@@ -57,6 +57,8 @@ goes back to the host.
 | cached load, second device open in the same process (page cache warm) | 4.0 s | 66/66 |
 
 - The cache is `artifacts/pplx_decider/weight_cache/<revision[:12]>/<policy name>/` (27 GB, 819 files).
+  Stage 8 moved it to `<revision[:12]>/weights/`, one directory for every policy, because the file names
+  carry the dtype.
 - A cached load builds the weight bundles from `meta` tensors (shapes from the safetensors headers),
   so it reads no HF weight bytes. The model checks that every weight hits before it skips the real
   tensors.

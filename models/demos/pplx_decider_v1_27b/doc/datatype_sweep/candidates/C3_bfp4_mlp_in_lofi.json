@@ -1,0 +1,32 @@
+{
+  "config_id": "C3",
+  "description": "BFP4+LoFi on MLP gate_up/down, attention qkv+gate, GDN in_qkv+in_zba; BFP8+HiFi2 on o_proj/out_proj/readout",
+  "policy": {
+    "name": "act_bf16__w_bfp4_mlp_attnqkvg_deltain_lofi__bfp8_out_readout",
+    "activation_dtype": "bfloat16",
+    "weight_dtypes": {
+      "attention_qkvg": "bfloat4_b",
+      "attention_out": "bfloat8_b",
+      "delta_in": "bfloat4_b",
+      "delta_out": "bfloat8_b",
+      "mlp_gate_up": "bfloat4_b",
+      "mlp_down": "bfloat4_b",
+      "readout": "bfloat8_b"
+    },
+    "fidelities": {
+      "attention_qkvg": "LoFi",
+      "attention_out": "HiFi2",
+      "delta_in": "LoFi",
+      "delta_out": "HiFi2",
+      "mlp_gate_up": "LoFi",
+      "mlp_down": "LoFi",
+      "readout": "HiFi2"
+    },
+    "embedding_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "conv_state_dtype": "bfloat16",
+    "norm_fidelity": "HiFi4"
+  }
+}

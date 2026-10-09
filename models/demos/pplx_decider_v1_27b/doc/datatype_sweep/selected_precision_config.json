@@ -1,0 +1,39 @@
+{
+  "config_id": "C0",
+  "description": "Selected stage-8 policy (person decision after C1 failed the logit-PCC gate): BFP8 weights for every projection, HiFi2 matmuls with fp32 accumulation, BF16 activations, embedding and norms, fp32 DeltaNet recurrent state. Read by PrecisionPolicy.default() (tt/optimizations.py); every field under 'policy' is consumed by Optimizations.build and the weight adapter.",
+  "policy": {
+    "name": "act_bf16__w_bfp8_all__hifi2",
+    "activation_dtype": "bfloat16",
+    "weight_dtypes": {
+      "attention_qkvg": "bfloat8_b",
+      "attention_out": "bfloat8_b",
+      "delta_in": "bfloat8_b",
+      "delta_out": "bfloat8_b",
+      "mlp_gate_up": "bfloat8_b",
+      "mlp_down": "bfloat8_b",
+      "readout": "bfloat8_b"
+    },
+    "fidelities": {
+      "attention_qkvg": "HiFi2",
+      "attention_out": "HiFi2",
+      "delta_in": "HiFi2",
+      "delta_out": "HiFi2",
+      "mlp_gate_up": "HiFi2",
+      "mlp_down": "HiFi2",
+      "readout": "HiFi2"
+    },
+    "embedding_dtype": "bfloat16",
+    "norm_weight_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "conv_state_dtype": "bfloat16",
+    "norm_fidelity": "HiFi4"
+  },
+  "fixed_in_code": {
+    "head": "readout matmul output typecast to float32; mask, / temperature and softmax in float32 (tt/head.py)",
+    "matmul_accumulation": "fp32_dest_acc_en=True, packer_l1_acc=True for every projection (tt/optimizations.py _compute_cfg)",
+    "sdpa_and_rope_fidelity": "HiFi4 (rope without fp32 dest acc)",
+    "deltanet_elementwise_fidelity": "HiFi4"
+  },
+  "gate": "tests/e2e/test_model.py: 25/25 agree, min readout-logit PCC 0.99801 (stage-8 C0 run)"
+}

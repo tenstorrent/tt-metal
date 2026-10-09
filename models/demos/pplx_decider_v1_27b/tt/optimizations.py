@@ -5,20 +5,31 @@
 Modules never pick a dtype, fidelity or matmul config themselves. They receive a
 resolved ``Optimizations`` (built once per device) and read their group from it.
 
+The default policy is the stage-8 selection, read from
+``doc/datatype_sweep/selected_precision_config.json``. ``$PPLX_DECIDER_PRECISION_CONFIG`` points
+the default at another policy JSON (the sweep candidates live in ``doc/datatype_sweep/candidates/``;
+``C0_bfp8_all_hifi2.json`` is the safe all-BFP8 baseline).
+
 Usage::
 
-    opts = Optimizations.build(mesh_device, policy=PrecisionPolicy.bfp8_weights())
+    opts = Optimizations.build(mesh_device)  # PrecisionPolicy.default()
     layer = PplxDecoderLayer.from_state_dict(state_dict, args=args, layer_idx=3, optimizations=opts)
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import json
+import os
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
 
 import ttnn
 
 # Matmul roles. Each projection weight belongs to exactly one role.
 ROLES = ("attention_qkvg", "attention_out", "delta_in", "delta_out", "mlp_gate_up", "mlp_down", "readout")
+
+SELECTED_CONFIG_PATH = Path(__file__).resolve().parents[1] / "doc" / "datatype_sweep" / "selected_precision_config.json"
+PRECISION_CONFIG_ENV = "PPLX_DECIDER_PRECISION_CONFIG"
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,26 @@ class PrecisionPolicy:
             weight_dtypes={role: "bfloat8_b" for role in ROLES},
             fidelities={role: "HiFi2" for role in ROLES},
         )
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "PrecisionPolicy":
+        """Policy from the ``policy`` object of a precision config JSON. Every role needs a dtype and a fidelity."""
+        data = json.loads(Path(path).read_text())
+        values = data["policy"]
+        unknown = set(values) - {f.name for f in fields(cls)}
+        if unknown:
+            raise ValueError(f"{path}: unknown policy fields {sorted(unknown)}")
+        policy = cls(**values)
+        for table in ("weight_dtypes", "fidelities"):
+            missing = [r for r in ROLES if r not in getattr(policy, table)]
+            if missing:
+                raise ValueError(f"{path}: policy.{table} misses roles {missing}")
+        return policy
+
+    @classmethod
+    def default(cls) -> "PrecisionPolicy":
+        """The selected stage-8 policy, or the JSON named by ``$PPLX_DECIDER_PRECISION_CONFIG``."""
+        return cls.from_json(os.environ.get(PRECISION_CONFIG_ENV) or SELECTED_CONFIG_PATH)
 
     def weight_dtype(self, role: str) -> ttnn.DataType:
         return getattr(ttnn, self.weight_dtypes.get(role, "bfloat8_b"))
@@ -112,12 +143,12 @@ class Optimizations:
         max_seq_len: int = 8192,
         prefill_chunk: int = 2048,
     ) -> "Optimizations":
-        policy = policy or PrecisionPolicy.bfp8_weights()
+        policy = policy or PrecisionPolicy.default()
         grid = mesh_device.compute_with_storage_grid_size()
         if prefill_chunk % 128:
             raise ValueError("prefill_chunk must be a multiple of the 128-token SDPA chunk")
         linear = LinearOptimizations(
-            compute_kernel_cfg={role: _compute_cfg(policy.fidelities.get(role, "HiFi2")) for role in ROLES},
+            compute_kernel_cfg={role: _compute_cfg(policy.fidelities[role]) for role in ROLES},
             output_dtype=getattr(ttnn, policy.activation_dtype),
             output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(x=grid.x, y=grid.y),

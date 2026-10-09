@@ -1,0 +1,252 @@
+{
+  "gate": {
+    "min_agree": 24,
+    "near_tie_gap": 0.05,
+    "min_logit_pcc": 0.99
+  },
+  "fastest_passing": "C0_bfp8_all_hifi2",
+  "selected": "C0",
+  "results": [
+    {
+      "config_id": "C0_bfp8_all_hifi2",
+      "policy_name": "act_bf16__w_bfp8_all__hifi2",
+      "weight_dtypes": {
+        "attention_qkvg": "bfloat8_b",
+        "attention_out": "bfloat8_b",
+        "delta_in": "bfloat8_b",
+        "delta_out": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "readout": "bfloat8_b"
+      },
+      "fidelities": {
+        "attention_qkvg": "HiFi2",
+        "attention_out": "HiFi2",
+        "delta_in": "HiFi2",
+        "delta_out": "HiFi2",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "readout": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "recurrent_dtype": "float32",
+      "hardware": "1x Blackhole p150a (single device), batch 1, eager",
+      "status": "measured",
+      "agree": 25,
+      "rows": 25,
+      "misses": [],
+      "logit_pcc_min": 0.9980116693606996,
+      "logit_pcc_median": 0.9999505793537559,
+      "final_hidden_pcc_min": 0.9989837984293045,
+      "final_hidden_pcc_median": 0.9997334595872288,
+      "max_abs_prob_diff": 0.03939327597618103,
+      "gate_pass": true,
+      "gate_detail": "pass",
+      "dram_allocated_gib_after_load": 27.29560089111328,
+      "request_burst_ms": {
+        "128": 148.5511240316555,
+        "1024": 366.10900005325675,
+        "2048": 665.6263479962945,
+        "4096": 1487.0458929799497,
+        "8192": 3521.6976430965587
+      },
+      "request_sustained_ms": {
+        "128": 155.12754407245666,
+        "1024": 464.9725939380005,
+        "2048": 924.6586950030178,
+        "4096": 1917.636216036044,
+        "8192": 4027.4339069146663
+      },
+      "device_forward_burst_ms": {
+        "128": 146.65713894646615,
+        "1024": 363.7605339754373,
+        "2048": 656.8161940667778,
+        "4096": 1468.2258600369096,
+        "8192": 3489.4173719221726
+      },
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C0_bfp8_all_hifi2.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C0_bfp8_all_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "selected": true
+    },
+    {
+      "config_id": "C1_bfp4_mlp_hifi2",
+      "policy_name": "act_bf16__w_bfp8_attn_gdn__bfp4_mlp__hifi2",
+      "weight_dtypes": {
+        "attention_qkvg": "bfloat8_b",
+        "attention_out": "bfloat8_b",
+        "delta_in": "bfloat8_b",
+        "delta_out": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "readout": "bfloat8_b"
+      },
+      "fidelities": {
+        "attention_qkvg": "HiFi2",
+        "attention_out": "HiFi2",
+        "delta_in": "HiFi2",
+        "delta_out": "HiFi2",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "readout": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "recurrent_dtype": "float32",
+      "hardware": "1x Blackhole p150a (single device), batch 1, eager",
+      "status": "measured",
+      "agree": 25,
+      "rows": 25,
+      "misses": [],
+      "logit_pcc_min": 0.988951722091059,
+      "logit_pcc_median": 0.9996678725682925,
+      "final_hidden_pcc_min": 0.9893501853544694,
+      "final_hidden_pcc_median": 0.9942919144767374,
+      "max_abs_prob_diff": 0.06362676620483398,
+      "gate_pass": false,
+      "gate_detail": "l01_faq_match_230opt logit PCC 0.98895 < 0.99",
+      "dram_allocated_gib_after_load": 19.32685089111328,
+      "request_burst_ms": {
+        "128": 138.83526006247848,
+        "1024": 365.5275070341304,
+        "2048": 663.3569229161367,
+        "4096": 1456.6616599913687,
+        "8192": 3371.0363649297506
+      },
+      "request_sustained_ms": {
+        "128": 141.30667503923178,
+        "1024": 441.76276307553053,
+        "2048": 853.378861094825,
+        "4096": 1776.289006927982,
+        "8192": 3745.387595030479
+      },
+      "device_forward_burst_ms": {
+        "128": 137.19253800809383,
+        "1024": 363.2952180923894,
+        "2048": 654.593707062304,
+        "4096": 1442.967489012517,
+        "8192": 3347.309251083061
+      },
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C1_bfp4_mlp_hifi2.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C1_bfp4_mlp_hifi2 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "selected": false
+    },
+    {
+      "config_id": "C2_bfp4_mlp_lofi",
+      "policy_name": "act_bf16__w_bfp8_attn_gdn__bfp4_mlp_lofi",
+      "weight_dtypes": {
+        "attention_qkvg": "bfloat8_b",
+        "attention_out": "bfloat8_b",
+        "delta_in": "bfloat8_b",
+        "delta_out": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "readout": "bfloat8_b"
+      },
+      "fidelities": {
+        "attention_qkvg": "HiFi2",
+        "attention_out": "HiFi2",
+        "delta_in": "HiFi2",
+        "delta_out": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "readout": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "recurrent_dtype": "float32",
+      "hardware": "1x Blackhole p150a (single device), batch 1, eager",
+      "status": "measured",
+      "agree": 25,
+      "rows": 25,
+      "misses": [],
+      "logit_pcc_min": 0.988951722091059,
+      "logit_pcc_median": 0.9996678725682925,
+      "final_hidden_pcc_min": 0.9893501853544694,
+      "final_hidden_pcc_median": 0.9942919144767374,
+      "max_abs_prob_diff": 0.06362676620483398,
+      "gate_pass": false,
+      "gate_detail": "l01_faq_match_230opt logit PCC 0.98895 < 0.99",
+      "dram_allocated_gib_after_load": 19.32685089111328,
+      "request_burst_ms": {
+        "128": 138.72513093519956,
+        "1024": 298.4601550269872,
+        "2048": 552.3774579633027,
+        "4096": 1197.7810830576345,
+        "8192": 2791.491538984701
+      },
+      "request_sustained_ms": {
+        "128": 137.73349800612777,
+        "1024": 360.9040330629796,
+        "2048": 700.1788379857317,
+        "4096": 1474.271512008272,
+        "8192": 3145.0583239784464
+      },
+      "device_forward_burst_ms": {
+        "128": 137.14748993515968,
+        "1024": 296.17776605300605,
+        "2048": 543.2728030718863,
+        "4096": 1183.6601439863443,
+        "8192": 2761.8596659740433
+      },
+      "command": "PPLX_DECIDER_PRECISION_CONFIG=models/demos/pplx_decider_v1_27b/doc/datatype_sweep/candidates/C2_bfp4_mlp_lofi.json PPLX_DECIDER_STAGE6_DIR=/local/ttuser/gtobar/artifacts/pplx_decider/stage8/C2_bfp4_mlp_lofi pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s; same env: pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -k test_model_perf -q -s",
+      "selected": false
+    },
+    {
+      "config_id": "C3_bfp4_mlp_in_lofi",
+      "policy_name": "act_bf16__w_bfp4_mlp_attnqkvg_deltain_lofi__bfp8_out_readout",
+      "weight_dtypes": {
+        "attention_qkvg": "bfloat4_b",
+        "attention_out": "bfloat8_b",
+        "delta_in": "bfloat4_b",
+        "delta_out": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "readout": "bfloat8_b"
+      },
+      "fidelities": {
+        "attention_qkvg": "LoFi",
+        "attention_out": "HiFi2",
+        "delta_in": "LoFi",
+        "delta_out": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "readout": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "recurrent_dtype": "float32",
+      "hardware": "1x Blackhole p150a (single device), batch 1, eager",
+      "status": "not run - person selected C0 after C1 failed the logit-PCC gate (l01 0.98895 < 0.99)",
+      "gate_pass": null,
+      "selected": false
+    },
+    {
+      "config_id": "C4_bfp8_mlp_lofi",
+      "policy_name": "act_bf16__w_bfp8_all__mlp_lofi",
+      "weight_dtypes": {
+        "attention_qkvg": "bfloat8_b",
+        "attention_out": "bfloat8_b",
+        "delta_in": "bfloat8_b",
+        "delta_out": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "readout": "bfloat8_b"
+      },
+      "fidelities": {
+        "attention_qkvg": "HiFi2",
+        "attention_out": "HiFi2",
+        "delta_in": "HiFi2",
+        "delta_out": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "readout": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "recurrent_dtype": "float32",
+      "hardware": "1x Blackhole p150a (single device), batch 1, eager",
+      "status": "not run - person selected C0 after C1 failed the logit-PCC gate (l01 0.98895 < 0.99)",
+      "gate_pass": null,
+      "selected": false
+    }
+  ]
+}

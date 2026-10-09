@@ -14,6 +14,12 @@ every row. Warmed request latency at batch 1 runs from 148 ms (128 bucket) to 3.
 for an isolated request, and is 1.25-1.36x higher under sustained back-to-back load. Details:
 [`doc/full_model/README.md`](doc/full_model/README.md).
 
+Stage 8 (datatype sweep, short) kept the all-BFP8 HiFi2 policy (person decision) and stage 6's numbers stand.
+The policy is now `doc/datatype_sweep/selected_precision_config.json`, which the default construction path
+reads. A BFP4 MLP (C1/C2) agrees on 25/25 rows but fails the per-row logit-PCC bar on one row (0.98895 < 0.99).
+BFP4 with LoFi would be 17 % faster at the 2048 bucket and would free 8 GiB of DRAM. Details:
+[`doc/datatype_sweep/README.md`](doc/datatype_sweep/README.md).
+
 Stage 1 (functional layers): every module and both decoder-layer kinds match the HF reference with
 real weights (PCC >= 0.995) at the prefill buckets 128, 1024, 2048, 4096 and 8192. The app pads a
 prompt on the right to the next bucket. The classifier reads the last real token. Details are in
@@ -70,7 +76,8 @@ Environment variables read by this model directory:
 | `PPLX_DECIDER_PCC_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl` | PCC records appended by every test. |
 | `PPLX_DECIDER_PERF_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/perf/prefill_perf.jsonl` | Perf records. |
 | `PPLX_DECIDER_PROBE_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl` | Context-probe records (`tests/probe`). |
-| `PPLX_DECIDER_WEIGHT_CACHE` | `/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache` | ttnn disk weight cache of the full model (27 GB; `<revision>/<policy>/` below it). |
+| `PPLX_DECIDER_WEIGHT_CACHE` | `/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache` | ttnn disk weight cache of the full model (27 GB; `<revision>/weights/` below it, shared by all policies; file names carry the dtype). |
+| `PPLX_DECIDER_PRECISION_CONFIG` | `doc/datatype_sweep/selected_precision_config.json` | Precision policy JSON read by `PrecisionPolicy.default()`; set it to a file in `doc/datatype_sweep/candidates/` to run another policy. |
 | `PPLX_DECIDER_DECISION_GOLDEN` | `/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions` | Stage-6 decision golden (`reference/hf_decision_golden.py`). |
 | `PPLX_DECIDER_STAGE6_DIR` | `/local/ttuser/gtobar/artifacts/pplx_decider/stage6` | JSON results of the e2e and full-model perf tests. |
 

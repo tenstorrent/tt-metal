@@ -103,7 +103,7 @@ def record(target: str, kind: str | None, layer: int | None, seq_len: int, sampl
         warmup=WARMUP,
         timed=len(samples),
         sync="ttnn.synchronize_device before and after each pass; eager (no trace)",
-        policy=PrecisionPolicy.bfp8_weights().name,
+        policy=PrecisionPolicy.default().name,
         time=time.strftime("%Y-%m-%d %H:%M:%S"),
     )
     PERF_LOG.parent.mkdir(parents=True, exist_ok=True)

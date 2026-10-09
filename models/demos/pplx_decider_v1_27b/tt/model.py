@@ -260,7 +260,10 @@ class PplxDeciderModel(LightweightModule):
     ) -> "PplxDeciderModel":
         """Build and upload every weight. ``layer_ids`` (default: all 64) allows a reduced stack for debugging.
 
-        ``cache_dir="default"`` uses ``DEFAULT_CACHE_ROOT/<revision>/<policy name>``; ``None`` disables the cache.
+        ``policy`` defaults to ``PrecisionPolicy.default()`` (the stage-8 selected precision config).
+        ``cache_dir="default"`` uses ``DEFAULT_CACHE_ROOT/<revision>/weights``, shared by every policy:
+        each cache file name carries the weight's dtype, shape and layout (``LazyWeight`` fingerprint),
+        so a policy reuses the files of the groups whose dtype it shares. ``None`` disables the cache.
         """
         from models.demos.pplx_decider_v1_27b.reference.hf_reference import REVISION, SnapshotReader
 
@@ -268,12 +271,13 @@ class PplxDeciderModel(LightweightModule):
         args = PplxDeciderArgs.from_hf_config(reader.text_config)
         opts = Optimizations.build(
             mesh_device,
-            policy=policy or PrecisionPolicy.bfp8_weights(),
+            policy=policy or PrecisionPolicy.default(),
             max_seq_len=args.max_seq_len,
             prefill_chunk=prefill_chunk,
         )
+        logger.info(f"precision policy {opts.policy.name}: {json.dumps(opts.policy.describe())}")
         if cache_dir == "default":
-            cache_dir = DEFAULT_CACHE_ROOT / REVISION[:12] / opts.policy.name
+            cache_dir = DEFAULT_CACHE_ROOT / REVISION[:12] / "weights"
         cache_dir = Path(cache_dir) if cache_dir is not None else None
         layer_ids = tuple(range(args.num_hidden_layers) if layer_ids is None else layer_ids)
         source = _SnapshotWeights(reader)

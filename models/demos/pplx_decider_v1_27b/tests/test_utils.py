@@ -49,7 +49,7 @@ def model_args() -> PplxDeciderArgs:
 
 
 def build_optimizations(device) -> Optimizations:
-    return Optimizations.build(device, policy=PrecisionPolicy.bfp8_weights(), max_seq_len=model_args().max_seq_len)
+    return Optimizations.build(device, policy=PrecisionPolicy.default(), max_seq_len=model_args().max_seq_len)
 
 
 def build_tt_layer(device, layer_idx: int):
@@ -129,7 +129,7 @@ def check_pcc(
     pcc_wo_tok0 = None
     if reference.dim() >= 2 and reference.shape[-2] > 1:
         pcc_wo_tok0 = float(comp_pcc(reference[..., 1:, :], candidate[..., 1:, :], threshold)[1])
-    policy = policy or PrecisionPolicy.bfp8_weights().name
+    policy = policy or PrecisionPolicy.default().name
     kind = model_args().layer_kind(layer) if layer is not None else None
     record = dict(
         module=module,
