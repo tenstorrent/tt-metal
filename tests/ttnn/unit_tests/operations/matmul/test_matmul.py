@@ -17,7 +17,6 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
-
 # for setting up multi-device stress tests
 NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices() if os.environ.get(NUM_DEVICES_ENV_KEY, None) is not None else 1
@@ -4909,15 +4908,12 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
         (4, 2, 6, 2),  # h=2, w=3
     ],
 )
-def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, per_core_N, out_block_w):
+@pytest.mark.parametrize("k_tiles", [2, 4, 8], ids=["inner1", "inner2", "inner4"])
+@pytest.mark.parametrize("in1_B", [2, 3])
+def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, per_core_N, out_block_w, k_tiles, in1_B):
     torch.manual_seed(0)
-    num_cores, in0_block_w, k_tiles, in1_B = 4, 2, 4, 3
+    num_cores, in0_block_w = 4, 2
     M, K, N = num_cores * per_core_M * 32, k_tiles * 32, per_core_N * 32
-
-    in0 = torch.randn(1, 1, M, K).bfloat16()
-    in1 = torch.randn(1, in1_B, K, N).bfloat16()
-    in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
-    in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(num_cores, 1),
@@ -4932,9 +4928,18 @@ def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, pe
         fused_activation=None,
         mcast_in0=False,
     )
-    output = ttnn.to_torch(ttnn.matmul(in0_t, in1_t, program_config=program_config))
 
-    expected = in0.float() @ in1.float()
-    # Check each weight batch separately: a stale in0 buffer only corrupts batches after the first.
-    for b in range(in1_B):
-        assert_with_pcc(expected[0, b], output[0, b], 0.999)
+    # Run twice with fresh data: the second run reuses the cached program with new buffer addresses.
+    with device.cache_entries_counter.measure():
+        for _ in range(2):
+            in0 = torch.randn(1, 1, M, K).bfloat16()
+            in1 = torch.randn(1, in1_B, K, N).bfloat16()
+            in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+            in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+            output = ttnn.to_torch(ttnn.matmul(in0_t, in1_t, program_config=program_config))
+
+            expected = in0.float() @ in1.float()
+            # Check each weight batch separately: a stale in0 buffer only corrupts batches after the first.
+            for b in range(in1_B):
+                assert_with_pcc(expected[0, b], output[0, b], 0.999)
+    assert device.cache_entries_counter.total == 1
