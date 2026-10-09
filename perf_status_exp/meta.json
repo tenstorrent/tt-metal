@@ -1,0 +1,97 @@
+{
+ "name": "merge-8",
+ "card": "TT_VISIBLE_DEVICES=0 (PCIe 2)",
+ "branch": "exp/merge-8 (deliverable branch moe-ffn-opt-11x8 at the same HEAD)",
+ "worktree": "/localdev/mbezulj/tt-metal/.claude/worktrees/agent-abb2aba9472191522",
+ "base_commit": "768453d91be",
+ "grid": "Both ops on 11x8 (88 cores, logical y 0-7). UNIFIED_ROUTED_EXPERT_CORE_GRID logged as 11-8 in every run log; kCoreGridX/Y = 11/8, adaptive_chunk::kGridY = 8; swiglu all_cores = CoreRange((0,0),(grid_x-1,grid_y-1)) with core_grid (11,8). Every CoreRange, multicast rectangle and worker_core_from_logical_core call in both factories stays inside (0..10, 0..7); the new counts broadcasts reuse the full-grid 11x8 rectangle. r-10rows commits not taken.",
+ "base": "main build host + untouched git archive of 768453d91be (.base_root, pytest CWD there)",
+ "new": "worktree build (ttnn/ttnn/_ttnn.so, build_Release) + worktree kernels (pytest CWD = worktree)",
+ "step_ab_method": "Same worktree build for both sides, kernels from git-archive snapshots: m7 = merge (steps 1-4), m8 = + step 5, new = + step 6. Host changes of steps 5/6 are backward compatible with older kernels (appended RT arg, extra semaphore, shared start CB). ab1 order m7,m8,new; ab2 order new,m8,m7; value = median of the two runs (each a median of 3).",
+ "method": "RT device time, median of 3 per run; 2 alternating runs per side (fb1, ff1, fb2, ff2); delta = median(new) - median(base), us",
+ "control": "Step-5 A/B doubles as a control for swiglu (identical swiglu kernels m7 vs m8): swiglu deltas there are noise, |d| <= 3.1 us at ISL 256-320 and <= 0.9 us at ISL <= 128. Step-6 A/B likewise for routed (identical routed kernels m8 vs new): |d| <= 0.5 us everywhere.",
+ "commits": [
+  {
+   "src": "ceb52771966",
+   "new": "ad296e886bd",
+   "what": "s-combo: swiglu row path for short blocks",
+   "resolution": "clean"
+  },
+  {
+   "src": "a5d71bb0374",
+   "new": "37cc9e81a46",
+   "what": "s-combo: fast SiLU + fused SiLU-GLU in DEST",
+   "resolution": "clean"
+  },
+  {
+   "src": "19994ffa90d",
+   "new": "f59d72e130a",
+   "what": "s-combo: W_down deferral on full-M blocks",
+   "resolution": "clean"
+  },
+  {
+   "src": "14587392a13",
+   "new": "08a9afeaeae",
+   "what": "r-silu: fused tanh-LUT SiLU*up in compute",
+   "resolution": "clean; perf_status_exp files dropped"
+  },
+  {
+   "src": "528c0122bd9",
+   "new": "492241ccfe3",
+   "what": "r-fix: x-mcast count clamp + over-capacity test",
+   "resolution": "clean; perf_status_exp files dropped"
+  },
+  {
+   "src": "0d9e1db316f",
+   "new": "5af5f856bd5",
+   "what": "r-tilize-e2e: tilize x once per M-row, bf8 multicast",
+   "resolution": "perf_status_exp modify/delete conflicts resolved by dropping those files; a212c0f3242 skipped (duplicate of r-fix). compute/fused_swiglu.cpp auto-merged: r-silu's FAST_SILU_GLU binary op (calculate_fast_silu_glu / fast_silu_glu_init) and r-tilize-e2e's owner tilize (tilize_owned_block, x_tilized_cb, my_gx/my_gy/grid_x args) both present. Owner rule x_owner_eligible = (gx % kGridY) != gy with kGridY = 8, as built and measured on 11x8."
+  },
+  {
+   "src": "agent-a223a69ebba2b47bc zi_exp_kernels.patch (ZI_EXP == 3 routed part only)",
+   "new": "4c37208a177",
+   "what": "step 5: routed start page folded into the counts broadcast",
+   "resolution": "Only the routed reader/writer start-in-broadcast part taken (no swiglu edits, no zone renames, no zi_exp.h include). BUG in the patch as written: reader and writer use DIFFERENT start CBs (reader c_15, writer c_14), so skipping the writer's read left c_14 stale -> routed PCC 0.934 at ISL 512 (zero-isl only ever checked ISL 0). Fixed on the host: the writer's cb_start_scratch CT arg (#15) now names the reader's c_15 and c_14 is no longer allocated. So step 5 is no longer kernel-only (one host line + CB removal)."
+  },
+  {
+   "src": "-",
+   "new": "cc4ae52593f",
+   "what": "step 6: swiglu counts/idx(/start) read once by core (0,0) and multicast to the grid",
+   "resolution": "new. Broadcast hoisted out of the per-expert loop; linked data multicasts then the counts-valid semaphore (non-linked, ends the chain); receivers wait and reset. Uses the common full-grid h-mcast rectangle. Host: SEM_COUNTS_VALID = 15 (moe_fused_swiglu only; SEM_COUNT unchanged so the hybrid op's pass-barrier id stays < 16), one per-core RT arg appended after the group rect, counts scratch 2 pages only with NEED_START. A first version with an always-2-page scratch measured +2.2/+3.7 us on kimi_k2_7 ndshard ISL 256/320 (step6_first_try in notes); the NEED_START-only sizing is neutral there. The hybrid op has its own forked kernels and is unaffected."
+  }
+ ],
+ "noc1_rule": "No NoC1 read overlaps a linked multicast chain: both new chains (routed start, swiglu counts) run on NoC0 at kernel start, and each core's writer (NoC1) first waits on its reader's counts push / mailbox, which follows the chain-terminating semaphore.",
+ "tests": [
+  {
+   "file": "test_single_routed_expert.py",
+   "passed": 81,
+   "failed": 0
+  },
+  {
+   "file": "test_moe_fused_swiglu.py",
+   "passed": 144,
+   "failed": 0,
+   "note": "re-run after the final step-6 host tweak: 144 passed"
+  },
+  {
+   "file": "test_routed_expert_hybrid.py",
+   "passed": 84,
+   "failed": 0
+  },
+  {
+   "file": "test_hybrid_routed_expert.py",
+   "passed": 137,
+   "failed": 1,
+   "note": "test_hybrid_routed_expert_config_fits_default_ring: PRE-EXISTING (base fails at 71904 B). Program size 71648 B > 70656 B ring, unchanged vs merge-proto (71648 B); 256 B smaller than base."
+  }
+ ],
+ "step6_first_try": "always-2-page counts scratch, ab1+ab2 medians (without -> with, us): kimi_k2_7 ndshard ISL 256 101.4->103.6, 320 132.5->136.9; interleaved ISL 256 -4 to -6 us; ISL 0 -1.15 us everywhere",
+ "step6_final_recheck": "logs sx1/sx2 (ndshard) and si1/si2 (interleaved), m8 vs new alternating on the final build",
+ "threshold_recommendation": {
+  "current": 320,
+  "recommended": 288,
+  "semantics": "TtRoutedExpert: swiglu takes counts <= threshold (max_active_tokens), routed takes > threshold.",
+  "reason": "Merged 11x8 build, ndshard, 2 runs each. swiglu wins 256-288 by 0.7-9 us (both models; glm by 8.5-9 at 272/288). At 320 (counts 289-320 share the 10-tile M) glm ties (swiglu -0.8 us) while kimi_k2_7 routed wins by 4.0 us; from 352 routed wins by 11-18 us. Below 256 it is model-dependent within ~3 us (glm routed -2.0 at 192, kimi swiglu -1.9 to -3.0). Crossover: between 288 and 320 for kimi_k2_7, at ~320 for glm_53. Threshold 288 gains ~4 us for kimi at 289-320 and costs ~0.8 us for glm. Config not changed."
+ },
+ "additivity": "Routed merged delta ~= r-silu + r-tilize-e2e (winners measured separately on 768453d91be): within ~1 us at ISL 384/512/544/1024 (e.g. glm nd 512 -16.6 vs sum -15.7; kimi nd 1024 -29.4 vs -29.0; glm int 544 -25.1 vs -24.1). Step 5 adds -1.2 us at ISL 0 only. Swiglu merged delta ~= s-combo within ~2 us except kimi nd 256 (-2.2 vs -7.9) and ISL 288 glm nd (-16.5 vs -10.8); step 6 adds -1.1 us at ISL 0 and -4 to -7 us at interleaved ISL 256."
+}
