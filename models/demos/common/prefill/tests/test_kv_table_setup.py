@@ -101,17 +101,17 @@ def test_no_stage_single_rank_mock_serves_without_table(calls):
     [("1", "0", 1), ("0", "1", 1), ("0", "0", 2)],
     ids=["publish", "file-export", "multi-rank"],
 )
-def test_no_stage_raises_when_a_table_is_required(monkeypatch, calls, enable, export, num_ranks):
+def test_no_stage_raises_when_a_table_is_required(monkeypatch, calls, expect_error, enable, export, num_ranks):
     monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/data/shared/table.pb")
     monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
     monkeypatch.setenv("PREFILL_MIGRATION_EXPORT_TO_FILE", export)
     runtime = _Runtime([])
 
-    with pytest.raises(RuntimeError, match="reported no KV cache stage"):
+    with expect_error(RuntimeError, "reported no KV cache stage"):
         _setup(runtime, num_ranks=num_ranks)
     assert not {"allgather", "deliver", "export", "publish"} & set(calls)
 
 
-def test_runtime_without_stage_hook_is_rejected(calls):
-    with pytest.raises(RuntimeError, match="kv_migration_stages"):
+def test_runtime_without_stage_hook_is_rejected(calls, expect_error):
+    with expect_error(RuntimeError, "kv_migration_stages"):
         _setup(object())
