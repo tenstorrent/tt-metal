@@ -40,6 +40,10 @@ struct ManifestRouterInputs {
     const RouterKernelInputs& kernel;
 };
 
+// Throws unless every named argument and define in `kernel` is read by the manifest or listed as unrecorded
+// (fabric_manifest_fields.hpp).
+void check_kernel_inputs_accounted(const RouterKernelInputs& kernel);
+
 // Collects a built router's manifest facts from what its kernels were fed and from its builders.
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs);
 
