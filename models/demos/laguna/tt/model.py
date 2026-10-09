@@ -443,9 +443,18 @@ class LagunaModel:
                 sin = ttnn.concat([sin] * int(num_segs), dim=2)
             rope_ctx[kind] = (cos, sin)
         h = hidden_1SH
+        D = int(getattr(self.layers[0], "D", 1))
+        T = int(seg_len) * int(num_segs)
+        sp = os.environ.get("TT_LAGUNA_PREFILL_SP", "1") == "1" and D > 1 and T % (D * 32) == 0
+        if sp:  # sequence-parallel residual, as in prefill_layers
+            h = ttnn.mesh_partition(h, len(h.shape) - 2, cluster_axis=self.layers[0].tp_axis)
         for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
             fill_pt = fill_page_table[i] if fill_per_layer else fill_page_table
-            h = dec.prefill_forward_packed(h, kv, fill_pt, seg_len, num_segs, rope_ctx[dec.cfg.attention_type])
+            h = dec.prefill_forward_packed(
+                h, kv, fill_pt, seg_len, num_segs, rope_ctx[dec.cfg.attention_type], seq_parallel=sp
+            )
+        if sp:
+            h = self.layers[-1]._sp_gather(h)
         return h
 
     def _validate_dflash_target_capture(self, enable_experimental):
