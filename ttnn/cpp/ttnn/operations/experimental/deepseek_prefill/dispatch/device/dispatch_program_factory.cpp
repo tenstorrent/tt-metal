@@ -1076,12 +1076,12 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
             "metadata_for_writer");
     }
 
-    // c_7: metadata_temp (reader-only, for constructing metadata locally)
+    // c_7: metadata_temp (reader-only, for constructing metadata locally): one slot per route of a read batch
     detail::create_tensor_cb(
         desc,
         sender_core_grid,
         metadata_tensor,
-        /*buffering_factor=*/1,
+        /*buffering_factor=*/read_batch_size * operation_attributes.num_experts_per_tok,
         /*cb_id=*/tt::CBIndex::c_7,
         "metadata_temp_buffer");
 

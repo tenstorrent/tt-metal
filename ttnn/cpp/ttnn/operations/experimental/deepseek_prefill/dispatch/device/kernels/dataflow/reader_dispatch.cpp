@@ -316,6 +316,7 @@ void kernel_main() {
             (batch_start + read_batch_size < token_end_idx) ? batch_start + read_batch_size : token_end_idx;
         uint32_t batch_count = batch_end - batch_start;
         bool batch_did_local_write = false;
+        uint32_t meta_used = 0;  // metadata scratch slots used by this batch's local routes
 
         for (uint32_t t = 0; t < batch_count; t++) {
             uint32_t token_idx = batch_start + t;
@@ -353,10 +354,13 @@ void kernel_main() {
                 if (expert_chip == linearized_mesh_coord) {
                     {
                         // Metadata layout (5 × int32): [src chip, global token idx, top-k slot,
-                        // routed expert, routing weight].  Staged in scratch, then written to the
+                        // routed expert, routing weight].  Staged in this route's own scratch slot (one per
+                        // route of the batch, reused after the batch's write barrier), then written to the
                         // same DRAM page index as the payload.
+                        const uint32_t meta_slot = metadata_temp_addr + meta_used * aligned_metadata_page_size;
+                        meta_used++;
                         volatile tt_l1_ptr int32_t* metadata =
-                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_slot);
                         metadata[0] = linearized_mesh_coord;
                         metadata[1] = token_idx;
                         metadata[2] = k;
@@ -364,8 +368,7 @@ void kernel_main() {
                         metadata[4] = static_cast<int16_t>(weights[k]);
 
                         noc_async_write_page(page_idx, output_addr_gen, token_input_addr);
-                        noc_async_write_page(page_idx, metadata_addr_gen, metadata_temp_addr);
-                        noc_async_writes_flushed();
+                        noc_async_write_page(page_idx, metadata_addr_gen, meta_slot);
                         batch_did_local_write = true;
                     }
                 } else {
@@ -416,6 +419,8 @@ void kernel_main() {
         uint32_t next_batch_start = batch_start + read_batch_size;
         bool has_next_batch = (next_batch_start < token_end_idx);
         if (has_next_batch) {
+            // the next reads overwrite the input rows this batch's writes source from: wait until they left L1
+            noc_async_writes_flushed();
             uint32_t next_batch_end = (next_batch_start + read_batch_size < token_end_idx)
                                           ? next_batch_start + read_batch_size
                                           : token_end_idx;
