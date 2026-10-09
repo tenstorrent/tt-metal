@@ -86,5 +86,16 @@
    "multicast data at its own measured rate, falling with receivers (mcrate)",
    "WH lat_dram, lat_l1, issue, noc_eff, mc_eff0, mc_eff_rx pinned from data-movement microbenchmarks (10 of 22 WH constants measured)"
   ]
+ },
+ "v11": {
+  "title": "v11: miss-sweep training + loaded read rate",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 2cf9cbc (frozen as frozen_v11_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v10",
+   "training adds the full sweeps of draw 1 (59 problems) and of the draw-2 problems v6 missed (41)",
+   "a core reading DRAM while other cores also read gets the loaded per-core rate, 0.48 of 32 B/cycle (corecc, measured with 4 concurrent readers)"
+  ]
  }
 }

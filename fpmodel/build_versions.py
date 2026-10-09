@@ -38,11 +38,13 @@ def tail(vl):
 
 
 # ---------- cross-validation ----------
-D = load(list(SETS))
+BASE_SETS = ["wh_designed", "wh_target", "bh_designed"]  # the training sets up to v10
+D = load(BASE_SETS)
+D_ALL = load(list(SETS))  # v11 on: plus the swept fresh / miss sets
 
 
 def tiebreak(pred, m=0.05):
-    s = np.full(len(D), 1e12)
+    s = np.full(len(D), 1e12)  # v5 only (base sets)
     x = D.assign(pred=pred)
     for _, g in x[x.origin.isin(CAND)].groupby("problem_id", sort=False):
         near = g[g.pred <= g.pred.min() * (1 + m)]
@@ -51,7 +53,7 @@ def tiebreak(pred, m=0.05):
 
 
 def cv_block(pred):
-    r = evaluate(D, pred, "", quiet=True)
+    r = evaluate(D if len(pred) == len(D) else D_ALL, pred, "", quiet=True)
     out = {}
     for s, g in r.groupby("set", sort=False):
         out[s] = dict(
@@ -188,6 +190,7 @@ CVPRED = {
     "v8": np.load("pred_cv_v8.npy"),
     "v9": np.load("pred_cv_v9.npy"),
     "v10": np.load("pred_cv_v10.npy"),
+    "v11": np.load("pred_cv_v11.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -260,59 +263,131 @@ def add(vid, path, set_id, label, note, usage=None, done=None):
         DEV.setdefault(vid, []).append(b)
 
 
-add(
-    "v7",
-    f"{W}/fresh/fresh3_timed.csv",
-    "fresh92001",
-    "Fresh random set, draw 3 (seeds 92001-7)",
-    "Out-of-sample: generated and picked after v7 was frozen.",
-    done=f"{W}/fresh/chain_v7.done",
+BHU = (
+    "From bh-30's full sweeps: constants fitted on the 153 bh_0200 problems, scored on the other designed BH problems."
 )
-add(
-    "v7",
-    f"{W}/miss/bh_unseen_v7_timed.csv",
-    "bh-unseen",
-    "BH designed problems never used in training (1021)",
-    "From bh-30's full sweeps: constants fitted on the 153 bh_0200 problems, scored on the other designed BH problems.",
-)
-add(
-    "v7",
-    f"{W}/fresh/freshbh_timed.csv",
-    "freshbh93001",
-    "BH fresh random set (seeds 93001-7), bh-30",
-    "Out-of-sample on BH: picked on bh-30 with the frozen v7 BH constants.",
-    done=f"{W}/fresh/freshbh.done",
-)
-add(
-    "v7",
-    f"{W}/device/suite719_v7_timed.csv",
-    "suite719",
-    "Real-case suite (719)",
-    "Not in training; the rules were tuned on this suite. Changed picks re-timed with legacy and rules in one session.",
-    f"{W}/usage/usage_v7_wh.json",
-)
-add(
-    "v7",
-    f"{W}/fresh/fresh2_v7_timed.csv",
-    "draw2-informed",
-    "Draw 2 (seeds 91001-7), not out-of-sample for v7",
-    "v7's terms were found from draw 2's misses, so this set informed v7; it is not counted in the bounds.",
-)
-add(
-    "v8",
-    f"{W}/fresh/fresh4_timed.csv",
-    "fresh94001",
-    "Fresh random set, draw 4 (seeds 94001-7)",
-    "Out-of-sample: generated and picked after v8 was frozen.",
-    done=f"{W}/fresh/chain_v8.done",
-)
-add(
-    "v8",
-    f"{W}/miss/bh_unseen_v8_timed.csv",
-    "bh-unseen",
-    "BH designed problems never used in training (1021)",
-    "From bh-30's full sweeps: constants fitted on the 153 bh_0200 problems, scored on the other designed BH problems.",
-)
+# (version, timed csv, set id, label, note, usage json, completion flag)
+RUNS = [
+    (
+        "v7",
+        "fresh/fresh3_timed.csv",
+        "fresh92001",
+        "Fresh random set, draw 3 (seeds 92001-7)",
+        "Out-of-sample: generated and picked after v7 was frozen.",
+        None,
+        "fresh/chain_v7.done",
+    ),
+    (
+        "v7",
+        "miss/bh_unseen_v7_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v7",
+        "fresh/freshbh_timed.csv",
+        "freshbh93001",
+        "BH fresh random set (seeds 93001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v7 BH constants.",
+        None,
+        "fresh/freshbh.done",
+    ),
+    (
+        "v7",
+        "device/suite719_v7_timed.csv",
+        "suite719",
+        "Real-case suite (719)",
+        "Not in training; the rules were tuned on this suite. Changed picks re-timed with legacy and rules in one session.",
+        "usage/usage_v7_wh.json",
+        None,
+    ),
+    (
+        "v7",
+        "fresh/fresh2_v7_timed.csv",
+        "draw2-informed",
+        "Draw 2 (seeds 91001-7), not out-of-sample for v7",
+        "v7's terms were found from draw 2's misses, so this set informed v7; it is not counted in the bounds.",
+        None,
+        None,
+    ),
+    (
+        "v8",
+        "miss/bh_unseen_v8_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v9",
+        "fresh/fresh4_timed.csv",
+        "fresh94001",
+        "Fresh random set, draw 4 (seeds 94001-7)",
+        "Out-of-sample: generated and picked after v9 was frozen.",
+        None,
+        "fresh/chain_v8.done",
+    ),
+    (
+        "v9",
+        "fresh/freshbh2_timed.csv",
+        "freshbh95001",
+        "BH fresh random set 2 (seeds 95001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v9 BH constants.",
+        None,
+        "fresh/freshbh2.done",
+    ),
+    (
+        "v9",
+        "device/suite719_v9_timed.csv",
+        "suite719",
+        "Real-case suite (719)",
+        "Not in training; the rules were tuned on this suite. Changed picks re-timed with legacy and rules in one session.",
+        "usage/usage_v9_wh.json",
+        "miss/v9suite.done",
+    ),
+    (
+        "v9",
+        "miss/bh_unseen_v9_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v10",
+        "miss/bh_unseen_v10_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v11",
+        "fresh/fresh5_timed.csv",
+        "fresh96001",
+        "Fresh random set, draw 5 (seeds 96001-7)",
+        "Out-of-sample: generated and picked after v11 was frozen.",
+        None,
+        "fresh/chain_v10.done",
+    ),
+    (
+        "v11",
+        "miss/bh_unseen_v11_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+]
+for vid, path, sid, label, note, usage, done in RUNS:
+    add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
 
 
 def bounds(blocks, bh=False):
@@ -341,7 +416,13 @@ for vid, meta in V.items():
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
     doc["bounds"] = bounds(doc["device"])
     doc["bounds_bh"] = bounds(doc["device"], bh=True)
-    sheet = {"v7": "abl/v7_nopad.json", "v8": "abl/v8_bhharv.json", "v9": "abl/v9.json", "v10": "abl/v10.json"}.get(vid)
+    sheet = {
+        "v7": "abl/v7_nopad.json",
+        "v8": "abl/v8_bhharv.json",
+        "v9": "abl/v9.json",
+        "v10": "abl/v10.json",
+        "v11": "abl/v11.json",
+    }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
 
@@ -361,7 +442,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v10"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v11"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [
