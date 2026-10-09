@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %s -o %t.t0.o
-// RUN: %{blackhole_compare_codegen} %t.t0.o
+// RUN: %{blackhole_objdump} -t --special-syms -drz %t.t0.o > %t.t0.dump
+// RUN: %{blackhole_compare_codegen} %t.t0.dump
 // RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -fno-ipa-icf -c %s -o %t.t2.o
-// RUN: %{blackhole_compare_codegen} %t.t2.o
+// RUN: %{blackhole_objdump} -t --special-syms -drz %t.t2.o > %t.t2.dump
+// RUN: %{blackhole_compare_codegen} %t.t2.dump
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -S %s -o %t.assert.s
 // RUN: FileCheck %s --check-prefix=ASSERT < %t.assert.s
 

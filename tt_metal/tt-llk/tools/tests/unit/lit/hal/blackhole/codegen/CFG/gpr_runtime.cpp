@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %s -o %t.o
-// RUN: %{blackhole_compare_codegen} %t.o
+// RUN: %{blackhole_objdump} -t --special-syms -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
 // RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
 
