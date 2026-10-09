@@ -370,6 +370,32 @@ PERF_TEST_SCHEMAS = {
             "perf_fast_untilize_baseline_compare": "perf_fast_untilize_baseline_compare"
         },
     },
+    "perf_hadamard": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "h16_tile_index",
+            "hadamard_normalize",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_hadamard": "perf_hadamard"},
+    },
     "perf_fused": {
         "version": 1,
         "columns": [
