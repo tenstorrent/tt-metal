@@ -11,6 +11,12 @@ qualification yet; Tau3 remains 3/12.
 [Controls](../galaxy-evidence/hf-decoder-controls-v2/README.md),
 [BFP8 GPQA launch](../galaxy-evidence/decoder-gpqa-v1/README.md).
 
+The failed earlier chunked-state follower has also been restored in fresh v2
+directories behind this GPQA's completion auditor. Twenty-seven tests and six
+subtests pass; hardware remains queued and serving chunking disabled. It uses
+the previously G0-qualified native BFP4 policy to test state isolation, not the
+new BFP8 policy. [Queued state test](../galaxy-evidence/chunked-prefill-hardware-v2/README.md).
+
 Oct 9 09:15 UTC update: repaired the HF report writer's set-serialization failure
 and completed the CPU plus full TP4 layer comparison. Full-model logit RMS error
 is 20.1-70.3% over eight short teacher-forced positions; the isolated device head

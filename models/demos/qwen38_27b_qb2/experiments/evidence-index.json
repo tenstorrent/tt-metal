@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T09:32:01.415168+00:00",
+  "generated_at": "2026-10-09T09:36:47.124726+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 94179,
-      "sha256": "55a46278e36556cecd6cbfe2f7739b38611c3fa5983702b1ce9c3105141050f6"
+      "bytes": 95562,
+      "sha256": "853af9d186881f4c52c7b8535caeb6e60bd08b9fbc60c14257d1f4ae50a04c33"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 29966,
-      "sha256": "e84e081a64e0370e3d071f5e8cd5c2436a5bc913021a8b5453ae50eae3b9657b"
+      "bytes": 30376,
+      "sha256": "2d156ae9fa95299bcf5c240e40a53ef8f037fd5dd2bcc0416d6ad6a8c2f49b51"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1057,6 +1057,46 @@
       "path": "galaxy-evidence/chunked-prefill-hardware-v1/unit.xml.gz",
       "bytes": 1203,
       "sha256": "33e9c411efcf0b733cbeb5ccde89ce019b69f3e98a547b739a561eac4b421eae"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/README.md",
+      "bytes": 2043,
+      "sha256": "6133b9af15c0aee4f0cc5a85a38f063b75e630db6e3dbfc11f1635db90ee033f"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/launch.json",
+      "bytes": 3922,
+      "sha256": "7f273f4bf4fe9dae298e22087038e74ee97a9449d70b8910f43cf21828347c25"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/preflight.log.gz",
+      "bytes": 589,
+      "sha256": "f06c0df3359927eb06d0e85cfddd347fc76573e74963bcae361f0c8efb4ec93d"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/queue-at-launch.json",
+      "bytes": 20973,
+      "sha256": "dc570f5037baeb7ea493a2375d3bc116bfa69cdf8567fe358466599369de7c59"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "ba922023e0d3994126a04b7f50046b63aef75ba731d1fe3a87178df1b1094317"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/source-manifest.json",
+      "bytes": 20163,
+      "sha256": "49d8a9ee37c9633a98960a3e8cf0268232e5c40630c8ec149792be56318f03fe"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/source-preflight.log.gz",
+      "bytes": 387,
+      "sha256": "fa31021abb4525f28209e31b7f0cd253aabe4fbb85036aac46976f4764f9f9aa"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v2/unit.xml.gz",
+      "bytes": 1199,
+      "sha256": "2d79ef06d59724ea247e8198207b16c0da8010740165b3de30515b069ae6ddcd"
     },
     {
       "path": "galaxy-evidence/chunked-prefill-state-v1/README.md",

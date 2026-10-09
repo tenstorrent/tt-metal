@@ -1240,3 +1240,24 @@ No session connection is needed for that queue to continue.
 
 [Completed decoder controls](../galaxy-evidence/hf-decoder-controls-v2/README.md),
 [full BFP8 qualification launch](../galaxy-evidence/decoder-gpqa-v1/README.md).
+
+## Oct 9, 09:35-09:37 UTC: restore latency follow-up behind accuracy
+
+- Pushed full GPQA launch, decoder-control evidence and follower changes at
+  `240b4c24d6b`; all 783 indexed tracked artifacts matched their hashes and
+  pre-commit passed. The active BFP8 invocation remains unchanged, with its
+  first physical TP4 replica loaded in 306.66 seconds and later replicas loading.
+- Restored the earlier chunked-state diagnostic in fresh v2 source/control/result
+  directories. It waits for this GPQA's exact completion auditor, then acquires
+  the shared device lock. The prior failed queue remains preserved.
+- Verified the original native BFP4 runtime against its G0 receipt and kept
+  serving chunked-prefill support disabled. Preflight passed 27 tests and six
+  subtests with one hardware skip. The test covers eleven host-logit comparisons
+  under interleaving and physical slot movement; it does not qualify the plugin
+  scheduler or device sampler and does not imply a Tau3 score improvement.
+- A read-only source search referenced a nonexistent run_galaxy_replicas.py;
+  the actual eight-replica execution is in tests/test_galaxy_replicas.py. It loads
+  all eight models serially, so one replica's five-minute load is not the total
+  G0 loading time. No running job was restarted or changed.
+
+[Restored state test](../galaxy-evidence/chunked-prefill-hardware-v2/README.md).
