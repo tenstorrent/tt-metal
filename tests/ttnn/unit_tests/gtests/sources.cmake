@@ -52,6 +52,15 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_unary_program_hash.cpp
 )
 
+set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
+    test_mcast_descriptor.cpp
+    test_mcast_host_api.cpp
+    test_mcast_program.cpp
+    test_mcast_program_spec.cpp
+    test_mcast_validation_lifecycle.cpp
+    test_mcast_wire_topology.cpp
+)
+
 set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_commands.cpp
     ccl/test_ccl_helpers.cpp
