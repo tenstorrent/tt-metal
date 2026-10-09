@@ -8,6 +8,10 @@ cd /work
 export EB_RUN_LIMIT=2400 EB_REPS=4 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
 T=tests/eb_r3_ci
 case $1 in
+  dp) for i in 1 2 3; do
+        echo "##### $(date -u +%T) dpsw: off=- main_env=EB_R3_NO_BLOCK=1"
+        EB_K_EXPR="test_qb2_add and dp_" bash $T/ab_r10.sh - EB_R3_NO_BLOCK=1 -p eb_k_plugin $T/test_eb_r11.py
+      done ;;
   ab) for i in 1 2 3; do
         echo "##### $(date -u +%T) qb2sw: off=- main_env=EB_R3_NO_BLOCK=1"
         EB_K_EXPR="test_qb2_add" bash $T/ab_r10.sh - EB_R3_NO_BLOCK=1 -p eb_k_plugin $T/test_eb_r11.py
