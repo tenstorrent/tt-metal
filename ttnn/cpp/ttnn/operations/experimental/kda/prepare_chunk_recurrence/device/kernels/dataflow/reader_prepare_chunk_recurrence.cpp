@@ -103,9 +103,12 @@ inline void fill_constant_tiles(
     block_masks.push_back(mask_tile_count);
 }
 
-// Replace rows [first_row, TILE_HEIGHT) of each reserved tile with zeros.
-// Tiles use four 16x16 faces; the rows of one face are contiguous.
-inline void zero_rows_from(DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
+// Issue zero writes for rows [first_row, TILE_HEIGHT) of each reserved tile; the
+// caller waits with write_zeros_l1_barrier() before publishing the buffer.
+// Tiles use four 16x16 faces; the padded rows of one face are one contiguous span.
+// Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and every span start
+// meets the 16-byte alignment of the zero writes.
+inline void zero_rows_from(const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
@@ -113,7 +116,6 @@ inline void zero_rows_from(DataflowBuffer& buffer, uint32_t tiles, uint32_t firs
     const uint32_t face_bytes = entry_bytes / (faces_per_tile_row * faces_per_tile_row);
     const uint32_t row_bytes = face_bytes / face_height;
     for (uint32_t tile = 0; tile < tiles; ++tile) {
-        const uint32_t tile_base = buffer.get_write_ptr() + tile * entry_bytes;
         for (uint32_t face_row = 0; face_row < faces_per_tile_row; ++face_row) {
             const uint32_t face_first = face_row * face_height;
             const uint32_t begin = first_row > face_first ? first_row - face_first : 0;
@@ -122,12 +124,10 @@ inline void zero_rows_from(DataflowBuffer& buffer, uint32_t tiles, uint32_t firs
             }
             for (uint32_t face_col = 0; face_col < faces_per_tile_row; ++face_col) {
                 const uint32_t face = face_row * faces_per_tile_row + face_col;
-                auto* words =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_base + face * face_bytes + begin * row_bytes);
-                const uint32_t count = (face_height - begin) * row_bytes / sizeof(uint32_t);
-                for (uint32_t word = 0; word < count; ++word) {
-                    words[word] = 0;
-                }
+                noc.async_write_zeros(
+                    buffer,
+                    (face_height - begin) * row_bytes,
+                    {.offset_bytes = tile * entry_bytes + face * face_bytes + begin * row_bytes});
             }
         }
     }
@@ -245,10 +245,11 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // each padded row an identity step, and replacing (not scaling) the rows keeps
         // arbitrary padding, including NaN, out of the carries. Q only reaches padded outputs.
         if (partial_rows != 0 && head_chunk_index % num_chunks == partial_chunk) {
-            zero_rows_from(k, chunk_key_tiles, partial_rows);
-            zero_rows_from(v, chunk_value_tiles, partial_rows);
-            zero_rows_from(g, chunk_key_tiles, partial_rows);
-            zero_rows_from(beta, Ct, partial_rows);
+            zero_rows_from(noc, k, chunk_key_tiles, partial_rows);
+            zero_rows_from(noc, v, chunk_value_tiles, partial_rows);
+            zero_rows_from(noc, g, chunk_key_tiles, partial_rows);
+            zero_rows_from(noc, beta, Ct, partial_rows);
+            noc.write_zeros_l1_barrier();
         }
         q.push_back(chunk_key_tiles);
         k.push_back(chunk_key_tiles);
