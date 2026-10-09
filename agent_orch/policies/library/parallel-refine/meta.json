@@ -1,0 +1,7 @@
+{
+  "name": "parallel-refine",
+  "description": "Hand-written starting policy (the paper's fixed exploration). Opens W branches and refines every one to R attempts, never closes or stops early. Wasteful on purpose: records the fullest first tree to dream on.",
+  "origin": {"kind": "hand-written"},
+  "aliases": ["fresh"],
+  "exported_at": "2026-10-07"
+}

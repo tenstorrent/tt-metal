@@ -1,0 +1,28 @@
+# Dream-RSI campaign: dit_fused_distributed_rmsnorm prefill latency on a 1x4 Blackhole mesh.
+name: rmsnorm-prefill
+description: dit_fused_distributed_rmsnorm prefill latency (per-chip device kernel time) on a 1x4 Blackhole mesh, 4 shapes
+machine: bh-qbge-15:48486       # 2x p300c = 4 BH chips; the test uses all 4
+
+editable:
+  - ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/*
+brief: brief.md
+rules:
+  - "Do not reduce math fidelity: every compute op stays at MathFidelity::HiFi4 (no HiFi3/HiFi2/LoFi), even if PCC holds. Decided 2026-10-08: lower fidelity raised mean abs error."
+  - "Do not enable approximate math modes (math_approx_mode / APPROX) that the baseline does not use."
+forbidden_patterns:
+  - 'MathFidelity::(HiFi3|HiFi2|LoFi)'
+
+eval:
+  command: >-
+    python agent_orch/adapters/ttmetal_op_perf.py
+    --test tests/ttnn/nightly/unit_tests/operations/fused/test_fused_rms_norm_prefill.py
+    --op-code DitFusedDistributedRmsnormDeviceOperation --warmup 3 --measured 10
+    --extra 'pcc=PCC: ([0-9.eE+-]+)' --extra 'max_abs=max_abs=([0-9.eE+-]+)'
+  direction: minimize
+  unit: us
+  gates: ["pcc >= 0.99999", "max_abs <= 0.05"]   # baseline is ~0.9999985 / ~0.022
+  timeout_s: 1200
+
+budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
+search: {policy: fresh, W: 4, R: 4, beta: 0.6, max_rounds: 6}
+dreaming: {revisions: 5, cost_per_attempt: 0.005, parallel_bonus: 0.01}

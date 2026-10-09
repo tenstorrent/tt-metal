@@ -1,0 +1,9 @@
+{
+  "name": "rmsnorm-prefill-v5",
+  "description": "Learned over 5 dreaming phases on the rmsnorm-prefill campaign. Depth 3 (R from beta); closes a branch whose best trails the round leader by more than noise x (2 + 8 beta) or whose last refinement stalled within noise; never runs a single-attempt step (re-roots instead); caps depth at 2 when the previous round's deepest attempts did not pay.",
+  "origin": {"kind": "dreamed", "campaign": "rmsnorm-prefill", "version": "v5", "machine": "bh-qbge-12",
+             "rounds_replayed": [1, 2, 3, 4, 5], "replay_V": 1.3511, "default_beta": 0.6,
+             "lineage": ["v0 parallel refine", "v1 gap-to-leader close", "v2 depth 3", "v3 stall close + no lone trailing step", "v4 no single-item step", "v5 earned depth"]},
+  "exported_at": "2026-10-08",
+  "caution": "Trained on ~58 attempts of one op; it prunes aggressively. Prefer it when attempts are expensive; prefer parallel-refine to record a complete first tree."
+}

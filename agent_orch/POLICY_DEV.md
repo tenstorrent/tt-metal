@@ -13,14 +13,19 @@ happened, so no device time is used.
 | `CAMPAIGN` | campaign name `<c>` |
 | `LEDGER` | worktree of `dream/<c>/ledger` |
 | `CURRENT` | active policy version, e.g. `v1` |
+| `NEXT` | the version to write if a candidate wins, e.g. `v2` |
 | `ROUNDS` | recorded rounds to replay on, e.g. `1,2` |
 | `M` | number of revisions to write this phase (default 5) |
+| `REPLAY` | the exact replay command line for this campaign |
 
-Write only under `$LEDGER/policies/v<N+1>.../`. Everything else is read-only.
+Write only under `$LEDGER/policies/`. Everything else is read-only. The driver
+commits the ledger and decides `ACTIVE` after you finish: it re-runs the replay of
+`CURRENT` and `NEXT` itself and adopts `NEXT` only if its mean V is at least
+`CURRENT`'s with no illegal batches.
 
 ## 1. What a replay is
 
-`tools/replay.py` takes a `policy.py` and a recorded round:
+`dream replay` takes a `policy.py` and a recorded round:
 
 1. It shows the policy only the round root.
 2. The policy returns a batch of start points from the legal set: `root` (open
@@ -33,19 +38,23 @@ Write only under `$LEDGER/policies/v<N+1>.../`. Everything else is read-only.
 
 Nothing is generated or run. Each replay takes milliseconds.
 
+Use the `REPLAY` command from your inputs, with `<path>` set to the version's
+directory, for example:
+
 ```bash
-agent_orch/tools/replay.py --campaign $CAMPAIGN --rounds $ROUNDS \
+agent_orch/bin/dream replay --campaign $CAMPAIGN --rounds $ROUNDS \
     --policy $LEDGER/policies/<version>/policy.py \
     --out $LEDGER/policies/<version>/replay.json --traces $LEDGER/policies/<version>/traces.jsonl
 ```
 
 The beta sweep, `cost_per_attempt` and `parallel_bonus` come from
-`campaign.yaml: dreaming`. `traces.jsonl` has one line per (round, beta): the
+`dream.yaml: dreaming`. `traces.jsonl` has one line per (round, beta): the
 plan, then every step's batch, closes and revealed outcomes. The policy imports
 its types from `dream.policy_api` (`agent_orch/tools/dream/policy_api.py`).
 Read that file and `$LEDGER/policies/v0/policy.py` before writing a candidate.
 `agent_orch/tools/tests/policies/revision_a.py` is a small example of a policy
-with closing rules.
+with closing rules, and `agent_orch/policies/library/` holds policies learned on
+other campaigns (their `meta.json` says where they came from); read them for ideas.
 
 ## 2. The objective
 
@@ -57,7 +66,7 @@ V = best valid score revealed
     + parallel_bonus   × attempts ÷ steps
 ```
 
-`cost_per_attempt` and `parallel_bonus` are in `campaign.yaml: dreaming`.
+`cost_per_attempt` and `parallel_bonus` are in `dream.yaml: dreaming`.
 `cost_per_attempt` encodes what an attempt really costs us (a build plus a
 turn on the only 4-chip mesh). The policy's score is **V averaged over all
 replayed rounds** at its default beta. The beta sweep is diagnostic: it shows
@@ -76,7 +85,7 @@ for m = 1..M:
     write policies/v<N>-cand<m>/policy.py + notes.md
     replay it on ROUNDS                           → V_m
 winner = argmax V over {CURRENT, cand1..candM}
-copy the winner to policies/v<N+1>/ (unless the winner is CURRENT)
+copy the winner to policies/$NEXT/ (unless the winner is CURRENT)
 ```
 
 Each candidate starts from the strongest version so far, not from scratch.
@@ -131,7 +140,7 @@ to write a rule that fits them exactly and generalizes badly. So:
 
 For each candidate, `policies/v<N>-cand<m>/` with `policy.py`, `notes.md`
 (what changed, which trace evidence motivated it, expected effect), and
-`replay.json`. For the winner, `policies/v<N+1>/` with the same files.
+`replay.json`. For the winner, `policies/$NEXT/` with the same files.
 
 Reply to the orchestrator with:
 

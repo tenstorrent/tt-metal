@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Entry point for the Dream-RSI tools. Uses $DREAM_PY, else the repo's python_env, else python3.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${DREAM_PY:-}" ]]; then
+  main="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  for cand in "${main%/.git}/python_env/bin/python" python3; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import yaml" 2>/dev/null; then DREAM_PY="$cand"; break; fi
+  done
+fi
+[[ -n "${DREAM_PY:-}" ]] || { echo "dream: no python with PyYAML found (set DREAM_PY)" >&2; exit 1; }
+export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$here/../tools${PYTHONPATH:+:$PYTHONPATH}"
+exec "$DREAM_PY" -m dream.cli "$@"

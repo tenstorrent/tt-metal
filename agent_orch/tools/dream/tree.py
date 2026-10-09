@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .campaign import Campaign, parse_node_id
+from .campaign import Campaign, node_from_ref, parse_node_id
 from .policy_api import ROOT, NodeObs, RoundView
 
 
@@ -27,7 +27,13 @@ class RecordedRound:
         for d in self.decisions:
             if d.get("type") == "decision":
                 out.update({int(k): v for k, v in d.get("closed", {}).items()})
+            elif d.get("type") == "close":  # closed by the driver (e.g. a worker lost twice)
+                out[int(d["branch"])] = d["why"]
         return out
+
+    def abandoned(self) -> set[int]:
+        """Branch numbers whose first attempt was lost too often; never reused."""
+        return {int(d["branch"]) for d in self.decisions if d.get("type") == "abandon"}
 
     def steps_done(self) -> int:
         return sum(1 for d in self.decisions if d.get("type") == "decision" and d.get("batch"))
@@ -53,9 +59,12 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def node_tags(c: Campaign, rnd: int | None = None) -> list[str]:
-    pat = f"refs/tags/dream/{c.name}/n/" + (f"r{rnd:02d}-*" if rnd else "*")
-    out = c.git("for-each-ref", "--format=%(refname:short)", pat)
-    return sorted(line.rsplit("/", 1)[1] for line in out.splitlines() if line)
+    """Node ids recorded under refs/dream/<c>/n/ (optionally only round `rnd`)."""
+    out = c.git("for-each-ref", "--format=%(refname)", f"{c.ref_prefix}/n/")
+    ids = [line.rsplit("/", 1)[1] for line in out.splitlines() if line]
+    if rnd:
+        ids = [i for i in ids if i.startswith(f"r{rnd:02d}-")]
+    return sorted(ids)
 
 
 def read_node_file(c: Campaign, nid: str, rel: str) -> str | None:
@@ -89,10 +98,10 @@ def load_node(c: Campaign, nid: str, overrides: dict[str, dict]) -> NodeObs:
     )
 
 
-def load_round(c: Campaign, rnd: int) -> RecordedRound:
+def load_round(c: Campaign, rnd: int, apply_overrides: bool = True) -> RecordedRound:
     rdir = c.ledger / "rounds" / f"r{rnd:02d}"
     decisions = _read_jsonl(rdir / "decisions.jsonl")
-    overrides = {d["node"]: d for d in decisions if d.get("type") == "override"}
+    overrides = {d["node"]: d for d in decisions if d.get("type") == "override"} if apply_overrides else {}
     manifest = json.loads((rdir / "manifest.json").read_text()) if (rdir / "manifest.json").exists() else {}
     branches: dict[int, list[NodeObs]] = {}
     for nid in node_tags(c, rnd):
@@ -101,9 +110,9 @@ def load_round(c: Campaign, rnd: int) -> RecordedRound:
     for b in branches:
         branches[b].sort(key=lambda n: n.attempt)
     root_score = 1.0
-    rr_ref = manifest.get("round_root", "")
-    if rr_ref.startswith(f"dream/{c.name}/n/"):
-        s = json.loads(read_node_file(c, rr_ref.rsplit("/", 1)[1], "eval/score.json") or "{}")
+    root_node = node_from_ref(manifest.get("round_root", ""))
+    if root_node:
+        s = json.loads(read_node_file(c, root_node, "eval/score.json") or "{}")
         root_score = float(s.get("score", 1.0)) if s.get("valid") else 1.0
     return RecordedRound(rnd, _with_deltas(branches, root_score), manifest, decisions, root_score)
 

@@ -1,0 +1,406 @@
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1000px column; status first, then result, then the search (grid, curve), then what was learned, then audit trail */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #171a21; --fg2: #4a5160; --muted: #7a8292; --rule: #dfe2e8;
+  --accent: #2f45c4; --accent-soft: #e6e9fb; --neutral-mark: #b9bfca; --bad: #b5481f; --band: #eef0f4;
+  --ok: #23824f; --warn: #a86a00;
+  --f-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12141a; --surface: #1a1d25; --fg: #e8eaf0; --fg2: #b3b9c6; --muted: #858c9b; --rule: #2c303b;
+    --accent: #8b9cff; --accent-soft: #252b4a; --neutral-mark: #5b6170; --bad: #ef8a5f; --band: #1f222b;
+    --ok: #5fd39a; --warn: #f0b44c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12141a; --surface: #1a1d25; --fg: #e8eaf0; --fg2: #b3b9c6; --muted: #858c9b; --rule: #2c303b;
+  --accent: #8b9cff; --accent-soft: #252b4a; --neutral-mark: #5b6170; --bad: #ef8a5f; --band: #1f222b;
+  --ok: #5fd39a; --warn: #f0b44c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--f-body); padding: 0 16px; margin: 0; }
+main { max-width: 1000px; margin: 0 auto; padding-block: 36px 80px; display: flex; flex-direction: column; gap: 44px; }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; line-height: 1.2; text-wrap: balance; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); letter-spacing: -0.015em; }
+h2 { font-size: 1.3rem; margin-bottom: 12px; }
+h3 { font-size: 1rem; margin-bottom: 8px; }
+p { margin: 0 0 10px; }
+code, .mono { font-family: var(--f-mono); font-size: 0.85em; }
+code { background: var(--band); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.head { display: flex; flex-direction: column; gap: 10px; }
+.desc { color: var(--fg2); max-width: 70ch; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/1 var(--f-mono); text-transform: uppercase;
+  letter-spacing: .06em; padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; width: fit-content; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.st-running { color: var(--accent); } .st-finished { color: var(--ok); }
+.st-blocked, .st-error { color: var(--bad); } .st-stopped, .st-not { color: var(--muted); }
+.statusline { color: var(--fg2); font-size: .95rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.tile .v { font: 700 1.7rem/1.1 var(--f-display); font-variant-numeric: tabular-nums; }
+.tile .k { color: var(--fg2); font-size: .85rem; margin-top: 4px; }
+.meter { height: 5px; background: var(--band); border-radius: 3px; margin-top: 10px; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--accent); }
+.meter.hot > i { background: var(--warn); }
+.box { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px; overflow-x: auto; position: relative; }
+svg { display: block; max-width: 100%; height: auto; }
+svg text { font-family: var(--f-body); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: .85rem; color: var(--fg2); margin-bottom: 12px; align-items: center; }
+.legend i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+.ramp { display: inline-block; width: 140px; height: 10px; border-radius: 2px; margin: 0 6px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.cols ul { margin: 0; padding-left: 1.1em; } .cols li { margin-bottom: 6px; font-size: .95rem; }
+.lineage { margin: 8px 0 0; padding-left: 1.3em; font-size: .93rem; } .lineage li { margin-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 600 11.5px/1.3 var(--f-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--f-mono); font-size: .85rem; }
+details summary { cursor: pointer; color: var(--accent); font-size: .9rem; }
+details pre, pre.spec { white-space: pre-wrap; font: .82rem/1.5 var(--f-mono); background: var(--band); padding: 10px 12px; border-radius: 6px; margin: 8px 0 0; overflow-x: auto; }
+.note { color: var(--muted); font-size: .88rem; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: 13px; line-height: 1.4;
+  padding: 8px 10px; border-radius: 6px; max-width: 340px; z-index: 5; }
+.tip b { font-family: var(--f-mono); font-weight: 500; }
+.cmd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.cmd code { flex: 1 1 280px; padding: 6px 8px; }
+button { font: 500 13px var(--f-body); border: 1px solid var(--rule); background: var(--surface); color: var(--fg); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:focus-visible, .cell:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.empty { color: var(--muted); font-style: italic; }
+@media (max-width: 560px) { main { gap: 36px; } .box { padding: 12px; } }
+</style>
+
+<main id="app">
+  <header class="head">
+    <div class="eyebrow">Dream-RSI campaign</div>
+    <h1 id="name">Campaign</h1>
+    <p class="desc" id="desc"></p>
+    <span class="pill st-not" id="pill">not started</span>
+    <p class="statusline" id="statusline"></p>
+  </header>
+  <section class="tiles" id="tiles" aria-label="Campaign totals"></section>
+  <section id="best-sec"><h2>Best result</h2><div id="best"></div></section>
+  <section><h2>Discovery tree</h2>
+    <div class="box" id="gridBox">
+      <div class="legend" id="gridLegend"></div>
+      <svg id="grid" role="img" aria-label="Every attempt by round, branch and attempt, colored by score"></svg>
+    </div>
+    <p class="note" style="margin-top:8px">Rows are branches, columns are attempts on that branch. Each round starts from the best node so far (outlined). Hover or focus a cell for its idea.</p>
+  </section>
+  <section><h2>Best score vs. attempts</h2>
+    <div class="box" id="progBox">
+      <div class="legend"><span><i style="background:var(--accent)"></i>best valid score so far</span><span><i style="background:var(--neutral-mark);border-radius:50%"></i>one attempt</span><span style="color:var(--bad)">✕ invalid attempt</span></div>
+      <svg id="prog" role="img" aria-label="Best score versus attempts spent"></svg>
+    </div>
+  </section>
+  <section><h2>What we learned</h2><div class="cols" id="insights"></div></section>
+  <section><h2>Rounds</h2><div class="box"><table id="rounds"></table></div></section>
+  <section><h2>Exploration policy</h2><div class="box"><table id="policies"></table></div><p class="note" id="dreamnote" style="margin-top:8px"></p></section>
+  <section><h2>Reproducibility</h2><div class="box" id="repro"></div></section>
+</main>
+<div class="tip" id="tip" hidden></div>
+
+<script id="dream-data" type="application/json">/*__DREAM_DATA__*/null</script>
+<script>
+(function () {
+const D = JSON.parse(document.getElementById("dream-data").textContent || "null");
+const NS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function h(tag, attrs, text, parent) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function s(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const fmt = (x, d = 4) => (x == null || isNaN(x)) ? "–" : Number(x).toFixed(d);
+const sig = x => (x == null || isNaN(x)) ? "–" : Number(x).toPrecision(4).replace(/\.?0+$/, "");
+const dark = () => { const t = document.documentElement.getAttribute("data-theme"); return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; };
+
+if (!D) { $("name").textContent = "No campaign data"; return; }
+document.title = D.campaign + " · Dream-RSI";
+
+/* ---------- header ---------- */
+$("name").textContent = D.campaign;
+$("desc").textContent = D.description || "";
+const st = (D.status && D.status.state) || "not started";
+const pill = $("pill");
+pill.textContent = st;
+pill.className = "pill st-" + st.split(" ")[0];
+const upd = D.status && D.status.updated ? new Date(D.status.updated) : null;
+$("statusline").textContent = [(D.status && D.status.message) || "", upd ? "Updated " + upd.toLocaleString() : "", D.machine ? "Machine " + D.machine : ""].filter(Boolean).join(" · ");
+
+/* ---------- tiles ---------- */
+const B = D.budget || {};
+const bestScore = D.best ? D.best.score : null;
+function tile(v, k, frac) {
+  const t = h("div", {class: "tile"}, null, $("tiles"));
+  h("div", {class: "v"}, v, t);
+  h("div", {class: "k"}, k, t);
+  if (frac != null) { const m = h("div", {class: "meter" + (frac > 0.85 ? " hot" : "")}, null, t); h("i", {style: "width:" + Math.min(100, frac * 100).toFixed(1) + "%"}, null, m); }
+}
+tile(bestScore != null ? fmt(bestScore, 3) + "×" : "–", "best score (1.0 = baseline)");
+tile(B.attempts + " / " + B.max_attempts, "attempts used", B.attempts / B.max_attempts);
+tile(fmt(B.hours, 1) + " / " + B.max_hours + " h", "active time", B.hours / B.max_hours);
+tile("$" + fmt(B.usd, 0) + " / $" + B.max_usd, "model cost", B.usd / B.max_usd);
+tile(String((D.rounds || []).length), "rounds" + (D.baseline ? " · noise ±" + D.baseline.noise_pct + "%" : ""));
+
+/* ---------- best ---------- */
+(function best() {
+  const host = $("best");
+  if (!D.best) { h("p", {class: "empty"}, D.baseline ? "No valid attempt yet." : "The baseline has not been measured yet.", host); return; }
+  const b = D.best;
+  const intro = h("p", {}, null, host);
+  h("code", {}, b.node, intro);
+  intro.appendChild(document.createTextNode(" — " + b.mechanism));
+  const box = h("div", {class: "box"}, null, host);
+  const lg = h("div", {class: "legend"}, null, box);
+  lg.innerHTML = '<span><i style="background:var(--neutral-mark)"></i>baseline</span><span><i style="background:var(--accent)"></i>best</span>';
+  h("span", {}, (D.direction === "minimize" ? "lower is better" : "higher is better") + (D.unit ? " · " + D.unit : ""), lg);
+  const cases = Object.keys(b.cases || {});
+  const W = 860, L = 170, R = 130, rowH = 46, T = 6, H = T + cases.length * rowH + 22;
+  const svg = s("svg", {viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Per-case value, baseline vs best"}, box);
+  const mx = Math.max(...cases.map(c => Math.max(b.cases[c].baseline || 0, b.cases[c].value || 0))) * 1.05 || 1;
+  const X = v => L + v / mx * (W - L - R);
+  const fg = css("--fg"), fg2 = css("--fg2"), muted = css("--muted"), rule = css("--rule"), acc = css("--accent"), neu = css("--neutral-mark");
+  for (let k = 0; k <= 4; k++) { const v = mx * k / 4; s("line", {x1: X(v), x2: X(v), y1: T, y2: H - 20, stroke: rule}, svg); s("text", {x: X(v), y: H - 4, "text-anchor": "middle", "font-size": 11, fill: muted, "font-family": "var(--f-mono)"}, svg, sig(v)); }
+  cases.forEach((c, i) => {
+    const v = b.cases[c], y = T + i * rowH;
+    s("text", {x: L - 10, y: y + 22, "text-anchor": "end", "font-size": 13, fill: fg}, svg, c.length > 24 ? c.slice(0, 23) + "…" : c);
+    s("rect", {x: L, y: y + 6, width: Math.max(1, X(v.baseline) - L), height: 13, rx: 2, fill: neu}, svg);
+    s("text", {x: X(v.baseline) + 6, y: y + 17, "font-size": 11, fill: fg2, "font-family": "var(--f-mono)"}, svg, sig(v.baseline));
+    s("rect", {x: L, y: y + 21, width: Math.max(1, X(v.value) - L), height: 13, rx: 2, fill: acc}, svg);
+    s("text", {x: X(v.value) + 6, y: y + 32, "font-size": 11, fill: fg, "font-family": "var(--f-mono)"}, svg, sig(v.value) + "  (" + fmt(v.ratio, 3) + "×)");
+  });
+  if (b.lineage && b.lineage.length) {
+    const d = h("details", {}, null, host); d.style.marginTop = "12px";
+    h("summary", {}, "How it got there: " + b.lineage.length + " attempts in its lineage", d);
+    const ol = h("ol", {class: "lineage"}, null, d);
+    b.lineage.forEach(x => h("li", {}, x, ol));
+  }
+  const r = D.refs || {};
+  const cmd = h("div", {class: "cmd"}, null, host);
+  const text = r.best_exists ? `agent_orch/bin/dream fetch ${D.campaign} && git log -1 ${r.best_branch}` : `agent_orch/bin/dream fetch ${D.campaign} && git show ${b.ref} --stat`;
+  h("code", {}, text, cmd);
+  const btn = h("button", {type: "button"}, "Copy", cmd);
+  btn.addEventListener("click", () => { navigator.clipboard.writeText(text).then(() => btn.textContent = "Copied", () => btn.textContent = "Select and copy"); });
+  if (b.diffstat) h("p", {class: "note"}, (r.best_exists ? "Branch " + r.best_branch + ": " : "Change vs. start: ") + b.diffstat, host);
+})();
+
+/* ---------- color ramp (diverging around 1.0) ---------- */
+const RL = [[0.85, [178, 84, 48]], [1.0, [226, 228, 234]], [1.15, [158, 178, 236]], [1.35, [88, 112, 214]], [1.6, [30, 44, 140]]];
+const RD = [[0.85, [214, 120, 82]], [1.0, [70, 74, 86]], [1.15, [66, 86, 160]], [1.35, [98, 124, 232]], [1.6, [176, 192, 255]]];
+const allScores = (D.rounds || []).flatMap(r => r.nodes.filter(n => n.valid).map(n => n.score));
+const hi = Math.max(1.2, ...allScores), lo = Math.min(0.85, ...allScores);
+function ramp(v) {
+  const R = dark() ? RD : RL;
+  // stretch the stops to the observed range so small campaigns still show contrast
+  const t = v >= 1 ? 1 + (v - 1) / (hi - 1) * 0.6 : 1 - (1 - v) / (1 - lo) * 0.15;
+  if (t <= R[0][0]) return R[0][1];
+  for (let i = 1; i < R.length; i++) if (t <= R[i][0]) { const [a, ca] = R[i - 1], [b2, cb] = R[i], u = (t - a) / (b2 - a); return ca.map((x, j) => Math.round(x + (cb[j] - x) * u)); }
+  return R[R.length - 1][1];
+}
+const rgb = c => `rgb(${c[0]},${c[1]},${c[2]})`;
+const lum = c => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255;
+
+/* ---------- tooltip ---------- */
+const tip = $("tip");
+function showTip(evt, html, box) {
+  box.appendChild(tip); tip.innerHTML = html; tip.hidden = false;
+  const bb = box.getBoundingClientRect();
+  let x = evt.clientX - bb.left + box.scrollLeft + 14; const y = evt.clientY - bb.top + 14;
+  if (x + tip.offsetWidth > box.scrollLeft + bb.width - 8) x = evt.clientX - bb.left + box.scrollLeft - tip.offsetWidth - 14;
+  tip.style.left = Math.max(4, x) + "px"; tip.style.top = y + "px";
+}
+const hide = () => { tip.hidden = true; };
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const nodeTip = n => `<b>${esc(n.id)}</b> · ${n.valid ? "score <b>" + fmt(n.score) + "</b>" : "<b>invalid</b> (" + esc(n.fail) + ")"}<br>${esc(n.mech || "")}`;
+const rootNode = r => (r.root || "").includes("/n/") ? r.root.split("/").pop() : null;
+const lineageRoots = new Set((D.rounds || []).map(rootNode).filter(Boolean));
+
+/* ---------- grid ---------- */
+function drawGrid() {
+  const svg = $("grid"), box = $("gridBox"); svg.innerHTML = "";
+  const lg = $("gridLegend"); lg.innerHTML = "";
+  const rounds = D.rounds || [];
+  if (!rounds.length) { s("text", {x: 10, y: 24, fill: css("--muted"), "font-size": 14}, svg, "No rounds yet."); svg.setAttribute("viewBox", "0 0 400 40"); return; }
+  const sw = h("span", {}, null, lg);
+  sw.appendChild(document.createTextNode("slower"));
+  const rp = h("span", {class: "ramp"}, null, sw);
+  const stops = []; for (let k = 0; k <= 10; k++) { const v = lo + (hi - lo) * k / 10; stops.push(rgb(ramp(v)) + " " + (k * 10) + "%"); }
+  rp.style.background = "linear-gradient(90deg," + stops.join(",") + ")";
+  sw.appendChild(document.createTextNode("faster than baseline"));
+  lg.insertAdjacentHTML("beforeend", '<span><i style="background:transparent;outline:2px solid var(--accent);outline-offset:-2px"></i>start of next round</span><span><i style="background:repeating-linear-gradient(45deg,var(--bad) 0 2px,transparent 2px 6px);border:1px solid var(--bad)"></i>invalid</span><span><i style="background:var(--band);border:1px dashed var(--muted)"></i>not run</span>');
+  const maxW = Math.max(...rounds.map(r => Math.max(r.W || 1, ...r.nodes.map(n => n.b), ...(r.lost || []).map(x => +x.split("-")[1].slice(1)))));
+  const maxR = Math.max(...rounds.map(r => Math.max(r.R || 1, ...r.nodes.map(n => n.a))));
+  const cw = 46, ch = 30, gap = 4, padL = 34, rg = 26, top = 40, perRow = Math.max(1, Math.floor(900 / (maxR * (cw + gap) + rg)));
+  const colW = maxR * cw + (maxR - 1) * gap, blockH = top + maxW * (ch + gap) + 18;
+  const nrows = Math.ceil(rounds.length / perRow);
+  const W = padL + Math.min(perRow, rounds.length) * (colW + rg), H = nrows * blockH;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.style.minWidth = Math.min(W, 820) + "px";
+  const fg = css("--fg"), fg2 = css("--fg2"), muted = css("--muted"), band = css("--band"), acc = css("--accent"), bad = css("--bad"), surf = css("--surface");
+  const defs = s("defs", {}, svg);
+  const pat = s("pattern", {id: "hatch", width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)"}, defs);
+  s("rect", {width: 6, height: 6, fill: surf}, pat); s("rect", {width: 2, height: 6, fill: bad}, pat);
+  rounds.forEach((r, ri) => {
+    const x0 = padL + (ri % perRow) * (colW + rg), y0 = Math.floor(ri / perRow) * blockH;
+    s("text", {x: x0, y: y0 + 16, "font-size": 13, "font-weight": 600, fill: fg}, svg, "r" + String(r.round).padStart(2, "0"));
+    s("text", {x: x0 + 32, y: y0 + 16, "font-size": 11.5, fill: fg2}, svg, "policy " + (r.policy || "?"));
+    if (ri % perRow === 0) for (let b = 1; b <= maxW; b++) s("text", {x: 2, y: y0 + top + (b - 1) * (ch + gap) + ch / 2 + 4, "font-size": 11, fill: muted, "font-family": "var(--f-mono)"}, svg, "b" + String(b).padStart(2, "0"));
+    for (let a = 1; a <= maxR; a++) s("text", {x: x0 + (a - 1) * (cw + gap) + cw / 2, y: y0 + top - 8, "text-anchor": "middle", "font-size": 10, fill: muted, "font-family": "var(--f-mono)"}, svg, "a" + String(a).padStart(2, "0"));
+    for (let b = 1; b <= maxW; b++) {
+      for (let a = 1; a <= maxR; a++) {
+        const x = x0 + (a - 1) * (cw + gap), y = y0 + top + (b - 1) * (ch + gap);
+        const id = `r${String(r.round).padStart(2, "0")}-b${String(b).padStart(2, "0")}-a${String(a).padStart(2, "0")}`;
+        const n = r.nodes.find(q => q.id === id);
+        if (!n) {
+          if ((r.lost || []).includes(id)) { s("rect", {x, y, width: cw, height: ch, rx: 3, fill: band, stroke: bad, "stroke-dasharray": "3 2"}, svg); s("text", {x: x + cw / 2, y: y + ch / 2 + 4, "text-anchor": "middle", "font-size": 10, fill: bad, "font-family": "var(--f-mono)"}, svg, "lost"); }
+          else s("rect", {x: x + .5, y: y + .5, width: cw - 1, height: ch - 1, rx: 3, fill: band, stroke: muted, "stroke-dasharray": "2 3", "stroke-opacity": .6}, svg);
+          continue;
+        }
+        const g = s("g", {class: "cell", tabindex: 0}, svg);
+        if (n.valid) { const c = ramp(n.score); s("rect", {x, y, width: cw, height: ch, rx: 3, fill: rgb(c)}, g); s("text", {x: x + cw / 2, y: y + ch / 2 + 4, "text-anchor": "middle", "font-size": 10.5, fill: lum(c) > .55 ? "#171a21" : "#ffffff", "font-family": "var(--f-mono)"}, g, fmt(n.score, 2)); }
+        else { s("rect", {x, y, width: cw, height: ch, rx: 3, fill: "url(#hatch)", stroke: bad}, g); s("text", {x: x + cw / 2, y: y + ch / 2 + 4, "text-anchor": "middle", "font-size": 11, fill: fg}, g, "✕"); }
+        if (lineageRoots.has(id)) s("rect", {x: x - 2, y: y - 2, width: cw + 4, height: ch + 4, rx: 5, fill: "none", stroke: acc, "stroke-width": 2.5}, g);
+        s("title", {}, g, id + ": " + (n.valid ? fmt(n.score) : "invalid, " + n.fail));
+        g.addEventListener("mousemove", e => showTip(e, nodeTip(n), box)); g.addEventListener("mouseleave", hide);
+        g.addEventListener("focus", () => { const q = g.getBoundingClientRect(); showTip({clientX: q.right, clientY: q.top}, nodeTip(n), box); }); g.addEventListener("blur", hide);
+      }
+      const why = r.closed && r.closed[String(b)];
+      const len = r.nodes.filter(q => q.b === b).length;
+      if (why && len < maxR) {
+        const t = s("text", {x: x0 + len * (cw + gap) + 4, y: y0 + top + (b - 1) * (ch + gap) + ch / 2 + 4, "font-size": 10, fill: muted}, svg, "closed");
+        s("title", {}, t, why);
+      }
+    }
+  });
+}
+
+/* ---------- progress ---------- */
+function drawProg() {
+  const svg = $("prog"), box = $("progBox"); svg.innerHTML = "";
+  const order = (D.rounds || []).flatMap(r => [...r.nodes].sort((p, q) => p.step - q.step || p.b - q.b).map(n => ({...n, round: r.round, policy: r.policy})));
+  const W = 860, H = 300, L = 50, R = 16, T = 28, Bm = 40;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.style.minWidth = "520px";
+  const fg2 = css("--fg2"), muted = css("--muted"), rule = css("--rule"), band = css("--band"), acc = css("--accent"), neu = css("--neutral-mark"), bad = css("--bad"), surf = css("--surface");
+  if (!order.length) { s("text", {x: L, y: 60, fill: muted, "font-size": 14}, svg, "No attempts yet."); return; }
+  const n = order.length, step = (W - L - R) / n, X = i => L + (i + .5) * step;
+  const vals = order.filter(o => o.valid).map(o => o.score);
+  const y0 = Math.min(0.9, Math.floor((Math.min(1, ...vals) - 0.02) * 10) / 10), y1 = Math.max(1.1, Math.ceil((Math.max(1, ...vals) + 0.02) * 10) / 10);
+  const Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - Bm);
+  let start = 0;
+  (D.rounds || []).forEach((r, i) => {
+    const cnt = r.nodes.length; if (!cnt) return;
+    const xa = L + start * step, xb = L + (start + cnt) * step;
+    if (i % 2 === 0) s("rect", {x: xa, y: T, width: xb - xa, height: H - T - Bm, fill: band}, svg);
+    s("text", {x: (xa + xb) / 2, y: H - 22, "text-anchor": "middle", "font-size": 11, fill: fg2, "font-family": "var(--f-mono)"}, svg, "r" + String(r.round).padStart(2, "0"));
+    s("text", {x: (xa + xb) / 2, y: H - 8, "text-anchor": "middle", "font-size": 10.5, fill: muted}, svg, (r.policy || "") + " · " + cnt);
+    start += cnt;
+  });
+  const ticks = 4;
+  for (let k = 0; k <= ticks; k++) { const v = y0 + (y1 - y0) * k / ticks; s("line", {x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: rule, "stroke-dasharray": "2 3"}, svg); s("text", {x: L - 8, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: muted, "font-family": "var(--f-mono)"}, svg, v.toFixed(2) + "×"); }
+  s("line", {x1: L, x2: W - R, y1: Y(1), y2: Y(1), stroke: muted, "stroke-width": 1.2}, svg);
+  s("text", {x: L + 4, y: Y(1) - 6, "font-size": 10.5, fill: muted}, svg, "baseline");
+  let best = 1, pts = [`${L},${Y(1)}`];
+  order.forEach((o, i) => { const xa = L + i * step, xb = xa + step; if (o.valid && o.score > best) { pts.push(`${xa},${Y(best)}`); best = o.score; pts.push(`${xa},${Y(best)}`); } pts.push(`${xb},${Y(best)}`); });
+  s("polyline", {points: pts.join(" "), fill: "none", stroke: acc, "stroke-width": 2, "stroke-linejoin": "round"}, svg);
+  const bestId = D.best && D.best.node;
+  order.forEach((o, i) => {
+    const g = s("g", {}, svg), cx = X(i), cy = o.valid ? Y(o.score) : Y(y0) - 4;
+    s("circle", {cx, cy, r: 11, fill: "transparent"}, g);
+    if (o.valid) s("circle", {cx, cy, r: o.id === bestId ? 6 : 4.5, fill: o.id === bestId ? acc : neu, stroke: surf, "stroke-width": 2}, g);
+    else s("text", {x: cx, y: cy, "text-anchor": "middle", "font-size": 11, fill: bad}, g, "✕");
+    g.addEventListener("mousemove", e => showTip(e, nodeTip(o), box)); g.addEventListener("mouseleave", hide);
+  });
+  if (bestId) { const bi = order.findIndex(o => o.id === bestId); s("text", {x: Math.max(L + 120, X(bi) - 10), y: Y(D.best.score) - 10, "text-anchor": "end", "font-size": 13, "font-weight": 600, fill: acc}, svg, fmt(D.best.score, 3) + "× " + bestId); }
+  s("text", {x: L, y: 14, "font-size": 11.5, fill: fg2}, svg, "score (geomean improvement vs baseline)");
+}
+
+/* ---------- insights ---------- */
+(function insights() {
+  const I = D.insights || {}, host = $("insights");
+  [["What worked", I.worked], ["Dead ends", I.dead_ends], ["Open leads", I.open_leads]].forEach(([t, xs]) => {
+    const b = h("div", {class: "box"}, null, host); h("h3", {}, t, b);
+    if (!xs || !xs.length) { h("p", {class: "empty"}, "Written at the end of each round.", b); return; }
+    const ul = h("ul", {}, null, b); xs.forEach(x => h("li", {}, x, ul));
+  });
+  if (I.round) h("p", {class: "note"}, "From the summary after round " + I.round + ".", host);
+})();
+
+/* ---------- rounds table ---------- */
+(function rounds() {
+  const t = $("rounds");
+  const hr = h("tr", {}, null, h("thead", {}, null, t));
+  ["Round", "Policy", "Start", "Attempts", "Valid", "Lost", "Best", ""].forEach(x => h("th", {}, x, hr));
+  const tb = h("tbody", {}, null, t);
+  if (!(D.rounds || []).length) { const tr = h("tr", {}, null, tb); h("td", {colspan: 8, class: "empty"}, "No rounds yet.", tr); return; }
+  D.rounds.forEach(r => {
+    const tr = h("tr", {}, null, tb);
+    const ok = r.nodes.filter(n => n.valid).map(n => n.score);
+    h("td", {class: "mono"}, "r" + String(r.round).padStart(2, "0") + (r.finished ? "" : " (running)"), tr);
+    h("td", {}, (r.policy || "") + (r.W ? ` (W${r.W} R${r.R})` : ""), tr);
+    h("td", {class: "mono"}, rootNode(r) || "campaign root", tr);
+    h("td", {class: "num"}, String(r.nodes.length), tr);
+    h("td", {class: "num"}, String(ok.length), tr);
+    h("td", {class: "num"}, String((r.lost || []).length), tr);
+    h("td", {class: "num"}, ok.length ? fmt(Math.max(...ok), 4) : "–", tr);
+    const td = h("td", {}, null, tr);
+    if (r.summary) { const d = h("details", {}, null, td); h("summary", {}, "summary", d); h("pre", {}, r.summary, d); }
+  });
+})();
+
+/* ---------- policies ---------- */
+(function policies() {
+  const t = $("policies");
+  const hr = h("tr", {}, null, h("thead", {}, null, t));
+  ["Version", "What it is", "Ran rounds", "Replay V"].forEach(x => h("th", {}, x, hr));
+  const tb = h("tbody", {}, null, t);
+  (D.policies || []).forEach(p => {
+    const tr = h("tr", {}, null, tb);
+    h("td", {class: "mono"}, p.version + (p.active ? " (active)" : ""), tr);
+    h("td", {}, p.title || "", tr);
+    h("td", {class: "mono"}, (p.ran || []).map(x => "r" + String(x).padStart(2, "0")).join(", ") || "–", tr);
+    h("td", {class: "num"}, p.V != null ? fmt(p.V) + (p.replay_rounds ? " (r" + p.replay_rounds.join(",") + ")" : "") : "–", tr);
+  });
+  const dr = (D.dreaming || []).filter(x => x.candidate || x.rejected || x.skipped);
+  $("dreamnote").textContent = dr.length ? dr.map(x => `After r${String(x.after_round).padStart(2, "0")}: ` + (x.skipped ? x.skipped : x.winner === x.candidate ? `${x.candidate} replaced ${x.current} (V ${fmt(x.current_V)} → ${fmt(x.candidate_V)})` : `kept ${x.current}` + (x.candidate ? ` (${x.candidate} replayed ${fmt(x.candidate_V)} vs ${fmt(x.current_V)})` : ""))).join(" · ")
+    : "Replay V = best score revealed − cost per attempt × attempts + parallel bonus × attempts ÷ steps, averaged over the recorded rounds.";
+})();
+
+/* ---------- reproducibility ---------- */
+(function repro() {
+  const host = $("repro"), r = D.refs || {}, c = D.costs || {};
+  const p = h("p", {}, null, host);
+  p.appendChild(document.createTextNode("Every attempt is a commit under "));
+  h("code", {}, r.prefix + "/n/<node>", p);
+  p.appendChild(document.createTextNode("; policies, decisions and costs are on "));
+  h("code", {}, r.prefix + "/ledger", p);
+  p.appendChild(document.createTextNode(". Final result branch: "));
+  h("code", {}, r.best_branch + (r.best_exists ? "" : " (written when the campaign ends)"), p);
+  const kinds = Object.entries(c.by_kind || {}).map(([k, v]) => `${k} $${fmt(v, 2)}`).join(", ");
+  h("p", {}, "Model cost: $" + fmt(c.total || 0, 2) + (kinds ? " (" + kinds + ")" : "") + (D.baseline ? ". Baseline: " + D.baseline.runs + " runs, noise ±" + D.baseline.noise_pct + "%." : "."), host);
+  const d = h("details", {}, null, host); h("summary", {}, "Campaign spec", d); h("pre", {class: "spec"}, D.spec_yaml || "", d);
+  h("p", {class: "note"}, "Generated " + new Date(D.generated).toLocaleString() + ".", host);
+})();
+
+function drawAll() { drawGrid(); drawProg(); }
+drawAll();
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll); } catch (e) {}
+new MutationObserver(drawAll).observe(document.documentElement, {attributes: true, attributeFilter: ["data-theme"]});
+})();
+</script>
