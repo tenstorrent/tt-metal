@@ -150,14 +150,14 @@ def _ttml_side() -> None:
 
 
 def _ttt_side() -> None:
-    """Host one TttGenerationWorker over four [1, 1] submeshes + MPIRolloutServer."""
+    """Host one TTTRolloutSampler over four [1, 1] submeshes + MPIRolloutServer."""
     from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutServer
     from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
     from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
         bf16_attn_bfp8_mlp_optimizations,
         llama_stop_and_pad,
     )
-    from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
+    from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -171,7 +171,7 @@ def _ttt_side() -> None:
     server: Any = None
     try:
         stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
-        worker = TttGenerationWorker(
+        worker = TTTRolloutSampler(
             mesh_device=parent_mesh,
             model_source=MODEL_ID,
             max_batch_size=TTT_MAX_BATCH_SIZE,
@@ -180,10 +180,13 @@ def _ttt_side() -> None:
             optimizations=bf16_attn_bfp8_mlp_optimizations,
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
+            completions_per_prompt=1,
+            max_completion_length=VERIFY_NEW_TOKENS,
             temperature=TEMPERATURE,
             top_k=0,
             top_p=1.0,
             seed=0,
+            dummy_weights=True,
         )
         assert (
             len(worker.submeshes) == NUM_SUBMESHES
@@ -207,7 +210,7 @@ def _ttt_side() -> None:
                     assert required_key in hf_dict, f"submesh {i} missing required HF key {required_key!r}"
             print(f"[TTT rank {TTT_RANK}] received weights for {len(per_submesh)} submeshes; applying", flush=True)
             t0 = time.perf_counter()
-            worker.update_weights(per_submesh)
+            worker.update_weights(per_submesh, version=worker.weight_version + 1)
             print(
                 f"[TTT rank {TTT_RANK}] applied to all {len(per_submesh)} submeshes in {time.perf_counter() - t0:.2f}s",
                 flush=True,
@@ -217,7 +220,7 @@ def _ttt_side() -> None:
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
             bridge=bridge,
-            generate_fn=worker.generate,
+            generate_fn=worker.generate_tokens,
             on_weights_received=_on_weights_received,
         )
         server.serve_forever()
@@ -228,7 +231,7 @@ def _ttt_side() -> None:
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
         verify_batch = NUM_SUBMESHES * TTT_MAX_BATCH_SIZE
         print("\n========= per-submesh verification =========", flush=True)
-        outs = worker.generate([prompt_ids] * verify_batch, max_new_tokens=VERIFY_NEW_TOKENS)
+        outs = worker.generate_tokens([prompt_ids] * verify_batch, max_new_tokens=VERIFY_NEW_TOKENS)
         print(f"[submesh 0] ({len(outs[0])} tok) {tokenizer.decode(outs[0], skip_special_tokens=False)!r}", flush=True)
         for i in range(1, verify_batch):
             assert outs[i] == outs[0], (
