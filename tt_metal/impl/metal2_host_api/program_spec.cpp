@@ -3437,6 +3437,10 @@ ComputeConfig MakeGen1ComputeConfig(
                                                   ? compute_config.config_1xx->bfp_pack_precision_mode
                                                   : Precision::Approximate;
 
+    // enable_pack_rvv is TT-1.2.x-only (Blackhole); config_12x is ignored on Wormhole.
+    const bool enable_trisc2_rvv = hal.get_arch() == tt::ARCH::BLACKHOLE && compute_config.config_12x.has_value() &&
+                                   compute_config.config_12x->enable_pack_rvv;
+
     return ComputeConfig{
         .math_fidelity = compute_config.fpu_math_fidelity,
         .fp32_dest_acc_en = compute_config.enable_32_bit_dest,
@@ -3444,6 +3448,7 @@ ComputeConfig MakeGen1ComputeConfig(
         .unpack_to_dest_mode = unpack_dst_modes,
         .bfp8_pack_precise = (bfp_pack_precision_mode == Precision::Precise),
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc2_rvv = enable_trisc2_rvv,
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3489,6 +3494,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !compute_config.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
+        .enable_trisc0_rvv = compute_config.config_2xx.has_value() && compute_config.config_2xx->enable_unpack_rvv,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

@@ -429,6 +429,29 @@ public:
         return cflags;
     }
 
+    std::string rvv_compile_flags(const Params& params) const override {
+        // Only TRISC0 of each Neo has the vector unit on Quasar. This is the single source of truth:
+        // a kernel only opts in, and the build applies these flags wherever they are non-empty.
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE &&
+              params.processor_id % NUM_TRISC_CORES == 0)) {
+            return {};
+        }
+        // -march: the tt-qsr32-tensix base ISA plus zve32f and zvl128b (VLEN >= 128).
+        //   Appended after common_flags' -mcpu, so it overrides the arch while keeping the
+        //   tt-qsr32-tensix tuning.
+        // -fno-lto: with -flto the RVV builtins are re-expanded by the link-stage LTRANS units,
+        //   which do not carry the vector -march, breaking codegen at link time (observed on
+        //   Blackhole with sfpi 7.70.0). Compile-only: the link stays stock, this object just
+        //   opts out of LTO.
+        // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers tripped
+        //   -Warray-bounds false positives at -O3 under -Werror (also observed on Blackhole).
+        // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reached through
+        //   explicit intrinsics; keep the auto-vectorizers off scalar kernel/LLK code.
+        return "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+    }
+
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {

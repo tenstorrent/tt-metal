@@ -52,6 +52,8 @@ namespace {
 constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_vadd.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
 constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
+// The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
+constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
 
 // Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
 std::string sfpi_gxx_path() {
@@ -77,7 +79,8 @@ bool sfpi_supports_bh_zve32f() {
         std::filesystem::temp_directory_path() /
         ("tt_metal_rvv_march_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(scratch);
-    const std::vector<std::string> args = {gxx, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
+    const std::vector<std::string> args = {
+        gxx, kBhTensixMcpu, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
     const bool ok = tt::jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
     std::error_code ec;
     std::filesystem::remove_all(scratch, ec);
