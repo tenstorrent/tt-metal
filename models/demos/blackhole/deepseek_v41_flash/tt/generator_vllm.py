@@ -847,7 +847,54 @@ class DeepseekV41ForCausalLM:
         return torch.stack([res[p][1] for p in phys]).float().reshape(N, 1, -1)
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
+    def _fresh_rows_via_spec(self, tokens, start_pos, args, kwargs):
+        """The first decode step after a prefill, when no row of the step carries a draft (the plugin's narrow ``[B, 1]`` decode: a whole wave of new requests): the rows are stepped by the
+        speculative runner's forced single-token round instead of the plain decode trace, so that the drafter is seeded from the prefill's taps (a few tens of ms, ``_spec_seed_taps``) and the
+        round drafts the next tokens: a plain step would leave the drafter without the stream rows of the position it fed (no taps), and the next ``propose_draft_tokens`` would replay the
+        prompt tail through the verify trace (seconds). The round commits exactly one token per row (accept count forced to 0): the same result as the plain step. -> the plain step's output
+        ``[W, 1]`` int32, or None when the step is not of that kind (ordinary decode of rows that are not fresh, host sampling, rows beyond the speculative range).
+        """
+        sp = kwargs.get("sampling_params")
+        if args or sp is None or self.m.sink.taps is None or kwargs.get("read_from_device", True) is not True:
+            return None
+        W = int(tokens.shape[0])
+        remap = kwargs.get("slot_remap")  # (applied by ``_spec_verify`` / the plain step; only looked through here)
+        phys = self.slots.phys if remap is None else [self.slots.phys[int(r)] for r in remap]
+        rows = []
+        for i in range(W):
+            pos = int(start_pos[i])
+            if pos < 0:
+                continue
+            p = phys[i]
+            if (
+                p not in self.slots.live
+                or not bool(self.spec_ok[p])
+                or bool(self.spec_has[p])
+                or int(self.book.n[p]) != pos
+                or self.m.tap_n.get(p) != pos
+            ):
+                return None
+            rows.append(i)
+        if not rows:
+            return None
+        K = self.spec.k
+        block = torch.zeros(W, K + 1, dtype=tokens.dtype)
+        block[:, 0] = tokens.reshape(W, -1)[:, 0]
+        out = self._spec_verify(
+            block,
+            torch.as_tensor(start_pos).reshape(W, 1),
+            num_valid_drafts=torch.zeros(W, dtype=torch.int32),
+            spec_mode="argmax_ids",
+            slot_remap=kwargs.get("slot_remap"),
+            sampling_params=sp,
+        )
+        return out.argmax_ids[:, :1].to(torch.int32).reshape(W, 1)
+
     def decode_forward(self, tokens, start_pos, *args, **kwargs):
+        if self.spec is not None and kwargs.get("spec_mode") is None and kwargs.get("num_valid_drafts") is None:
+            out = self._fresh_rows_via_spec(tokens, start_pos, args, kwargs)
+            if out is not None:
+                return out
         out = self._decode_forward_impl(tokens, start_pos, *args, **kwargs)
         if self.spec is not None and kwargs.get("spec_mode") is None and kwargs.get("num_valid_drafts") is None:
             # a draftless ordinary step advanced the model but not the drafter: the stepped rows are reseeded when the plugin asks for their next drafts (propose_draft_tokens)
