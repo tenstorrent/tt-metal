@@ -360,12 +360,14 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     // matmul label's. Caller-supplied persistent buffers are those tensors and take the same labels. The fused
     // addcmul, addcmul_input_tensor1 + scalar * rs + addcmul_input_tensor2, is applied at the reduce_scatter's final
     // write, so the rs_output is also a function of those two operands: its label is the union of the reduce_scatter
-    // label (first, so its Shard{dim} on the scattered axis wins) and theirs, what launch() gives an elementwise op
-    // over the three; a ternary operand sharded on a mesh axis the reduce_scatter result replicates makes the result
-    // Shard there, and validation does not constrain the ternary tensors' labels. No honest label (nullopt, already
-    // reported): the rs_output keeps the matmul label -- the label of the tensor it scatters -- before the addcmul
-    // union, so the fallback is a function of the inputs alone (returning {} would hand the framework the union over
-    // every tensor argument, the caller's persistent buffers and their stale labels included).
+    // label (first, so its Shard{dim} on the scattered axis wins and its rank is the result's: a collapsed
+    // whole-mesh {N},[Shard{dim}] is not dropped against N-D addcmul operands, see union_topology) and theirs, what
+    // launch() gives an elementwise op over the three; a ternary operand sharded on a mesh axis the reduce_scatter
+    // result replicates makes the result Shard there, and validation does not constrain the ternary tensors' labels.
+    // No honest label (nullopt, already reported): the rs_output keeps the matmul label -- the label of the tensor it
+    // scatters -- before the addcmul union, so the fallback is a function of the inputs alone (returning {} would hand
+    // the framework the union over every tensor argument, the caller's persistent buffers and their stale labels
+    // included).
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};

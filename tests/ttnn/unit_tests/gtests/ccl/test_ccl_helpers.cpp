@@ -1402,6 +1402,10 @@ std::pair<UnionPlacements, MeshShape> union_of(const std::vector<TensorTopology>
     return {UnionPlacements(placements.begin(), placements.end()), shape};
 }
 
+UnionPlacements placements_of(const TensorTopology& label) {
+    return UnionPlacements(label.placements().begin(), label.placements().end());
+}
+
 }  // namespace
 
 TEST(TopologyUnion, FirstShardOnAnAxisWinsAndAClaimedDimReadsReplicate) {
@@ -1465,5 +1469,67 @@ TEST(TopologyUnion, LowerRankShardedLabelsAreDroppedAndStridesAreTheMaximum) {
              nd_label(MeshShape(2, 4), {TopoShard{2}, TopoReplicate{}})});
         EXPECT_EQ(shape, MeshShape(2, 8));
         EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+}
+
+// union_topology: the fused hooks' union as a TensorTopology, with one rule beyond the union's -- a sharded first
+// operand (the collective's label) fixes the result's rank and sharded operands of another rank are left out.
+TEST(TopologyUnion, UnionTopologyKeepsTheRankOfAShardedFirstOperand) {
+    const MeshShape mesh(2, 4);
+    const auto coords = row_major_coords(mesh);
+    const auto union_topology = [&](const std::vector<TensorTopology>& labels) {
+        std::vector<std::reference_wrapper<const TensorTopology>> refs(labels.begin(), labels.end());
+        return ttnn::device_operation::detail::union_topology(refs, coords);
+    };
+
+    // A whole-mesh reduce_scatter result ({N}, [Shard{3}]: every device holds a distinct piece) with two N-D
+    // elementwise (addcmul) operands sharded on dim 3 along axis 1. The union alone keeps only the highest-rank
+    // sharded labels, so it would drop the reduce_scatter label and read [Replicate, Shard{3}]: Replicate on an axis
+    // whose devices hold different pieces. The first operand's rank wins and the result is the reduce_scatter label
+    // over the given coordinates.
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoShard{3}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(result.distribution_shape(), MeshShape(8));
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoShard{3}}));
+        EXPECT_EQ(result.mesh_coords(), coords);
+    }
+    // Uncollapsing the reduce_scatter label instead would not help: [Shard{3}, Shard{3}] unions to
+    // [Shard{3}, Replicate] (a dim claimed on one axis reads Replicate on the next), the same over-claim on the
+    // other axis. Pinned so the alternative is not re-proposed.
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{3}, TopoShard{3}}), nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{3}, TopoReplicate{}}));
+    }
+    // An N-D first operand: a collapsed sharded weight is left out (the union drops it too) while a same-rank bias
+    // still contributes its Shard.
+    {
+        const auto result = union_topology(
+            {nd_label(mesh, {TopoShard{2}, TopoReplicate{}}),
+             collapsed_label(mesh, TopoShard{3}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(result.distribution_shape(), mesh);
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+    // A fully replicated first operand (a whole-mesh all_gather result) decides nothing: the sharded operands' rank
+    // and placements, as the union has them (the lower-rank collapsed bias is dropped).
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoReplicate{}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}}),
+             collapsed_label(mesh, TopoShard{3})});
+        EXPECT_EQ(result.distribution_shape(), mesh);
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoReplicate{}, TopoShard{3}}));
+    }
+    // Nothing sharded anywhere: the first operand's rank, all Replicate, as the union has it.
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoReplicate{}, TopoReplicate{}})});
+        EXPECT_EQ(result.distribution_shape(), MeshShape(8));
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoReplicate{}}));
     }
 }
