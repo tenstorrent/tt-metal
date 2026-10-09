@@ -14,6 +14,16 @@ real token. The 64-layer model,
 the decision head and the demo are later stages. Stage-1 details, numbers and the self-check are in
 [`doc/functional_decoder/README.md`](doc/functional_decoder/README.md).
 
+Stage 2 (graph fusing, prefill) changed the modules in place:
+
+- fused SwiGLU MLP matmul;
+- separate q|k|v and gate matmuls;
+- one full-width fused RoPE op on pre-permuted q/k head dims;
+- GDN in-projection as qkv plus z|b|a.
+
+Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details are in
+[`doc/fused_decoder/README.md`](doc/fused_decoder/README.md).
+
 ## Layout
 
 | path | content |
@@ -25,6 +35,7 @@ the decision head and the demo are later stages. Stage-1 details, numbers and th
 | `tests/probe/test_context_probe.py` | Context probe beyond the app limit (S=16384) with DRAM numbers. |
 | `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
 | `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
+| `doc/fused_decoder/` | Stage-2 (graph fusing) README, work log and `perf/` (tt-perf-report at S=128/2048/8192). |
 
 ## Setup
 
