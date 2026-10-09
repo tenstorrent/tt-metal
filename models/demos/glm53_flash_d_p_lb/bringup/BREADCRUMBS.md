@@ -302,3 +302,16 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Perf measurement: test_perf's warm number is Python wall time over eager dispatch (host dispatch ~60% of device time),
   so host load moves it: the same code measured 7.09 and 7.40 s today. Decide on device time (profiler) or interleaved
   A/B runs, not single wall-time runs hours apart.
+
+## Row gathers on fabric_all_gather (2026-10-09), common.gather_axis (GLM_FABRIC_GATHER=0: ttnn.all_gather)
+
+- tests/test_all_gather_bench.py (common, generic: every all-gather shape in the op report; outputs checked
+  bit-identical to ttnn.all_gather; device time from the profiler's per-call records): fabric_all_gather wins at every
+  model shape, high_bw_all_gather never beats ttnn.all_gather. 640x4096 bf16 axis 1 (79 calls / chunk) 281 -> 208 us,
+  640x1536 132 -> 88, 2560x4096 axis 0 340 -> 289, 640x512 / 2560x512 56 / 65 -> 42 / 53; ~7 ms per chunk. Non-tile
+  rows (KDA's 3x6144 conv state) fail in fabric / high_bw: they keep ttnn.all_gather (as do ttKDA's internal gathers).
+- gather_half / gather_rows / the KDA input gather go through gather_axis: a fresh output per call (ttnn.empty), the
+  op's own cached semaphores, and a 2D topology re-declared on split-layout tensors (rows over both axes, as MiMo's
+  gather_full) - the op rejects their 1D one. Layers 2-4 A/B vs ttnn.all_gather: bit-identical (0 differing elements).
+- ttnn.all_gather / reduce_scatter / all_reduce ignore num_links (all_gather) or pick it when unset: they use every
+  link on the axis (2 per axis on the LoudBox); the op report's per-link numbers now use the real axis links.

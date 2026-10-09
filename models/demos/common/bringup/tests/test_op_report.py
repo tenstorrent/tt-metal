@@ -41,6 +41,20 @@ def _layers_and_weights():
     return sorted(weights), weights
 
 
+def _axis_links(mesh_device) -> dict:
+    """Fabric links per mesh axis: BRINGUP_OPREP_AXIS_LINKS="a0,a1", else the system table the DeepSeek-family CCLs
+    use (P150x8 LoudBox: 2 and 2), else 1."""
+    env = os.environ.get("BRINGUP_OPREP_AXIS_LINKS")
+    if env:
+        return {i: int(v) for i, v in enumerate(env.split(","))}
+    try:
+        from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
+
+        return {a: int(get_num_links(mesh_device, a)) for a in range(len(tuple(mesh_device.shape)))}
+    except Exception:
+        return {}
+
+
 @mesh_parametrize
 def test_op_report(mesh_device):
     import ttnn
@@ -80,6 +94,7 @@ def test_op_report(mesh_device):
     calls = profile_at(start)
     ctx_calls = profile_at(ctx_start) if ctx_start is not None and ctx_start != start else None
     grid = mesh_device.compute_with_storage_grid_size()
+    axis_links = _axis_links(mesh_device)
     rep = op_report.build(
         calls,
         tuple(mesh_device.shape),
@@ -88,12 +103,25 @@ def test_op_report(mesh_device):
         layer_weights=weights,
         context_calls=ctx_calls,
         context_label=f"start {ctx_start}" if ctx_calls is not None else "",
+        axis_links=axis_links,
     )
     title = f"{S.model}: chunk [{start}, {start + chunk}), {len(layers)} profiled layers"
     text = op_report.render(rep, title=title)
     out = S.repo / "generated" / S.model
     out.mkdir(parents=True, exist_ok=True)
     op_report.save(rep, out / "op_report.json")
+    op_report.save_calls(  # the raw per-call records: re-render offline with python -m ...testing.op_report
+        out / "op_calls.json",
+        calls=calls,
+        context_calls=ctx_calls,
+        mesh=tuple(mesh_device.shape),
+        grid=(grid.x, grid.y),
+        arch=ttnn.get_arch_name(),
+        layer_weights=weights,
+        axis_links=axis_links,
+        context_label=f"start {ctx_start}" if ctx_calls is not None else "",
+        title=title,
+    )
     (out / "op_report.txt").write_text(text + "\n")
     print(text, flush=True)
     print(f"wrote {out / 'op_report.json'} and op_report.txt", flush=True)
