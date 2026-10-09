@@ -23,7 +23,7 @@
 //   - Both DEST indices are RAW DEST ROW offsets (TT_SETC16 of DEST_TARGET_REG_CFG_MATH_Offset), not tile indices,
 //     so they are 64 apart per 32x32 dest tile.
 //
-// Geometry: the MOP is two 8-row ELWMULs with dest.incr == 8, i.e. 16 CONTIGUOUS dest rows, and srcb.incr == 0 so
+// Geometry: the MOP covers two 8-row groups with dest.incr == 8, i.e. 16 CONTIGUOUS dest rows, and srcb.incr == 0 so
 // both halves reuse the same 8 per-row scales. That is the demo's tile: an 8x32 logical tile packed into one 16x16
 // DEST face ("Each tile is 8x32, which is the same as a full 16x16 face" -- sdpa.h:317), dest rows 0-7 holding
 // logical columns 0-15 and rows 8-15 holding columns 16-31. The test therefore drives a single 16x16 face
@@ -91,9 +91,8 @@ static constexpr std::uint32_t OUTPUT_GRANULARITY = 1;
 // for.
 static constexpr std::uint32_t MATH_MOP_NUM_FACES = 2;
 
-// This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
-static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
-static constexpr MathFidelity SDPA_FIDELITY = MathFidelity::LoFi;
+// The Python driver selects the MUL (softmax-scale) fidelity through params.h.
+static constexpr EltwiseBinaryType SDPA_OP = EltwiseBinaryType::ELWMUL;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -156,7 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
 // The promoted srca_srcb addrmod helper (sdpa_bcast_col_srca_srcb_reuse_configure_addrmod) leaves its `num_faces`
-// param unread on the LoFi ELWMUL path we instantiate -- the dest.incr is a fixed 8 here, not derived from num_faces
+// param unread on the ELWMUL paths we instantiate -- the dest.incr is a fixed 8 here, not derived from num_faces
 // -- so suppress -Wunused-parameter on this thread too, at file scope for the same template-body reason as above.
 // Unlike the sibling srcb_reuse header, this one needs no -Wunused-variable shim: its MOP-config locals are all read
 // on the path we take. Drop this once the promoted header is warning-clean (tracked in #53295).
@@ -195,14 +194,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The promoted execute runs the output_granularity loop unconditionally; the demo copy gated it behind a
     // `fused_signalling` template arg in position 8, which is gone here. OUTPUT_GRANULARITY == 1 keeps the per-tile
     // FPU_SFPU cadence either way, and the golden ignores signalling cadence.
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
         SDPA_OP,
         NUM_TILES,
         DST_SYNC,
         is_fp32_dest_acc_en,
-        SDPA_FIDELITY,
+        MATH_FIDELITY,
         false /* clear_dest */,
         false /* skip_signalling */,
         OUTPUT_GRANULARITY>(DST_ROW);
