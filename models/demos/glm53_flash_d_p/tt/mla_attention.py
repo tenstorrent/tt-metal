@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, mm_config, replicate
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 MC = ttnn.DRAM_MEMORY_CONFIG
@@ -76,7 +76,7 @@ class TtMLA:
 
     def _write_latent(self, x: ttnn.Tensor, start: int) -> None:
         s = x.shape[-2]
-        lat = ttnn.linear(x, self.w_kva, dtype=ttnn.float32, compute_kernel_config=self.mm, memory_config=MC)
+        lat = ttnn.linear(x, self.w_kva, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         ln = self.kv_norm(lat)
         ttnn.deallocate(lat)
         lb = ttnn.typecast(ln, ttnn.bfloat16, memory_config=MC)
@@ -98,14 +98,14 @@ class TtMLA:
         self._write_latent(x, start)
 
         qr = q_resid if split else self._local_rows(q_resid)
-        q = ttnn.linear(qr, self.w_qb, dtype=self.mid, compute_kernel_config=self.mm, memory_config=MC)
+        q = ttnn.linear(qr, self.w_qb, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         if qr is not q_resid:
             ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
         )
         ttnn.deallocate(q)
-        ql = ttnn.matmul(qh, self.w_uk, dtype=ttnn.bfloat16, compute_kernel_config=self.mm, memory_config=MC)
+        ql = ttnn.matmul(qh, self.w_uk, dtype=ttnn.bfloat16, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         ttnn.deallocate(qh)
         qrm = ttnn.to_layout(ql, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
         ttnn.deallocate(ql)
@@ -135,11 +135,11 @@ class TtMLA:
         ttnn.deallocate(qrm)
         ot = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=MC)
         ttnn.deallocate(o)
-        oh = ttnn.matmul(ot, self.w_uv, dtype=self.mid, compute_kernel_config=self.mm, memory_config=MC)
+        oh = ttnn.matmul(ot, self.w_uv, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         ttnn.deallocate(ot)
         oc = self._concat_heads(oh)  # [1, 1, S/4, 64 * 256]
         ttnn.deallocate(oh)
-        y = ttnn.linear(oc, self.w_o, dtype=self.mid, compute_kernel_config=self.mm, memory_config=MC)
+        y = ttnn.linear(oc, self.w_o, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         ttnn.deallocate(oc)
         if y.dtype != ttnn.bfloat16:
             yb = ttnn.typecast(y, ttnn.bfloat16, memory_config=MC)
