@@ -64,6 +64,30 @@ inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi() 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, is_32bit>();
 }
 
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_<is_fp32_dest_acc_en, is_32bit>();
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_<is_fp32_dest_acc_en, is_32bit>();
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t d2b_dst, std::uint32_t b2d_base, bool is_32bit = false>
+inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, d2b_dst, b2d_base, is_32bit>();
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16, bool is_32bit = false>
+inline void llk_math_generalized_moe_gate_copy4rows_direct() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, src, dst, srcb, is_32bit>();
+}
+
 template <bool is_32bit = false, std::uint32_t num_tiles = 3>
 inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init() {
     SAN_HOOK(unsupported());
