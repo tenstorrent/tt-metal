@@ -2475,6 +2475,8 @@ class UnarySFPUGolden:
         # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
         # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
         self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
+        # polygamma's order, matching the kernel's default when SFPU_POLYGAMMA_ORDER is unset.
+        self._polygamma_order = 1
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2501,12 +2503,15 @@ class UnarySFPUGolden:
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
         relu_max_threshold: float = RELU_MAX_THRESHOLD,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
+        polygamma_order: int = 1,
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
+        # Mirrors the SFPU_POLYGAMMA_ORDER template parameter; only polygamma reads it.
+        self._polygamma_order = polygamma_order
         # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
         # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
         self._relu_min_int_threshold = relu_min_int_threshold
@@ -3488,7 +3493,6 @@ class UnarySFPUGolden:
     _REMAINDER_DIVISOR = 2.0
     _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
     _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
-    _POLYGAMMA_ORDER = 1
     _XIELU_ALPHA_P = 1.0
     _XIELU_ALPHA_N = 1.0
     _XIELU_BETA = 0.5
@@ -3568,8 +3572,8 @@ class UnarySFPUGolden:
         # Float16 rule would make the pole's inf a NaN, which the sweep never judges, so
         # any answer there would pass (see `_sinh`).
         if x <= 0 and float(x).is_integer():
-            return math.inf if self._POLYGAMMA_ORDER % 2 else math.nan
-        return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
+            return math.inf if self._polygamma_order % 2 else math.nan
+        return self._torch_unary(x, lambda t: torch.polygamma(self._polygamma_order, t))
 
     def _xielu(self, x):
         # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
