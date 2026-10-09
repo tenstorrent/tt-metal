@@ -916,6 +916,36 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.reshape(gated, shp)
 
     # ---- DRAM-sharded matmul ---------------------------------------------- #
+    _SMALL_PREFILL_MM_MAX = int(os.environ.get("TT_LAGUNA_SMALL_PREFILL_MM_MAX", "256"))
+
+    def _prefill_linear(self, x, w, ck, **kw):
+        """Prefill linear. Up to _SMALL_PREFILL_MM_MAX tokens a 1D program (activations multicast to every core,
+        each core one N slice of the weight read once) instead of the default 2D grid, which leaves the weight
+        read spread over few rows of work at a short M (128 tokens: 3072x2816 bf8 83 -> 42 us, 2304x3072
+        67 -> 34 us)."""
+        T = x.shape[-2]
+        if T > self._SMALL_PREFILL_MM_MAX or T % TILE:
+            return ttnn.linear(x, w, compute_kernel_config=ck, **kw)
+        kt, nt = w.padded_shape[-2] // TILE, w.padded_shape[-1] // TILE
+        gs = self.device.compute_with_storage_grid_size()
+        pcn = -(-nt // (gs.x * gs.y))
+        used = -(-nt // pcn)
+        grid = ttnn.CoreCoord(min(used, gs.x), -(-used // gs.x))
+        bw = next(d for d in (8, 6, 4, 3, 2, 1) if kt % d == 0)
+        sw = next(d for d in (4, 2, 1) if pcn % d == 0)
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=bw,
+            out_subblock_h=1,
+            out_subblock_w=sw,
+            per_core_M=T // TILE,
+            per_core_N=pcn,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
+
     def _dram_mm(self, x, w_il, w_ds, k, n, ck, fused_activation=None):
         """Width-shard x in L1, run DRAM-sharded matmul, return L1-width-sharded output.
         Falls back to a plain interleaved linear (interleaved weight) if disabled.
@@ -1196,7 +1226,7 @@ class OptimizedDecoder(LightweightModule):
     # ---- prefill ----------------------------------------------------------- #
     def _qkv_roped(self, ln, seq, start_pos, rope=None):
         cfg = self.cfg
-        qkv = ttnn.linear(ln, self.w["wqkv"], compute_kernel_config=self._ck_qkv)  # [1,seq,qkv_w] (seq in dim1)
+        qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)  # [1,seq,qkv_w] (seq in dim1)
         qkv = ttnn.reshape(qkv, (1, 1, seq, self.meta["qkv_w"]))
         # fused prefill head-split — one op replaces 3x slice + 3x reshape + 3x permute.
         # Packed wqkv is [all-Q | all-K | all-V] exactly as this op expects; emits q[1,nh,seq,hd],

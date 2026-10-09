@@ -1020,9 +1020,7 @@ class MultichipDecoder(OptimizedDecoder):
             # of the coarse bf16 top-(K+1), the fp32 cut-off ops, a second top-K, the gather and the re-layouts
             from .router32 import route_topk_rm
 
-            logits32 = ttnn.linear(
-                ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
-            )
+            logits32 = self._prefill_linear(ln_flat, self.w["gate_w"], self._ck_router_precise, dtype=ttnn.float32)
             scores = ttnn.sigmoid(logits32)
             sel = ttnn.add(scores, self.w["e_bias_f32"])
             return route_topk_rm(sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob)
@@ -1416,12 +1414,12 @@ class MultichipDecoder(OptimizedDecoder):
             out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
             return out if keep_sharded else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
         # prefill: interleaved packed gate+up linear, split, SwiGLU, down
-        gu = ttnn.linear(x, w[guk], compute_kernel_config=ck)  # [.,seq,2I]
+        gu = self._prefill_linear(x, w[guk], ck)  # [.,seq,2I]
         shp = list(gu.shape)
         g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
         u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
         gg = ttnn.mul(ttnn.silu(g), u)
-        return ttnn.linear(gg, w[dk], compute_kernel_config=ck)
+        return self._prefill_linear(gg, w[dk], ck)
 
     # ---- dense/shared MLP: gate/up column, down row -> caller reduces ------ #
     def _mlp(self, ln, T, sharded):
@@ -1522,7 +1520,7 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
-        o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)  # row-parallel partial
+        o = self._prefill_linear(attn, self.w["wo"], self._ck_o)  # row-parallel partial
         o = self._reduce(o)
         h = ttnn.add(residual, o)
         ln2 = self._rms(h, self.w["post_ln"])
@@ -1553,7 +1551,7 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
-        o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
+        o = self._prefill_linear(attn, self.w["wo"], self._ck_o)
         o = self._reduce(o)
         h = ttnn.add(residual, o)
         ln2 = self._rms(h, self.w["post_ln"])
@@ -1647,7 +1645,7 @@ class MultichipDecoder(OptimizedDecoder):
             attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
             attn = self._gate(attn, ln)
-            o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
+            o = self._prefill_linear(attn, self.w["wo"], self._ck_o)
             o = self._reduce(o)
             h = ttnn.add(residual, o)
             ln2 = self._rms(h, self.w["post_ln"])
