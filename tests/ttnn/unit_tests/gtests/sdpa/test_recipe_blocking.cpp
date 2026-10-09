@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -98,6 +99,28 @@ TEST(SDPARecipeBlocking, L1LimitsTheChoice) {
         const auto choice = choose_recipe_blocking(p);
         ASSERT_TRUE(choice.has_value());
         expect_valid(p, *choice);
+    }
+}
+
+TEST(SDPARecipeBlocking, LargeHeadDimsFindAFittingBlocking) {
+    // D512 (Gemma-4 global layers, SD / FLUX.2 VAEs) and D1152 (Qwen-Image-2.1 VAE) do not fit L1 in the fitted
+    // search range (Q128+ x K256+): the chooser extends down to one-tile chunks, dense and with a causal key range.
+    // D512 fits every recipe; D1152 the FP32-state recipes (routed FP32-dest calls run ACCURATE).
+    for (const auto& selection : kSelections) {
+        const bool fp32 = selection.recipe == Recipe::C || selection.recipe == Recipe::D;
+        for (const uint32_t d_tiles : fp32 ? std::vector{16u, 36u} : std::vector{16u}) {
+            for (const bool causal : {false, true}) {
+                auto p = problem(RecipeOp::Dense, selection, 1, 4096, 4096, d_tiles);
+                if (causal) {
+                    p.key_range = p.causal = true;
+                    p.mask_page_bytes = 576;
+                    p.extra_l1_bytes = 3072;
+                }
+                const auto choice = choose_recipe_blocking(p);
+                ASSERT_TRUE(choice.has_value()) << "D" << d_tiles * 32 << " causal " << causal;
+                expect_valid(p, *choice);
+            }
+        }
     }
 }
 
