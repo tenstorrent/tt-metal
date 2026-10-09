@@ -11,7 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow_host.hpp"
+#include "ttnn/kernel_lib/ccl/ccl_helpers_dataflow_host.hpp"
 
 namespace ttnn::ccl_host {
 
