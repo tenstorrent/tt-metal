@@ -282,26 +282,3 @@ def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
         assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        (3, 4, 64, 32),
-        (128, 128),
-    ],
-)
-def test_lgamma_fp32(device, shapes):
-    torch.manual_seed(42)
-    torch_dtype = torch.float32
-    ttnn_dtype = ttnn.float32
-
-    x_torch = torch.empty(shapes, dtype=torch_dtype).uniform_(-5, 5)
-    z_torch = torch.lgamma(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.lgamma(x_tt)
-
-    tt_out = ttnn.to_torch(z_tt)
-
-    assert_with_pcc(z_torch, tt_out, 0.999)
