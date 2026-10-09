@@ -19,6 +19,14 @@
 //   - Seeks (reseek(), plan_*): a loop whose page id is affine in its counter (page = a * i + b) could program the
 //     sequence once before the loop, with a pop amount of a.
 //   - The hit check (serve_on_side()): with both of the above, a transfer is a single push or pop.
+//
+// Limitation: the sequencer assumes it owns both address generators of the DM core. It resets and programs them on
+// first use and keeps their state in sides[], so a kernel that also programs an address generator directly (the
+// overlay API, addrgen_api.hpp / addrgen_state.h) can have its programming overwritten, or leave the sequencer serving
+// from stale state: silently wrong addresses. Nothing detects mixed use. Until the generators can be handed over (e.g.
+// a scoped ownership guard that makes TensorAccessor transfers use software while it lives, or an API that exposes a
+// programmed sequence to the kernel), a kernel that drives the address generators itself must be built with
+// TT_TA_ADDRGEN_DISABLE, so its TensorAccessor transfers use software addresses.
 
 #pragma once
 

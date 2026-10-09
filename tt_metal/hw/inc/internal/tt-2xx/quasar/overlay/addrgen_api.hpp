@@ -20,6 +20,10 @@
  * - `xxx_addrgen<ADDRGEN_1>()` - Functions for address generator 1
  * `xxx_addrgen_0()` / `xxx_addrgen_1()` aliases are provided at the end of the file.
  *
+ * On Quasar DM cores with the ATT backend, TensorAccessor NoC transfers already use both address generators (the
+ * sequencer, tensor/addrgen_sequencer.h). A kernel that programs them directly with this API must be built with
+ * TT_TA_ADDRGEN_DISABLE, or the two will overwrite each other's state.
+ *
  * ## Hardware Loop Implementation
  *
  * Each address generator implements following loops in hardware:
