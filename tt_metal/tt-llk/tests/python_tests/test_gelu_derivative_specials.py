@@ -3,7 +3,7 @@
 
 """GELU derivative on the bit patterns a finite-value sweep never presents.
 
-`calculate_gelu_derivative_polynomial` picks its region with a chain of ordered
+`calculate_gelu_derivative_simple` picks its region with a chain of ordered
 float compares (x >= 3.1719 -> 1.0, x >= -3 -> polynomial, x > -13.375 -> tail,
 else 0). SFPU compares order NaNs by sign and magnitude, so +NaN sorts above +inf
 and -NaN below -inf: without an explicit case +NaN comes out as 1.0 and -NaN as 0
@@ -15,9 +15,11 @@ keeps 1.0 / 0 on both architectures: it ends in convert<vFloat16b>
 anyway. Wormhole keeps the old behaviour on both arms.
 
 Inputs are written as raw bit patterns through an integer view, so both NaN signs
-and the two extreme payloads (0x7F800001 / 0xFFFFFFFF for fp32, 0x7F81 / 0xFFFF for
-bfloat16) reach L1 as asked -- torch's float -> bfloat16 conversion would collapse
-every NaN onto one positive pattern.
+reach L1 as asked -- torch's float -> bfloat16 conversion would collapse every NaN
+onto one positive pattern. The two extreme payloads (0x7F800001 / 0xFFFFFFFF) also
+survive for fp32; the bfloat16 rows (0x7F81 / 0xFFFF) are packed through float32
+and ml_dtypes, which keep the sign but canonicalise the payload, so there they
+repeat the plain +-NaN rows.
 
 Reference: GELU'(+inf) = 1, GELU'(-inf) = 0, GELU'(+-0) = 0.5, GELU'(NaN) = NaN.
 """
@@ -27,6 +29,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
@@ -142,6 +145,8 @@ def _classify(v):
     return "%.9g" % v
 
 
+# Quasar's unary SFPU dispatch has no gelu_derivative arm (static_assert at compile time).
+@skip_for_quasar
 @pytest.mark.parametrize(
     "approx", [ApproximationMode.No, ApproximationMode.Yes], ids=["exact", "approx"]
 )
@@ -162,9 +167,10 @@ def test_gelu_derivative_specials(out_fmt, dest_acc, approx):
         CONTROLS,
         controls,
     )
-    # The probes must have arrived: the -0.0/+0.0 lanes evaluate the polynomial
-    # to 0.5, and a stimuli path that lost them would leave the whole tile at 0.
-    assert got["+0.0"] == "0.5", "the +0.0 probe did not reach the kernel: %s" % got
+    # The probes must have arrived. The background is 0.0, whose GELU' is 0.5, so a
+    # stimuli path that lost the probes would leave every lane at 0.5; the +inf lane
+    # saturates to 1 and can tell the two apart.
+    assert got["+inf"] == "1", "the +inf probe did not reach the kernel: %s" % got
 
     propagates = (
         get_chip_architecture() == ChipArchitecture.BLACKHOLE
