@@ -10,7 +10,9 @@
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif defined(SDPA_RECIPE_ACCURATE)
+#elif defined(SDPA_RECIPE_ACCURATE) || (defined(ARCH_WORMHOLE) && defined(SDPA_RECIPE_FP32))
+// Wormhole BALANCED too: at -O3 its chunked prefill build with a sink and a device-tensor start overflows the kernel
+// config buffer (70768 B).
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("O2")
