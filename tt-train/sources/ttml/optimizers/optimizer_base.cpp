@@ -38,9 +38,10 @@ void OptimizerBase::restore_initial_lr(const serialization::StateDict& dict) {
 void restore_topology(
     std::initializer_list<autograd::TensorPtr> written, const tt::tt_metal::TensorTopology& topology) {
     for (const auto& tensor_ptr : written) {
-        auto value = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE);  // the tensor the step stored
+        // A Tensor is a handle: this copy shares the stored tensor's attributes, so the relabel lands on the stored
+        // tensor (the one the step wrote) and on every alias of it. No set_value: nothing else changes.
+        auto value = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE);
         value.update_tensor_topology(topology);
-        tensor_ptr->set_value(value);
     }
 }
 
