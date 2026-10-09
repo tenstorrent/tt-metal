@@ -424,7 +424,7 @@ def test_bcast_sec_act(device, kind, case):
 
 # QuietBox 2 decode residual adds on one chip (test_eb_r11.test_qb2_add): width-sharded bf16 add, 6, 4 and 2 tiles per core,
 # Gemma-4 31B's with MUL_UNARY_SFPU after; every bf16 pattern in a against 64 b values of the special and normal set.
-QB2 = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 5376, "dp_add": 5376}
+QB2 = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 3584, "dp_add": 3584, "qwen_qb2_40": 5120}
 
 
 @pytest.mark.parametrize("cfg", list(QB2))
