@@ -33,12 +33,15 @@ FORMATS = [
     for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
 ]
 
-# (atol, rtol): two output steps of relative slack plus a near-zero floor.
-TOLERANCE = {
-    DataFormat.Float16_b: (0.02, 2.0**-6),
-    DataFormat.Float16: (0.005, 2.0**-9),
-    DataFormat.Float32: (1e-4, 1e-4),
+# Two output steps of relative slack. The near-zero floor is that slack times the smallest
+# statistic a check compares (see floor_atol), so no variance here falls under it.
+RTOL = {
+    DataFormat.Float16_b: 2.0**-6,
+    DataFormat.Float16: 2.0**-9,
+    DataFormat.Float32: 1e-4,
 }
+# Large-mean data: a purely relative check that only the anchored (shifted) sums pass.
+LARGE_MEAN_RTOL = 2e-4
 
 STREAM, COMBINE, SWITCH = 0, 1, 2
 ROW, RAW, SPLIT, COMBINED, ROW_VAR_ONLY = 0, 1, 2, 3, 4
@@ -72,6 +75,8 @@ class Scenario:
     partial_last_tile: bool = False
     start_row: int = 0
     num_rows: int = TILE_DIM
+    # Columns near 1000 with a spread of 0.005-0.015, so an unshifted sum loses the variance.
+    large_mean: bool = False
 
     @property
     def block(self):
@@ -116,6 +121,18 @@ SCENARIOS = {
         partial_last_tile=True,
         start_row=7,
         num_rows=20,
+    ),
+    # Float32 only: the anchor keeps the variance to ~6e-5 relative here, against ~3e-2 without it.
+    "stream_row_dual_large_mean_3x4_partial": Scenario(
+        tile_count=12,
+        tiles_per_block=4,
+        partial_last_tile=True,
+        start_row=7,
+        num_rows=20,
+        large_mean=True,
+    ),
+    "stream_row_single_large_mean_2t": Scenario(
+        tile_count=2, dual=False, large_mean=True
     ),
     "stream_var_only_dual_2t": Scenario(tile_count=2, finalize=ROW_VAR_ONLY),
     "stream_raw_g5_dual_2x2_partial": Scenario(
@@ -166,12 +183,15 @@ SCENARIOS = {
 }
 
 
-def make_stimuli(tile_count, torch_format):
+def make_stimuli(tile_count, torch_format, large_mean=False):
     """Row-major [32, 32 * tile_count]; per-column offset and spread expose lane or row mix-ups."""
     torch.manual_seed(0)
     column = torch.arange(TILE_DIM, dtype=torch.float32)
     offset = (column - 15.5) * 0.25
     spread = 0.5 + column / TILE_DIM
+    if large_mean:
+        offset = offset + 1000.0
+        spread = 0.005 + 0.01 * column / (TILE_DIM - 1)
     noise = torch.empty(TILE_DIM, tile_count * TILE_DIM).uniform_(-1.0, 1.0)
     block = offset.repeat(tile_count) + spread.repeat(tile_count) * noise
     return block.to(torch_format)
@@ -228,6 +248,15 @@ def scalar_slot(tile, value, group_id, rows):
     return golden, device
 
 
+def floor_atol(golden, rtol, scale=None):
+    """Near-zero floor: rtol times the smallest non-zero statistic in the check, or times scale."""
+    if scale is not None:
+        return rtol * scale
+    magnitude = golden.abs()
+    magnitude = magnitude[magnitude > 0]
+    return rtol * magnitude.min().item() if magnitude.numel() else 0.0
+
+
 def row_slot(tile, stat, row=0):
     """(golden, device) of tile row `row` = stat with the next three rows zero."""
     golden = torch.zeros(4, TILE_DIM, dtype=torch.float64)
@@ -235,9 +264,16 @@ def row_slot(tile, stat, row=0):
     return golden.flatten(), tile[row : row + 4].flatten()
 
 
+VARIANTS = [
+    pytest.param(formats, name, id=f"{name}-{formats.input_format.name}")
+    for name, scenario in SCENARIOS.items()
+    for formats in FORMATS
+    if not scenario.large_mean or formats.input_format == DataFormat.Float32
+]
+
+
 @pytest.mark.quasar
-@pytest.mark.parametrize("formats", FORMATS, ids=lambda f: f.input_format.name)
-@pytest.mark.parametrize("scenario_name", list(SCENARIOS))
+@pytest.mark.parametrize("formats, scenario_name", VARIANTS)
 def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
     """Shifted two-pass per-column mean / population variance (the _two_pass_* helpers)."""
     scenario = SCENARIOS[scenario_name]
@@ -251,7 +287,7 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
     tile_count = scenario.tile_count
     dims = [TILE_DIM, tile_count * TILE_DIM]
 
-    block = make_stimuli(tile_count, torch_format)
+    block = make_stimuli(tile_count, torch_format, scenario.large_mean)
     src_A = tilize_block(
         block.flatten(), dims, stimuli_format=formats.input_format
     ).flatten()
@@ -338,8 +374,14 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
             if not scenario.average_variance:
                 total_var = total_var * TILE_DIM
             group = scenario.group_a
+            # The total mean cancels column means of up to ~4 that went through Dest centred on
+            # one lane, so its error scales with them, not with the near-zero result.
             checks.append(
-                ("mean", *scalar_slot(first, total_mean, group, range(GROUP_UNITS)))
+                (
+                    "mean",
+                    *scalar_slot(first, total_mean, group, range(GROUP_UNITS)),
+                    mean.abs().mean().item(),
+                )
             )
             checks.append(("var", *scalar_slot(second, total_var, group, range(1))))
     elif scenario.mode == COMBINE:
@@ -363,9 +405,10 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
         checks.append(("mean_b", *raw_slot(state, mean_b, scenario.group_b)))
         checks.append(("m2_b", *raw_slot(state_2, m2_b, scenario.group_b)))
 
-    atol, rtol = TOLERANCE[formats.output_format]
+    rtol = LARGE_MEAN_RTOL if scenario.large_mean else RTOL[formats.output_format]
     failed = []
-    for name, golden_lanes, device_lanes in checks:
+    for name, golden_lanes, device_lanes, *scale in checks:
+        atol = 0.0 if scenario.large_mean else floor_atol(golden_lanes, rtol, *scale)
         if not passed_test(
             golden_lanes.to(torch.float32),
             device_lanes.to(torch.float32),

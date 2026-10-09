@@ -36,14 +36,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
+    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
@@ -218,6 +224,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT  = params.TILE_CNT;
+    const std::uint32_t DST_INDEX = params.DST_INDEX;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
 
@@ -227,15 +237,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
     _two_pass_clear_stats_();
 
-    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
-    const std::uint32_t last_tile       = params.TILE_CNT - 1;
-    const std::uint32_t dst             = params.DST_INDEX;
+    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
+    const std::uint32_t last_tile       = TILE_CNT - 1;
+    const std::uint32_t dst             = DST_INDEX;
 
     if constexpr (TWO_PASS_MODE == 0)
     {
         std::uint32_t rows = 0;
-        for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+        for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
         {
             rows += tile_window(tile, last_tile).num;
         }
@@ -285,7 +295,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else if constexpr (TWO_PASS_MODE == 1)
     {
         std::uint32_t total_rows = 0;
-        for (std::uint32_t first = 0; first < params.TILE_CNT; first += TWO_PASS_BLOCK_TILES)
+        for (std::uint32_t first = 0; first < TILE_CNT; first += TWO_PASS_BLOCK_TILES)
         {
             const std::uint32_t block_rows = two_pass_in_place(dst, first, TWO_PASS_BLOCK_TILES, last_tile);
             total_rows += block_rows;
@@ -373,14 +383,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 
-    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
+    const std::uint32_t tiles_per_block = two_pass_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
@@ -388,7 +405,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            _llk_pack_(params.DST_INDEX, block * tiles_per_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_pack_(DST_INDEX, block * tiles_per_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }

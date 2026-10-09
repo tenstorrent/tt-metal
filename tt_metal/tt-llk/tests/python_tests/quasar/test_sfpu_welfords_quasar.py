@@ -38,11 +38,12 @@ WELFORDS_FORMATS = [
     for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
 ]
 
-# (atol, rtol): two output steps of relative slack plus a near-zero floor.
-WELFORDS_TOLERANCE = {
-    DataFormat.Float16_b: (0.02, 2.0**-6),
-    DataFormat.Float16: (0.005, 2.0**-9),
-    DataFormat.Float32: (1e-4, 1e-4),
+# Two output steps of relative slack. The near-zero floor is that slack times the smallest
+# statistic a check compares (see floor_atol), so no variance here falls under it.
+WELFORDS_RTOL = {
+    DataFormat.Float16_b: 2.0**-6,
+    DataFormat.Float16: 2.0**-9,
+    DataFormat.Float32: 1e-4,
 }
 
 # After the row-quad transpose, state lane (r, c) tracks tile column QUAD_COLUMN[r](c).
@@ -204,6 +205,13 @@ def face_slot(tile, stat, group_id):
     return golden, device
 
 
+def floor_atol(golden, rtol):
+    """Near-zero floor: rtol times the smallest non-zero statistic in the check."""
+    magnitude = golden.abs()
+    magnitude = magnitude[magnitude > 0]
+    return rtol * magnitude.min().item() if magnitude.numel() else 0.0
+
+
 def row_slot(tile, stat):
     """(golden, device) of a Row-layout slot: tile row 0 = stat, rows 1-3 = 0."""
     golden = torch.zeros(4, TILE_DIM, dtype=torch.float64)
@@ -321,9 +329,10 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
             ("saved_m2", *face_slot(saved_m2_tile, golden["saved_m2"], group))
         )
 
-    atol, rtol = WELFORDS_TOLERANCE[formats.output_format]
+    rtol = WELFORDS_RTOL[formats.output_format]
     failed = []
     for name, golden_lanes, device_lanes in checks:
+        atol = floor_atol(golden_lanes, rtol)
         if not passed_test(
             golden_lanes.to(torch.float32),
             device_lanes.to(torch.float32),
