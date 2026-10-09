@@ -665,11 +665,13 @@ def _reduce_scatter_minimal_direct(tensor, dim, cluster_axis):
     )
 
 
-def _strided_reduce_scatter_async(tensor, mesh_device, dim, cluster_axis):
+def _strided_reduce_scatter_async(tensor, mesh_device, dim, cluster_axis, persistent_output_buffers=None):
     # Each device's slice is 2 x 2 tiles: one matmul block (mm_block_ht x mm_block_wt) of the fused matmul the strided
-    # reduce_scatter is the writer of; stand-alone it still needs that geometry.
+    # reduce_scatter is the writer of; stand-alone it still needs that geometry. `persistent_output_buffers` is the
+    # op's caller-owned [intermediate, output] pair.
     return ttnn.experimental.strided_reduce_scatter_async(
         tensor,
+        persistent_output_buffers=persistent_output_buffers,
         dim=dim,
         multi_device_global_semaphore=_semaphores(mesh_device, 3),
         mm_block_ht=2,
@@ -951,3 +953,46 @@ def test_strided_reduce_scatter_async_collapsed_shard_same_dim_inner_axis(mesh_d
     pieces = _pieces(full, num_devices)
     expected = torch.cat([sum(pieces[r * cols : (r + 1) * cols]) for r in range(rows)], dim=3)
     assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", [8], indirect=True, ids=["1x8"])
+def test_strided_reduce_scatter_async_refused_label_falls_back_to_the_input_not_the_buffers(
+    mesh_device, warn_only_ccl_topology
+):
+    """A refused label falls back to the INPUT's label, whatever the caller's persistent buffers carry (the convention
+    ccl_topology_utils.hpp documents). The hooks this PR adds used to return {} on a refusal, which handed launch()
+    the union over every tensor argument -- the persistent buffers included -- so the fallback depended on the
+    buffers' history: before this change the output here read (2, 8), [Shard(3), Shard(2)], the input's label unioned
+    with the stale (1, 8), [Replicate, Shard(2)] the buffers' mapper left on them; now the result and the caller's
+    output handle (the same tensor) both read the input's (2, 4), [Shard(3), Replicate].
+
+    The refusal: the input is mapped with a (2, 4) mesh_shape override on the 1x8, a label whose axes are not the
+    mesh's (the mapper distributes it row-major over the line: devices 0-3 hold the first half of dim 3, 4-7 the
+    second), which the helper refuses in every mode; warn-only, so the op still runs. Eight devices on a line are
+    needed for that label, hence 1x8 only. The bytes are checked too: device d holds chunk d of the ring sum, four
+    copies of each half."""
+    torch.manual_seed(31)
+    rows, cols, num_devices = _mesh(mesh_device)
+    halves = _integers([1, 1, 64, 64 * num_devices * 2])
+    tt_input = _from_torch(halves, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(2, 4), dims=(3, None)))
+    _skip_unless_ring(tt_input, 1)
+    assert _placements(tt_input) == [SHARD(3), REPLICATE]
+    assert _dist_shape(tt_input) == (2, 4)
+    stale_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 2))
+    intermediate = _from_torch(
+        torch.zeros([1, 1, 64 * num_devices, 64 * num_devices]).bfloat16(), mesh_device, stale_mapper
+    )
+    output = _from_torch(torch.zeros([1, 1, 64 * num_devices, 64]).bfloat16(), mesh_device, stale_mapper)
+    assert _placements(output) == [REPLICATE, SHARD(2)]
+
+    tt_output = _strided_reduce_scatter_async(
+        tt_input, mesh_device, dim=3, cluster_axis=1, persistent_output_buffers=[intermediate, output]
+    )
+
+    for tensor in (tt_output, output):
+        assert _placements(tensor) == [SHARD(3), REPLICATE]
+        assert _dist_shape(tensor) == (2, 4)
+    first, second = _pieces(halves, 2)
+    for shard, piece in zip(_shards(tt_output), _pieces(4 * (first + second), num_devices)):
+        assert torch.equal(shard, piece)
