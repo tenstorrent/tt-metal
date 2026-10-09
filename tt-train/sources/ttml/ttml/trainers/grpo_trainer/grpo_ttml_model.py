@@ -135,9 +135,8 @@ def setup_ttml_model(
 def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
     """Open the device and return the ``ttnn.MeshDevice``.
 
-    Llama opens the ``AutoContext`` device directly (as
-    ``LlamaGRPOCompleter``); Qwen3 opens a named mesh so an ``"fsdp"`` axis
-    exists (as ``Qwen3GRPOCompleter``). Tests may override this to reuse an
+    Llama opens the ``AutoContext`` device directly; Qwen3 opens a named mesh
+    so an ``"fsdp"`` axis exists. Tests may override this to reuse an
     already-open device.
 
     Llama leaves an already-set fabric config alone: in a 2-rank job both ranks
