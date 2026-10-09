@@ -159,3 +159,20 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Tried and reverted: fabric_all_gather for the model's other row gathers (gather_half, gather_rows, KDA input,
   shared expert): 10.73 s vs 10.74 s, no gain (ttnn.all_gather is as fast at these shapes). Needs the tensors'
   topology re-declared 2D (split-layout tensors carry a 1D one), as MiMo's gather_full does.
+
+## Indexer score: one fused op (2026-10-09), GLM_INDEXER_SCORE=bringup (default; "heads" kept)
+
+- Before: score = sum_h w_h relu(q_h k^T) as 32 per-head ttnn.linear (fp32 [640, 14080] out, 0.415 ms each) + 32 fp32
+  addcmul (0.277 ms each): 22 of the indexer's 24.8 ms at 51200, all DRAM traffic. ttnn.experimental.indexer_score_dsa
+  ("op") does it in one op but only with bf16 DEST (head sum truncates), hence "heads".
+- Now: ttnn.bringup.indexer_score_dsa (the indexer_score fork, hy4's) with fp32 DEST, k chunk 32 (per-column gate
+  multiply, fidelity honoured), q chunk 64, bf16 gates: 0.434 ms; indexer 24.75 -> 2.79 ms per dsa layer.
+- Component test L3 (chunk 1): overlap 0.99830 / worst row 0.9902 (heads 0.99832 / 0.9922). Both modes fail the
+  same pooled-key row-norm check (ratio 0.9911 < 0.995, before the score step: pre-existing, unrelated).
+- Warm 56k prefill 10.74 -> 9.34 s (6029 tok/s). s4096 KV PCC min/mean kv_latent 0.96674 / 0.98401 (was 0.96656 /
+  0.98396), index_key 0.98806 / 0.99516 (0.98811 / 0.99510), kda_conv min 0.9653 (0.9599). 56k top1 0.8767 (ag
+  before 0.8701, unified 0.8814).
+- Indexer projections at HiFi4 (GLM_INDEXER_FIDELITY=HiFi4, opt-in): fixes the L3 component test's pooled-key gate
+  (rel L2 0.0050 -> 0.0025, row-norm ratio min 0.9911 -> 0.9976; the HiFi2 failure predates the fused score). Full
+  model: perf same (9.34 s), KV PCC same within 1e-4 (kv_latent 0.96660 / 0.98397, index_key 0.98760 / 0.99511),
+  56k top1 0.8696 (HiFi2 0.8767; last chunk 0.7136 vs 0.7416). Left at the attention fidelity (HiFi2) by default.
