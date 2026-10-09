@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -191,22 +192,20 @@ void append_fabric_connection_rt_args(
         auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(
-            tt::tt_metal::SemaphoreDescriptor{
-                .id = worker_teardown_semaphore_id,
-                .core_type = core_type,
-                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_teardown_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
 
         auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(
-            tt::tt_metal::SemaphoreDescriptor{
-                .id = worker_buffer_index_semaphore_id,
-                .core_type = core_type,
-                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = worker_buffer_index_semaphore_id,
+            .core_type = core_type,
+            .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+            .initial_value = 0});
     } else {
         worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
         worker_buffer_index_semaphore_id =
@@ -274,12 +273,11 @@ void append_fabric_connection_rt_args(
             TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
             worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
 
-            worker_program_or_desc.semaphores.push_back(
-                tt::tt_metal::SemaphoreDescriptor{
-                    .id = worker_flow_control_semaphore_id,
-                    .core_type = core_type,
-                    .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
-                    .initial_value = 0});
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_flow_control_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
         } else {
             worker_flow_control_semaphore_id =
                 tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
@@ -736,34 +734,104 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
+// only says what they are, so they can be validated here.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
+size_t fabric_connection_rt_args_size(size_t num_connections) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    // RoutingPlaneConnectionManager consumes four words per connection: direction,
+    // ethernet channel, teardown semaphore, and producer cursor. 2D routing also has
+    // two shared header words and two destination words per connection. No template
+    // option changes this layout.
+    constexpr size_t connection_words = 4;
+    constexpr size_t routing_2d_header_words = 2;
+    constexpr size_t routing_2d_destination_words = 2;
+    return num_connections * connection_words +
+           (fabric_context.is_2D_routing_enabled()
+                ? routing_2d_header_words + num_connections * routing_2d_destination_words
+                : 0);
+}
+
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
+    const std::vector<uint32_t>& teardown_sem_args,
+    const std::vector<uint32_t>& buffer_index_sem_args,
+    bool sem_args_are_l1_addresses) {
     TT_FATAL(
-        teardown_sem_ids.size() == dst_nodes.size(),
-        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
-        teardown_sem_ids.size(),
+        teardown_sem_args.size() == dst_nodes.size(),
+        "teardown_sem_args size ({}) must match dst_nodes size ({})",
+        teardown_sem_args.size(),
         dst_nodes.size());
     TT_FATAL(
-        buffer_index_sem_ids.size() == dst_nodes.size(),
-        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
-        buffer_index_sem_ids.size(),
+        buffer_index_sem_args.size() == dst_nodes.size(),
+        "buffer_index_sem_args size ({}) must match dst_nodes size ({})",
+        buffer_index_sem_args.size(),
         dst_nodes.size());
     TT_FATAL(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
+    const std::pair<const std::vector<uint32_t>&, const char*> sem_arg_arrays[] = {
+        {teardown_sem_args, "teardown_sem_args"}, {buffer_index_sem_args, "buffer_index_sem_args"}};
+    if (sem_args_are_l1_addresses) {
+        // Both are 16 B NoC targets: the EDM remotely increments the teardown flag and block-reads
+        // a 16 B SenderChannelProducerCursor into the buffer-index address.
+        constexpr uint32_t k_sem_address_alignment = 16;
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const uint32_t l1_unreserved_base = hal.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        const uint32_t l1_end = l1_unreserved_base + hal.get_dev_size(
+                                                         tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                         tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] % k_sem_address_alignment == 0,
+                    "{}[{}] ({:#x}) must be {} B aligned",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment);
+                TT_FATAL(
+                    values[i] >= l1_unreserved_base,
+                    "{}[{}] ({:#x}) is below the unreserved L1 base ({:#x}); it looks like a program "
+                    "semaphore id, but sem_args_are_l1_addresses says these are addresses",
+                    name,
+                    i,
+                    values[i],
+                    l1_unreserved_base);
+                TT_FATAL(
+                    values[i] <= l1_end - k_sem_address_alignment,
+                    "{}[{}] ({:#x}) must leave its {} B landing zone below the Tensix L1 end ({:#x})",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment,
+                    l1_end);
+            }
+        }
+    } else {
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] < tt::tt_metal::NUM_SEMAPHORES,
+                    "{}[{}] ({}) exceeds the maximum program semaphore id ({})",
+                    name,
+                    i,
+                    values[i],
+                    tt::tt_metal::NUM_SEMAPHORES - 1);
+            }
+        }
+    }
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 2 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(fabric_connection_rt_args_size(dst_nodes.size()));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -795,8 +863,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
         // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
         worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
+        worker_args.push_back(teardown_sem_args[i]);
+        worker_args.push_back(buffer_index_sem_args[i]);
     }
 
     // 2D metadata
@@ -809,6 +877,13 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
     }
+
+    TT_FATAL(
+        worker_args.size() == fabric_connection_rt_args_size(dst_nodes.size()),
+        "Fabric connection RT-arg layout emitted {} words, expected {} for {} connections",
+        worker_args.size(),
+        fabric_connection_rt_args_size(dst_nodes.size()),
+        dst_nodes.size());
 
     return worker_args;
 }
