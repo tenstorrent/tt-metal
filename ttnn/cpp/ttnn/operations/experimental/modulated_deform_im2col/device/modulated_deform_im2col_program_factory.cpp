@@ -59,20 +59,24 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     constexpr uint8_t corner_block_cb = tt::CBIndex::c_2;
     constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_3;
     constexpr uint8_t tiled_block_cb = tt::CBIndex::c_4;
+    constexpr uint8_t geom_in_cb = tt::CBIndex::c_5;
+    constexpr uint8_t geom_index_cb = tt::CBIndex::c_6;
+    constexpr uint8_t geom_weight_cb = tt::CBIndex::c_7;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
     constexpr uint32_t CORNERS = 4;
 
-    auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size) {
-        descriptor.cbs.push_back(CBDescriptor{
-            .total_size = pages * page_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = idx,
-                .data_format = tile_format,
-                .page_size = page_size,
-            }}},
-        });
-    };
+    auto push_cb =
+        [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat format = tt::DataFormat::Invalid) {
+            descriptor.cbs.push_back(CBDescriptor{
+                .total_size = pages * page_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = idx,
+                    .data_format = format == tt::DataFormat::Invalid ? tile_format : format,
+                    .page_size = page_size,
+                }}},
+            });
+        };
     // Reader-only arenas, one stick per row of a block.
     push_cb(offset_arena_cb, TILE_ROWS, offset_page_nbytes);
     push_cb(mask_arena_cb, TILE_ROWS, mask_page_nbytes);
@@ -83,6 +87,13 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     // One scalar tile per corner, two positions deep.
     push_cb(scalar_tile_cb, 2 * CORNERS, tile_nbytes);
     push_cb(output_tile_cb, 2 * channel_tiles, tile_nbytes);
+    // A block's geometry, [row, kernel position] tiles: the reader's offsets, mask and base
+    // coordinates in fp32, and compute's corner indices (int32) and weights, two blocks deep so
+    // compute hands over the next block's while the reader works on this one.
+    constexpr uint32_t GEOM_IN_TILES = 5;
+    push_cb(geom_in_cb, GEOM_IN_TILES, tt::tile_size(tt::DataFormat::Float32), tt::DataFormat::Float32);
+    push_cb(geom_index_cb, 2 * 2, tt::tile_size(tt::DataFormat::Int32), tt::DataFormat::Int32);
+    push_cb(geom_weight_cb, 2 * CORNERS, tile_nbytes);
 
     KernelDescriptor::CompileTimeArgs reader_ct{
         offset_arena_cb,
@@ -106,6 +117,9 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         offset_page_nbytes,
         mask_page_nbytes,
         kOffsetClampPixels,
+        geom_in_cb,
+        geom_index_cb,
+        geom_weight_cb,
     };
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*offset.buffer()).append_to(reader_ct);
@@ -123,8 +137,23 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = {
-        corner_block_cb, scalar_tile_cb, output_tile_cb, channel_tiles, s.kernel_positions, tiled_block_cb};
-    compute_desc.config = ComputeConfigDescriptor{};
+        corner_block_cb,
+        scalar_tile_cb,
+        output_tile_cb,
+        channel_tiles,
+        s.kernel_positions,
+        tiled_block_cb,
+        geom_in_cb,
+        geom_index_cb,
+        geom_weight_cb};
+    // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
+    // its fp32 inputs unpack straight to dest, as srcA would round them to TF32.
+    ComputeConfigDescriptor compute_config{};
+    compute_config.fp32_dest_acc_en = true;
+    compute_config.dst_full_sync_en = true;
+    compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
+    compute_desc.config = compute_config;
 
     KernelDescriptor::CompileTimeArgs writer_ct{output_tile_cb, channel_tiles, s.kernel_positions, tile_nbytes};
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);

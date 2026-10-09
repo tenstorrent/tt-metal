@@ -4,22 +4,25 @@
 
 // Reader of the modulated deformable im2col.
 //
-// Per block of 32 output rows (pixels) it stages the rows' offsets and masks,
-// then for each kernel position computes every row's bilinear sample point and
-// hands compute the four corners as one row-major block, 32 rows of
-// [corner 0 | corner 1 | corner 2 | corner 3] C-wide input sticks, landed by
-// the NoC reads themselves, plus one scalar tile per corner whose column 0
-// holds mask * corner_coefficient per row, rounded to nearest bfloat16.
-// Compute tilizes the block and sums the four corners times their scalars,
-// which is the masked bilinear sample.
+// Per block of 32 output rows (pixels) it stages the rows' offsets and masks and
+// hands compute one tile each of the y and x offsets, the mask, and the kernel
+// window's base coordinates, laid out [row, kernel position]. Compute returns
+// every sample's top-left corner (y0, x0) and its four masked bilinear weights
+// in the same layout. For each kernel position the reader then hands compute
+// the four corners as one row-major block, 32 rows of
+// [corner 0 | corner 1 | corner 2 | corner 3] C-wide input sticks, landed by the
+// NoC reads themselves, plus one scalar tile per corner whose column 0 holds the
+// row's weight. Compute tilizes the block and sums the four corners times their
+// scalars, which is the masked bilinear sample.
 //
-// The geometry runs in Q16.16 integers: the data-movement RISC-Vs have no FPU,
-// so a float operation is a software routine of about a hundred cycles, and
-// this runs for every row and kernel position. Offsets saturate at
-// +-OFFSET_CLAMP pixels, which keeps every coordinate inside int32 and puts a
-// non-finite offset outside the input.
+// The geometry runs on compute because the data-movement RISC-Vs have no FPU.
+// The reader only moves bits: a bfloat16 widens to fp32 by a shift. Offsets
+// saturate at +-OFFSET_CLAMP pixels, which keeps every coordinate inside int32
+// and puts a non-finite offset outside the input. The next block's geometry is
+// handed over before this block's corners are read, so compute works on it while
+// the reader waits on the NoC.
 //
-// A corner is read only when it lies inside the input and its coefficient is
+// A corner is read only when it lies inside the input and its weight is
 // nonzero. Every other row, and every row past the block's end, is zeroed
 // rather than skipped: a stale NaN or Inf times a zero scalar would still be
 // NaN.
@@ -31,7 +34,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
 constexpr uint32_t offset_arena_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t mask_arena_cb_index = get_compile_time_arg_val(1);
@@ -55,9 +57,12 @@ constexpr uint32_t input_page_nbytes = get_compile_time_arg_val(17);
 constexpr uint32_t offset_page_nbytes = get_compile_time_arg_val(18);
 constexpr uint32_t mask_page_nbytes = get_compile_time_arg_val(19);
 // The host validates that the input size, padding and kernel span stay below this.
-constexpr int32_t OFFSET_CLAMP = get_compile_time_arg_val(20);
+constexpr uint32_t OFFSET_CLAMP = get_compile_time_arg_val(20);
+constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(21);
+constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(22);
+constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(23);
 
-constexpr auto input_args = TensorAccessorArgs<21>();
+constexpr auto input_args = TensorAccessorArgs<24>();
 constexpr auto offset_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto mask_args = TensorAccessorArgs<offset_args.next_compile_time_args_offset()>();
 
@@ -67,78 +72,49 @@ constexpr uint32_t CORNERS = 4;
 constexpr uint32_t STICK_NBYTES = C * sizeof(uint16_t);  // the C channels read per corner
 constexpr uint32_t BLOCK_ROW_NBYTES = CORNERS * STICK_NBYTES;
 
+// Tiles of geom_in_cb, in compute's order: fp32 [row, kernel position].
+constexpr uint32_t IN_DY = 0;
+constexpr uint32_t IN_DX = 1;
+constexpr uint32_t IN_MASK = 2;
+constexpr uint32_t IN_BASE_Y = 3;
+constexpr uint32_t IN_BASE_X = 4;
+constexpr uint32_t GEOM_IN_TILES = 5;
+constexpr uint32_t FP32_TILE_NBYTES = 32 * 32 * sizeof(uint32_t);
+constexpr uint32_t BF16_TILE_NBYTES = 32 * 32 * sizeof(uint16_t);
+
+static_assert(kernel_positions <= 32, "the geometry tiles hold one kernel position per column");
+static_assert((OFFSET_CLAMP & (OFFSET_CLAMP - 1)) == 0, "the offset clamp works on the bfloat16 exponent");
+
 namespace {
 
-using fixed_point_arithmetic::fixed_frac;
-using fixed_point_arithmetic::fixed_mul;
-using fixed_point_arithmetic::FIXED_ONE;
-using fixed_point_arithmetic::fixed_to_int;
-using fixed_point_arithmetic::int_to_fixed;
+// bfloat16 exponent field of OFFSET_CLAMP, a power of two, and OFFSET_CLAMP itself.
+constexpr uint32_t CLAMP_EXPONENT = 127 + (31 - __builtin_clz(OFFSET_CLAMP));
+constexpr uint16_t CLAMP_BF16 = static_cast<uint16_t>(CLAMP_EXPONENT << 7);
 
-constexpr int32_t OFFSET_CLAMP_FIXED = int_to_fixed(OFFSET_CLAMP);
-
-// bfloat16 -> Q16.16 in integers, saturating at +-clamp_fixed (at most 2^30). Zero, subnormals
-// and values below Q16.16 resolution become 0; inf and NaN saturate with their sign.
-inline int32_t bf16_to_fixed_saturating(uint16_t bf16, int32_t clamp_fixed) {
-    const int32_t exponent = static_cast<int32_t>((bf16 >> 7) & 0xFFu);
-    if (exponent == 0) {
-        return 0;
+// An offset of magnitude OFFSET_CLAMP or more, inf and NaN, become +-OFFSET_CLAMP.
+inline uint32_t offset_to_fp32(uint16_t bf16) {
+    if (((bf16 >> 7) & 0xFFu) >= CLAMP_EXPONENT) {
+        const bool negative = (bf16 & 0x8000u) && (bf16 & 0x7FFFu) <= 0x7F80u;  // NaN goes positive
+        return static_cast<uint32_t>(negative ? (0x8000u | CLAMP_BF16) : CLAMP_BF16) << 16;
     }
-    // value = (0x80 | mantissa) * 2^(exponent - 134), so scaling by 2^16 shifts the 8-bit
-    // significand left by (exponent - 118).
-    const int32_t significand = static_cast<int32_t>(0x80u | (bf16 & 0x7Fu));
-    const int32_t shift = exponent - 118;
-    int32_t magnitude;
-    if (shift > 22) {
-        magnitude = clamp_fixed;  // the significand would overflow int32
-    } else if (shift >= 0) {
-        magnitude = significand << shift;
-    } else if (shift > -32) {
-        magnitude = significand >> (-shift);
-    } else {
-        magnitude = 0;
-    }
-    if (magnitude > clamp_fixed) {
-        magnitude = clamp_fixed;
-    }
-    return (bf16 & 0x8000u) ? -magnitude : magnitude;
+    return static_cast<uint32_t>(bf16) << 16;
 }
 
-// bfloat16 * Q16.16 weight in (0, 1] -> bfloat16, rounded to nearest, in integers. The weight is
-// normalised to a 16-bit significand, so the product holds more precision than the result.
-inline uint16_t bf16_times_fixed_to_bf16(uint16_t value_bf16, uint32_t weight_fixed) {
-    const int32_t value_exponent = static_cast<int32_t>((value_bf16 >> 7) & 0xFFu);
-    if (value_exponent == 0 || weight_fixed == 0) {
+// An integer of magnitude below 2^24 as fp32 bits.
+inline uint32_t int_to_fp32(int32_t value) {
+    if (value == 0) {
         return 0;
     }
-    const uint32_t value_significand = 0x80u | (value_bf16 & 0x7Fu);  // 1.m, 8 bits
-    // weight = weight_significand * 2^(weight_msb - 31), weight_significand in [2^15, 2^16).
-    const int32_t weight_msb = 31 - __builtin_clz(weight_fixed);
-    const uint32_t weight_significand =
-        (weight_msb >= 15) ? (weight_fixed >> (weight_msb - 15)) : (weight_fixed << (15 - weight_msb));
-    const uint32_t product = value_significand * weight_significand;  // 23 or 24 bits
-    int32_t product_msb = 31 - __builtin_clz(product);
-    // One bit past the 8-bit significand, rounded half up; a carry moves up one binade.
-    uint32_t significand = ((product >> (product_msb - 8)) + 1) >> 1;
-    if (significand == 0x100u) {
-        significand = 0x80u;
-        ++product_msb;
-    }
-    // value = value_significand * 2^(value_exponent - 134).
-    const int32_t out_exponent = (value_exponent - 134) + (weight_msb - 31) + product_msb + 127;
-    if (out_exponent <= 0) {
-        return 0;
-    }
-    const uint16_t sign = static_cast<uint16_t>(value_bf16 & 0x8000u);
-    if (out_exponent >= 0xFF) {
-        return static_cast<uint16_t>(sign | (0xFEu << 7) | 0x7Fu);
-    }
-    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(out_exponent) << 7) | (significand & 0x7Fu));
+    const uint32_t sign = value < 0 ? 0x80000000u : 0;
+    const uint32_t magnitude = static_cast<uint32_t>(value < 0 ? -value : value);
+    const int32_t msb = 31 - __builtin_clz(magnitude);
+    return sign | (static_cast<uint32_t>(127 + msb) << 23) | ((magnitude << (23 - msb)) & 0x7FFFFFu);
 }
 
-// Column 0 of a bf16 tile row: rows 0-15 in face 0, rows 16-31 in face 2; a face is
-// 16 x 16 bf16, so its rows are 32 B apart and the face 512 B.
-inline uint32_t tile_col0_offset(uint32_t r) { return r < 16 ? r * 32 : 1024 + (r - 16) * 32; }
+// Element (row, col) of a 32 x 32 tile in its four 16 x 16 faces.
+inline uint32_t tile_element(uint32_t row, uint32_t col) {
+    return ((row >> 4) * 2 + (col >> 4)) * 256 + (row & 15) * 16 + (col & 15);
+}
 
 inline void zero_stick(uint32_t l1_addr) {
     CoreLocalMem<volatile uint32_t> dst(l1_addr);
@@ -149,12 +125,10 @@ inline void zero_stick(uint32_t l1_addr) {
 
 inline bool inside(int32_t index, int32_t extent) { return index >= 0 && index < extent; }
 
-struct CornerGeometry {
-    int32_t y0[TILE_ROWS];
-    int32_t x0[TILE_ROWS];
-    bool in_input[CORNERS][TILE_ROWS];
-    uint16_t coeff_bf16[CORNERS][TILE_ROWS];  // mask * bilinear weight
-};
+inline uint32_t valid_rows_of(uint32_t block, uint32_t num_rows) {
+    const uint32_t row0 = block * TILE_ROWS;
+    return num_rows - row0 < TILE_ROWS ? num_rows - row0 : TILE_ROWS;
+}
 
 }  // namespace
 
@@ -175,6 +149,9 @@ void kernel_main() {
     CircularBuffer mask_arena_cb(mask_arena_cb_index);
     CircularBuffer corner_block_cb(corner_block_cb_index);
     CircularBuffer scalar_tile_cb(scalar_tile_cb_index);
+    CircularBuffer geom_in_cb(geom_in_cb_index);
+    CircularBuffer index_cb(geom_index_cb_index);
+    CircularBuffer weight_cb(geom_weight_cb_index);
 
     // The arenas are reserved once and used as flat L1; nothing waits on them.
     offset_arena_cb.reserve_back(TILE_ROWS);
@@ -182,30 +159,50 @@ void kernel_main() {
     mask_arena_cb.reserve_back(TILE_ROWS);
     const uint32_t mask_l1 = mask_arena_cb.get_write_ptr();
 
-    CornerGeometry geom;
-    uint32_t batch_base[TILE_ROWS];  // first input page of the row's image
-    int32_t base_y[TILE_ROWS];       // h_out * stride - pad
-    int32_t base_x[TILE_ROWS];       // w_out * stride - pad
+    // b * IN_H per row, the row's image in batch-wide input rows: of the block being read, and of
+    // the block whose geometry is being staged.
+    int32_t batch_row[TILE_ROWS];
+    int32_t staged_batch_row[TILE_ROWS];
 
-    for (uint32_t block = start_block; block < start_block + num_blocks; ++block) {
+    // Stages a block's offsets and masks and hands compute its geometry tiles.
+    auto stage_geometry = [&](uint32_t block) {
         const uint32_t row0 = block * TILE_ROWS;
-        const uint32_t valid_rows = num_rows - row0 < TILE_ROWS ? num_rows - row0 : TILE_ROWS;
-
+        const uint32_t valid_rows = valid_rows_of(block, num_rows);
         for (uint32_t r = 0; r < valid_rows; ++r) {
             CoreLocalMem<uint32_t> off_dst(offset_l1 + r * offset_page_nbytes);
             noc.async_read(offset_acc, off_dst, offset_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
             CoreLocalMem<uint32_t> mask_dst(mask_l1 + r * mask_page_nbytes);
             noc.async_read(mask_acc, mask_dst, mask_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
         }
+        geom_in_cb.reserve_back(GEOM_IN_TILES);
+        const uint32_t geom_l1 = geom_in_cb.get_write_ptr();
+        noc.async_read_barrier();
 
         // (b, h_out, w_out) of the block's first row, then stepped row by row.
         uint32_t b = row0 / (OUT_H * OUT_W);
         uint32_t h_o = (row0 / OUT_W) % OUT_H;
         uint32_t w_o = row0 % OUT_W;
         for (uint32_t r = 0; r < valid_rows; ++r) {
-            batch_base[r] = b * IN_H * IN_W;
-            base_y[r] = static_cast<int32_t>(h_o) * STRIDE_H - PAD_H;
-            base_x[r] = static_cast<int32_t>(w_o) * STRIDE_W - PAD_W;
+            staged_batch_row[r] = static_cast<int32_t>(b) * IN_H;
+            const int32_t base_y = static_cast<int32_t>(h_o) * STRIDE_H - PAD_H;
+            const int32_t base_x = static_cast<int32_t>(w_o) * STRIDE_W - PAD_W;
+            CoreLocalMem<volatile uint16_t> off(offset_l1 + r * offset_page_nbytes);
+            CoreLocalMem<volatile uint16_t> msk(mask_l1 + r * mask_page_nbytes);
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
+                const int32_t k_y = static_cast<int32_t>(kk / KERNEL_W) * DILATION_H;
+                const int32_t k_x = static_cast<int32_t>(kk % KERNEL_W) * DILATION_W;
+                CoreLocalMem<volatile uint32_t> dy(geom_l1 + IN_DY * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> dx(geom_l1 + IN_DX * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> m(geom_l1 + IN_MASK * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> by(geom_l1 + IN_BASE_Y * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> bx(geom_l1 + IN_BASE_X * FP32_TILE_NBYTES + element);
+                dy[0] = offset_to_fp32(off[2 * kk]);
+                dx[0] = offset_to_fp32(off[2 * kk + 1]);
+                m[0] = static_cast<uint32_t>(msk[kk]) << 16;
+                by[0] = int_to_fp32(base_y + k_y);
+                bx[0] = int_to_fp32(base_x + k_x);
+            }
             if (++w_o == OUT_W) {
                 w_o = 0;
                 if (++h_o == OUT_H) {
@@ -214,41 +211,47 @@ void kernel_main() {
                 }
             }
         }
-        noc.async_read_barrier();
+        geom_in_cb.push_back(GEOM_IN_TILES);
+    };
+
+    if (num_blocks > 0) {
+        stage_geometry(start_block);
+    }
+
+    uint32_t y0[TILE_ROWS];
+    uint32_t x0[TILE_ROWS];
+    uint16_t weight[CORNERS][TILE_ROWS];  // zero for a corner outside the input
+
+    for (uint32_t block = start_block; block < start_block + num_blocks; ++block) {
+        const uint32_t valid_rows = valid_rows_of(block, num_rows);
+        for (uint32_t r = 0; r < valid_rows; ++r) {
+            batch_row[r] = staged_batch_row[r];
+        }
+        index_cb.wait_front(2);
+        weight_cb.wait_front(CORNERS);
+        const uint32_t index_l1 = index_cb.get_read_ptr();
+        const uint32_t weight_l1 = weight_cb.get_read_ptr();
+        if (block + 1 < start_block + num_blocks) {
+            stage_geometry(block + 1);
+        }
 
         for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
-            const int32_t k_y = static_cast<int32_t>(kk / KERNEL_W) * DILATION_H;
-            const int32_t k_x = static_cast<int32_t>(kk % KERNEL_W) * DILATION_W;
-
             for (uint32_t r = 0; r < valid_rows; ++r) {
-                CoreLocalMem<volatile uint16_t> off(offset_l1 + r * offset_page_nbytes);
-                CoreLocalMem<volatile uint16_t> msk(mask_l1 + r * mask_page_nbytes);
-                const int32_t y =
-                    int_to_fixed(base_y[r] + k_y) + bf16_to_fixed_saturating(off[2 * kk], OFFSET_CLAMP_FIXED);
-                const int32_t x =
-                    int_to_fixed(base_x[r] + k_x) + bf16_to_fixed_saturating(off[2 * kk + 1], OFFSET_CLAMP_FIXED);
-                const uint16_t mask = msk[kk];
-
-                // The arithmetic shift floors negative coordinates too, and the fraction is
-                // taken against that floor.
-                const int32_t y0 = fixed_to_int(y);
-                const int32_t x0 = fixed_to_int(x);
-                const int32_t ly = fixed_frac(y);
-                const int32_t lx = fixed_frac(x);
-                const int32_t hy = FIXED_ONE - ly;
-                const int32_t hx = FIXED_ONE - lx;
-
-                geom.y0[r] = y0;
-                geom.x0[r] = x0;
-                geom.in_input[0][r] = inside(y0, IN_H) && inside(x0, IN_W);
-                geom.in_input[1][r] = inside(y0, IN_H) && inside(x0 + 1, IN_W);
-                geom.in_input[2][r] = inside(y0 + 1, IN_H) && inside(x0, IN_W);
-                geom.in_input[3][r] = inside(y0 + 1, IN_H) && inside(x0 + 1, IN_W);
-                const int32_t weights[CORNERS] = {
-                    fixed_mul(hy, hx), fixed_mul(hy, lx), fixed_mul(ly, hx), fixed_mul(ly, lx)};
+                const uint32_t element = tile_element(r, kk);
+                CoreLocalMem<volatile uint32_t> y0_tile(index_l1);
+                CoreLocalMem<volatile uint32_t> x0_tile(index_l1 + FP32_TILE_NBYTES);
+                y0[r] = y0_tile[element];
+                x0[r] = x0_tile[element];
+                const int32_t y = static_cast<int32_t>(y0[r]);
+                const int32_t x = static_cast<int32_t>(x0[r]);
+                const bool in_input[CORNERS] = {
+                    inside(y, IN_H) && inside(x, IN_W),
+                    inside(y, IN_H) && inside(x + 1, IN_W),
+                    inside(y + 1, IN_H) && inside(x, IN_W),
+                    inside(y + 1, IN_H) && inside(x + 1, IN_W)};
                 for (uint32_t c = 0; c < CORNERS; ++c) {
-                    geom.coeff_bf16[c][r] =
-                        geom.in_input[c][r] ? bf16_times_fixed_to_bf16(mask, static_cast<uint32_t>(weights[c])) : 0;
+                    CoreLocalMem<volatile uint16_t> w(weight_l1 + c * BF16_TILE_NBYTES);
+                    weight[c][r] = in_input[c] ? w[element] : 0;
                 }
             }
 
@@ -260,12 +263,13 @@ void kernel_main() {
                 for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                     const uint32_t dst_l1 = block_l1 + r * BLOCK_ROW_NBYTES + c * STICK_NBYTES;
                     // The page index below is valid only for a corner inside the input.
-                    if (r >= valid_rows || !geom.in_input[c][r] || geom.coeff_bf16[c][r] == 0) {
+                    if (r >= valid_rows || weight[c][r] == 0) {
                         zero_stick(dst_l1);
                         continue;
                     }
-                    const uint32_t page = batch_base[r] + static_cast<uint32_t>(geom.y0[r] + dy) * IN_W +
-                                          static_cast<uint32_t>(geom.x0[r] + dx);
+                    const int32_t row = batch_row[r] + static_cast<int32_t>(y0[r]) + dy;
+                    const uint32_t x = static_cast<uint32_t>(static_cast<int32_t>(x0[r]) + dx);
+                    const uint32_t page = static_cast<uint32_t>(row) * IN_W + x;
                     CoreLocalMem<uint32_t> dst(dst_l1);
                     noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = page}, {.offset_bytes = 0});
                 }
@@ -278,11 +282,13 @@ void kernel_main() {
                 scalar_tile_cb.reserve_back(1);
                 const uint32_t scalar_l1 = scalar_tile_cb.get_write_ptr();
                 for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                    CoreLocalMem<volatile uint16_t> lane(scalar_l1 + tile_col0_offset(r));
-                    lane[0] = r < valid_rows ? geom.coeff_bf16[c][r] : 0;
+                    CoreLocalMem<volatile uint16_t> lane(scalar_l1 + tile_element(r, 0) * sizeof(uint16_t));
+                    lane[0] = r < valid_rows ? weight[c][r] : 0;
                 }
                 scalar_tile_cb.push_back(1);
             }
         }
+        index_cb.pop_front(2);
+        weight_cb.pop_front(CORNERS);
     }
 }
