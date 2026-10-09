@@ -121,9 +121,9 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False):
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False, seq_parallel=False):
         if mode == "prefill":
-            return self.forward_prefill(x, batch_size=batch_size)
+            return self.forward_prefill(x, batch_size=batch_size, seq_parallel=seq_parallel)
 
         intermediates = {} if return_intermediates else None
 
@@ -346,7 +346,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1, seq_parallel=False) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -492,6 +492,12 @@ class TtLlamaMLP(LightweightModule):
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
+
+        if seq_parallel:
+            # Sequence-parallel residual (llama_model.py): keep only this mesh row's S/8 chunk of the sum.
+            w2_out_reduced = self.tt_ccl.ring_reduce_scatter_seq(w2_out, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
