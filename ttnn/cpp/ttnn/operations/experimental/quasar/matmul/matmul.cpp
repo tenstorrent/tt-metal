@@ -121,11 +121,14 @@ static bool get_post_process_bias(
             const auto& q_tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
             const uint32_t q_tile_height = transpose_a ? q_tile_shape[1] : q_tile_shape[0];
             const bool bias_tile_aligned = bias.value().padded_shape()[-2] == q_tile_height;
-            const bool is_1d_mcast =
+            // 2D mcast (block-sharded SDXL feed-forward / GEGLU linears with bias + fused GELU) takes the same
+            // FUSE_BIAS kernel path; the activation can only be fused when the bias is, so fuse there too.
+            const bool is_mcast =
                 program_config.has_value() &&
-                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value());
-            // fuse (post_process=false) for the wired 1D-mcast + tile-aligned bias; else post-process
-            return !(is_1d_mcast && bias_tile_aligned);
+                (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()) ||
+                 std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value()));
+            // fuse (post_process=false) for the wired 1D/2D-mcast + tile-aligned bias; else post-process
+            return !(is_mcast && bias_tile_aligned);
         }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
@@ -256,14 +259,58 @@ static ttnn::Tensor bound_matmul(
         parameters.transpose_b = false;
     }
 
+    const bool arch_is_quasar = input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR;
+    // Quasar: decide bias fusion on the config that will actually run. With no user program config the
+    // attributes carry nullopt and the config is auto-generated (chosen_program_config above); the bias
+    // decision must see that config so an auto 1D/2D-mcast matmul fuses its bias instead of post-processing.
+    std::optional<const MatmulProgramConfig> bias_decision_config;
+    if (arch_is_quasar && !parameters.program_config.has_value()) {
+        bias_decision_config.emplace(chosen_program_config);
+    } else if (parameters.program_config.has_value()) {
+        bias_decision_config.emplace(parameters.program_config.value());
+    }
     bool post_process_bias = get_post_process_bias(
         bias,
-        parameters.program_config,
+        bias_decision_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
         parameters.transpose_a);
+
+    // Quasar: a user activation (ttnn.linear(..., activation="silu")) cannot be applied by the mainline
+    // unary op (legacy DataMovementKernel, rejected on Quasar), so fold it into the program config as the
+    // matmul kernel's fused SFPU activation. That only works when the bias (if any) is fused as well, since
+    // the activation has to follow the bias add.
+    if (arch_is_quasar && parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+        TT_FATAL(
+            !post_process_bias,
+            "Quasar matmul: activation {} cannot be fused because the bias is post-processed for program config {}; "
+            "a Quasar unary op would be needed to apply it afterwards.",
+            parameters.user_fused_activation.value().op_type,
+            chosen_program_config);
+        const bool folded = std::visit(
+            [&](auto& pc) {
+                if constexpr (requires { pc.fused_activation; }) {
+                    pc.fused_activation = parameters.user_fused_activation;
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            chosen_program_config);
+        TT_FATAL(
+            folded,
+            "Quasar matmul: program config {} has no fused_activation; activation {} cannot be applied.",
+            chosen_program_config,
+            parameters.user_fused_activation.value().op_type);
+        parameters.program_config = chosen_program_config;
+        parameters.user_fused_activation = std::nullopt;
+    }
+    if (arch_is_quasar && !parameters.program_config.has_value()) {
+        // keep the bias decision and the launched program consistent
+        parameters.program_config = chosen_program_config;
+    }
 
     auto attributes = ttnn::prim::qsr::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
