@@ -27,7 +27,7 @@ import torch
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, mm_config, replicate
-from models.demos.glm53_flash_d_p.tt.mm_configs import linear_config, minimal_config
+from models.demos.glm53_flash_d_p.tt.mm_configs import bmm, linear_config, minimal_config
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 MC = ttnn.DRAM_MEMORY_CONFIG
@@ -40,6 +40,37 @@ SDPA_MODE = os.environ.get("GLM_MLA_SDPA", "fork")
 # dtype of q, the per-head outputs and the o_proj output. bf16 (rounded) is unbiased; fp32 inputs to the next matmul are
 # read at TF32 precision, which shrinks the output by about 0.05% ("fp32" for comparison)
 MID_DTYPE = os.environ.get("GLM_MLA_MID", "bf16")
+# explicit configs for the per-head absorb matmuls (mm_configs.bmm: one output block per core, the only correct
+# multi-core-reuse batched case); o w_uv 0.899 -> 0.276 ms, q w_uk stays auto. Module attributes so
+# tests/test_ab_layers.py can flip them between runs
+USE_BMM = os.environ.get("GLM_MLA_BMM", "1") == "1"
+CHECK_BMM = False  # debug (tests/test_ab_layers.py): also run the auto config on the same input and print the diff
+
+
+def _check(tag, out, a, w, dtype, ckc, pc=None):
+    ref = ttnn.matmul(a, w, dtype=dtype, compute_kernel_config=ckc, memory_config=MC)
+    x = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).double()
+    y = ttnn.to_torch(ttnn.get_device_tensors(ref)[0]).double()
+    ttnn.deallocate(ref)
+    rel = float((x - y).norm() / y.norm())
+    dump = os.environ.get("GLM_MLA_CHECK_DUMP")
+    if dump:  # chip 0's live inputs and both outputs, for the single-chip replay (tests/test_mla_bmm_repro.py)
+        torch.save(
+            {
+                "a": ttnn.to_torch(ttnn.get_device_tensors(a)[0]),
+                "w": ttnn.to_torch(ttnn.get_device_tensors(w)[0]),
+                "cfg_out": x.float(),
+                "auto_out": y.float(),
+            },
+            f"{dump}/{tag.replace(' ', '_')}.pt",
+        )
+    print(
+        f"[mla-check] {tag} {tuple(a.shape)} padded {tuple(a.padded_shape)} {a.dtype} {a.memory_config().memory_layout}"
+        f" x {tuple(w.shape)} {w.dtype}: config vs auto rel {rel:.3e}; cfg {pc}",
+        flush=True,
+    )
+
+
 # dtype of the 2D projection weights kv_a, q_b, o_proj (bf16 | bfp8; MiMo runs its projections on bfp8 weights)
 W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_MLA_WDTYPE", "bf16")]
 
@@ -138,7 +169,24 @@ class TtMLA:
             q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
         )
         ttnn.deallocate(q)
-        ql = ttnn.matmul(qh, self.w_uk, dtype=ttnn.bfloat16, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        ql = ttnn.matmul(
+            qh,
+            self.w_uk,
+            dtype=ttnn.bfloat16,
+            program_config=bmm(qh.device(), self.nh, qh.shape[-2], self.dqk, self.r) if USE_BMM else None,
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
+        if CHECK_BMM:
+            _check(
+                "q w_uk",
+                ql,
+                qh,
+                self.w_uk,
+                ttnn.bfloat16,
+                mm_config(self.mm),
+                bmm(qh.device(), self.nh, qh.shape[-2], self.dqk, self.r),
+            )
         ttnn.deallocate(qh)
         qrm = ttnn.to_layout(ql, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
         ttnn.deallocate(ql)
@@ -168,7 +216,24 @@ class TtMLA:
         ttnn.deallocate(qrm)
         ot = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=MC)
         ttnn.deallocate(o)
-        oh = ttnn.matmul(ot, self.w_uv, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        oh = ttnn.matmul(
+            ot,
+            self.w_uv,
+            dtype=self.mid,
+            program_config=bmm(ot.device(), self.nh, ot.shape[-2], self.r, self.dv) if USE_BMM else None,
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
+        if CHECK_BMM:
+            _check(
+                "o w_uv",
+                oh,
+                ot,
+                self.w_uv,
+                self.mid,
+                mm_config(self.mm),
+                bmm(ot.device(), self.nh, ot.shape[-2], self.r, self.dv),
+            )
         ttnn.deallocate(ot)
         oc = self._concat_heads(oh)  # [1, 1, S/4, 64 * 256]
         ttnn.deallocate(oh)
