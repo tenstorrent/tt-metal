@@ -48,6 +48,18 @@
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
 
+// Experiment switches (s-reorder). SR_A: issue W_gate chunk 0 after the x multicast chain instead of
+// inside round 0. SR_B_READER: issue the reader's W_down head batch after this core's up scatter.
+#ifndef SR_A
+#define SR_A 0
+#endif
+#ifndef SR_B_READER
+#define SR_B_READER 0
+#endif
+#ifndef SR_MROW_ONLY
+#define SR_MROW_ONLY 1
+#endif
+
 // Keep profiling source-compatible with the operation's detailed zones without depending on
 // kernel_lib's convenience wrapper. Ordinary profiler sweeps leave these off so stage-record
 // traffic does not alter the latency being measured.
@@ -760,7 +772,7 @@ void kernel_main() {
             const bool protect_x_stage = (m_blocks == 1) && !staged_early;
             if constexpr (!XMCAST_ACTIVE) {
                 issue_wg_chunk(0);
-            } else if (!protect_x_stage) {
+            } else if (!protect_x_stage && !SR_A) {
                 issue_wg_chunk(0);
             }
 
@@ -784,7 +796,9 @@ void kernel_main() {
                                 // acknowledgement to ensure every receiver consumed this phase before
                                 // reusing x_ready for the payload-ready signal below.
                                 constexpr uint32_t X_STAGED = 2;
-                                issue_wg_chunk(0);
+                                if constexpr (!SR_A) {
+                                    issue_wg_chunk(0);
+                                }
                                 x_ready.set(X_STAGED);
                                 x_ready.set_multicast(
                                     noc,
@@ -826,7 +840,9 @@ void kernel_main() {
                                 constexpr uint32_t X_STAGED = 2;
                                 x_ready.wait(X_STAGED);
                                 x_ready.set(INVALID);
-                                issue_wg_chunk(0);
+                                if constexpr (!SR_A) {
+                                    issue_wg_chunk(0);
+                                }
                                 x_free.up(noc, sx, sy, 1);
                             }
                             x_ready.wait(VALID);
@@ -844,6 +860,10 @@ void kernel_main() {
                 // padding rows past `m_eff` are published unwritten: compute's shapes stop at the
                 // real prefix, and the whole-slot push is what keeps the write pointer aligned.
                 cb_push_back(cb_x_tiles, X_SLOT_FULL);
+            }
+            if constexpr (SR_A && XMCAST_ACTIVE) {
+                // The whole x chain is done: only now put W_gate chunk 0 on NoC0.
+                issue_wg_chunk(0);
             }
             // ---- Phase 1b: W_gate landed under the x rounds; publish it ----
             // (W_up is the writer's twin on NoC1.) Publish chunk c, then issue c+1 and block on it, so
@@ -902,7 +922,11 @@ void kernel_main() {
             // A short row-mode block issues its whole W_down batch only after its up-scatter, so the
             // issue loop does not sit in front of the reduce on this RISC-V.
             const bool wd_issue_late = wd_mrow && (m_eff != M_BLOCK);
-            if (!wd_issue_late) {
+            // s-reorder's reader deferral (off by default) is a full-M-block switch; short row-mode
+            // blocks already defer through wd_issue_late above.
+            const bool rd_defer =
+                (SR_B_READER != 0) && !wd_issue_late && (!SR_MROW_ONLY || (wd_mrow && m_eff == M_BLOCK));
+            if (!wd_issue_late && !rd_defer) {
                 issue_wd_batch();
             }
 
@@ -1026,6 +1050,10 @@ void kernel_main() {
                 if (wd_issue_late) {
                     issue_wd_batch();
                 }
+            }
+            if (rd_defer) {
+                // gate/up have landed and the up scatter is out: now stream the W_down head.
+                issue_wd_batch();
             }
             if (slice_tiles) {
                 // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent

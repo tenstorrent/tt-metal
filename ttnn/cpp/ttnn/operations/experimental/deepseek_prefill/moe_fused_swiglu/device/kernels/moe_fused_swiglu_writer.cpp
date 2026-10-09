@@ -28,6 +28,18 @@
 
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
+// Experiment switch (s-reorder). SR_B: where the writer's W_down tail is issued. 0 = right after
+// this core's W_up (original); 2 = after the column's scatter invites (every column reader's W_gate
+// landed); 1 = after this core's gate accumulator is full. When deferred, the drain/publish of
+// SEM_WDSPLIT moves to just after the h-slice send (same values, same order).
+#ifndef SR_B
+#define SR_B 2
+#endif
+// SR_MROW_ONLY: defer only on full-M (wd_mrow) blocks; ragged blocks keep the original order.
+#ifndef SR_MROW_ONLY
+#define SR_MROW_ONLY 1
+#endif
+
 #include "moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the reader
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
@@ -383,6 +395,7 @@ void kernel_main() {
             // the h all-gather for the reader's NOC_0. All HGROUPS blocks go out as ONE batch: with
             // residency every W_down read happens at b == 0, where all slots are free from kernel
             // start. This RISC-V takes the tail rows, a contiguous run.
+            bool wd_drain_pending = false;
             auto issue_wd_share = [&]() {
                 MaybeDeviceZoneScope("writer_wd_issue");
                 // The publish word. A plain volatile store like SEM_XSTAGED: producer and consumer are
@@ -415,15 +428,29 @@ void kernel_main() {
                         W_TILE);
                 }
                 noc_async_read_set_trid(0);  // back to untagged for the output write-back's cmd buf
-                // DRAIN IN BLOCK ORDER, PUBLISHING AS WE GO. Costs the writer nothing over one blanket
-                // barrier, but the reader stops waiting for the whole 111 KB stream and waits only for
-                // the block it is about to push — worth +13 % at count 128.
+                wd_drain_pending = true;
+            };
+            // DRAIN IN BLOCK ORDER, PUBLISHING AS WE GO. Costs the writer nothing over one blanket
+            // barrier, but the reader stops waiting for the whole 111 KB stream and waits only for
+            // the block it is about to push — worth +13 % at count 128.
+            auto drain_wd_share = [&]() {
+                if (!wd_drain_pending) {
+                    return;
+                }
+                MaybeDeviceZoneScope("writer_wd_drain");
+                Semaphore<> pub(SEM_WDSPLIT);
                 for (uint32_t r = 0; r < HGROUPS; ++r) {
                     noc_async_read_barrier_with_trid(r + 1);
                     pub.set(gb * HGROUPS + r + 1);
                 }
+                wd_drain_pending = false;
             };
-            issue_wd_share();
+            // Full-M blocks only: wd_mrow also covers short row-mode blocks, which keep the original order.
+            const bool wd_defer = (SR_B != 0) && (!SR_MROW_ONLY || (wd_mrow && m_eff == M_BLOCK));
+            if (!wd_defer) {
+                issue_wd_share();
+                drain_wd_share();
+            }
 
             // ---- REDUCE-SCATTER: contributor side + the finished-slice scatter ----
             // The ONE shared slice plan (moe_fused_swiglu_common.hpp), from the SAME (m_eff, KGROUPS)
@@ -443,9 +470,19 @@ void kernel_main() {
                     sem_go.wait_min(invites + KGROUPS);
                 }
                 invites += KGROUPS;
+                if (SR_B == 2 && wd_defer) {
+                    // Every reader in this column has invited, i.e. its W_gate chunks have landed (and
+                    // this core's W_up landed above): put the W_down tail on NoC1 now.
+                    issue_wd_share();
+                }
                 {
                     MaybeDeviceZoneScope("writer_scatter_gate_wait");
                     gate_acc_buf.wait_front(GU_FULL);
+                }
+                if (SR_B == 1 && wd_defer) {
+                    // This core's gate/up weights have landed (the gate accumulator is full): only
+                    // now put the W_down tail on NoC1. Drained after the h-slice send below.
+                    issue_wd_share();
                 }
                 uint32_t gate_dst = gather_gate_buf.get_write_ptr();
                 if constexpr (PHASE_CB_ALIAS) {
@@ -543,6 +580,9 @@ void kernel_main() {
                 noc.async_atomic_barrier();
                 h_slice_buf.pop_front(SLICE_FULL);
             }
+
+            // Must precede hsend's blanket read barrier and the output wait (phase 2 needs the publish).
+            drain_wd_share();
 
             // Whole-round NoC1 ownership.  The receiver readers reserve/ack HACK_AHEAD slots, so this
             // diagonal writer can launch its round as soon as every destination has acknowledged it;
