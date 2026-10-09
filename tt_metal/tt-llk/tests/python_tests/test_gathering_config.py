@@ -174,3 +174,135 @@ def test_harness_gathering_sequence_matches_tt_metal():
         "boot.h's configure_gathering() has drifted from tt-metal's in "
         "firmware_common.h; keep the two in sync."
     )
+
+
+# Replay-record checks for ENABLE_GATHERING builds (tenstorrent/tt-llk#1701 item 9).
+#
+# RISC-V CSR instruction fields, for matching cfg0 (CSR 0x7c0) writes whatever register
+# the compiler picked for the bit mask: csr[31:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0].
+CFG0_CSR = 0x7C0
+FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
+# disable_gathering() is csrrs, fence, csrrs, csrrc, fence, then three TTNOPs; allow
+# slack for scheduling.
+DISABLE_WINDOW_WORDS = 16
+# enable_gathering() is a single csrrc that follows the recorded body; allow a few
+# scalar instructions between the body's last Tensix instruction and it.
+ENABLE_SLACK_WORDS = 8
+TT_OPCODE_REPLAY = 0x04
+
+
+def _cfg0_csr_op(word):
+    """'s' / 'c' for csrrs / csrrc zero, 0x7c0, <any rs1>; None otherwise."""
+    if word & 0x7F != 0x73 or (word >> 7) & 0x1F != 0 or word >> 20 != CFG0_CSR:
+        return None
+    return {FUNCT3_CSRRS: "s", FUNCT3_CSRRC: "c"}.get((word >> 12) & 0x7)
+
+
+def _replay_records(words):
+    """(index, length) of every REPLAY that records (load_mode=1), from the inline
+    ``.ttinsn`` encoding: the Tensix word rotated left by two bits."""
+    records = []
+    for i, word in enumerate(words):
+        if word & 0x3 == 0x3:  # 32-bit RISC-V opcode space: not a Tensix instruction
+            continue
+        insn = (word >> 2) | ((word & 0x3) << 30)
+        if insn >> 24 == TT_OPCODE_REPLAY and insn & 0x1:
+            records.append((i, (insn >> 4) & 0x3FF))
+    return records
+
+
+@blackhole_only
+def test_replay_records_are_gathering_bracketed():
+    """With ENABLE_GATHERING, every replay record in the accurate bf16 exp kernel must sit
+    inside disable_gathering()/enable_gathering(), as load_replay_buf emits it.
+
+    Functional sweeps cannot catch a raw TTI_REPLAY record here: on a Blackhole p100a the
+    unbracketed record produced bit-identical exp output with gathering on, so only the
+    binary shows whether the bracket is there.
+    """
+    from helpers.llk_params import (
+        ApproximationMode,
+        DestAccumulation,
+        FastMode,
+        MathOperation,
+    )
+    from helpers.test_variant_parameters import (
+        APPROX_MODE,
+        CLAMP_NEGATIVE,
+        FAST_MODE,
+        MATH_OP,
+        NUM_BLOCKS,
+        NUM_TILES_IN_BLOCK,
+        TILE_COUNT,
+        generate_input_dim,
+    )
+
+    # bf16 Dest + APPROX_MODE=No selects _sfpu_exp_21f_bf16_tti_, the replayed body.
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    input_dimensions = [32, 32]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_gathering_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.Exp),
+        ],
+        runtimes=[TILE_COUNT(1), NUM_BLOCKS(1), NUM_TILES_IN_BLOCK(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    # Build only: the assertions are on the binary.
+    configuration.prepare()
+
+    math_elf = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+        / "math.elf"
+    )
+    assert math_elf.is_file(), f"math ELF was not built: {math_elf}"
+    words = _executable_words(math_elf)
+
+    records = _replay_records(words)
+    assert (
+        records
+    ), "no replay record found in the exp math ELF; the bf16 TTI path moved"
+
+    unbracketed = []
+    for index, length in records:
+        before = [
+            _cfg0_csr_op(w) for w in words[max(0, index - DISABLE_WINDOW_WORDS) : index]
+        ]
+        before = [op for op in before if op]
+        after = words[index + 1 + length : index + 1 + length + ENABLE_SLACK_WORDS]
+        disabled = before[-3:] == ["s", "s", "c"]
+        enabled = any(_cfg0_csr_op(w) == "c" for w in after)
+        if not (disabled and enabled):
+            unbracketed.append(
+                f"record at word {index} (len {length}): "
+                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
+            )
+    assert not unbracketed, (
+        "replay record(s) not bracketed by disable_gathering()/enable_gathering() with "
+        "ENABLE_GATHERING defined; record through ckernel::load_replay_buf instead of a raw "
+        "TTI_REPLAY:\n  " + "\n  ".join(unbracketed)
+    )

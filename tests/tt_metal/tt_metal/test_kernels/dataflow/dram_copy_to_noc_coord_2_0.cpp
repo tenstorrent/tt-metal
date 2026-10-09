@@ -12,6 +12,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/watcher_test_helpers.h"
 #include "internal/hw_thread.h"
 #include "experimental/kernel_args.h"
 
@@ -86,8 +87,7 @@ void kernel_main() {
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
 #else
-    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
+    signal_completion_before_hang();
 #endif
 
     if (invalid_txn_id) {

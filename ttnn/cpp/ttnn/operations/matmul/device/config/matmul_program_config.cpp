@@ -7,6 +7,7 @@
 #include "ttnn/types.hpp"
 #include <algorithm>
 #include <ranges>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::matmul {
 

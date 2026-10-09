@@ -14,6 +14,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
+    GatedReduceScale,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -5948,6 +5949,42 @@ class SdpaExpUnclampedGolden:
         return round_to_dest_width(result, DestAccumulation.No).to(
             format_dict[data_format]
         )
+
+
+@register_golden
+class GatedReduceGolden:
+    """Adjacent gate/up fusion: scale and activate in FP32, round only the result."""
+
+    def __call__(
+        self,
+        gate,
+        up,
+        gate_mode,
+        up_mode,
+        scale_flags,
+        scale,
+        out_scale,
+        limit,
+        alpha,
+        dest_acc,
+    ):
+        gate = gate.float()
+        up = up.float()
+        if scale_flags & GatedReduceScale.Gate:
+            gate = gate * scale
+        if scale_flags & GatedReduceScale.Up:
+            up = up * scale
+        if gate_mode == "ClampedSilu":
+            gate = gate.clamp(max=limit)
+            activated = gate * torch.sigmoid(alpha * gate)
+        else:
+            activated = torch.nn.functional.silu(gate)
+        if up_mode == "Clamp":
+            up = up.clamp(-limit, limit)
+        result = activated * up
+        if scale_flags & GatedReduceScale.Out:
+            result = result * out_scale
+        return round_to_dest_width(result, dest_acc)
 
 
 @register_golden
