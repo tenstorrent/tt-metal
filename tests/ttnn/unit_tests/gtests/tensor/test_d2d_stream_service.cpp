@@ -35,6 +35,7 @@
 #include <numeric>
 #include <optional>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -45,6 +46,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -366,14 +368,14 @@ public:
 
     // True once every coord has released exactly `n` transfers (polls up to `timeout`).
     bool wait_released(uint32_t n, std::chrono::milliseconds timeout) const {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (std::all_of(coords_.begin(), coords_.end(), [&](const auto& c) { return released(c) == n; })) {
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        return false;
+        return wait_until(timeout, [&] {
+            return std::all_of(coords_.begin(), coords_.end(), [&](const auto& c) { return released(c) == n; });
+        });
+    }
+
+    // Same, for one coord only.
+    bool wait_released_at(const MeshCoordinate& coord, uint32_t n, std::chrono::milliseconds timeout) const {
+        return wait_until(timeout, [&] { return released(coord) == n; });
     }
 
     // Stand in for the receiver workers: ack the released transfer so the receiver
@@ -406,6 +408,17 @@ public:
     }
 
 private:
+    static bool wait_until(std::chrono::milliseconds timeout, const std::function<bool()>& done) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (done()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+
     D2DStreamServiceSender* sender_;
     D2DStreamServiceReceiver* receiver_;
     std::shared_ptr<MeshDevice> sender_mesh_;
@@ -491,6 +504,116 @@ void verify_stage_gate_semantics(
     std::this_thread::sleep_for(kGateHeldWindow);
     for (const auto& coord : h.coords()) {
         EXPECT_EQ(h.released(coord), 5u) << "transfer for closed gate 0 was released at " << coord;
+    }
+}
+
+// Gates are per coord: opening one coord's gate releases only that coord's transfer, and
+// CloseOnTransit closes only that coord's gate. Needs a multi-coord receiver.
+void verify_stage_gate_per_coord_independence(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    const auto& coords = h.coords();
+    ASSERT_GE(coords.size(), 2u);
+    const MeshCoordinate& first = coords.front();
+    const MeshCoordinate& opened = coords.back();
+
+    h.send(/*slot=*/2, ttnn::kStageGateFlagCloseOnTransit);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : coords) {
+        EXPECT_EQ(h.released(coord), 0u) << "transfer for a closed gate was released at " << coord;
+    }
+
+    // Open gate 2 on the last coord only.
+    receiver->set_stage_gate(opened, 2, /*open=*/true);
+    ASSERT_TRUE(h.wait_released_at(opened, 1, kGateReleaseTimeout)) << "opening gate 2 did not release " << opened;
+    EXPECT_FALSE(receiver->is_stage_gate_open(opened, 2)) << "CloseOnTransit did not close gate 2 at " << opened;
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : coords) {
+        if (coord != opened) {
+            EXPECT_EQ(h.released(coord), 0u) << "opening gate 2 at " << opened << " released " << coord;
+            EXPECT_FALSE(receiver->is_stage_gate_open(coord, 2)) << "gate 2 at " << coord << " changed";
+        }
+    }
+
+    // The rest follow once their own gates open.
+    for (const auto& coord : coords) {
+        if (coord != opened) {
+            receiver->set_stage_gate(coord, 2, /*open=*/true);
+        }
+    }
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout)) << "gate 2 at " << first << " did not release";
+    EXPECT_TRUE(h.gate_closed_everywhere(2));
+    h.consume();
+}
+
+// One-shot program on `opener_mesh` (1x1) that opens `gate` on the receiver's `coord` over
+// fabric, built only from the receiver's published descriptor. mode 0 = inline write of
+// OPEN, mode 1 = flushed atomic +1 (see stage_gate_remote_opener.cpp).
+MeshWorkload make_remote_gate_opener_workload(
+    const std::shared_ptr<MeshDevice>& opener_mesh,
+    const ttnn::D2DStageGateDescriptor& desc,
+    uint32_t gate,
+    uint32_t mode) {
+    const CoreCoord opener_core{0, 0};
+    const MeshCoordinate opener_coord(0, 0);
+    const auto src_node = opener_mesh->get_fabric_node_id(opener_coord);
+    const tt::tt_fabric::FabricNodeId dst_node(tt::tt_fabric::MeshId{desc.mesh_id}, desc.chip_id);
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
+    TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
+
+    auto program = CreateProgram();
+    auto kernel = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/tensor/kernels/stage_gate_remote_opener.cpp",
+        CoreRange{opener_core, opener_core},
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    std::vector<uint32_t> rt = {
+        mode,
+        static_cast<uint32_t>(desc.service_core_noc.x),
+        static_cast<uint32_t>(desc.service_core_noc.y),
+        static_cast<uint32_t>(desc.gate_base_addr + gate * desc.gate_stride_bytes),
+        desc.chip_id,
+        desc.mesh_id,
+    };
+    tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
+    SetRuntimeArgs(program, kernel, opener_core, rt);
+
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(opener_coord), std::move(program));
+    return workload;
+}
+
+// A kernel on a third chip (no host access to the receiver) opens the gate over fabric
+// using only the descriptor, once per opener flavour.
+void verify_stage_gate_remote_opener(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const std::shared_ptr<MeshDevice>& opener_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    const MeshCoordinate coord(0, 0);
+    const auto desc = receiver->get_stage_gate_descriptor(coord);
+
+    uint32_t expected = 0;
+    for (const auto& [gate, mode, name] :
+         {std::tuple{1u, 0u, "inline write"}, std::tuple{2u, 1u, "flushed atomic inc"}}) {
+        h.send(gate, ttnn::kStageGateFlagCloseOnTransit);
+        std::this_thread::sleep_for(kGateHeldWindow);
+        ASSERT_EQ(h.released(coord), expected) << "transfer for closed gate " << gate << " was released";
+
+        auto workload = make_remote_gate_opener_workload(opener_mesh, desc, gate, mode);
+        EnqueueMeshWorkload(opener_mesh->mesh_command_queue(), workload, /*blocking=*/false);
+        Finish(opener_mesh->mesh_command_queue());
+
+        ++expected;
+        ASSERT_TRUE(h.wait_released(expected, kGateReleaseTimeout))
+            << "remote " << name << " did not open gate " << gate;
+        EXPECT_TRUE(h.gate_closed_everywhere(gate))
+            << "CloseOnTransit did not close gate " << gate << " after " << name;
+        h.consume();
     }
 }
 
@@ -1933,6 +2056,35 @@ TEST_F(D2DStreamServiceTest, StageGateSemanticsRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
     verify_stage_gate_semantics(sender_mesh, receiver_mesh);
+}
+
+// Row pair: opening gate 2 on one coord releases only that coord.
+TEST_F(D2DStreamServiceTest, StageGatePerCoordIndependenceRowPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
+    }
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    verify_stage_gate_per_coord_independence(sender_mesh, receiver_mesh);
+}
+
+// Sender (0,0) -> receiver (0,1); a kernel on (1,1) opens the receiver's gates over fabric.
+TEST_F(D2DStreamServiceTest, StageGateRemoteFabricOpener) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh for sender, receiver and a separate opener chip; got " << shape;
+    }
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1));
+    auto opener_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1));
+    verify_stage_gate_remote_opener(sender_mesh, receiver_mesh, opener_mesh);
 }
 
 }  // namespace

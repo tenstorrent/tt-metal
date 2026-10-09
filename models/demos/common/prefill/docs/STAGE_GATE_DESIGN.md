@@ -546,14 +546,17 @@ multicast and `data_ready` (§3.3). It polls the termination word, so teardown w
 3. [done] Host API: descriptor, `set_stage_gate`, `is_stage_gate_open`; nanobind + `ttnn` exports.
 4. [done, passing on a 2x2 Blackhole mesh, 2026-10-09] gtests in `tests/ttnn/unit_tests/gtests/tensor/test_d2d_stream_service.cpp`:
    `StageGateDisabledByDefault`, `StageGateRequiresMetadata`, `StageGateDescriptorSingleChipPair`,
-   `StageGateSemanticsSingleChipPair`, `StageGateSemanticsRowPair`. Semantics covers: held while
+   `StageGateSemanticsSingleChipPair`, `StageGateSemanticsRowPair`,
+   `StageGatePerCoordIndependenceRowPair`, `StageGateRemoteFabricOpener`. Semantics covers: held while
    closed, release on open, CloseOnTransit closes, multi-transfer burst through one open, sentinel
    slot passes, Bypass passes, teardown while gated. A mutation run (gate wait forced to pass) fails
    `StageGateSemanticsSingleChipPair`, so the test catches a gate that never holds. No regressions:
-   `D2DStreamServiceTest.*` and `*StreamPipeline*` show 53 passed and 3 skipped (they need more than 4 chips).
-   Still to add: per-chip independence (open one coord's gate; only that coord releases), and a
-   remote opener: a kernel on another chip opening the gate over fabric using only the descriptor
-   (inline write, and flushed atomic-inc +1).
+   `D2DStreamServiceTest.*` and `*StreamPipeline*` show 55 passed and 3 skipped (they need more than 4 chips).
+   Per-coord independence: opening gate 2 on one receiver coord releases only that coord, and
+   CloseOnTransit closes only that coord's gate. Remote opener: a kernel on a third chip
+   (`kernels/stage_gate_remote_opener.cpp`) opens the gate over fabric using only the descriptor,
+   once as an inline write of OPEN and once as a flushed atomic +1. A mutation run (opener aimed at
+   the neighbouring gate word) fails that test.
 5. [todo] Same gate in the H2D ingress (stage 0, `persistent_h2d_writer.cpp`).
 6. [todo] Prefill runner / engine: grow the record (§3.6), forward it verbatim on the eager path,
    resize the traced persistent record, stamp `CLOSE_ON_TRANSIT` in `prefill_producer.py`, publish
