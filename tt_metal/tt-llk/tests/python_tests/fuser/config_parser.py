@@ -5,6 +5,7 @@
 import os
 import re
 from pathlib import Path
+from textwrap import indent
 from typing import Annotated, Dict, List, Optional, Tuple
 
 import pytest
@@ -91,6 +92,9 @@ def format_validation_error(error: ValidationError) -> str:
             error_msg = "required field"
         else:
             error_msg = msg.removeprefix("Value error, ")
+
+        if not loc_parts:
+            messages.append(error_msg)
 
         for i, part in enumerate(loc_parts):
             indent = "  " * i
@@ -319,13 +323,17 @@ class FuserConfigSchema(BaseModel):
             )
 
         pipeline = []
+        errors = []
         for i, op in enumerate(self.operations):
             try:
                 pipeline.append(
                     op.to_l1_operation(operands, dest_acc=self.dest_acc.value)
                 )
             except ValueError as e:
-                raise ValueError(f"Operation {i + 1}\n  {e}") from None
+                errors.append(f"Operation {i + 1}\n{indent(str(e), '  ')}")
+
+        if errors:
+            raise ValueError("\n\n".join(errors))
 
         num_stages = len(pipeline)
         for i, operation in enumerate(pipeline):
