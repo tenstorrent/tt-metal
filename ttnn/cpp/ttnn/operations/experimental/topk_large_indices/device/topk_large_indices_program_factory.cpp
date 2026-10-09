@@ -186,7 +186,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
     // Blackhole's segmented K' 2048 body holds its unfused accumulator here while a later segment is split across the
-    // threads: two sequences of raw 32-bit words, moved by the pack thread's RISC.
+    // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back.
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
