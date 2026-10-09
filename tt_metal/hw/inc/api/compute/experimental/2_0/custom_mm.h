@@ -51,8 +51,9 @@ ALWI void custom_mm_block_init(
         S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
         "custom_mm_block: in1 tile shape must be [32, 32]");
 
-    constexpr auto in0_descriptor = experimental::LLKOperand<F0, S0>::descriptor;
-    constexpr auto in1_descriptor = experimental::LLKOperand<F1, S1>::descriptor;
+    // Used only inside UNPACK/MATH, which expand to nothing on the pack thread.
+    [[maybe_unused]] constexpr auto in0_descriptor = experimental::LLKOperand<F0, S0>::descriptor;
+    [[maybe_unused]] constexpr auto in1_descriptor = experimental::LLKOperand<F1, S1>::descriptor;
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(fp32_dest_acc_en);
 
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
