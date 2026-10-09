@@ -19,10 +19,14 @@ void kernel_main() {
     constexpr uint32_t norm = get_compile_time_arg_val(3);
     constexpr uint32_t scale_bits = get_compile_time_arg_val(4);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
+    // local_e > 0: one-token mode writing only this chip's local_e experts (starting at the uint32 in ep_off) as one
+    // bf16 row-major row -- the routing ("sparsity") row the batch-1 MoE kernels read -- instead of the dense tile
+    constexpr uint32_t local_e = get_compile_time_arg_val(6);
     constexpr uint32_t cb_buf = 0;
-    constexpr auto sel_args = TensorAccessorArgs<6>();
+    constexpr auto sel_args = TensorAccessorArgs<7>();
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
+    constexpr auto off_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr uint32_t Et = E / 32;
 
     const uint32_t sel_addr = get_common_arg_val<uint32_t>(0);
@@ -90,6 +94,26 @@ void kernel_main() {
         outv[picked[k]] = scv[picked[k]] * mult;
     }
 
+    if constexpr (local_e > 0) {
+        // this chip's expert offset (one uint32 page of the mesh-sharded ep_off tensor), then the bf16 row
+        const auto off_acc = TensorAccessor(off_args, get_common_arg_val<uint32_t>(3));
+        const uint32_t off_l1 = out_l1 + E * 4;
+        noc_async_read(off_acc.get_noc_addr(0), off_l1, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t e0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1)[0];
+        const uint32_t row_l1 = (off_l1 + 64 + 63) & ~63u;
+        volatile tt_l1_ptr uint16_t* row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_l1);
+        volatile tt_l1_ptr uint32_t* outu = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_l1);
+        for (uint32_t e = 0; e < local_e; ++e) {
+            const uint32_t u = outu[e0 + e];
+            row[e] = static_cast<uint16_t>((u + 0x7FFFu + ((u >> 16) & 1u)) >> 16);
+        }
+        const auto row_acc = TensorAccessor(out_args, out_addr);
+        noc_async_write(row_l1, row_acc.get_noc_addr(0), local_e * 2);
+        noc_async_write_barrier();
+        return;
+    }
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {
             const uint32_t off = (face0 + h) * 1024 + row_off;

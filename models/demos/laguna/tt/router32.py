@@ -20,20 +20,20 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
     grid_size = device.compute_with_storage_grid_size()
     grid = ttnn.num_cores_to_corerangeset(T, grid_size, True)
     buf = ttnn.CBDescriptor(
-        total_size=4 * E * 4,
+        total_size=4 * E * 4 + 256,
         core_ranges=grid,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4)],
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
     )
     args = []
-    for t in (sel, scores, out):
+    for t in (sel, scores, out, out):
         args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     scale_bits = struct.unpack("<I", struct.pack("<f", float(routed_scaling)))[0]
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "router32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096] + args,
-        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address()],
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, 0] + args,
+        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), 0],
         config=ttnn.ReaderConfigDescriptor(),
     )
     program = ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf])
@@ -90,3 +90,36 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
     ]
     ttnn.generic_op([sel, scores, idx, wgt], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=bufs))
     return wgt, idx
+
+
+def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e,
+                 memory_config=ttnn.L1_MEMORY_CONFIG):
+    """One decode token: sel, scores [1, 1, 1, E] fp32 TILE; ep_off: mesh-sharded uint32 holding each chip's first
+    local expert. Returns this chip's [1, 1, 1, local_e] bf16 row-major routing row (normalized, scaled weights of
+    its picked local experts, 0 elsewhere) -- the batch-1 MoE kernels' sparsity input."""
+    device = sel.device()
+    E = sel.shape[-1]
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 1, local_e]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config
+    )
+    grid_size = device.compute_with_storage_grid_size()
+    grid = ttnn.num_cores_to_corerangeset(1, grid_size, True)
+    buf = ttnn.CBDescriptor(
+        total_size=4 * E * 4 + 256,
+        core_ranges=grid,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
+    )
+    args = []
+    for t in (sel, scores, out, ep_off):
+        args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    scale_bits = struct.unpack("<I", struct.pack("<f", float(routed_scaling)))[0]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "router32_reader.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e)] + args,
+        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), ep_off.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op([sel, scores, ep_off, out], ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf]))
+    return out

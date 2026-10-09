@@ -51,6 +51,7 @@ from .optimized_decoder import (
     PrecisionPolicy,
     _cached_device_tensor,
     _decode_shard_cores,
+    _dram_matmul_pc,
     _dram_weight_memcfg,
     _hf_rope_tables,
     _sparse_pc,
@@ -292,6 +293,8 @@ class MultichipDecoder(OptimizedDecoder):
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
+        # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
+        self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
         self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
         self._combine_local = _parse_binary_env("TT_LAGUNA_COMBINE_LOCAL", True)  # all-core local combine kernel
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
@@ -648,6 +651,14 @@ class MultichipDecoder(OptimizedDecoder):
             # D=1 already owns every score, so avoid the large identity weight and selector matmul.
             if D > 1:
                 w["ep_sel"] = shard_tt("ep_sel", lambda: torch.eye(E).reshape(1, 1, E, E), 3, ttnn.bfloat16)
+                # each chip's first local expert id (the one-token router kernel's local routing row)
+                w["ep_off"] = ttnn.from_torch(
+                    (torch.arange(D, dtype=torch.int32) * (E // D)).reshape(1, 1, 1, D),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=dev,
+                    mesh_mapper=ttnn.ShardTensorToMesh(dev, dim=3),
+                )
 
             # expert weights EP-sharded on the expert dim (dim1): device d holds experts [64d:64d+64].
             # The 256-expert torch.stack is the dominant boot cost, so build it lazily
@@ -1145,6 +1156,16 @@ class MultichipDecoder(OptimizedDecoder):
         LE = self.local_experts
         H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
         T = ln_flat.shape[2]
+        if (
+            T == 1
+            and self.D > 1
+            and getattr(self, "_moe1_kernels", False)
+            and getattr(self, "_route_local_row", False)
+            and getattr(self, "_router32", False)
+            and "ep_off" in self.w
+            and "gate_w_ds" in self.w
+        ):
+            return self._moe1_local(ln_flat, sharded)
         logits, idx, wsel = self._route(ln_flat, want_dense=self._route_dense_mask)
         # idx is None when the router returned the dense [1,1,T,E] routing matrix directly
         dense = wsel if idx is None else ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
@@ -1273,6 +1294,41 @@ class MultichipDecoder(OptimizedDecoder):
             combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)
+
+    def _moe1_local(self, ln_flat, sharded):
+        """One decode token: router logits -> exact top-K kernel writing this chip's local routing row -> the
+        batch-1 MoE kernels; then the shared expert and the all-reduce (see _moe)."""
+        from .router32 import route1_local
+
+        cfg = self.cfg
+        H, E = cfg.hidden, cfg.num_experts
+        num_cores = _decode_shard_cores(H, E)
+        x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
+        logits32 = ttnn.linear(
+            x_sh,
+            self.w["gate_w_ds"],
+            program_config=_dram_matmul_pc(TILE, H, E, num_cores),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._ck_router_precise,
+            dtype=ttnn.float32,
+        )
+        ttnn.deallocate(x_sh)
+        logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
+        scores = ttnn.sigmoid(logits32)
+        sel = ttnn.add(scores, self.w["e_bias_f32"])
+        sparsity = route1_local(
+            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
+        )
+        x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
+        routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
+        keep = sharded and self._glu_out_sharded
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        if keep:
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, 1, H)))
         return self._reduce(combined)
 
     # ---- MoE baseline (unpacked gate/up: two separate sparse_matmuls) ------ #
