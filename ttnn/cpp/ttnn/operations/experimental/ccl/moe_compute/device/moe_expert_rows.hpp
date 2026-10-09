@@ -43,8 +43,10 @@ struct MoEExpertRowsCore {
     uint32_t bank = 0;          // DRAM bank holding that shard
     uint32_t group = 0;         // expert group (jobs dealt by rows_reader.cpp)
     uint32_t g0 = 0, ng = 0;    // W0/W1 two-column groups of the shard
+    bool half_col = false;      // the last of them is the shard's half block-column (one column, 2 tiles per K row)
     uint32_t c0 = 0, na = 0;    // real intermediate columns
     uint32_t q0 = 0, nq = 0;    // W2 four-tile output groups of the shard
+    bool half_out = false;      // the last of them is the half-width last a2a iteration (2 tiles per K row)
     uint32_t n0 = 0, nout = 0;  // real output tiles
     uint32_t reader_noc = 0;
 };
