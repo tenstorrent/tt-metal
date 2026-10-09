@@ -46,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape, formats.unpack_A_src);
+    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
 
     const std::uint32_t tile_cnt = static_cast<std::uint32_t>(params.INPUT_TILE_CNT);
     const std::uint32_t stride   = tile_cnt > 1 ? L1_ADDRESS(params.buffer_A[1]) - L1_ADDRESS(params.buffer_A[0]) : 0;

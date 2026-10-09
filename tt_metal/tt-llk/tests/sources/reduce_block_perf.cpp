@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE, formats.unpack_A_src);
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
