@@ -81,9 +81,11 @@ def append_layer_pages(pdf, finish, data, root):
         *axes[0].get_legend_handles_labels(), loc="upper left", bbox_to_anchor=(0.055, 0.865), ncol=2, frameon=False
     )
     notes = []
+    last_deltas = {}
     for layer, label in (("global", "Global"), ("local", "Sliding")):
         a, b = [select(cells, layer, m, "last") for m in ("canonical", batch_mode)]
         extra = b["kernel_ms"] - a["kernel_ms"]
+        last_deltas[layer] = extra
         attention_extra = (b["grouped"]["Attention (SDPA)"]["us"] - a["grouped"]["Attention (SDPA)"]["us"]) / 1000
         notes.append(
             f"{label}, last: batching {'adds' if extra >= 0 else 'saves'} {abs(extra):.3f} ms per layer. The {lanes} attention calls total "
@@ -99,7 +101,13 @@ def append_layer_pages(pdf, finish, data, root):
     notes += [
         f"Prefix control: batched global time is {control['kernel_ms']:.3f} ms at {control['start']//1024}K and {last['kernel_ms']:.3f} ms at {last['start']//1024}K. This isolates the effect of the different final-chunk starts.",
         f"Token ranges (K = 1024): first = canonical [0, {total//1024}K), batch {lanes} × [0, {chunk//1024}K). Last = canonical [{canonical_last['start']//1024}K, 256K), batch {lanes} × [{last['start']//1024}K, 256K).",
-        "These are profiled kernel sums, not full-model latency. The layer test uses random KV histories and token embeddings; the full-model charts use actual model histories. Each panel has its own vertical scale.",
+        "Kernel sums use isolated layers with random KV histories; full-model charts use actual histories. "
+        + (
+            "The 50 sliding layers offset much of the saving across 10 global layers. "
+            if last_deltas["global"] < 0 < last_deltas["local"]
+            else ""
+        )
+        + "Each panel has its own vertical scale.",
     ]
     paragraphs(fig, notes, 0.31)
     finish(fig, "layer_overview", pdf)
@@ -162,16 +170,21 @@ def append_layer_pages(pdf, finish, data, root):
                 for col in range(9):
                     table[i, col].set_facecolor("#faeadb")
                     table[i, col].get_text().set_fontweight("bold")
-        paragraphs(
-            fig,
-            [
-                f"The five projection/MLP matmuls have the same packed row count in both paths. Attention, cache writes and local slicing operate per request in the batch. Counts include all {lanes} requests.",
-                "Slices/concatenation copy rows locally; norm redistribution changes local memory layout. The SDPA operation includes its internal ring KV exchange. The separate TP all-gather/reduce-scatter operations communicate between tensor-parallel devices.",
-                "Timing source: tt-perf-report main (version 1.4.1), with the final warmed replay selected by signposts. Ordinary ops use the slowest device; collectives use the device average. Full per-call tables follow.",
-            ],
-            0.19,
-            size=9,
-        )
+        notes = [
+            f"The five projection/MLP matmuls have the same packed row count. Attention, cache writes and slicing operate per request. Counts include all {lanes} requests. Slices/concatenation copy local rows; norm redistribution changes local memory layout.",
+            "The SDPA time includes its internal ring KV exchange. The separate TP all-gather/reduce-scatter operations communicate between tensor-parallel devices. Ordinary ops use the slowest device; collectives use the device average.",
+        ]
+        if total == 8192 and chunk == 4096:
+            notes.append(
+                "Existing global SDPA settings: canonical 8K uses Q blocks of 96, K blocks of 256, one K partition; each 4K call uses Q blocks of 128, K blocks of 256, three K partitions. Both use LoFi. These profiles do not isolate the effect of each setting."
+                if layer == "global"
+                else "Existing sliding SDPA settings: both paths use Q/K blocks of 128 tokens, one K partition and HiFi2. The batch executes the attention operation twice, once per request."
+            )
+        else:
+            notes.append(
+                "Timing source: tt-perf-report main (version 1.4.1), final warmed replay. Full per-call tables follow."
+            )
+        paragraphs(fig, notes, 0.19, size=9)
         finish(fig, f"{layer}_op_comparison", pdf)
 
     # Preserve the tool's per-call metrics instead of offering only grouped charts.

@@ -1,0 +1,446 @@
+mode,layer,chunk_index,start,end,index,code,label,group,us,min_device_us,max_device_us,mean_device_us,input0,fidelity,trace_id,replay_id
+canonical,global,0,0,8192,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.704,6.973,7.704,7.3709999999999996,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.832,9.55,9.832,9.72171875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+canonical,global,0,0,8192,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.132,9.204,10.132,9.64109375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,3,AllGatherDeviceOperation,TP all-gather,TP communication,105.486,98.56,112.309,105.486,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,159.955,156.354,159.955,157.9295,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+canonical,global,0,0,8192,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,38.719,35.893,38.719,37.3090625,"['1[1]', '1[1]', '1024[1024]', '4608[4608]']",,1,5
+canonical,global,0,0,8192,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,27.352,25.957,27.352,26.9116875,"['1[1]', '1[1]', '8192[8192]', '512[512]']",HiFi4,1,5
+canonical,global,0,0,8192,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,7.907,7.471,7.907,7.69396875,"['1[1]', '1[1]', '1024[1024]', '512[512]']",HiFi4,1,5
+canonical,global,0,0,8192,8,SliceDeviceOperation,Local tensor slices,Local slices / concat,4.738,4.372,4.738,4.4743125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+canonical,global,0,0,8192,9,SliceDeviceOperation,Local tensor slices,Local slices / concat,10.9,10.406,10.9,10.54896875,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+canonical,global,0,0,8192,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.9,17.18,17.9,17.52475,"['1[1]', '8[8]', '1024[1024]', '128[128]']",HiFi4,1,5
+canonical,global,0,0,8192,11,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,34.307,32.682,34.307,33.6091875,"['1[1]', '8[8]', '1024[1024]', '128[128]']",,1,5
+canonical,global,0,0,8192,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,1.621,1.547,1.621,1.57546875,"['1[1]', '1[1]', '1024[1024]', '512[512]']",,1,5
+canonical,global,0,0,8192,13,TilizeWithValPaddingDeviceOperation,Rotary weight tiling,Norms / RoPE / other,5.65,5.596,5.65,5.62646875,"['1[1]', '1[1]', '1[1]', '128[128]']",HiFi4,1,5
+canonical,global,0,0,8192,14,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,4.086,3.902,4.086,3.97278125,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,5
+canonical,global,0,0,8192,15,RotaryEmbeddingDeviceOperation,Rotary transform,Norms / RoPE / other,7.944,7.579,7.944,7.73375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,5
+canonical,global,0,0,8192,16,GatherCodegenDeviceOperation,Rotary-channel gather,Norms / RoPE / other,61.862,61.587,61.862,61.726625,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,5
+canonical,global,0,0,8192,17,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,3.573,3.388,3.573,3.48503125,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,5
+canonical,global,0,0,8192,18,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.467,3.347,3.467,3.3961875,"['1[1]', '1[1]', '1024[1024]', '640[640]']",HiFi4,1,5
+canonical,global,0,0,8192,19,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,7.765,7.574,7.765,7.6872187499999995,"['1[1]', '1[1]', '32768[32768]', '640[640]']",,1,5
+canonical,global,0,0,8192,20,RingJointSDPADeviceOperation,Attention (SDPA),Attention,652.73,341.736,652.73,499.7803125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",HiFi2,1,5
+canonical,global,0,0,8192,21,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,53.8,50.841,53.8,52.2578125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+canonical,global,0,0,8192,22,MatmulDeviceOperation,Attention output projection,Projections / MLP,151.795,146.102,151.795,149.67775,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",LoFi,1,5
+canonical,global,0,0,8192,23,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,124.0328125,106.238,151.015,124.0328125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+canonical,global,0,0,8192,24,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.626,6.898,7.626,7.25865625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,25,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.831,9.569,9.831,9.70121875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+canonical,global,0,0,8192,26,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.053,4.114,5.053,4.39990625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,27,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.493,10.004,11.493,10.71965625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,5
+canonical,global,0,0,8192,28,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.286,3.88,4.286,4.05140625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,29,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.747,9.524,9.747,9.61821875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+canonical,global,0,0,8192,30,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.013,9.301,10.013,9.6766875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,31,AllGatherDeviceOperation,TP all-gather,TP communication,106.7379375,99.873,116.112,106.7379375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,32,MatmulDeviceOperation,MLP gate projection,Projections / MLP,223.668,221.038,223.668,221.780125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+canonical,global,0,0,8192,33,MatmulDeviceOperation,MLP up projection,Projections / MLP,155.487,151.852,155.487,154.1705,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+canonical,global,0,0,8192,34,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.456,30.961,32.456,31.6715625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+canonical,global,0,0,8192,35,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.462,172.664,174.462,173.67025,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+canonical,global,0,0,8192,36,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,113.55746875,106.268,130.429,113.55746875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+canonical,global,0,0,8192,37,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.59,6.856,7.59,7.215125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,38,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.784,9.507,9.784,9.65071875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+canonical,global,0,0,8192,39,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.178,4.1,5.178,4.47375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+canonical,global,0,0,8192,40,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,12.153,10.548,12.153,11.07865625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,5
+canonical,local,0,0,8192,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.715,7.007,7.715,7.346,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.843,9.549,9.843,9.7138125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+canonical,local,0,0,8192,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.113,9.389,10.113,9.7525625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,3,AllGatherDeviceOperation,TP all-gather,TP communication,105.42453125,99.077,113.096,105.42453125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,157.244,153.541,157.244,155.59928125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+canonical,local,0,0,8192,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,31.213,28.991,31.213,30.098125,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",,3,5
+canonical,local,0,0,8192,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,17.201,15.703,17.201,16.2858125,"['1[1]', '1[1]', '8192[8192]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,11.567,11.241,11.567,11.418375,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,8,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.259,8.897,9.259,9.056875,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,9,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,26.774,26.194,26.774,26.52684375,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,18.047,17.444,18.047,17.78446875,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,11,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,4.739,4.33,4.739,4.51840625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,12,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.187,8.704,9.187,8.907,"['1[1]', '4[4]', '32768[32768]', '256[256]']",,3,5
+canonical,local,0,0,8192,13,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,4.59,4.219,4.59,4.3910625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,5
+canonical,local,0,0,8192,14,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.565,8.604,9.565,9.002218749999999,"['1[1]', '4[4]', '32768[32768]', '256[256]']",,3,5
+canonical,local,0,0,8192,15,RingJointSDPADeviceOperation,Attention (SDPA),Attention,356.699,304.762,356.699,322.6768125,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi2,3,5
+canonical,local,0,0,8192,16,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,27.057,24.947,27.057,25.94740625,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,5
+canonical,local,0,0,8192,17,MatmulDeviceOperation,Attention output projection,Projections / MLP,101.73,97.095,101.73,99.34659375,"['1[1]', '1[1]', '1024[1024]', '2048[2048]']",LoFi,3,5
+canonical,local,0,0,8192,18,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,118.68596875,105.959,158.635,118.68596875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+canonical,local,0,0,8192,19,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.562,6.865,7.562,7.2260625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,20,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.844,9.577,9.844,9.7180625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+canonical,local,0,0,8192,21,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.011,4.221,5.011,4.4823125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,22,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.422,9.956,11.422,10.64175,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,5
+canonical,local,0,0,8192,23,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.218,3.844,4.218,4.08578125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,24,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.756,9.525,9.756,9.64225,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+canonical,local,0,0,8192,25,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.113,9.314,10.113,9.6883125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,26,AllGatherDeviceOperation,TP all-gather,TP communication,108.04446875,102.218,114.71,108.04446875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,27,MatmulDeviceOperation,MLP gate projection,Projections / MLP,223.733,221.284,223.733,222.3224375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+canonical,local,0,0,8192,28,MatmulDeviceOperation,MLP up projection,Projections / MLP,156.241,152.471,156.241,154.41246875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+canonical,local,0,0,8192,29,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.044,30.976,32.044,31.53246875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+canonical,local,0,0,8192,30,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.939,172.59,174.939,173.56225,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+canonical,local,0,0,8192,31,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,114.29771875,105.042,128.786,114.29771875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+canonical,local,0,0,8192,32,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.748,6.849,7.748,7.23240625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,33,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.866,9.557,9.866,9.71403125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+canonical,local,0,0,8192,34,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.063,4.099,5.063,4.45865625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+canonical,local,0,0,8192,35,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,12.085,10.639,12.085,11.154,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,5
+canonical,global,31,253952,262144,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.73,6.955,7.73,7.29615625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.812,9.456,9.812,9.6865625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+canonical,global,31,253952,262144,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.078,9.293,10.078,9.72365625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,3,AllGatherDeviceOperation,TP all-gather,TP communication,101.422625,94.712,106.508,101.422625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,158.793,153.87,158.793,156.42390625000002,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+canonical,global,31,253952,262144,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,39.426,36.161,39.426,37.62459375,"['1[1]', '1[1]', '1024[1024]', '4608[4608]']",,1,10
+canonical,global,31,253952,262144,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,27.45,26.105,27.45,26.82125,"['1[1]', '1[1]', '8192[8192]', '512[512]']",HiFi4,1,10
+canonical,global,31,253952,262144,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,7.861,7.43,7.861,7.66471875,"['1[1]', '1[1]', '1024[1024]', '512[512]']",HiFi4,1,10
+canonical,global,31,253952,262144,8,SliceDeviceOperation,Local tensor slices,Local slices / concat,4.68,4.322,4.68,4.47371875,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+canonical,global,31,253952,262144,9,SliceDeviceOperation,Local tensor slices,Local slices / concat,10.804,10.362,10.804,10.55384375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+canonical,global,31,253952,262144,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.473,16.936,17.473,17.240625,"['1[1]', '8[8]', '1024[1024]', '128[128]']",HiFi4,1,10
+canonical,global,31,253952,262144,11,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,35.061,32.684,35.061,33.6953125,"['1[1]', '8[8]', '1024[1024]', '128[128]']",,1,10
+canonical,global,31,253952,262144,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,1.611,1.553,1.611,1.57746875,"['1[1]', '1[1]', '1024[1024]', '512[512]']",,1,10
+canonical,global,31,253952,262144,13,TilizeWithValPaddingDeviceOperation,Rotary weight tiling,Norms / RoPE / other,5.659,5.601,5.659,5.6265,"['1[1]', '1[1]', '1[1]', '128[128]']",HiFi4,1,10
+canonical,global,31,253952,262144,14,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,3.963,3.88,3.963,3.9285625,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,10
+canonical,global,31,253952,262144,15,RotaryEmbeddingDeviceOperation,Rotary transform,Norms / RoPE / other,7.84,7.564,7.84,7.6935,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,10
+canonical,global,31,253952,262144,16,GatherCodegenDeviceOperation,Rotary-channel gather,Norms / RoPE / other,61.853,61.59,61.853,61.703,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,10
+canonical,global,31,253952,262144,17,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,3.579,3.373,3.579,3.47934375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,10
+canonical,global,31,253952,262144,18,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.517,3.355,3.517,3.4248125,"['1[1]', '1[1]', '1024[1024]', '640[640]']",HiFi4,1,10
+canonical,global,31,253952,262144,19,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,7.799,7.535,7.799,7.69665625,"['1[1]', '1[1]', '32768[32768]', '640[640]']",,1,10
+canonical,global,31,253952,262144,20,RingJointSDPADeviceOperation,Attention (SDPA),Attention,16362.603,15783.527,16362.603,16132.020625,"['1[1]', '8[8]', '1024[1024]', '512[512]']",HiFi2,1,10
+canonical,global,31,253952,262144,21,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,51.316,48.592,51.316,49.62859375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+canonical,global,31,253952,262144,22,MatmulDeviceOperation,Attention output projection,Projections / MLP,150.752,144.47,150.752,146.72028125,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",LoFi,1,10
+canonical,global,31,253952,262144,23,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,276.97134375,99.787,616.919,276.97134375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+canonical,global,31,253952,262144,24,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.503,6.819,7.503,7.17878125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,25,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.901,9.554,9.901,9.71465625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+canonical,global,31,253952,262144,26,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.759,4.027,4.759,4.43515625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,27,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,10.998,9.793,10.998,10.48303125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,10
+canonical,global,31,253952,262144,28,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.279,3.845,4.279,4.09684375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,29,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.796,9.553,9.796,9.63159375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+canonical,global,31,253952,262144,30,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.327,9.213,10.327,9.7116875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,31,AllGatherDeviceOperation,TP all-gather,TP communication,101.60609375,95.201,116.05,101.60609375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,32,MatmulDeviceOperation,MLP gate projection,Projections / MLP,221.143,218.047,221.143,219.33515625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+canonical,global,31,253952,262144,33,MatmulDeviceOperation,MLP up projection,Projections / MLP,153.096,150.137,153.096,151.53253125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+canonical,global,31,253952,262144,34,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.447,31.003,32.447,31.6821875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+canonical,global,31,253952,262144,35,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.2,171.927,174.2,173.0590625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+canonical,global,31,253952,262144,36,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,111.99559375,100.308,132.787,111.99559375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+canonical,global,31,253952,262144,37,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.441,6.774,7.441,7.11459375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,38,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.801,9.515,9.801,9.6545,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+canonical,global,31,253952,262144,39,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.267,4.102,5.267,4.4651250000000005,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+canonical,global,31,253952,262144,40,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.601,10.653,11.601,11.18415625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,10
+canonical,local,31,253952,262144,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.667,6.934,7.667,7.32084375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.817,9.412,9.817,9.6949375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+canonical,local,31,253952,262144,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.15,9.176,10.15,9.7258125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,3,AllGatherDeviceOperation,TP all-gather,TP communication,101.11253125,95.73,106.172,101.11253125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,158.015,153.79,158.015,155.1399375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+canonical,local,31,253952,262144,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,31.176,28.687,31.176,29.9904375,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",,3,10
+canonical,local,31,253952,262144,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,16.744,15.625,16.744,16.033625,"['1[1]', '1[1]', '8192[8192]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,11.579,11.139,11.579,11.348875,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,8,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.236,8.891,9.236,9.0576875,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,9,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,26.671,26.154,26.671,26.40840625,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.876,17.276,17.876,17.64015625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,11,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,4.701,4.287,4.701,4.4908125,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,12,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.365,8.641,9.365,9.00209375,"['1[1]', '4[4]', '32768[32768]', '256[256]']",,3,10
+canonical,local,31,253952,262144,13,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,4.647,4.203,4.647,4.3725625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,10
+canonical,local,31,253952,262144,14,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.408,8.679,9.408,9.01165625,"['1[1]', '4[4]', '32768[32768]', '256[256]']",,3,10
+canonical,local,31,253952,262144,15,RingJointSDPADeviceOperation,Attention (SDPA),Attention,383.479,302.413,383.479,324.342125,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi2,3,10
+canonical,local,31,253952,262144,16,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,26.147,24.238,26.147,25.2785,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,10
+canonical,local,31,253952,262144,17,MatmulDeviceOperation,Attention output projection,Projections / MLP,100.282,96.51,100.282,98.570125,"['1[1]', '1[1]', '1024[1024]', '2048[2048]']",LoFi,3,10
+canonical,local,31,253952,262144,18,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,117.8399375,103.113,150.321,117.8399375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+canonical,local,31,253952,262144,19,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.613,6.824,7.613,7.2264375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,20,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.893,9.557,9.893,9.74471875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+canonical,local,31,253952,262144,21,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.921,4.199,4.921,4.50578125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,22,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.158,9.773,11.158,10.54753125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,10
+canonical,local,31,253952,262144,23,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.273,3.919,4.273,4.077875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,24,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.782,9.539,9.782,9.653,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+canonical,local,31,253952,262144,25,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.113,9.388,10.113,9.702375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,26,AllGatherDeviceOperation,TP all-gather,TP communication,104.63846875,99.481,115.166,104.63846875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,27,MatmulDeviceOperation,MLP gate projection,Projections / MLP,221.952,219.239,221.952,220.78121875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+canonical,local,31,253952,262144,28,MatmulDeviceOperation,MLP up projection,Projections / MLP,154.301,151.029,154.301,152.82278125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+canonical,local,31,253952,262144,29,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.124,30.725,32.124,31.602687500000002,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+canonical,local,31,253952,262144,30,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.899,171.401,174.899,173.0349375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+canonical,local,31,253952,262144,31,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,115.03971875,102.712,137.354,115.03971875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+canonical,local,31,253952,262144,32,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.516,6.808,7.516,7.1492812500000005,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,33,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.832,9.544,9.832,9.700875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+canonical,local,31,253952,262144,34,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.787,4.111,4.787,4.38375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+canonical,local,31,253952,262144,35,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.688,10.726,11.688,11.15046875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,10
+chunked2,global,0,0,4096,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.807,6.963,7.807,7.339125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.881,9.537,9.881,9.72025,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+chunked2,global,0,0,4096,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.254,9.251,10.254,9.68215625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,3,AllGatherDeviceOperation,TP all-gather,TP communication,104.38046875,97.972,110.637,104.38046875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,160.156,155.22,160.156,157.48190625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+chunked2,global,0,0,4096,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,39.093,36.001,39.093,37.40528125,"['1[1]', '1[1]', '1024[1024]', '4608[4608]']",,1,5
+chunked2,global,0,0,4096,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,27.687,26.306,27.687,26.89928125,"['1[1]', '1[1]', '8192[8192]', '512[512]']",HiFi4,1,5
+chunked2,global,0,0,4096,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,7.888,7.335,7.888,7.64865625,"['1[1]', '1[1]', '1024[1024]', '512[512]']",HiFi4,1,5
+chunked2,global,0,0,4096,8,SliceDeviceOperation,Local tensor slices,Local slices / concat,4.667,4.331,4.667,4.48775,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,9,SliceDeviceOperation,Local tensor slices,Local slices / concat,10.818,10.407,10.818,10.56528125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.795,17.108,17.795,17.43284375,"['1[1]', '8[8]', '1024[1024]', '128[128]']",HiFi4,1,5
+chunked2,global,0,0,4096,11,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,34.831,32.71,34.831,33.6774375,"['1[1]', '8[8]', '1024[1024]', '128[128]']",,1,5
+chunked2,global,0,0,4096,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,1.656,1.599,1.656,1.62334375,"['1[1]', '1[1]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,13,TilizeWithValPaddingDeviceOperation,Rotary weight tiling,Norms / RoPE / other,5.653,5.609,5.653,5.6243125,"['1[1]', '1[1]', '1[1]', '128[128]']",HiFi4,1,5
+chunked2,global,0,0,4096,14,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,4.126,3.947,4.126,3.997,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,5
+chunked2,global,0,0,4096,15,RotaryEmbeddingDeviceOperation,Rotary transform,Norms / RoPE / other,7.903,7.532,7.903,7.7168125,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,5
+chunked2,global,0,0,4096,16,GatherCodegenDeviceOperation,Rotary-channel gather,Norms / RoPE / other,61.844,61.637,61.844,61.72115625,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,5
+chunked2,global,0,0,4096,17,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,3.553,3.351,3.553,3.47171875,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,5
+chunked2,global,0,0,4096,18,SliceDeviceOperation,Local tensor slices,Local slices / concat,25.496,23.13,25.496,24.31596875,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.164,2.819,3.164,2.97059375,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,5
+chunked2,global,0,0,4096,20,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.556,3.071,3.556,3.34484375,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,5
+chunked2,global,0,0,4096,21,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.888,9.226,9.888,9.58803125,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,5
+chunked2,global,0,0,4096,22,RingJointSDPADeviceOperation,Attention (SDPA),Attention,242.981,233.041,242.981,238.50590625,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,5
+chunked2,global,0,0,4096,23,SliceDeviceOperation,Local tensor slices,Local slices / concat,26.2,23.246,26.2,24.781375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,24,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.286,2.756,3.286,2.94865625,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,5
+chunked2,global,0,0,4096,25,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.801,3.135,3.801,3.4555625,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,5
+chunked2,global,0,0,4096,26,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,11.298,9.365,11.298,9.75075,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,5
+chunked2,global,0,0,4096,27,RingJointSDPADeviceOperation,Attention (SDPA),Attention,248.913,233.421,248.913,239.58168750000002,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,5
+chunked2,global,0,0,4096,28,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,48.15,44.635,48.15,46.80325,"['1[1]', '8[8]', '512[512]', '512[512]']",,1,5
+chunked2,global,0,0,4096,29,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,54.006,49.838,54.006,51.9553125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,5
+chunked2,global,0,0,4096,30,MatmulDeviceOperation,Attention output projection,Projections / MLP,152.922,146.821,152.922,149.7945,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",LoFi,1,5
+chunked2,global,0,0,4096,31,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,119.89709375,106.064,148.932,119.89709375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+chunked2,global,0,0,4096,32,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.587,6.856,7.587,7.2331875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,33,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.936,9.586,9.936,9.73821875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+chunked2,global,0,0,4096,34,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.081,4.284,5.081,4.63821875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,35,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.4,9.823,11.4,10.5899375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,5
+chunked2,global,0,0,4096,36,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.402,3.719,4.402,4.0878125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,37,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.729,9.492,9.729,9.59915625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+chunked2,global,0,0,4096,38,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.088,9.433,10.088,9.70396875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,39,AllGatherDeviceOperation,TP all-gather,TP communication,107.0179375,100.303,117.996,107.0179375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,40,MatmulDeviceOperation,MLP gate projection,Projections / MLP,223.078,221.108,223.078,221.96171875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+chunked2,global,0,0,4096,41,MatmulDeviceOperation,MLP up projection,Projections / MLP,155.939,152.367,155.939,154.6561875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+chunked2,global,0,0,4096,42,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.727,30.925,32.727,31.784781249999998,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+chunked2,global,0,0,4096,43,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.878,172.564,174.878,173.410625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,5
+chunked2,global,0,0,4096,44,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,113.0135625,106.724,132.633,113.0135625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,5
+chunked2,global,0,0,4096,45,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.605,6.86,7.605,7.22746875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,46,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.751,9.54,9.751,9.62809375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,5
+chunked2,global,0,0,4096,47,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.177,4.209,5.177,4.51303125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,5
+chunked2,global,0,0,4096,48,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.739,10.673,11.739,11.207625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,5
+chunked2,local,0,0,4096,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.91,6.988,7.91,7.36590625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.87,9.481,9.87,9.7305,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+chunked2,local,0,0,4096,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.152,9.338,10.152,9.7556875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,3,AllGatherDeviceOperation,TP all-gather,TP communication,105.1740625,99.164,113.63,105.1740625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,157.173,153.956,157.173,155.4595625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+chunked2,local,0,0,4096,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,32.05,28.908,32.05,30.23146875,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",,3,5
+chunked2,local,0,0,4096,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,16.968,15.704,16.968,16.1501875,"['1[1]', '1[1]', '8192[8192]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,12.05,11.153,12.05,11.5053125,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,8,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.365,8.99,9.365,9.11478125,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,9,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,26.851,26.321,26.851,26.60975,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,18.03,17.425,18.03,17.76178125,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,11,SliceDeviceOperation,Local tensor slices,Local slices / concat,17.583,14.999,17.583,16.29071875,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.277,4.801,5.277,4.98540625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,13,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.119,4.706,5.119,4.92009375,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,14,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.867,6.801,7.867,7.2254375,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,15,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.857,7.753,8.857,8.2056875,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,5
+chunked2,local,0,0,4096,16,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.921,6.581,7.921,7.05509375,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,17,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.342,7.487,9.342,8.16090625,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,5
+chunked2,local,0,0,4096,18,RingJointSDPADeviceOperation,Attention (SDPA),Attention,216.851,154.453,216.851,186.5571875,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,5
+chunked2,local,0,0,4096,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,17.35,14.473,17.35,16.18175,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,20,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.156,4.619,5.156,4.80471875,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,21,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.444,4.578,5.444,4.8665,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,22,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.812,6.533,7.812,7.08121875,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,23,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.749,7.764,9.749,8.1755,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,5
+chunked2,local,0,0,4096,24,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,8.463,6.5,8.463,6.998375,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,5
+chunked2,local,0,0,4096,25,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.356,7.552,9.356,8.0959375,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,5
+chunked2,local,0,0,4096,26,RingJointSDPADeviceOperation,Attention (SDPA),Attention,207.887,176.555,207.887,189.2471875,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,5
+chunked2,local,0,0,4096,27,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,26.364,23.834,26.364,24.95103125,"['1[1]', '8[8]', '512[512]', '256[256]']",,3,5
+chunked2,local,0,0,4096,28,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,27.401,24.896,27.401,26.23421875,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,5
+chunked2,local,0,0,4096,29,MatmulDeviceOperation,Attention output projection,Projections / MLP,103.163,96.681,103.163,99.59190625,"['1[1]', '1[1]', '1024[1024]', '2048[2048]']",LoFi,3,5
+chunked2,local,0,0,4096,30,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,114.873125,107.517,128.376,114.873125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+chunked2,local,0,0,4096,31,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.674,6.893,7.674,7.2605625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,32,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.9,9.59,9.9,9.69590625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+chunked2,local,0,0,4096,33,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.706,4.19,4.706,4.4230625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,34,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.531,9.887,11.531,10.66296875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,5
+chunked2,local,0,0,4096,35,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.273,3.828,4.273,4.0840625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,36,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.717,9.501,9.717,9.60203125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+chunked2,local,0,0,4096,37,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.107,9.292,10.107,9.713625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,38,AllGatherDeviceOperation,TP all-gather,TP communication,107.3694375,101.424,117.223,107.3694375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,39,MatmulDeviceOperation,MLP gate projection,Projections / MLP,223.562,220.859,223.562,222.38871875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+chunked2,local,0,0,4096,40,MatmulDeviceOperation,MLP up projection,Projections / MLP,156.139,152.432,156.139,154.6488125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+chunked2,local,0,0,4096,41,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.583,30.59,32.583,31.5378125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+chunked2,local,0,0,4096,42,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.929,172.361,174.929,173.5364375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,5
+chunked2,local,0,0,4096,43,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,113.49371875,105.836,132.466,113.49371875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,5
+chunked2,local,0,0,4096,44,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.687,6.852,7.687,7.28753125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,45,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.863,9.552,9.863,9.6884375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,5
+chunked2,local,0,0,4096,46,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.158,4.106,5.158,4.5006875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,5
+chunked2,local,0,0,4096,47,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,12.011,10.69,12.011,11.25609375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,5
+chunked2,global,62,253952,258048,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.661,6.887,7.661,7.2449375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.87,9.473,9.87,9.70790625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+chunked2,global,62,253952,258048,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.308,9.352,10.308,9.64803125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,3,AllGatherDeviceOperation,TP all-gather,TP communication,99.4590625,94.376,106.268,99.4590625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,157.873,153.942,157.873,155.97290625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+chunked2,global,62,253952,258048,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,38.601,35.985,38.601,37.27665625,"['1[1]', '1[1]', '1024[1024]', '4608[4608]']",,1,10
+chunked2,global,62,253952,258048,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,27.68,26.156,27.68,26.7941875,"['1[1]', '1[1]', '8192[8192]', '512[512]']",HiFi4,1,10
+chunked2,global,62,253952,258048,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,7.862,7.442,7.862,7.6524375000000004,"['1[1]', '1[1]', '1024[1024]', '512[512]']",HiFi4,1,10
+chunked2,global,62,253952,258048,8,SliceDeviceOperation,Local tensor slices,Local slices / concat,4.612,4.365,4.612,4.459375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,9,SliceDeviceOperation,Local tensor slices,Local slices / concat,10.83,10.381,10.83,10.580718749999999,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.556,16.959,17.556,17.21453125,"['1[1]', '8[8]', '1024[1024]', '128[128]']",HiFi4,1,10
+chunked2,global,62,253952,258048,11,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,34.982,32.884,34.982,33.74809375,"['1[1]', '8[8]', '1024[1024]', '128[128]']",,1,10
+chunked2,global,62,253952,258048,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,1.647,1.583,1.647,1.61965625,"['1[1]', '1[1]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,13,TilizeWithValPaddingDeviceOperation,Rotary weight tiling,Norms / RoPE / other,5.645,5.606,5.645,5.6268125,"['1[1]', '1[1]', '1[1]', '128[128]']",HiFi4,1,10
+chunked2,global,62,253952,258048,14,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,4.041,3.864,4.041,3.94384375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,10
+chunked2,global,62,253952,258048,15,RotaryEmbeddingDeviceOperation,Rotary transform,Norms / RoPE / other,7.796,7.471,7.796,7.65384375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,10
+chunked2,global,62,253952,258048,16,GatherCodegenDeviceOperation,Rotary-channel gather,Norms / RoPE / other,61.81,61.572,61.81,61.6818125,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,10
+chunked2,global,62,253952,258048,17,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,3.558,3.377,3.558,3.47534375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,10
+chunked2,global,62,253952,258048,18,SliceDeviceOperation,Local tensor slices,Local slices / concat,24.607,22.118,24.607,23.066375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.127,2.833,3.127,2.9528125,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,10
+chunked2,global,62,253952,258048,20,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.501,2.954,3.501,3.20003125,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,10
+chunked2,global,62,253952,258048,21,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,10.194,9.269,10.194,9.64459375,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,10
+chunked2,global,62,253952,258048,22,RingJointSDPADeviceOperation,Attention (SDPA),Attention,6946.814,6925.783,6946.814,6932.1795624999995,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,10
+chunked2,global,62,253952,258048,23,SliceDeviceOperation,Local tensor slices,Local slices / concat,25.667,21.617,25.667,23.04596875,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,24,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.473,2.77,3.473,3.00725,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,10
+chunked2,global,62,253952,258048,25,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.801,2.925,3.801,3.2520000000000002,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,10
+chunked2,global,62,253952,258048,26,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,11.314,9.246,11.314,10.1201875,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,10
+chunked2,global,62,253952,258048,27,RingJointSDPADeviceOperation,Attention (SDPA),Attention,7034.956,6925.827,7034.956,6969.94378125,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,10
+chunked2,global,62,253952,258048,28,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,43.824,41.679,43.824,42.635968749999996,"['1[1]', '8[8]', '512[512]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,29,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,50.384,47.759,50.384,48.86065625,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,10
+chunked2,global,62,253952,258048,30,MatmulDeviceOperation,Attention output projection,Projections / MLP,149.107,144.814,149.107,146.87553125,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",LoFi,1,10
+chunked2,global,62,253952,258048,31,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,267.66671875,98.722,624.556,267.66671875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+chunked2,global,62,253952,258048,32,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.447,6.776,7.447,7.085625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,33,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.919,9.639,9.919,9.776375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+chunked2,global,62,253952,258048,34,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.001,4.239,5.001,4.58996875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,35,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.242,9.713,11.242,10.5073125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,10
+chunked2,global,62,253952,258048,36,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.344,3.724,4.344,4.05884375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,37,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.78,9.475,9.78,9.6188125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+chunked2,global,62,253952,258048,38,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.101,9.307,10.101,9.6611875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,39,AllGatherDeviceOperation,TP all-gather,TP communication,100.014,93.789,111.47,100.014,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,40,MatmulDeviceOperation,MLP gate projection,Projections / MLP,219.878,217.593,219.878,218.4068125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+chunked2,global,62,253952,258048,41,MatmulDeviceOperation,MLP up projection,Projections / MLP,152.538,148.99,152.538,150.79459375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+chunked2,global,62,253952,258048,42,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.726,31.228,32.726,31.87259375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+chunked2,global,62,253952,258048,43,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.267,171.402,174.267,172.75725,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,10
+chunked2,global,62,253952,258048,44,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,111.88765625,97.416,135.99,111.88765625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,10
+chunked2,global,62,253952,258048,45,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.473,6.77,7.473,7.12015625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,46,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.799,9.501,9.799,9.63315625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,10
+chunked2,global,62,253952,258048,47,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.346,4.241,5.346,4.560875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,10
+chunked2,global,62,253952,258048,48,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.682,10.604,11.682,11.18909375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,10
+chunked2,local,62,253952,258048,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.619,6.93,7.619,7.28821875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.833,9.448,9.833,9.7194375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+chunked2,local,62,253952,258048,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,9.97,9.224,9.97,9.69509375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,3,AllGatherDeviceOperation,TP all-gather,TP communication,100.75021875,94.795,110.364,100.75021875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,156.871,153.362,156.871,154.85859375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+chunked2,local,62,253952,258048,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,31.252,28.941,31.252,29.99290625,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",,3,10
+chunked2,local,62,253952,258048,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,16.53,15.504,16.53,16.08828125,"['1[1]', '1[1]', '8192[8192]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,11.624,11.046,11.624,11.34071875,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,8,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.325,9.004,9.325,9.09753125,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,9,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,26.681,26.173,26.681,26.37928125,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.748,17.279,17.748,17.54675,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,11,SliceDeviceOperation,Local tensor slices,Local slices / concat,16.779,14.519,16.779,15.8131875,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.103,4.761,5.103,4.95290625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,13,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.182,4.719,5.182,4.95890625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,14,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.559,6.221,7.559,6.7505625,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,15,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.356,7.256,8.356,7.75390625,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,16,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.485,6.235,7.485,6.67421875,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,17,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.915,7.272,8.915,7.88328125,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,18,RingJointSDPADeviceOperation,Attention (SDPA),Attention,230.221,177.987,230.221,195.71634375,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,10
+chunked2,local,62,253952,258048,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,16.67,14.185,16.67,15.72896875,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,20,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.161,4.629,5.161,4.8744375,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,21,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.278,4.61,5.278,4.8946875,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,22,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.519,6.344,7.519,6.8450625,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,23,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.906,7.335,8.906,7.825125,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,24,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.865,6.24,7.865,6.71459375,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,10
+chunked2,local,62,253952,258048,25,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.705,7.279,8.705,7.841,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,26,RingJointSDPADeviceOperation,Attention (SDPA),Attention,217.747,176.655,217.747,193.51084375,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,10
+chunked2,local,62,253952,258048,27,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,25.038,22.098,25.038,23.52203125,"['1[1]', '8[8]', '512[512]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,28,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,26.246,24.002,26.246,25.16959375,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,10
+chunked2,local,62,253952,258048,29,MatmulDeviceOperation,Attention output projection,Projections / MLP,101.087,95.644,101.087,98.57440625,"['1[1]', '1[1]', '1024[1024]', '2048[2048]']",LoFi,3,10
+chunked2,local,62,253952,258048,30,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,115.76459375,100.073,144.389,115.76459375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+chunked2,local,62,253952,258048,31,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.615,6.761,7.615,7.24328125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,32,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.848,9.584,9.848,9.69378125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+chunked2,local,62,253952,258048,33,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.073,4.219,5.073,4.4529375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,34,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.43,9.767,11.43,10.5679375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,10
+chunked2,local,62,253952,258048,35,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.301,3.743,4.301,4.0531875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,36,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.738,9.494,9.738,9.60215625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+chunked2,local,62,253952,258048,37,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.215,9.368,10.215,9.7078125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,38,AllGatherDeviceOperation,TP all-gather,TP communication,103.7748125,94.977,119.077,103.7748125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,39,MatmulDeviceOperation,MLP gate projection,Projections / MLP,222.206,218.433,222.206,220.31503125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+chunked2,local,62,253952,258048,40,MatmulDeviceOperation,MLP up projection,Projections / MLP,154.427,150.63,154.427,152.41221875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+chunked2,local,62,253952,258048,41,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.396,30.853,32.396,31.551375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+chunked2,local,62,253952,258048,42,MatmulDeviceOperation,MLP down projection,Projections / MLP,173.884,172.586,173.884,173.0831875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,10
+chunked2,local,62,253952,258048,43,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,116.128125,103.394,140.281,116.128125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,10
+chunked2,local,62,253952,258048,44,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.559,6.819,7.559,7.21659375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,45,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.824,9.527,9.824,9.68975,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,10
+chunked2,local,62,253952,258048,46,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.853,4.145,4.853,4.4775,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,10
+chunked2,local,62,253952,258048,47,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.981,10.595,11.981,11.15965625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,10
+chunked2,global,63,258048,262144,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.647,6.934,7.647,7.258875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.85,9.447,9.85,9.70971875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,15
+chunked2,global,63,258048,262144,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.38,9.107,10.38,9.6926875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,3,AllGatherDeviceOperation,TP all-gather,TP communication,98.06934375,93.393,103.812,98.06934375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,157.608,153.826,157.608,155.8049375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,15
+chunked2,global,63,258048,262144,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,39.591,35.859,39.591,37.42009375,"['1[1]', '1[1]', '1024[1024]', '4608[4608]']",,1,15
+chunked2,global,63,258048,262144,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,27.083,25.93,27.083,26.5709375,"['1[1]', '1[1]', '8192[8192]', '512[512]']",HiFi4,1,15
+chunked2,global,63,258048,262144,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,7.851,7.481,7.851,7.66721875,"['1[1]', '1[1]', '1024[1024]', '512[512]']",HiFi4,1,15
+chunked2,global,63,258048,262144,8,SliceDeviceOperation,Local tensor slices,Local slices / concat,4.573,4.382,4.573,4.46490625,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,9,SliceDeviceOperation,Local tensor slices,Local slices / concat,10.896,10.344,10.896,10.592875,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.396,16.819,17.396,17.06575,"['1[1]', '8[8]', '1024[1024]', '128[128]']",HiFi4,1,15
+chunked2,global,63,258048,262144,11,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,35.324,32.8,35.324,33.78765625,"['1[1]', '8[8]', '1024[1024]', '128[128]']",,1,15
+chunked2,global,63,258048,262144,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,1.666,1.589,1.666,1.62028125,"['1[1]', '1[1]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,13,TilizeWithValPaddingDeviceOperation,Rotary weight tiling,Norms / RoPE / other,5.655,5.606,5.655,5.62625,"['1[1]', '1[1]', '1[1]', '128[128]']",HiFi4,1,15
+chunked2,global,63,258048,262144,14,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,4.299,3.853,4.299,3.9394375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,15
+chunked2,global,63,258048,262144,15,RotaryEmbeddingDeviceOperation,Rotary transform,Norms / RoPE / other,7.981,7.519,7.981,7.67134375,"['1[1]', '1[1]', '1024[1024]', '128[128]']",HiFi4,1,15
+chunked2,global,63,258048,262144,16,GatherCodegenDeviceOperation,Rotary-channel gather,Norms / RoPE / other,61.791,61.557,61.791,61.67575,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,15
+chunked2,global,63,258048,262144,17,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,3.563,3.33,3.563,3.4575625,"['1[1]', '1[1]', '1024[1024]', '128[128]']",,1,15
+chunked2,global,63,258048,262144,18,SliceDeviceOperation,Local tensor slices,Local slices / concat,23.959,21.547,23.959,22.97084375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.056,2.824,3.056,2.94128125,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,15
+chunked2,global,63,258048,262144,20,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.615,2.94,3.615,3.2183125,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,15
+chunked2,global,63,258048,262144,21,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.998,9.179,9.998,9.56015625,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,15
+chunked2,global,63,258048,262144,22,RingJointSDPADeviceOperation,Attention (SDPA),Attention,7091.519,6948.39,7091.519,7022.90609375,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,15
+chunked2,global,63,258048,262144,23,SliceDeviceOperation,Local tensor slices,Local slices / concat,26.073,21.985,26.073,23.59934375,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,24,SliceDeviceOperation,Local tensor slices,Local slices / concat,3.534,2.755,3.534,3.0691875,"['1[1]', '1[1]', '1024[1024]', '640[640]']",,1,15
+chunked2,global,63,258048,262144,25,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,3.634,2.964,3.634,3.24653125,"['1[1]', '1[1]', '512[512]', '640[640]']",HiFi4,1,15
+chunked2,global,63,258048,262144,26,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,11.168,9.099,11.168,9.685,"['2[2]', '1[1]', '32768[32768]', '640[640]']",,1,15
+chunked2,global,63,258048,262144,27,RingJointSDPADeviceOperation,Attention (SDPA),Attention,7272.687,6985.065,7272.687,7072.9129375,"['1[1]', '8[8]', '512[512]', '512[512]']",HiFi2,1,15
+chunked2,global,63,258048,262144,28,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,43.939,41.568,43.939,42.6213125,"['1[1]', '8[8]', '512[512]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,29,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,50.497,46.995,50.497,48.67628125,"['1[1]', '8[8]', '1024[1024]', '512[512]']",,1,15
+chunked2,global,63,258048,262144,30,MatmulDeviceOperation,Attention output projection,Projections / MLP,148.181,144.629,148.181,146.411375,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",LoFi,1,15
+chunked2,global,63,258048,262144,31,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,257.935,97.8,592.49,257.935,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,15
+chunked2,global,63,258048,262144,32,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.461,6.831,7.461,7.15590625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,33,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.968,9.625,9.968,9.76903125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,15
+chunked2,global,63,258048,262144,34,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.993,4.21,4.993,4.56059375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,35,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.304,9.837,11.304,10.5006875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,15
+chunked2,global,63,258048,262144,36,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.273,3.681,4.273,4.0555,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,37,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.796,9.502,9.796,9.60503125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,15
+chunked2,global,63,258048,262144,38,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.129,9.247,10.129,9.67884375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,39,AllGatherDeviceOperation,TP all-gather,TP communication,99.3615625,92.521,117.241,99.3615625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,40,MatmulDeviceOperation,MLP gate projection,Projections / MLP,219.801,217.391,219.801,218.31046874999998,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,15
+chunked2,global,63,258048,262144,41,MatmulDeviceOperation,MLP up projection,Projections / MLP,153.097,148.939,153.097,150.7075625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,15
+chunked2,global,63,258048,262144,42,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.447,31.16,32.447,31.86728125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,15
+chunked2,global,63,258048,262144,43,MatmulDeviceOperation,MLP down projection,Projections / MLP,174.795,171.9,174.795,172.931125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,1,15
+chunked2,global,63,258048,262144,44,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,112.113375,98.193,139.261,112.113375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,1,15
+chunked2,global,63,258048,262144,45,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.524,6.753,7.524,7.149875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,46,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.791,9.53,9.791,9.64971875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,1,15
+chunked2,global,63,258048,262144,47,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.959,4.196,4.959,4.53159375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,1,15
+chunked2,global,63,258048,262144,48,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.7,10.696,11.7,11.15075,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,1,15
+chunked2,local,63,258048,262144,0,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.575,6.889,7.575,7.2583125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,1,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.865,9.413,9.865,9.70825,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,15
+chunked2,local,63,258048,262144,2,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.305,9.27,10.305,9.66046875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,3,AllGatherDeviceOperation,TP all-gather,TP communication,99.9983125,93.955,110.26,99.9983125,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,4,MatmulDeviceOperation,Q/K/V projection,Projections / MLP,156.14,152.956,156.14,154.6751875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,15
+chunked2,local,63,258048,262144,5,NlpCreateHeadsDeviceOperation,Split Q/K/V heads,Norms / RoPE / other,31.999,28.832,31.999,29.81015625,"['1[1]', '1[1]', '1024[1024]', '4096[4096]']",,3,15
+chunked2,local,63,258048,262144,6,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,16.493,15.633,16.493,16.07421875,"['1[1]', '1[1]', '8192[8192]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,7,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,11.589,11.097,11.589,11.3474375,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,8,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.339,9.021,9.339,9.12490625,"['1[1]', '1[1]', '4096[4096]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,9,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,26.724,26.128,26.724,26.3555,"['1[1]', '8[8]', '1024[1024]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,10,RotaryEmbeddingLlamaDeviceOperation,RoPE rotation,Norms / RoPE / other,17.8,17.301,17.8,17.498375,"['1[1]', '4[4]', '1024[1024]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,11,SliceDeviceOperation,Local tensor slices,Local slices / concat,16.913,14.013,16.913,15.62821875,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,12,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.252,4.681,5.252,4.9434375,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,13,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.107,4.569,5.107,4.89265625,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,14,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.322,6.363,7.322,6.87321875,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,15,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.933,7.327,8.933,7.80615625,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,16,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.718,6.185,7.718,6.8140625,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,17,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.681,7.453,9.681,7.92684375,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,18,RingJointSDPADeviceOperation,Attention (SDPA),Attention,239.286,178.634,239.286,196.19412499999999,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,15
+chunked2,local,63,258048,262144,19,SliceDeviceOperation,Local tensor slices,Local slices / concat,16.745,14.476,16.745,15.8329375,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,20,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.113,4.583,5.113,4.81596875,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,21,SliceDeviceOperation,Local tensor slices,Local slices / concat,5.184,4.548,5.184,4.8428125,"['1[1]', '4[4]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,22,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.963,6.239,7.963,6.8430937499999995,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,23,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,9.076,7.205,9.076,7.8279375,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,24,TypecastDeviceOperation,KV dtype conversion,Norms / RoPE / other,7.353,6.251,7.353,6.7530625,"['1[1]', '4[4]', '512[512]', '256[256]']",HiFi4,3,15
+chunked2,local,63,258048,262144,25,UpdatePaddedKvCacheDeviceOperation,KV-cache writes,Cache writes,8.804,7.241,8.804,7.77246875,"['2[2]', '4[4]', '32768[32768]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,26,RingJointSDPADeviceOperation,Attention (SDPA),Attention,235.127,178.394,235.127,193.158375,"['1[1]', '8[8]', '512[512]', '256[256]']",HiFi2,3,15
+chunked2,local,63,258048,262144,27,ConcatDeviceOperation,Local tensor concatenation,Local slices / concat,24.43,22.81,24.43,23.7470625,"['1[1]', '8[8]', '512[512]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,28,NLPConcatHeadsDeviceOperation,Combine attention heads,Norms / RoPE / other,26.376,24.156,26.376,25.32540625,"['1[1]', '8[8]', '1024[1024]', '256[256]']",,3,15
+chunked2,local,63,258048,262144,29,MatmulDeviceOperation,Attention output projection,Projections / MLP,100.44,96.436,100.44,98.05628125,"['1[1]', '1[1]', '1024[1024]', '2048[2048]']",LoFi,3,15
+chunked2,local,63,258048,262144,30,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,109.83778125,102.661,122.886,109.83778125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,15
+chunked2,local,63,258048,262144,31,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.536,6.774,7.536,7.16890625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,32,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.831,9.595,9.831,9.6945,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,15
+chunked2,local,63,258048,262144,33,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,5.055,4.15,5.055,4.41190625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,34,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.239,9.868,11.239,10.54921875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,15
+chunked2,local,63,258048,262144,35,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,4.225,3.833,4.225,4.01384375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,36,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.738,9.511,9.738,9.61625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,15
+chunked2,local,63,258048,262144,37,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,10.152,9.319,10.152,9.66340625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,38,AllGatherDeviceOperation,TP all-gather,TP communication,102.36471875,97.508,113.218,102.36471875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,39,MatmulDeviceOperation,MLP gate projection,Projections / MLP,221.992,219.005,221.992,220.29421875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,15
+chunked2,local,63,258048,262144,40,MatmulDeviceOperation,MLP up projection,Projections / MLP,153.927,150.668,153.927,152.52190625,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,15
+chunked2,local,63,258048,262144,41,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,32.218,30.684,32.218,31.56309375,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,15
+chunked2,local,63,258048,262144,42,MatmulDeviceOperation,MLP down projection,Projections / MLP,173.995,172.117,173.995,172.95178125,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",LoFi,3,15
+chunked2,local,63,258048,262144,43,ReduceScatterDeviceOperation,TP reduce-scatter,TP communication,110.84346875,101.95,128.831,110.84346875,"['1[1]', '1[1]', '1024[1024]', '5376[5376]']",HiFi4,3,15
+chunked2,local,63,258048,262144,44,InterleavedToShardedDeviceOperation,Norm input redistribution,Norms / RoPE / other,7.458,6.809,7.458,7.1426875,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,45,LayerNormDeviceOperation,RMS normalization,Norms / RoPE / other,9.859,9.555,9.859,9.7179375,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi2,3,15
+chunked2,local,63,258048,262144,46,ShardedToInterleavedDeviceOperation,Norm output redistribution,Norms / RoPE / other,4.939,4.174,4.939,4.51075,"['1[1]', '1[1]', '256[256]', '5376[5376]']",,3,15
+chunked2,local,63,258048,262144,47,BinaryNgDeviceOperation,Elementwise operations,Norms / RoPE / other,11.894,10.664,11.894,11.19390625,"['1[1]', '1[1]', '256[256]', '5376[5376]']",HiFi4,3,15

@@ -1,0 +1,83 @@
+layer,position,operation,canonical_calls,batch_calls,canonical_us,batch_us,extra_us
+global,first,Norm input redistribution,4,4,27.206,27.401,0.19500000000000028
+global,first,RMS normalization,6,6,74.453,74.872,0.41899999999999693
+global,first,Norm output redistribution,4,4,30.376,30.6,0.2240000000000002
+global,first,TP all-gather,2,2,212.2239375,211.39840625,-0.8255312500000116
+global,first,Q/K/V projection,1,1,159.955,160.156,0.2009999999999934
+global,first,Split Q/K/V heads,1,1,38.719,39.093,0.37400000000000233
+global,first,Local tensor slices,3,7,17.259,75.287,58.028000000000006
+global,first,RoPE rotation,1,1,17.9,17.795,-0.10499999999999687
+global,first,Local tensor concatenation,2,3,37.88,86.53399999999999,48.65399999999999
+global,first,Rotary weight tiling,1,1,5.65,5.653,0.0029999999999992255
+global,first,Elementwise operations,4,4,60.188,59.992000000000004,-0.19599999999999795
+global,first,Rotary transform,1,1,7.944,7.903,-0.04100000000000037
+global,first,Rotary-channel gather,1,1,61.862,61.844,-0.018000000000000682
+global,first,KV dtype conversion,1,2,3.467,7.357,3.89
+global,first,KV-cache writes,1,2,7.765,21.186,13.421
+global,first,Attention (SDPA),1,2,652.73,491.894,-160.836
+global,first,Combine attention heads,1,1,53.8,54.006,0.20600000000000307
+global,first,Attention output projection,1,1,151.795,152.922,1.1270000000000095
+global,first,TP reduce-scatter,2,2,237.59028125,232.91065625,-4.679625000000016
+global,first,MLP gate projection,1,1,223.668,223.078,-0.5900000000000034
+global,first,MLP up projection,1,1,155.487,155.939,0.4519999999999982
+global,first,MLP down projection,1,1,174.462,174.878,0.4159999999999968
+global,last,Norm input redistribution,4,4,26.953,26.905,-0.047999999999998266
+global,last,RMS normalization,6,6,74.621,74.339,-0.2819999999999965
+global,last,Norm output redistribution,4,4,30.431,30.461000000000002,0.030000000000001137
+global,last,TP all-gather,2,2,203.02871875,197.43090625000002,-5.597812499999975
+global,last,Q/K/V projection,1,1,158.793,157.608,-1.1850000000000023
+global,last,Split Q/K/V heads,1,1,39.426,39.591,0.16499999999999915
+global,last,Local tensor slices,3,7,17.095,73.757,56.662000000000006
+global,last,RoPE rotation,1,1,17.473,17.396,-0.07699999999999818
+global,last,Local tensor concatenation,2,3,38.64,82.826,44.18599999999999
+global,last,Rotary weight tiling,1,1,5.659,5.655,-0.0039999999999995595
+global,last,Elementwise operations,4,4,59.009,59.75,0.7409999999999997
+global,last,Rotary transform,1,1,7.84,7.981,0.14100000000000001
+global,last,Rotary-channel gather,1,1,61.853,61.791,-0.06200000000000472
+global,last,KV dtype conversion,1,2,3.517,7.2490000000000006,3.7320000000000007
+global,last,KV-cache writes,1,2,7.799,21.165999999999997,13.366999999999997
+global,last,Attention (SDPA),1,2,16362.603,14364.206,-1998.396999999999
+global,last,Combine attention heads,1,1,51.316,50.497,-0.8190000000000026
+global,last,Attention output projection,1,1,150.752,148.181,-2.570999999999998
+global,last,TP reduce-scatter,2,2,388.96693750000003,370.048375,-18.918562500000007
+global,last,MLP gate projection,1,1,221.143,219.801,-1.342000000000013
+global,last,MLP up projection,1,1,153.096,153.097,0.0010000000000047748
+global,last,MLP down projection,1,1,174.2,174.795,0.5949999999999989
+local,first,Norm input redistribution,4,4,27.243000000000002,27.544,0.3009999999999984
+local,first,RMS normalization,7,7,77.336,77.733,0.39700000000000557
+local,first,Norm output redistribution,4,4,30.299999999999997,30.123,-0.17699999999999605
+local,first,TP all-gather,2,2,213.469,212.5435,-0.9254999999999995
+local,first,Q/K/V projection,1,1,157.244,157.173,-0.07099999999999795
+local,first,Split Q/K/V heads,1,1,31.213,32.05,0.8369999999999962
+local,first,RoPE rotation,2,2,44.821,44.881,0.060000000000002274
+local,first,KV dtype conversion,2,4,9.329,32.063,22.734
+local,first,KV-cache writes,2,4,18.752,37.304,18.552000000000003
+local,first,Attention (SDPA),1,2,356.699,424.738,68.03899999999999
+local,first,Combine attention heads,1,1,27.057,27.401,0.3440000000000012
+local,first,Attention output projection,1,1,101.73,103.163,1.4329999999999927
+local,first,TP reduce-scatter,2,2,232.9836875,228.36684375,-4.616843750000015
+local,first,Elementwise operations,3,3,55.550999999999995,56.125,0.5740000000000052
+local,first,MLP gate projection,1,1,223.733,223.562,-0.17099999999999227
+local,first,MLP up projection,1,1,156.241,156.139,-0.10200000000000387
+local,first,MLP down projection,1,1,174.939,174.929,-0.009999999999990905
+local,first,Local tensor slices,0,6,0,55.929,55.929
+local,first,Local tensor concatenation,0,1,0,26.364,26.364
+local,last,Norm input redistribution,4,4,27.069000000000003,26.793999999999997,-0.2750000000000057
+local,last,RMS normalization,7,7,76.88300000000001,76.71399999999998,-0.16900000000002535
+local,last,Norm output redistribution,4,4,29.971,30.451,0.4800000000000004
+local,last,TP all-gather,2,2,205.751,202.36303125,-3.387968749999999
+local,last,Q/K/V projection,1,1,158.015,156.14,-1.875
+local,last,Split Q/K/V heads,1,1,31.176,31.999,0.8230000000000004
+local,last,RoPE rotation,2,2,44.547,44.524,-0.022999999999996135
+local,last,KV dtype conversion,2,4,9.347999999999999,30.356,21.008000000000003
+local,last,KV-cache writes,2,4,18.773,36.494,17.721
+local,last,Attention (SDPA),1,2,383.479,474.413,90.93400000000003
+local,last,Combine attention heads,1,1,26.147,26.376,0.22900000000000276
+local,last,Attention output projection,1,1,100.282,100.44,0.15800000000000125
+local,last,TP reduce-scatter,2,2,232.87965625,220.68125,-12.198406250000005
+local,last,Elementwise operations,3,3,54.970000000000006,55.351000000000006,0.3810000000000002
+local,last,MLP gate projection,1,1,221.952,221.992,0.03999999999999204
+local,last,MLP up projection,1,1,154.301,153.927,-0.3739999999999952
+local,last,MLP down projection,1,1,174.899,173.995,-0.9039999999999964
+local,last,Local tensor slices,0,6,0,54.31399999999999,54.31399999999999
+local,last,Local tensor concatenation,0,1,0,24.43,24.43

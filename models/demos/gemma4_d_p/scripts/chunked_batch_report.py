@@ -93,6 +93,10 @@ def main():
         write_csv(args.output / "official_canonical.csv", official)
     validation = json.loads(args.validation.read_text()) if args.validation else {}
     layer_data = json.loads(args.layers.read_text()) if args.layers else None
+    if layer_data:
+        assert {cell["mode"] for cell in layer_data["cells"]} == {"canonical", batch_mode}
+        assert all(cell["useful_tokens"] == total for cell in layer_data["cells"])
+        assert all(cell["batch_size"] == runs[cell["mode"]]["batch_size"] for cell in layer_data["cells"])
     method = (
         "Gemma-4-31B-it, 60 layers, Blackhole CP8/TP4, original reduce-scatter, default activation placement. "
         f"Each call processes {total:,} useful tokens: {canonical_label} in canonical, or {batch_label} in the fixed batch. "

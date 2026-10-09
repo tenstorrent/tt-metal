@@ -1,0 +1,243 @@
+{
+  "source_commit": "8aeb99f2eac",
+  "method": "Gemma-4-31B-it, 60 layers, Blackhole CP8/TP4, original reduce-scatter, default activation placement. Each call processes 8,192 useful tokens: 1\u00d78K in canonical, or 2\u00d74K in the fixed batch. Every request has the prefix shown on the chart. All histories were populated by real model calls. Five replays at selected prefix positions; one replay elsewhere. JSON records contain every sample and repeat count. Timing covers trace replay and synchronization. Host staging is recorded separately; loading, compilation, output download and KV migration are excluded.",
+  "validation": {
+    "summary": "Six-layer 2\u00d74K output/KV, isolation, migration and trace checks passed (72 output/KV comparisons). Original math settings retained.",
+    "comparisons": 72,
+    "min_pcc": 0.99895,
+    "max_rrmse": 0.021063
+  },
+  "memory_note": "Fixed batch allocates 2 full 256K request caches; canonical allocates one. Weights and working buffers are additional.",
+  "kv_storage_bytes_per_device": {
+    "batch": 7575961600,
+    "canonical": 3787980800
+  },
+  "official_canonical": [
+    {
+      "chunk": 1,
+      "total_chunks": 32,
+      "start": 0,
+      "end": 8192,
+      "device_ms": 123.2
+    },
+    {
+      "chunk": 2,
+      "total_chunks": 32,
+      "start": 8192,
+      "end": 16384,
+      "device_ms": 128.2
+    },
+    {
+      "chunk": 3,
+      "total_chunks": 32,
+      "start": 16384,
+      "end": 24576,
+      "device_ms": 134.2
+    },
+    {
+      "chunk": 4,
+      "total_chunks": 32,
+      "start": 24576,
+      "end": 32768,
+      "device_ms": 140.9
+    },
+    {
+      "chunk": 5,
+      "total_chunks": 32,
+      "start": 32768,
+      "end": 40960,
+      "device_ms": 146.4
+    },
+    {
+      "chunk": 6,
+      "total_chunks": 32,
+      "start": 40960,
+      "end": 49152,
+      "device_ms": 154.0
+    },
+    {
+      "chunk": 7,
+      "total_chunks": 32,
+      "start": 49152,
+      "end": 57344,
+      "device_ms": 157.6
+    },
+    {
+      "chunk": 8,
+      "total_chunks": 32,
+      "start": 57344,
+      "end": 65536,
+      "device_ms": 165.9
+    },
+    {
+      "chunk": 9,
+      "total_chunks": 32,
+      "start": 65536,
+      "end": 73728,
+      "device_ms": 170.4
+    },
+    {
+      "chunk": 10,
+      "total_chunks": 32,
+      "start": 73728,
+      "end": 81920,
+      "device_ms": 176.2
+    },
+    {
+      "chunk": 11,
+      "total_chunks": 32,
+      "start": 81920,
+      "end": 90112,
+      "device_ms": 181.7
+    },
+    {
+      "chunk": 12,
+      "total_chunks": 32,
+      "start": 90112,
+      "end": 98304,
+      "device_ms": 186.2
+    },
+    {
+      "chunk": 13,
+      "total_chunks": 32,
+      "start": 98304,
+      "end": 106496,
+      "device_ms": 193.1
+    },
+    {
+      "chunk": 14,
+      "total_chunks": 32,
+      "start": 106496,
+      "end": 114688,
+      "device_ms": 200.8
+    },
+    {
+      "chunk": 15,
+      "total_chunks": 32,
+      "start": 114688,
+      "end": 122880,
+      "device_ms": 204.6
+    },
+    {
+      "chunk": 16,
+      "total_chunks": 32,
+      "start": 122880,
+      "end": 131072,
+      "device_ms": 211.2
+    },
+    {
+      "chunk": 17,
+      "total_chunks": 32,
+      "start": 131072,
+      "end": 139264,
+      "device_ms": 217.0
+    },
+    {
+      "chunk": 18,
+      "total_chunks": 32,
+      "start": 139264,
+      "end": 147456,
+      "device_ms": 221.5
+    },
+    {
+      "chunk": 19,
+      "total_chunks": 32,
+      "start": 147456,
+      "end": 155648,
+      "device_ms": 226.7
+    },
+    {
+      "chunk": 20,
+      "total_chunks": 32,
+      "start": 155648,
+      "end": 163840,
+      "device_ms": 232.0
+    },
+    {
+      "chunk": 21,
+      "total_chunks": 32,
+      "start": 163840,
+      "end": 172032,
+      "device_ms": 240.0
+    },
+    {
+      "chunk": 22,
+      "total_chunks": 32,
+      "start": 172032,
+      "end": 180224,
+      "device_ms": 245.8
+    },
+    {
+      "chunk": 23,
+      "total_chunks": 32,
+      "start": 180224,
+      "end": 188416,
+      "device_ms": 251.3
+    },
+    {
+      "chunk": 24,
+      "total_chunks": 32,
+      "start": 188416,
+      "end": 196608,
+      "device_ms": 256.7
+    },
+    {
+      "chunk": 25,
+      "total_chunks": 32,
+      "start": 196608,
+      "end": 204800,
+      "device_ms": 262.9
+    },
+    {
+      "chunk": 26,
+      "total_chunks": 32,
+      "start": 204800,
+      "end": 212992,
+      "device_ms": 267.9
+    },
+    {
+      "chunk": 27,
+      "total_chunks": 32,
+      "start": 212992,
+      "end": 221184,
+      "device_ms": 275.8
+    },
+    {
+      "chunk": 28,
+      "total_chunks": 32,
+      "start": 221184,
+      "end": 229376,
+      "device_ms": 281.4
+    },
+    {
+      "chunk": 29,
+      "total_chunks": 32,
+      "start": 229376,
+      "end": 237568,
+      "device_ms": 286.6
+    },
+    {
+      "chunk": 30,
+      "total_chunks": 32,
+      "start": 237568,
+      "end": 245760,
+      "device_ms": 292.3
+    },
+    {
+      "chunk": 31,
+      "total_chunks": 32,
+      "start": 245760,
+      "end": 253952,
+      "device_ms": 299.4
+    },
+    {
+      "chunk": 32,
+      "total_chunks": 32,
+      "start": 253952,
+      "end": 262144,
+      "device_ms": 305.0
+    }
+  ],
+  "layer_profile_method": "test_prefill_layer_perf_chunk_n; global layer 5 and sliding-window layer 0; CP8/TP4; full model weights loaded, default math and activation placement. Isolated layers receive token embeddings and random initialized KV caches, as in the canonical layer test. Five replays per position; the final replay supplies operation timings. Embedding, RoPE lookup/packing, host staging and synchronization are outside the operation table. Per-cell tables are generated by tt-perf-report main. Device merge takes maximum kernel duration across 32 devices for ordinary operations, mean for collectives. Each row sums its operation calls, never devices. Kernel sums are distinct from host wall time and from the unprofiled full-model measurements.",
+  "tt_perf_report_commit": "cb9407747a28ad00aba42e2b98fdb23e8e5fad6f"
+}
