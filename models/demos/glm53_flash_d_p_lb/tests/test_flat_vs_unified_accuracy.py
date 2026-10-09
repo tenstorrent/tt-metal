@@ -20,7 +20,7 @@ Inputs (x, bf16): the golden's real MoE input with its real routing (and x4), th
 <y, ref> / <ref, ref>, per-row rel error p50 / p99 / max, and flat vs unified directly; plus the error a bfp8-rounded
 x alone gives the reference (the flat op's input rounding), and flat with packer stochastic rounding (pack_stochastic_rounding, not
 the model's default: separates the packer's ties-away bias from bfp8 precision). GLM_ACC_DISTS (comma list) selects inputs, GLM_ACC_OPS the ops
-(flat, flat_srnd, unified; default flat,unified).
+(flat, flat_srnd, unified; default flat,unified); GLM_ACC_XBF16 / GLM_ACC_HBF16 the flat op's x / h formats.
 """
 
 import os
@@ -124,7 +124,18 @@ def test_flat_vs_unified_accuracy(device):
     print(f"[acc] layer {LAYER}: {E} experts at a common bfp4 fixed point (W and W^T tilings)", flush=True)
 
     flat = FlatRoutedExpert(
-        device, [W], m=CAP, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act="clamped_silu", pin=1
+        device,
+        [W],
+        m=CAP,
+        H=H,
+        I=I,
+        gids=[list(range(E))],
+        n_global=NG,
+        wdtype="bf4",
+        act="clamped_silu",
+        pin=1,
+        x_bf16=os.environ.get("GLM_ACC_XBF16", "0") == "1",
+        h_bf16=os.environ.get("GLM_ACC_HBF16", "0") == "1",
     )
     to_dev = lambda w: ttnn.from_torch(  # noqa: E731
         w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG

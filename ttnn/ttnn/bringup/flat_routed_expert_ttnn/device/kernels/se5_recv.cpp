@@ -30,9 +30,9 @@
 // CT: 0 X_CB, 1 X_BLK_TILES, 2 IN1_CB, 3 SLOT_TILES, 4 TOTAL_W_BLOCKS, 5 NUM_V, 6 W_SLOTS, 7 OUT_CB, 8 OUT_TILES,
 //     9 H_LOCAL_CB, 10 H_ALL_CB, 11 MT, 12 H_TILE_BYTES, 13 NCC, 14 DATA_SEM, 15 HARR_SEM, 16 GO_SEM, 17 DONE_SEM,
 //     18 KBLK, 19 HARR1_SEM, 20 SFREE_SEM, 21 HBUF, 22 XARR_SEM, 23 HFREE_SEM, 24 X_SLOTS, 25 X_BYTES, 26 S, 27 NP,
-//     28 HSFREE_SEM, 29 H_PIECES, 30 X_PER_V (x blocks per virtual expert), 31-32 (SE_GU_ONLY) GATH ids of h buffers
-//     1, 2, 33 X_PIECES (x blocks travel the chain cut-through in this many pieces; XARR counts pieces), 34 G (M-groups
-//     sharing the down cores' h_all)
+//     28 HSFREE_SEM, 29 H_PIECES, 30 X_PER_V (x blocks per virtual expert), 31-32 (SE_GU_ONLY; SE_GATH3: buffer 3) GATH
+//     ids of h buffers 1, 2, 33 X_PIECES (x blocks travel the chain cut-through in this many pieces; XARR counts
+//     pieces), 34 G (M-groups sharing the down cores' h_all)
 // SE_X_RELAY2 = run, SE_X_NRELAY = n (with SE_X_RELAY): n relays take turns, runs of `run` blocks each (relay k the
 //     runs k, k + n, ...), each counting its own blocks in its own semaphore (XARR, 3, 2, 1 for relays 0..3); relay xy
 //     in RT 11, 15, 16, 17 (every relay keeps a copy of this core's freed word at RT 12).
@@ -375,7 +375,12 @@ void kernel_main() {
             // Slices of h(v) are counted per down-core buffer v % HBUF (CT 31.. give buffers 1, 2).
             const uint32_t gid = h_sent % hbuf == 0   ? gath_sem_id
                                  : h_sent % hbuf == 1 ? get_compile_time_arg_val(31)
-                                                      : get_compile_time_arg_val(32);
+                                 : h_sent % hbuf == 2 ? get_compile_time_arg_val(32)
+#ifdef SE_GATH3
+                                                      : SE_GATH3;  // (4 h buffers)
+#else
+                                                      : 0;
+#endif
 #else
             const uint32_t gid = gath_sem_id;
 #endif

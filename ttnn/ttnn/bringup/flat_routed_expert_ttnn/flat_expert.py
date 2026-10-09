@@ -1741,14 +1741,31 @@ class FlatRoutedExpert:
     op re-applies every buffer address itself on a program-cache hit (per-call arena / words / x / y cost nothing
     on the host). weights / gids as for FlatExpert."""
 
-    def __init__(self, device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None):
+    def __init__(
+        self,
+        device,
+        weights,
+        *,
+        m,
+        H,
+        I,
+        gids,
+        n_global,
+        wdtype="bf4",
+        act="silu",
+        pin=1,
+        cache_prefix=None,
+        x_bf16=False,
+        h_bf16=False,
+    ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
         (only called when the weight cache misses). ``cache_prefix``: path stem of the laid-out weight cache; the
         file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale layout."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
+        self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-            device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin
+            device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin, x_bf16=x_bf16, h_bf16=h_bf16
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
@@ -1834,4 +1851,6 @@ class FlatRoutedExpert:
             y_row_major=y_row_major,
             down_fp32=down_fp32,
             pack_stochastic_rounding=pack_stochastic_rounding,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
         )
