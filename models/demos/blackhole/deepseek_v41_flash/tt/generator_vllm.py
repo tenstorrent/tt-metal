@@ -855,7 +855,10 @@ class DeepseekV41ForCausalLM:
         ``[W, 1]`` int32, or None when the step is not of that kind (ordinary decode of rows that are not fresh, host sampling, rows beyond the speculative range).
         """
         sp = kwargs.get("sampling_params")
-        if args or sp is None or self.m.sink.taps is None or kwargs.get("read_from_device", True) is not True:
+        if args or sp is None or self.m.sink.taps is None:
+            logger.info(
+                f"DSV4.1 fresh-row step: plain (args {len(args)}, sampling params {sp is not None}, taps {self.m.sink.taps is not None})"
+            )
             return None
         W = int(tokens.shape[0])
         remap = kwargs.get("slot_remap")  # (applied by ``_spec_verify`` / the plain step; only looked through here)
@@ -873,6 +876,9 @@ class DeepseekV41ForCausalLM:
                 or int(self.book.n[p]) != pos
                 or self.m.tap_n.get(p) != pos
             ):
+                logger.info(
+                    f"DSV4.1 fresh-row step: plain (row {i} user {p} pos {pos}: live {p in self.slots.live}, ok {bool(self.spec_ok[p])}, has {bool(self.spec_has[p])}, history {int(self.book.n[p])}, taps {self.m.tap_n.get(p)})"
+                )
                 return None
             rows.append(i)
         if not rows:
