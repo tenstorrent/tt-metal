@@ -191,7 +191,10 @@ class Gemma4Attention:
             q_rotated = ttnn.experimental.rotary_embedding_llama(
                 q_rotary, q_cos, q_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
             )
-            tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Ring SDPA reads Q from DRAM. When a typecast follows, it writes the DRAM copy, so the concat stays in L1:
+            # at chunk 2048 the concat drops 9.5 -> 4.6 us and the typecast 13.2 -> 4.9 us.
+            q_mc = act_mc if global_query_dtype(q_full.shape[-2]) is not None else ttnn.DRAM_MEMORY_CONFIG
+            tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=q_mc)
             for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
                 tensor.deallocate(True)
         elif is_sliding:
@@ -217,7 +220,7 @@ class Gemma4Attention:
         if is_global:
             query_dtype = global_query_dtype(tt_q.shape[-2])
             if query_dtype is not None:
-                q_bf16, tt_q = tt_q, ttnn.typecast(tt_q, query_dtype)
+                q_bf16, tt_q = tt_q, ttnn.typecast(tt_q, query_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 q_bf16.deallocate(True)
             packed_q = tt_q
             packed_kv = pack_global_kv_device(
