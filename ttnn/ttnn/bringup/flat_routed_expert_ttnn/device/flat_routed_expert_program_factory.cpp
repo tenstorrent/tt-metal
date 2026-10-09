@@ -54,7 +54,7 @@ struct Args {
 tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b; }
 }  // namespace factory_detail
 using namespace factory_detail;
-constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile, H_TILE = kBf8Tile, RM_CHUNKS = kRmChunks, SB_SLOTS = kSbSlots;
+constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile, RM_CHUNKS = kRmChunks;
 
 FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory::create(
     const FlatRoutedExpertParams& cfg, const FlatRoutedExpertInputs& t, Tensor& output) {
@@ -71,7 +71,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const uint32_t E = p.E, MT = p.mt, MTG = p.mtg, NP = p.np, G = p.g, S = p.s, V = p.v, It = p.It, Ht = p.Ht;
     const uint32_t w_tile = p.w_tile, banks = p.banks, NR = p.rects.size();
     const uint32_t n_rd = p.readers.size(), ngu = p.gu.size(), ND = p.down.size(), ngu_sg = ngu / p.nsg;
-    const uint32_t x_blk = MT * KBLK, x_bytes = x_blk * BF8_TILE;
+    const uint32_t x_blk = MT * KBLK, x_bytes = x_blk * p.x_tile;
     const uint32_t PIN = cfg.pin;
     const auto sgx = [&](uint32_t k) { return p.nsg > 1 ? std::vector<uint32_t>{k} : std::vector<uint32_t>{}; };
 
@@ -258,7 +258,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                rdn_cores,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_0,
-               {0,        w_tile, p.rg * p.slot, E * p.nk_gu, 1,    p.slot_dr, E * p.nblk_r, 2,  p.h_tiles, H_TILE,
+               {0,        w_tile, p.rg * p.slot, E * p.nk_gu, 1,    p.slot_dr, E * p.nblk_r, 2,  p.h_tiles, p.h_tile,
                 H_PIECES, 16,     p.out_tiles_r, V,           HARR, HSFREE,    p.hbuf,       MT, p.pcd_r,   Ht,
                 S,        E,      p.rd_slots,    p.ring_dr},
                rdn_def);
@@ -380,7 +380,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                prim,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
-               {1, MT, BF8_TILE, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
+               {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
                with(
                    dyn_def,
                    {{"SE_SBT", sbt},
@@ -397,10 +397,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                    hl,
                    DataMovementProcessor::RISCV_1,
                    NOC::NOC_0,
-                   {1, MT, BF8_TILE, p.land_slots, data_sem, 5, E, p.nsb},
+                   {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
                    with(dyn_def, {{"SE_SBT", sbt}})));
         }
-        const uint32_t sbb = MT * p.sbt * BF8_TILE;
+        const uint32_t sbb = MT * p.sbt * p.x_tile;
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
             const CoreCoord rl = p.relays[idx];
             const uint32_t k = idx % NR;
@@ -456,7 +456,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
                {0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
-                H_TILE,    ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
+                p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
                 p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E},
                with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}}));
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
@@ -532,8 +532,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                cores,
                DataMovementProcessor::RISCV_0,
                dn_noc0 ? NOC::NOC_0 : NOC::NOC_1,
-               {2,     p.h_tiles, H_TILE, H_PIECES, 16, out,    V,  S,  ngu_sg, p.nd_sg + p.n_rdn,
-                HARR,  HSFREE,    GATH,   DONE,     GO, p.hbuf, MT, pw, Ht,     GATH,
+               {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,  S,  ngu_sg, p.nd_sg + p.n_rdn,
+                HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MT, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
                yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw));
         const auto kw =
@@ -585,6 +585,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         CreateSemaphore(program, all_crs, 0);
     }
     const Buffer& arena = *t.arena.buffer();
+    // x / h tile formats (the plan's precision probes: bf16 tiles instead of bfp8)
+    const auto x_fmt = p.x_tile == BF8_TILE ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+    const auto h_fmt = p.h_tile == BF8_TILE ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     auto arena_cb = [&](uint8_t idx,
                         uint32_t off,
                         uint32_t size,
@@ -616,15 +619,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     };
     arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, p.readers, wf, w_tile);
     arena_cb(0, 0, RM_CHUNKS * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
-    arena_cb(1, p.sb_off, SB_SLOTS * MT * p.sbt * BF8_TILE, p.relays, tt::DataFormat::Bfp8_b, BF8_TILE);
+    arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
-    arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, tt::DataFormat::Bfp8_b, BF8_TILE);
-    static_cb(3, p.hbuf * MTG * NP * H_TILE, p.gu, tt::DataFormat::Bfp8_b, H_TILE);
+    arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, x_fmt, p.x_tile);
+    static_cb(3, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
     static_cb(16, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     if (p.gu_l1acc) {
         arena_cb(5, p.p_off, MTG * 2 * NP * 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     }
-    arena_cb(2, p.h_off, p.hbuf * p.h_tiles * H_TILE, p.down, tt::DataFormat::Bfp8_b, H_TILE);
+    arena_cb(2, p.h_off, p.hbuf * p.h_tiles * p.h_tile, p.down, h_fmt, p.h_tile);
     for (const auto& [pw, ds] : dgroups) {
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(pw, It);
         const uint32_t ring = static_cast<uint32_t>(std::nearbyint(p.dring * (It / kd)));
@@ -637,7 +640,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     }
     if (p.rdown) {
         arena_cb(1, p.rd_off, p.ring_dr * p.slot_dr * w_tile, rdn_cores, wf, w_tile);
-        arena_cb(2, p.h_off, p.hbuf * p.h_tiles * H_TILE, rdn_cores, tt::DataFormat::Bfp8_b, H_TILE);
+        arena_cb(2, p.h_off, p.hbuf * p.h_tiles * p.h_tile, rdn_cores, h_fmt, p.h_tile);
         out_cb(rdn_cores, p.pcd_r, 2 * p.out_tiles_r * BF8_TILE);
     }
     static_cb(6, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
