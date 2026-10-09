@@ -69,13 +69,9 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
 
         in0_dfb.reserve_back(block_size);
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, in0_dfb_id, block_size);
-#else
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             pack_tile(tile_idx, in0_dfb_id);
         }
-#endif
         tile_regs_release();
         in0_dfb.push_back(block_size);
     }
@@ -91,13 +87,9 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
 
         in0_dfb.reserve_back(last_block_size);
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, in0_dfb_id, last_block_size);
-#else
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             pack_tile(tile_idx, in0_dfb_id);
         }
-#endif
         tile_regs_release();
         in0_dfb.push_back(last_block_size);
     }
