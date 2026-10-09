@@ -204,6 +204,55 @@ void kernel_main() {
     cb_reserve_back(cb_metadata_temp_id, 1);
     uint32_t metadata_temp_addr = get_write_ptr(cb_metadata_temp_id);
 
+    // Expert-split selection below: core c takes the routes whose expert id has (id & core_mask) == c.
+    uint32_t core_sel = dispatch_core_idx;
+#ifdef LOCAL_TOKEN_SPLIT
+    // No fabric (every route is local): split the TOKENS across the dispatch cores instead, so each token row is
+    // read by one core and any core count works. A core takes every expert of its token range; it first replays
+    // the earlier tokens' routes to advance each expert's destination counter exactly as the token-ordered loop
+    // below would have (a counter advances for every route whose expert the table maps somewhere).
+    {
+        const uint32_t n_tok = token_end_idx - token_start_idx;
+        const uint32_t per = (n_tok + num_dispatch_cores - 1) / num_dispatch_cores;
+        uint32_t my_start = token_start_idx + dispatch_core_idx * per;
+        my_start = my_start < token_end_idx ? my_start : token_end_idx;
+        const uint32_t my_end = (my_start + per < token_end_idx) ? my_start + per : token_end_idx;
+        // The replay is bound by issuing small index reads. DRAM-interleaved pages p, p + NUM_DRAM_BANKS, ... sit back
+        // to back in one bank, so a pass over the input-row scratch reads them as NUM_DRAM_BANKS contiguous runs.
+        constexpr uint32_t banks = NUM_DRAM_BANKS;
+        const uint32_t pg = aligned_indices_page_size;
+        const uint32_t prefix_batch = (read_batch_size * aligned_input_page_size / pg) / banks * banks;
+        const uint32_t per_bank = prefix_batch / banks;
+        for (uint32_t b = token_start_idx; b < my_start; b += prefix_batch) {
+            const uint32_t cnt = (b + prefix_batch < my_start) ? prefix_batch : my_start - b;
+#ifdef INDICES_DRAM_INTERLEAVED
+            for (uint32_t r = 0; r < banks && r < cnt; r++) {
+                const uint32_t n = (cnt - r + banks - 1) / banks;
+                noc_async_read(indices_addr_gen.get_noc_addr(b + r), input_base + r * per_bank * pg, n * pg);
+            }
+#else
+            for (uint32_t t = 0; t < cnt; t++) {
+                noc_async_read_page(b + t, indices_addr_gen, input_base + (t % banks * per_bank + t / banks) * pg);
+            }
+#endif
+            noc_async_read_barrier();
+            for (uint32_t t = 0; t < cnt; t++) {
+                tt_l1_ptr uint16_t* idx =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(input_base + (t % banks * per_bank + t / banks) * pg);
+                for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
+                    if (expert_dispatch_table[idx[k]] != -1) {
+                        offsets[idx[k]]++;
+                    }
+                }
+            }
+        }
+        token_start_idx = my_start;
+        token_end_idx = my_end;
+        core_mask = 0;
+        core_sel = 0;
+    }
+#endif
+
     // Prefetch first batch of DRAM reads
     uint32_t first_batch_end =
         (token_start_idx + read_batch_size < token_end_idx) ? token_start_idx + read_batch_size : token_end_idx;
@@ -238,7 +287,7 @@ void kernel_main() {
 
                 // Skip experts not owned by this dispatch core (low bits of the expert id
                 // select the dispatch core) and experts the table maps nowhere (-1).
-                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                if (((uint32_t)routed_expert & core_mask) != core_sel) {
                     continue;
                 }
 

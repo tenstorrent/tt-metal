@@ -973,7 +973,11 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
+    // Without fabric every route is local and the reader splits tokens across cores (LOCAL_TOKEN_SPLIT), so the
+    // core count is not tied to fabric links: num_links sets it, up to the worker grid.
+    uint32_t effective_num_links =
+        use_fabric ? std::min(num_links, MAX_WORKER_CORES)
+                   : std::min<uint32_t>(num_links, static_cast<uint32_t>(subdevice_cores.size()));
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -1229,6 +1233,14 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
+    std::map<std::string, std::string> reader_defines = fabric_defines;
+    if (!use_fabric) {
+        reader_defines["LOCAL_TOKEN_SPLIT"] = "1";
+        if (indices_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+            indices_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+            reader_defines["INDICES_DRAM_INTERLEAVED"] = "1";
+        }
+    }
 
     // Single reader kernel shared across all senders.  (Legacy code stored one
     // handle per sender for uniform override_runtime_arguments iteration; the
@@ -1241,7 +1253,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     reader_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kd.core_ranges = sender_core_grid;
     reader_kd.compile_time_args = compile_time_args;
-    reader_kd.defines = {fabric_defines.begin(), fabric_defines.end()};
+    reader_kd.defines = {reader_defines.begin(), reader_defines.end()};
     reader_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
