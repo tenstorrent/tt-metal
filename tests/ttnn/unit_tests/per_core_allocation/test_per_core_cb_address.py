@@ -2,17 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""A circular buffer on a per-core-allocated tensor is programmed at its own core's shard.
+"""A CB on a per-core-allocated tensor is placed at its own core's shard, not Buffer::address().
 
-A per-core tensor's shard sits at a different address on each core, and Buffer::address() is only
-the first core's. A CB has one address, which used to be taken from Buffer::address(), so a CB on
-any other core landed on the first core's address. A kernel's get_write_ptr then disagreed with the
-raw per-core address the host and other cores used for the same shard (how tt-blaze's router demux
-lost its pages).
-
-Every test skews one core's per-core allocator first, so the two cores' shards sit at different
-addresses. Skewing the first core puts the second core's shard above Buffer::address(); skewing the
-second puts it below.
+Each test first skews one core's allocator so the two cores' shards sit at different addresses.
 """
 
 import pytest
@@ -65,11 +57,7 @@ def _addr(tensor, core):
 
 
 def _skewed_tensor(mesh, skewed, skew_bytes=2 * SHARD):
-    """A per-core tensor over FIRST and SECOND whose two shards sit at different addresses.
-
-    A per-core reservation of ``skew_bytes`` on one core only pushes the next allocation lower there.
-    Returns (tensor, skew); keep both alive.
-    """
+    """A per-core tensor over FIRST and SECOND at different addresses. Returns (tensor, skew); keep both alive."""
     skew = _sharded_tensor(mesh, [FIRST if skewed == "first" else SECOND], skew_bytes, per_core=True)
     tensor = _sharded_tensor(mesh, [FIRST, SECOND], SHARD, per_core=True)
     assert _addr(tensor, FIRST) != _addr(tensor, SECOND), "the skew did not separate the shards"
@@ -112,7 +100,7 @@ void kernel_main() {
 
 
 def _probe_program(tensor, out, offset):
-    """One CB per core over ``tensor`` and a kernel on each comparing its CB with the raw address."""
+    """One CB per core over ``tensor``, and a kernel comparing each CB's write pointer with the raw address."""
     runtime_args = ttnn.RuntimeArgs()
     for core in (FIRST, SECOND):
         runtime_args[core.x][core.y] = [_addr(tensor, core) + offset, out.buffer_address()]
@@ -180,8 +168,10 @@ void kernel_main() {
 @requires_hybrid_allocator
 @SKEWS
 def test_pages_written_by_raw_address_are_read_through_the_cb(per_core_mesh_device, skewed):
-    """Another core writes pages into each receiver's CB by raw per-core address; the receiver reads
-    them through the CB. This is the tt-blaze router demux pattern that lost its pages."""
+    """A core writes pages to each receiver's CB by raw per-core address; receivers read them via the CB.
+
+    This is the tt-blaze router demux pattern that lost pages.
+    """
     mesh = per_core_mesh_device
     tensor, _skew = _skewed_tensor(mesh, skewed)
     receivers = (FIRST, SECOND)
@@ -190,7 +180,7 @@ def test_pages_written_by_raw_address_are_read_through_the_cb(per_core_mesh_devi
     out = _sharded_tensor(mesh, list(receivers), PAGE, per_core=False)
 
     cbs = [_cb(tensor, core, LAST_PAGE) for core in receivers]
-    # get_cb_address is what callers hand other cores, so it must be this core's raw per-core address too.
+    # Callers pass get_cb_address to other cores, so it must match the raw per-core address.
     for core, cb in zip(receivers, cbs):
         assert ttnn.get_cb_address(cb) == _addr(tensor, core) + LAST_PAGE, f"core {core}"
 
@@ -235,14 +225,10 @@ def test_pages_written_by_raw_address_are_read_through_the_cb(per_core_mesh_devi
 
 @requires_hybrid_allocator
 def test_cached_program_follows_a_new_per_core_tensor(per_core_mesh_device):
-    """A cached program re-run on a per-core tensor at other addresses re-points each CB at its own core.
-
-    The second run is a program cache hit, so the CBs are re-pointed (UpdateDynamicCircularBufferAddress)
-    rather than rebuilt, and the cached dispatch commands must pick up the new per-core addresses.
-    """
+    """On a program cache hit, each re-pointed CB follows the new tensor's per-core address."""
     mesh = per_core_mesh_device
     first, _first_skew = _skewed_tensor(mesh, "first")
-    # FIRST already holds more than SECOND, so SECOND needs a bigger skew to end up below it.
+    # FIRST already holds more, so SECOND needs a bigger skew to end up below it.
     second, _second_skew = _skewed_tensor(mesh, "second", skew_bytes=4 * SHARD)
     for core in (FIRST, SECOND):
         assert _addr(first, core) != _addr(second, core), f"core {core}: both tensors share a shard address"
@@ -259,7 +245,7 @@ def test_cached_program_follows_a_new_per_core_tensor(per_core_mesh_device):
 
 @requires_hybrid_allocator
 def test_cb_spanning_cores_at_different_addresses_is_rejected(per_core_mesh_device, expect_error):
-    """One CB over both cores has no single right address, so asking for it or building it fails."""
+    """A CB over cores at different addresses is rejected by get_cb_address and by program creation."""
     tensor, _skew = _skewed_tensor(per_core_mesh_device, "first")
     spanning = ttnn.cb_descriptor_from_sharded_tensor(
         CB_INDEX, tensor, total_size=PAGE, core_ranges=_cores([FIRST, SECOND])

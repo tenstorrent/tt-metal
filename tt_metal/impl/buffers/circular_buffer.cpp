@@ -33,9 +33,8 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
         this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
     if (globally_allocated()) {
-        // The config only knows Buffer::address(); resolve against this CB's cores now, so a per-core
-        // buffer's address is right (or rejected) from construction, not only once a Program adds the CB.
-        // Without the buffer (e.g. a config rebuilt from a trace), keep the address the config stores.
+        // The config holds Buffer::address(), which is wrong for a per-core buffer; resolve on this CB's cores.
+        // Without a backing buffer (e.g. a config rebuilt from a trace), keep the stored address.
         if (config_.shadow_global_buffer != nullptr) {
             this->assign_global_address();
         } else {
@@ -78,7 +77,7 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
-            // As above: resolve a per-core buffer's address against this CB's cores at construction.
+            // See the constructor above.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();
             } else {
@@ -197,7 +196,7 @@ void CircularBufferImpl::set_page_size(uint8_t buffer_index, uint32_t page_size)
 }
 
 void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
-    // Reject a buffer this CB's cores cannot share before changing any backing-buffer state.
+    // Resolve first so a rejected buffer leaves the CB unchanged.
     const DeviceAddr base_address =
         experimental::per_core_allocation::get_shard_base_address(buffer, this->core_ranges_);
     config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
@@ -205,8 +204,7 @@ void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_
 }
 
 void CircularBufferImpl::assign_global_address() {
-    // A per-core-allocated buffer can sit at a different address on each core, and Buffer::address() is only
-    // its first core's, so take the address on this CB's own cores.
+    // Buffer::address() is only the first core's for a per-core buffer; use this CB's cores.
     set_global_base_address(
         experimental::per_core_allocation::get_shard_base_address(*config_.shadow_global_buffer, this->core_ranges_));
 }

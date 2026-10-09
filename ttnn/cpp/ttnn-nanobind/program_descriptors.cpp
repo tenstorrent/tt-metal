@@ -563,10 +563,8 @@ void py_module_types(nb::module_& mod) {
         R"pbdoc(
             Get the L1 byte address a CB descriptor is programmed at.
 
-            Returns the backing buffer's address + address_offset when a buffer or tensor is set,
-            or just address_offset when none is set (manually placed CB). For a per-core-allocated
-            buffer, whose shards can sit at a different address on each core, this is the address
-            on the descriptor's own cores, not the buffer's first core.
+            Returns the backing buffer's address on the descriptor's cores + address_offset,
+            or just address_offset when no buffer or tensor is set.
 
             Args:
                 descriptor: A CBDescriptor to get the address from
@@ -575,8 +573,8 @@ void py_module_types(nb::module_& mod) {
                 The L1 byte address of the circular buffer
 
             Raises:
-                RuntimeError: If the backing buffer is per-core allocated and the descriptor's cores
-                    do not share one address, or one of them holds no shard of the buffer.
+                RuntimeError: If a per-core-allocated buffer's address differs across the
+                    descriptor's cores, or one of them has no shard.
         )pbdoc");
 
     // Bind KernelDescriptor related types
