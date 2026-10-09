@@ -1412,6 +1412,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
+    // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && has_post_activations && num_tiles_per_cycle > 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+        compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
