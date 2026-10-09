@@ -86,7 +86,9 @@ void kernel_main() {
     const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
 
     uint32_t in_base_addr = get_write_ptr(cb_id_in);
-    uint32_t out_addr = get_write_ptr(cb_id_out);
+    // BRISC counts into cb_out, NCRISC into cb_gather_tmp (each RISC its own histogram: plain L1 increments, no
+    // atomics); BRISC then adds NCRISC's into cb_out, the core's published histogram
+    uint32_t out_addr = get_write_ptr(is_initializer ? cb_id_out : cb_gather_tmp);
     uint32_t mask_l1_addr = get_write_ptr(cb_mask);
 
     // Phase 1: Read this core's shard pages
@@ -94,15 +96,15 @@ void kernel_main() {
         noc_async_read_page(h_start + h, src_accessor, in_base_addr + h * input_page_size);
     }
 
-    // Phase 2: Local histogram counting (BRISC/NCRISC cooperate on same core)
+    // Phase 2: local counting. BRISC fetches the mask and signals NCRISC (init_sem); each RISC zeroes and fills
+    // its own histogram.
     uint32_t init_sem_addr = get_semaphore(init_sem_idx);
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem_addr);
-
+    volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+    for (uint32_t i = 0; i < n_routed_experts; i++) {
+        counts[i] = 0;
+    }
     if constexpr (is_initializer) {
-        volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
-        for (uint32_t i = 0; i < n_routed_experts; i++) {
-            counts[i] = 0;
-        }
         noc_async_read_page(0, mask_accessor, mask_l1_addr);
         noc_async_read_barrier();
         noc_semaphore_set(init_sem_ptr, 1);
@@ -110,69 +112,81 @@ void kernel_main() {
         noc_async_read_barrier();
         noc_semaphore_wait(init_sem_ptr, 1);
     }
+    invalidate_l1_cache();
 
     volatile tt_l1_ptr int32_t* mask = reinterpret_cast<volatile tt_l1_ptr int32_t*>(mask_l1_addr);
-
     for (uint32_t h = 0; h < h_count; h++) {
         volatile tt_l1_ptr uint16_t* row =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
         for (uint32_t w = 0; w < num_experts_per_token; w++) {
             uint32_t expert_idx = row[w];
             if (expert_idx < n_routed_experts && mask[expert_idx] >= 0) {
-                uint64_t noc_addr = get_noc_addr(out_addr + expert_idx * sizeof(uint32_t));
-                noc_semaphore_inc(noc_addr, 1);
+                counts[expert_idx] += 1;
             }
         }
     }
-    noc_async_atomic_barrier();
+    asm volatile("fence" ::: "memory");
 
     uint32_t done_sem_addr = get_semaphore(done_sem_idx);
-    uint64_t done_sem_noc_addr = get_noc_addr(done_sem_addr);
-    noc_semaphore_inc(done_sem_noc_addr, 1);
+    volatile tt_l1_ptr uint32_t* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
+    if constexpr (!is_initializer) {
+        noc_semaphore_inc(get_noc_addr(done_sem_addr), 1);
+        noc_async_atomic_barrier();
+        return;
+    }
+
+    // Phase 3 (BRISC): fold NCRISC's histogram in, publish to every reducer core, then (reducers only) sum the
+    // reducer's 16-expert column of every core's histogram and write it to the output.
+    noc_semaphore_wait_min(done_sem_ptr, 1);
+    invalidate_l1_cache();
+    volatile tt_l1_ptr uint32_t* other =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_gather_tmp));
+    for (uint32_t i = 0; i < n_routed_experts; i++) {
+        counts[i] += other[i];
+    }
+    asm volatile("fence" ::: "memory");
+
+    const uint32_t num_cores_rt = get_arg_val<uint32_t>(4);
+    const uint32_t num_reducers = get_arg_val<uint32_t>(5);
+    const uint32_t my_reducer = get_arg_val<uint32_t>(6);  // 0xFFFFFFFF: not a reducer
+    constexpr uint32_t per_reducer = 16;                  // experts per reducer (64 bytes)
+    const uint32_t gather_sem_addr = get_semaphore(gather_sem_idx);
+    // core c's NoC xy at args 7 + 2c
+    for (uint32_t r = 0; r < num_reducers; r++) {
+        const uint32_t x = get_arg_val<uint32_t>(7 + 2 * r), y = get_arg_val<uint32_t>(7 + 2 * r + 1);
+        noc_semaphore_inc(get_noc_addr(x, y, gather_sem_addr), 1);
+    }
     noc_async_atomic_barrier();
-
-    // Phase 3: Tree reduction — BRISC only
-    if constexpr (is_initializer) {
-        volatile tt_l1_ptr uint32_t* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
-        noc_semaphore_wait_min(done_sem_ptr, 2);
-
-        uint32_t num_receive = get_arg_val<uint32_t>(4);
-        uint32_t parent_noc_x = get_arg_val<uint32_t>(5);
-        uint32_t parent_noc_y = get_arg_val<uint32_t>(6);
-
-        uint32_t gather_sem_addr = get_semaphore(gather_sem_idx);
-        volatile tt_l1_ptr uint32_t* gather_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
-
-        uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
-        volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
-
-        // Wait for ALL children to signal before reading any.
-        // A single gather_sem counter does not identify WHICH child signaled,
-        // so we must wait for all num_receive increments to guarantee every
-        // child's histogram is finalized before reading.
-        noc_semaphore_wait_min(gather_sem_ptr, num_receive);
-        for (uint32_t level = 0; level < num_receive; level++) {
-            uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
-            uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
-
-            uint64_t child_hist_noc = get_noc_addr(child_noc_x, child_noc_y, out_addr);
-            noc_async_read(child_hist_noc, tmp_addr, output_page_size);
-            noc_async_read_barrier();
-
-            volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
-            for (uint32_t i = 0; i < n_routed_experts; i++) {
-                local_hist[i] += remote_hist[i];
-            }
-        }
-
-        if (parent_noc_x != 0xFFFFFFFF) {
-            uint64_t parent_gather_noc = get_noc_addr(parent_noc_x, parent_noc_y, gather_sem_addr);
-            noc_semaphore_inc(parent_gather_noc, 1);
-            noc_async_atomic_barrier();
-        } else {
-            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(0);
-            noc_async_write(out_addr, dst_noc_addr, output_page_size);
-            noc_async_write_barrier();
+    if (my_reducer == 0xFFFFFFFF) {
+        return;
+    }
+    volatile tt_l1_ptr uint32_t* gather_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
+    noc_semaphore_wait_min(gather_sem_ptr, num_cores_rt);
+    noc_semaphore_set(gather_sem_ptr, 0);
+    // stage every core's 64-byte column in c_5 (num_cores x 64 bytes, reducer staging)
+    const uint32_t stage = get_write_ptr(tt::CBIndex::c_5);
+    const uint32_t col_off = my_reducer * per_reducer * sizeof(uint32_t);
+    for (uint32_t c = 0; c < num_cores_rt; c++) {
+        const uint32_t x = get_arg_val<uint32_t>(7 + 2 * c), y = get_arg_val<uint32_t>(7 + 2 * c + 1);
+        noc_async_read(get_noc_addr(x, y, out_addr + col_off), stage + c * 64, 64);
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    uint32_t sum[per_reducer];
+    for (uint32_t e = 0; e < per_reducer; e++) {
+        sum[e] = 0;
+    }
+    for (uint32_t c = 0; c < num_cores_rt; c++) {
+        volatile tt_l1_ptr uint32_t* col = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + c * 64);
+        for (uint32_t e = 0; e < per_reducer; e++) {
+            sum[e] += col[e];
         }
     }
+    // stage the 16 sums in cb_gather_tmp (NCRISC's histogram, already folded in) and write them to the output
+    volatile tt_l1_ptr uint32_t* res = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_gather_tmp));
+    for (uint32_t e = 0; e < per_reducer; e++) {
+        res[e] = sum[e];
+    }
+    noc_async_write(get_write_ptr(cb_gather_tmp), dst_accessor.get_noc_addr(0) + col_off, 64);
+    noc_async_write_barrier();
 }
