@@ -152,6 +152,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // 3K 455 -> 463 and 4K 569 -> 611 ms, where each row's M work outgrows the parallel win.
     constexpr uint32_t kRowExpertsMaxMTiles = 64;
     const bool row_experts = op.stacked_packed_weights && op.m_tiles <= kRowExpertsMaxMTiles;
+    // A row runs its expert's whole token range in chunks of up to this many tile-rows; every chunk re-streams the
+    // expert's weights through each core, so a 2K bucket's ~5-tile experts take one chunk (1K 183 -> 176 ms, 2K
+    // 304 -> 285 ms vs 4); 16 narrows the gate/up K-block in L1 and loses.
+    constexpr uint32_t row_chunk = 8;
     const uint32_t M_ROWS = row_experts ? 1u : GRID_Y;  // grid rows one expert's tokens are split over
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
@@ -175,7 +179,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
     constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
-    uint32_t chunk_M_tiles = row_experts ? 4u : kMaxChunkMTiles;
+    uint32_t chunk_M_tiles = row_experts ? row_chunk : kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
