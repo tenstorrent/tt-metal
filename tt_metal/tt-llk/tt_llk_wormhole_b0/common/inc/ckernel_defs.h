@@ -4,6 +4,8 @@
 
 #pragma once
 
+// CI probe for RTL Sim flakiness -- comment-only, no functional change. DO NOT MERGE.
+
 #include <cstdint>
 #include <type_traits>
 
