@@ -22,7 +22,7 @@ The rule passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--port`, `--timeout`)
+- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -58,7 +58,7 @@ bash .cursor/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [-k EXPR] [--test-id ID] \
-    [--no-split] [--port PORT] [--timeout SECS]
+    [--no-split] [--timeout SECS]
 ```
 
 Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) so the command finishes before any terminal read. Synchronous, never run in background. If a retry is needed, re-run with a higher timeout rather than polling.

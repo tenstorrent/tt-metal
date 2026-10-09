@@ -21,7 +21,7 @@ The skill passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--port`, `--timeout`)
+- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -49,7 +49,7 @@ bash .claude/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [--k EXPR] [--test-id ID] \
-    [--no-split] [--port PORT] [--timeout SECS]
+    [--no-split] [--timeout SECS]
 ```
 
 Use `timeout: 1800000` (30 min) on the Bash tool call — synchronous, never `run_in_background`.
