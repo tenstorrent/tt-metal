@@ -1,0 +1,40 @@
+# Int32 gcd over non-negative operands up to 2**31 - 1: small values, around 2**30, near the ceiling,
+# fp32-NaN bit patterns and the 30-step worst-case operands. Negative operands need a sign-magnitude
+# knob in the fuser; test_eltwise_binary_sfpu_quasar.py covers them and plants the worst-case pairs.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Int32]
+    stimuli:
+      include:
+        - [0.0, 64.0]
+        - [1000.0, 1064.0]
+        - [1073741792.0, 1073741856.0]
+        - [2147483583.0, 2147483647.0]
+        - 3.0
+        - 1048576.0
+        - 805306368.0
+        - 715827883.0
+        - 1134903170.0
+        - 1431655765.0
+        - 1836311903.0
+        - 2139095041.0
+        - 2143289344.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuGcd]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

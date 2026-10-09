@@ -109,6 +109,7 @@
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"        // calculate_div_int32 / div_init (int32 / int32 -> fp32)
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
+#include "llk_sfpu/ckernel_sfpu_gcd.h"              // calculate_gcd / calculate_gcd_init
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
@@ -1261,8 +1262,8 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode. Must match the calculate step;
  *         atan2 uses it to select the reciprocal variant its polynomial expects.
- * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
- *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family and GCD only).
+ *         Must match the calculate step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
  * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel.
@@ -1378,6 +1379,10 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
     }
+    else if constexpr (OP == BinaryOp::GCD)
+    {
+        calculate_gcd_init();
+    }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
@@ -1396,8 +1401,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         NearestEven applies software RNE before the store. Ignored for MUL (no narrowing)
  *         and DIV (always rounds RNE regardless). No-op when is_fp32_dest_acc_en is true.
  * @tparam ITERATIONS Number of SFPU loop iterations.
- * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
- *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family and GCD only).
+ *         Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
  * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel (float only,
@@ -1585,6 +1590,10 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
+    }
+    else if constexpr (OP == BinaryOp::GCD)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gcd, (SIGN_MAGNITUDE_FORMAT, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {

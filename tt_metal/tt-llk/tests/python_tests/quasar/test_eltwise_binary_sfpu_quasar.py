@@ -119,6 +119,7 @@ def _run_sfpu_binary_llk_golden(
     format_variant=None,
     max_ulp=None,
     broadcast_type=BroadcastType.None_,
+    sign_magnitude=False,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -127,6 +128,9 @@ def _run_sfpu_binary_llk_golden(
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
+
+    ``sign_magnitude`` stages int32 operands as SMAG32 after the golden is computed,
+    so it only suits ops with a non-negative result (gcd).
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -166,6 +170,9 @@ def _run_sfpu_binary_llk_golden(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
+    if sign_magnitude:
+        src_A = _int32_to_smag32(src_A)
+
     unpack_to_dest = (
         format_variant.unpack_to_dest if format_variant is not None else True
     )
@@ -181,8 +188,7 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family reads this.
-            SIGN_MAGNITUDE_FORMAT(False),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
@@ -246,14 +252,15 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
 def _prepare_int_stimuli(
     formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
-    clamps to keep the product representable). Both operands live in src_A."""
+    clamps to keep the product representable). Both operands live in src_A.
+    For GCD, the head of each operand tile is overwritten by _plant_gcd_lanes."""
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -268,8 +275,94 @@ def _prepare_int_stimuli(
     if clamp_inputs is not None:
         src_A = torch.clamp(src_A, -clamp_inputs, clamp_inputs)
         src_B = torch.clamp(src_B, -clamp_inputs, clamp_inputs)
+    if mathop == MathOperation.SfpuGcd:
+        _plant_gcd_lanes(src_A, src0_idx, src1_idx)
     return src_A, tile_cnt_A, src_B
 
+
+_INT31_MAX = 2**31 - 1
+
+# Uniform int32 pairs almost always have a tiny gcd, so plant edge pairs.
+_GCD_EDGE_PAIRS = [
+    (0, 0),
+    (0, 12),
+    (12, 0),
+    (0, -_INT31_MAX),
+    (-_INT31_MAX, 0),
+    (12345, 12345),
+    (-7, -7),
+    (_INT31_MAX, _INT31_MAX),
+    (-_INT31_MAX, _INT31_MAX),
+    (-48, 18),
+    (48, -18),
+    (-48, -18),
+    (1, 1),
+    (1, 2),
+    (2, 1),
+    (15, 40),
+    (40, 15),
+    (1 << 30, 1 << 20),
+    (1 << 20, 1 << 30),
+    (1 << 30, 1 << 30),
+    (1, 1 << 30),
+    (1 << 30, 3 << 28),
+    (3 << 28, 1 << 30),
+    (-(1 << 30), 6 << 20),
+    (_INT31_MAX, 1),
+    (1836311903, 1134903170),
+    (1134903170, 1836311903),
+    (-1836311903, 1134903170),
+    # Operands above 0x7F800000 (fp32 NaN patterns) check SFPSWAP compares as int32.
+    (2147483647, 2139095041),
+    (2139095041, 2147483647),
+    (2147483646, 2139095042),
+    (2143289344, 2139095041),
+    (2147483646, 2143289344),
+    (2147483646, 2147483644),
+    (2139095044, 2147483644),
+    (2147483647, 2147483646),
+    (2139095041, 7),
+    (2147483646, 1000),
+    # Need all 30 Stein steps: catches a short replay budget.
+    (2147483645, 3),
+    (3, 2147483645),
+    (-2147483645, 3),
+    (3, -2147483645),
+    (1073741821, 1073741827),
+    (715827883, -1431655765),
+]
+
+# g * x must fit 31 bits, or the int32 cast wraps and corrupts the golden's operands.
+_GCD_MAX_COMMON_FACTOR = 1 << 15
+_GCD_MAX_COFACTOR = 1 << 16
+assert (_GCD_MAX_COMMON_FACTOR - 1) * (_GCD_MAX_COFACTOR - 1) <= _INT31_MAX
+_GCD_COMMON_FACTOR_LANES = MAX_TILE_ELEMENTS // 2
+
+
+def _plant_gcd_lanes(src_A, src0_idx, src1_idx):
+    """Overwrite each operand tile's head with edge pairs, then shared-factor pairs."""
+    elems = MAX_TILE_ELEMENTS
+    edge_a = torch.tensor([a for a, _ in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
+    edge_b = torch.tensor([b for _, b in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
+    n_common = _GCD_COMMON_FACTOR_LANES
+    g = torch.randint(1, _GCD_MAX_COMMON_FACTOR, (n_common,), dtype=torch.int64)
+    x = torch.randint(0, _GCD_MAX_COFACTOR, (n_common,), dtype=torch.int64)
+    y = torch.randint(0, _GCD_MAX_COFACTOR, (n_common,), dtype=torch.int64)
+    sx = torch.where(torch.rand(n_common) < 0.5, -1, 1)
+    sy = torch.where(torch.rand(n_common) < 0.5, -1, 1)
+    common_a = (sx * g * x).to(src_A.dtype)
+    common_b = (sy * g * y).to(src_A.dtype)
+    lane_a = torch.cat([edge_a, common_a])
+    lane_b = torch.cat([edge_b, common_b])
+    n = len(lane_a)
+    src_A[src0_idx * elems : src0_idx * elems + n] = lane_a
+    src_A[src1_idx * elems : src1_idx * elems + n] = lane_b
+
+
+_INT_CLAMP = {
+    MathOperation.SfpuElwmulInt: 1000,
+    MathOperation.SfpuGcd: _INT31_MAX,
+}
 
 # Shared with perf_eltwise_binary_sfpu_quasar.py. tile_indices stays functional-only.
 INT_SWEEP = dict(
@@ -283,6 +376,7 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuGcd,
     ],
 )
 
@@ -304,9 +398,10 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32."""
     binary_op = mathop.cpp_enum_value
-    clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
+    # GCD excludes INT_MIN: SFPABS saturates it.
+    clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
@@ -322,6 +417,38 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+    )
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+def test_eltwise_binary_sfpu_gcd_sign_magnitude_quasar(
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """gcd with SMAG32-staged operands (SIGN_MAGNITUDE_FORMAT); the result is non-negative."""
+    formats = InputOutputFormat(
+        input_format=DataFormat.Int32, output_format=DataFormat.Int32
+    )
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.Yes,
+        ImpliedMathFormat.No,
+        tile_indices,
+        MathOperation.SfpuGcd,
+        "GCD",
+        prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
+            f, dims, s0, s1, op, _INT31_MAX
+        ),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        sign_magnitude=True,
     )
 
 
@@ -858,7 +985,7 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family reads this.
+            # 2's-complement datapath (default); only the quant family and GCD read this.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
