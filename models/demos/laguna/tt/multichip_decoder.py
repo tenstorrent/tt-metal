@@ -73,6 +73,16 @@ TOKEN_DISPATCH_BUCKETS = frozenset({1024, 1536, 2048, 3072, 4096, 5120, 6144, 71
 TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | {
     int(v) for v in os.environ.get("TT_LAGUNA_DISPATCH_SMALL", "128,256,512").split(",") if v.strip()
 }
+# Fine prefill ladder above 512 tokens (S p150x4, generator_vllm._prefill_bucket_lens): every 128 tokens to 2048, every
+# 256 to 4096, every 512 to 8192, so a request pads by at most 128/256/512 rows (a 1066-token prompt computed 1536
+# rows on the 1536-then-every-1024 ladder). Multiples of 128 keep the sequence-parallel split (seq % (4 * 32)) and the
+# 128-row chunked SDPA. TT_LAGUNA_FINE_LADDER=0 restores 1536 + every 1024.
+FINE_PREFILL_LADDER = (
+    tuple(range(640, 2048, 128)) + tuple(range(2048, 4096, 256)) + tuple(range(4096, 8192 + 1, 512))
+    if os.environ.get("TT_LAGUNA_FINE_LADDER", "1") == "1"
+    else ()
+)
+TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | set(FINE_PREFILL_LADDER)
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
 # (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
 # Laguna-XS-2.1 on p150x2 and Laguna-S-2.1 on p150x4.

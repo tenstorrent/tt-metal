@@ -1357,10 +1357,15 @@ class LagunaForCausalLM:
                 type(self)._warned_warm_cap = True
         buckets, b = [], 32  # floor 32 (one tile) to match small cached-suffix prefills
         fine = self._fine_prefill_buckets()
-        while b < cap and not (fine and b > 1024):
+        from .multichip_decoder import FINE_PREFILL_LADDER
+
+        ladder = FINE_PREFILL_LADDER if fine else ()
+        while b < cap and not (fine and b > (512 if ladder else 1024)):
             buckets.append(b)
             b *= 2
-        if fine:  # above 1024: 1536, then every 1024 (worst-case padding 1.5x at 1025 / 2049, else <= 1.25x)
+        if ladder:  # above 512: every 128 to 2048, every 256 to 4096, every 512 above (multichip_decoder)
+            buckets += [L for L in ladder if L < cap]
+        elif fine:  # above 1024: 1536, then every 1024 (worst-case padding 1.5x at 1025 / 2049, else <= 1.25x)
             buckets += [L for L in [1536] + list(range(2048, cap, 1024)) if L < cap]
         buckets.append(cap)
         return sorted(set(x for x in buckets if x >= 1))
@@ -1729,6 +1734,7 @@ class LagunaForCausalLM:
         fill page tables (shape-keyed persistent buffers), the one-hot last-row selector and the sampling params.
         The first request at L runs eagerly and then captures the trace (no compile: warmup built every program);
         later requests replay it. Returns the sampled token."""
+        t0 = time.perf_counter()
         tokbuf = st["tokbuf"][L]
         ttnn.copy_host_to_device_tensor(
             self.gen._host(padded.reshape(1, L).to(torch.int32), ttnn.uint32), tokbuf
@@ -1764,8 +1770,13 @@ class LagunaForCausalLM:
             traces[L] = tid
             print(f"[laguna] prefill trace captured for bucket {L}", flush=True)
             return tok
+        t1 = time.perf_counter()
         ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=False)
-        return self.gen._read_token(st["tok"], 1)[0]
+        tok = self.gen._read_token(st["tok"], 1)[0]
+        if self._PREFILL_TIMING:
+            print(f"[laguna] traced prefill L={L}: inputs {(t1 - t0) * 1e3:.1f} ms, replay+read "
+                  f"{(time.perf_counter() - t1) * 1e3:.1f} ms", flush=True)
+        return tok
 
     def _select_hidden_row(self, h, row, L, st):
         """Copy a host one-hot selector in and write the selected hidden row to ``st["last_h"]``.
@@ -1985,6 +1996,7 @@ class LagunaForCausalLM:
                     else [torch.as_tensor(t, dtype=torch.int32).reshape(-1, torch.as_tensor(t).shape[-1])[u : u + 1]
                           for t in page_tables_per_layer]
                 )
+                _tp = time.perf_counter()
                 pt, fill_pt = self._prepare_prefill_page_tables(
                     row_table,
                     row_tables,
@@ -1994,6 +2006,9 @@ class LagunaForCausalLM:
                     operation=f"prefill request {u} stream chunk {chunk_idx}",
                 )
 
+                if self._PREFILL_TIMING:
+                    print(f"[laguna] prefill chunk L={L} start={absolute_start} page tables "
+                          f"{(time.perf_counter() - _tp) * 1e3:.1f} ms", flush=True)
                 runtime_offsets = self._runtime_offsets_for_prefill(L, absolute_start, runtime_bs)
                 padded = torch.zeros(L, dtype=torch.int64)
                 padded[: chunk.real_len] = tokens[u, absolute_start:absolute_end]
