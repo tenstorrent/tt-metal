@@ -2237,8 +2237,9 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # divisor's inverted exponent: x/+-0 = +-inf, 0/0 = inf/inf = NaN, a NaN divisor is
         # forwarded, subnormals read as zero, and every zero result is +0 (x/+-inf included;
         # passed_test does not compare the sign of a zero). At 16 bits it is in0 * (1/in1)
-        # with a +0 divisor overwritten by copysgn(inf, in0), and since 1/NaN = +0 a NaN
-        # divisor gives in0 * 0, which BinarySFPUGolden models.
+        # with a +0 divisor overwritten by copysgn(inf, in0), so NaN/+-0 is an infinity of the
+        # NaN's sign rather than a NaN, and since 1/NaN = +0 a NaN divisor gives in0 * 0.
+        # BinarySFPUGolden models both.
         MathOperation.SfpuElwdiv,  # x/+-0 = +-inf, x/+-inf = +0, 0/0 = inf/inf = NaN
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN

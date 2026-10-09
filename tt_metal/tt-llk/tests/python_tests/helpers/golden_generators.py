@@ -4037,7 +4037,9 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         def flush(t):
             f = t.to(torch.float32)
-            return torch.where(f.abs() < tiny, torch.copysign(torch.zeros_like(f), f), f)
+            return torch.where(
+                f.abs() < tiny, torch.copysign(torch.zeros_like(f), f), f
+            )
 
         return (flush(t1) / flush(t2)).to(t1.dtype)
 
@@ -4052,6 +4054,12 @@ class EltwiseBinaryGolden(FidelityMasking):
         # kernel that starts propagating the NaN fails here.
         if torch.isnan(t2):
             return t1.to(torch.float32) * 0.0
+        # The same path's zero-divisor arm, v_if(in1 == 0) -> copysgn(inf, in0), is reached by a
+        # NaN dividend too (in0 == 0 is false for it), so NaN/+-0 is an infinity carrying the
+        # NaN's sign bit, not a NaN. That sign is the operand's: torch's bf16 cast makes the
+        # stimulus NaN 0xFFFF, and the unpack keeps it, so the result is -inf.
+        if torch.isnan(t1) and t2 == 0:
+            return torch.copysign(torch.tensor(float("inf")), t1.to(torch.float32))
         return quotient
 
     def _gt_int(self, t1, t2):
