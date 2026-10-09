@@ -66,6 +66,11 @@ ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass sli
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
 # XS p150x2's power-of-two buckets plus S's finer prefill ladder (generator_vllm._PREFILL_FINE_BUCKETS)
 TOKEN_DISPATCH_BUCKETS = frozenset({1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192})
+# A 512-token bucket through dispatch too (48-layer prefill on p150x4, serving flags: 581 -> 251 ms vs the 256-row
+# sparse MoE loop; fp32-reference PCC 0.9701 -> 0.9700). At 128 tokens dispatch is slower (163 -> 173 ms).
+TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | {
+    int(v) for v in os.environ.get("TT_LAGUNA_DISPATCH_SMALL", "512").split(",") if v.strip()
+}
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
 # (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
 # Laguna-XS-2.1 on p150x2 and Laguna-S-2.1 on p150x4.
@@ -269,6 +274,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
         self._token_dispatch_state = None
         self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
+        # 2 fabric buffers per channel for that all_gather: 24.0 -> 22.3 us per 1-row decode all-reduce on p150x4
+        nb = int(os.environ.get("TT_LAGUNA_AG_BUFFERS", "2"))
+        self._ag_kw = {"num_buffers_per_channel": nb} if nb > 0 else {}
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
         # batched decode (2..32 tokens) router: per-token rank<K as well, instead of the 1-core top-k chain
@@ -415,6 +423,7 @@ class MultichipDecoder(OptimizedDecoder):
                 topology=self.ccl_topology,
                 num_links=self.num_links,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                **self._ag_kw,
             )  # [1, D, rows, H]
             # ttnn.sum(dim=1) is FillPad + fast_reduce_nc + slice: the ~5 us FillPad of the 1-row tensor's tile
             # padding is unnecessary for a reduction over dim 1 (it never mixes rows), and a preallocated output
