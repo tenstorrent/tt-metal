@@ -13,7 +13,8 @@
 //   address via address-update replay in end_ops. No per-tile RISC-V overhead.
 //
 // L1 step (a 16-bit input through a 16-bit DEST): end_ops advance L1_Dest_addr by one output tile (SCRATCH_SEC2) with a
-//   bare CFGSHIFTMASK; two-tile chunks of a 16-bit output keep the replay, whose WRCFG becomes that CFGSHIFTMASK.
+//   bare CFGSHIFTMASK; two-tile chunks of a 16-bit output keep the replay, whose WRCFG becomes that CFGSHIFTMASK, since
+//   the bare chunks before them in a row do not step OUTPUT_ADDR.
 
 #pragma once
 
@@ -26,6 +27,9 @@ constexpr std::uint32_t REPLAY_TILE_LEN    = 16;
 
 constexpr std::uint32_t REPLAY_ADDR_UPDATE_OFFSET = ckernel::packer::replay_buf_offset;
 constexpr std::uint32_t REPLAY_ADDR_UPDATE_LEN    = 4;
+
+// Set when a row of two tiles took the init with the WRCFG replay (llk_api); written and read only under LLK asserts.
+inline bool pack_fast_tilize_two_tile_row = false;
 
 __attribute__((noinline)) void _llk_pack_fast_tilize_configure_addrmod_()
 {
@@ -344,6 +348,7 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b)
 {
+    LLK_ASSERT(!pack_fast_tilize_two_tile_row || new_unit_dim == 2, "fast_tilize: a row of two tiles takes two-tile chunks only");
     if (is_fp32_dest_acc_en || input_32b)
     {
         _llk_pack_fast_tilize_mop_config_(new_unit_dim);
