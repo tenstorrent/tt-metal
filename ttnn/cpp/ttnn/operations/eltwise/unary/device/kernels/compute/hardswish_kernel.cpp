@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
-#include "dram_height_sharded.hpp"
+#include "dram_sharded.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -24,7 +24,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
-    dram_hs::for_each_chunk(num_tiles, [&](uint32_t count) {
+    dram_shard::for_each_chunk(num_tiles, [&](uint32_t count) {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(count),
             ckl::CopyTile<

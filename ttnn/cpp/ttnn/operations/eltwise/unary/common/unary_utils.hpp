@@ -29,24 +29,27 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-/** DRAM height-sharded TILE in and out with one shard spec. Each shard sits in one DRAM bank, so the reader and
- * writer take slot 0 of every shard, then slot 1, ... (SHARD_ROTATE), which spreads consecutive pages over the
- * banks. The flow splits the pages over cores:
+/** DRAM height- or width-sharded TILE in and out with one shard spec. Each shard sits in one DRAM bank, so the
+ * reader and writer take slot 0 of every shard, then slot 1, ... (SHARD_ROTATE), which spreads consecutive pages
+ * over the banks. The flow splits the pages over cores:
  * - StaticBurst: even split, several pages in flight.
  * - StaticOnePage: even split, one page in flight. Compute-heavy ops on small tensors.
  * - WorkQueue: cores take chunks from a scheduler on one core, so cores that finish early take more work.
  * The flow is hashed; the sizes are runtime args. */
-enum class DramHeightFlow : uint8_t { None, StaticBurst, StaticOnePage, WorkQueue };
+enum class DramShardFlow : uint8_t { None, StaticBurst, StaticOnePage, WorkQueue };
 
-struct DramHeightPlan {
-    DramHeightFlow flow = DramHeightFlow::None;
-    uint32_t shard_pages = 0;       // pages per full shard
-    uint32_t num_shards = 0;        // shards holding data
-    uint32_t last_shard_pages = 0;  // pages in the last shard, which may be short
-    uint32_t chunk_pages = 0;       // WorkQueue only
+struct DramShardPlan {
+    DramShardFlow flow = DramShardFlow::None;
+    // Page order, see dram_shard::RotatedPages (kernels/dataflow/dram_sharded.hpp).
+    uint32_t shard_stride = 0;
+    uint32_t num_shards = 0;
+    uint32_t last_shard_pages = 0;
+    uint32_t shard_width = 0;
+    uint32_t row_pages = 0;
+    uint32_t chunk_pages = 0;  // WorkQueue only
 };
 
-DramHeightPlan get_dram_height_plan(
+DramShardPlan get_dram_shard_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,

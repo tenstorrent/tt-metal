@@ -6,7 +6,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_height_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -82,19 +82,20 @@ bool is_heavy_op(const EltwiseUnaryWithParam& op) {
 
 }  // namespace
 
-DramHeightPlan get_dram_height_plan(
+DramShardPlan get_dram_shard_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,
     uint32_t num_cores) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::TensorMemoryLayout;
-    auto is_dram_height = [](const tt::tt_metal::TensorSpec& s) {
+    auto is_dram_sharded = [](const tt::tt_metal::TensorSpec& s) {
         const auto& mc = s.memory_config();
         return s.layout() == tt::tt_metal::Layout::TILE && mc.buffer_type() == BufferType::DRAM &&
-               mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && mc.shard_spec().has_value();
+               mc.memory_layout() != TensorMemoryLayout::INTERLEAVED && mc.shard_spec().has_value();
     };
-    if (!is_dram_height(input_spec) || !is_dram_height(output_spec) || op_chain.empty() || num_cores == 0) {
+    if (!is_dram_sharded(input_spec) || !is_dram_sharded(output_spec) || op_chain.empty() || num_cores == 0 ||
+        input_spec.memory_config().memory_layout() != output_spec.memory_config().memory_layout()) {
         return {};
     }
     const auto& shard = input_spec.memory_config().shard_spec()->shape;
@@ -103,34 +104,47 @@ DramHeightPlan get_dram_height_plan(
         shard[1] % tile.get_width() != 0) {
         return {};
     }
-    const uint32_t shard_pages = (shard[0] / tile.get_height()) * (shard[1] / tile.get_width());
+    const uint32_t shard_height = shard[0] / tile.get_height();
+    const uint32_t shard_width = shard[1] / tile.get_width();
+    const uint32_t row_pages = input_spec.padded_shape()[-1] / tile.get_width();
     const uint64_t total_pages = input_spec.padded_shape().volume() / tile.get_tile_hw();
-    if (shard_pages == 0 || total_pages == 0) {
+    if (shard_height == 0 || shard_width == 0 || total_pages == 0 || row_pages % shard_width != 0) {
         return {};
     }
-    const auto num_shards = static_cast<uint32_t>((total_pages + shard_pages - 1) / shard_pages);
-    DramHeightPlan plan{
-        .flow = DramHeightFlow::StaticBurst,
-        .shard_pages = shard_pages,
-        .num_shards = num_shards,
-        .last_shard_pages = static_cast<uint32_t>(total_pages - (uint64_t{num_shards} - 1) * shard_pages)};
+    DramShardPlan plan{.flow = DramShardFlow::StaticBurst, .shard_width = shard_width, .row_pages = row_pages};
+    if (shard_width == row_pages) {
+        // Height shards: whole rows; the last one may be short.
+        const uint32_t shard_pages = shard_height * shard_width;
+        plan.shard_stride = shard_pages;
+        plan.num_shards = static_cast<uint32_t>((total_pages + shard_pages - 1) / shard_pages);
+        plan.last_shard_pages = static_cast<uint32_t>(total_pages - (uint64_t{plan.num_shards} - 1) * shard_pages);
+    } else if (uint64_t{shard_height} * row_pages == total_pages) {
+        // Width shards: a column band of every row.
+        plan.shard_stride = shard_width;
+        plan.num_shards = row_pages / shard_width;
+        plan.last_shard_pages = shard_height * shard_width;
+    } else {
+        return {};  // block shards
+    }
 
     // Below this there is too little work per core for the queue to balance.
     constexpr uint64_t kMinPagesPerCore = 512;
     // Chunks are a fixed share of a core's pages: smaller ones load the scheduler, larger ones leave a tail.
     constexpr uint64_t kChunksPerCore = 150;
     const uint64_t pages_per_core = total_pages / num_cores;
-    // Compute kernels that take their tile counts from the queue (dram_hs::for_each_chunk).
+    // Compute kernels that take their tile counts from the queue (dram_shard::for_each_chunk).
     const std::string_view kernel = utils::get_compute_kernel_path(op_chain[0].type(), input_spec.data_type());
     const bool queue_kernel =
         kernel == "eltwise_sfpu.cpp" || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
     const bool bf16 = input_spec.data_type() == DataType::BFLOAT16 && output_spec.data_type() == DataType::BFLOAT16;
     if (pages_per_core < kMinPagesPerCore) {
         if (std::any_of(op_chain.begin(), op_chain.end(), is_heavy_op)) {
-            plan.flow = DramHeightFlow::StaticOnePage;
+            // With one page in flight the rotation only helps height shards, whose plain page order stays in
+            // one bank; the plain order of width shards already crosses banks every shard row.
+            plan.flow = shard_width == row_pages ? DramShardFlow::StaticOnePage : DramShardFlow::None;
         }
-    } else if (queue_kernel && bf16 && num_cores <= dram_hs::kMaxWorkers) {
-        plan.flow = DramHeightFlow::WorkQueue;
+    } else if (queue_kernel && bf16 && num_cores <= dram_shard::kMaxWorkers) {
+        plan.flow = DramShardFlow::WorkQueue;
         plan.chunk_pages =
             static_cast<uint32_t>(std::clamp<uint64_t>((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, 8, 256));
     }

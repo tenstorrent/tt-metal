@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_height_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
@@ -106,10 +106,8 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
-    // DRAM height-sharded: shard sizes, and the work queue's per-worker args.
-    uint32_t shard_pages = 0;
-    uint32_t num_shards = 0;
-    uint32_t last_shard_pages = 0;
+    // DRAM-sharded: page order sizes (dram_shard::RotatedPages), and the work queue's per-worker args.
+    std::array<uint32_t, 5> page_order{};
     bool work_queue = false;
     uint32_t worker_id = 0;
     bool is_scheduler = false;
@@ -137,32 +135,31 @@ uint32_t noc_xy(const Tensor& tensor, const tt::tt_metal::CoreCoord& core) {
     return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
 }
 
-// Reader and writer args 1-7 of a TILE core outside L1 sharding (arg 0 is the buffer). Args 3-5 are the DRAM
-// shard sizes; the work queue replaces the split in args 1-2 with its worker args.
-std::array<uint32_t, 7> tile_reader_args(const CoreRtArgs& w) {
-    if (w.work_queue) {
-        return {
-            w.worker_id, w.total_pages, w.shard_pages, w.num_shards, w.last_shard_pages, w.chunk_pages, w.scheduler_xy};
-    }
-    return {w.in_units, w.start_id, w.shard_pages, w.num_shards, w.last_shard_pages, 0, 0};
+std::array<uint32_t, 5> page_order(const DramShardPlan& plan) {
+    return {plan.shard_stride, plan.num_shards, plan.last_shard_pages, plan.shard_width, plan.row_pages};
 }
 
-std::array<uint32_t, 7> tile_writer_args(const CoreRtArgs& w) {
-    if (w.work_queue) {
-        return {
-            w.is_scheduler,
-            w.total_pages,
-            w.shard_pages,
-            w.num_shards,
-            w.last_shard_pages,
-            w.chunk_pages,
-            w.num_workers};
-    }
-    return {w.out_units, w.start_id, w.shard_pages, w.num_shards, w.last_shard_pages, 0, 0};
+// Reader and writer args 1-9 of a TILE core outside L1 sharding (arg 0 is the buffer). Args 3-7 are the DRAM page
+// order; the work queue replaces the split in args 1-2 with its worker args and adds args 8-9.
+constexpr uint32_t kTileDataMovementArgs = 10;
+
+std::array<uint32_t, kTileDataMovementArgs - 1> tile_args(
+    uint32_t a1, uint32_t a2, const std::array<uint32_t, 5>& order, uint32_t a8, uint32_t a9) {
+    return {a1, a2, order[0], order[1], order[2], order[3], order[4], a8, a9};
+}
+
+std::array<uint32_t, kTileDataMovementArgs - 1> tile_reader_args(const CoreRtArgs& w) {
+    return w.work_queue ? tile_args(w.worker_id, w.total_pages, w.page_order, w.chunk_pages, w.scheduler_xy)
+                        : tile_args(w.in_units, w.start_id, w.page_order, 0, 0);
+}
+
+std::array<uint32_t, kTileDataMovementArgs - 1> tile_writer_args(const CoreRtArgs& w) {
+    return w.work_queue ? tile_args(w.is_scheduler, w.total_pages, w.page_order, w.chunk_pages, w.num_workers)
+                        : tile_args(w.out_units, w.start_id, w.page_order, 0, 0);
 }
 
 std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> with_buffer(
-    tt::tt_metal::Buffer* buffer, const std::array<uint32_t, 7>& args) {
+    tt::tt_metal::Buffer* buffer, const std::array<uint32_t, kTileDataMovementArgs - 1>& args) {
     std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> all{buffer};
     all.insert(all.end(), args.begin(), args.end());
     return all;
@@ -241,7 +238,7 @@ void enumerate_core_rt_args(
             k.rows_per_tile = tile_hw / row_width_elements;
         }
     }
-    const auto plan = get_dram_height_plan(
+    const auto plan = get_dram_shard_plan(
         operation_attributes.op_chain, input.tensor_spec(), output.tensor_spec(), all_device_cores.num_cores());
     const uint32_t out_num_tiles =
         rm_interleaved ? (k.total_rows + k.rows_per_tile - 1) / k.rows_per_tile : output.physical_volume() / tile_hw;
@@ -345,7 +342,7 @@ void enumerate_core_rt_args(
         return;
     }
 
-    if (plan.flow == DramHeightFlow::WorkQueue) {
+    if (plan.flow == DramShardFlow::WorkQueue) {
         // No split: every core is a worker. The middle one also runs the scheduler, to keep requests short.
         cores = corerange_to_cores(all_device_cores, {}, row_major);
         const auto num_workers = static_cast<uint32_t>(cores.size());
@@ -354,9 +351,7 @@ void enumerate_core_rt_args(
             fn(
                 CoreRtArgs{
                     .core = cores[i],
-                    .shard_pages = plan.shard_pages,
-                    .num_shards = plan.num_shards,
-                    .last_shard_pages = plan.last_shard_pages,
+                    .page_order = page_order(plan),
                     .work_queue = true,
                     .worker_id = i,
                     .is_scheduler = i == num_workers / 2,
@@ -402,9 +397,7 @@ void enumerate_core_rt_args(
                 .out_units = npc,
                 .start_id = start_tile_id,
                 .compute_units = rm_interleaved ? npc * k.chunks_per_row : npc,
-                .shard_pages = plan.shard_pages,
-                .num_shards = plan.num_shards,
-                .last_shard_pages = plan.last_shard_pages},
+                .page_order = page_order(plan)},
             k);
         start_tile_id += npc;
     }
@@ -494,13 +487,13 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
 
-    // Bursts for DRAM height-sharded tensors (get_dram_height_plan). The CBs hold two bursts, so the next one can be
+    // Bursts for DRAM-sharded tensors (get_dram_shard_plan). The CBs hold two bursts, so the next one can be
     // posted while compute works on the previous one. Every other path keeps one page in flight.
     const auto plan =
-        get_dram_height_plan(ops_chain, input.tensor_spec(), output.tensor_spec(), all_device_cores.num_cores());
-    const bool shard_rotate = plan.flow != DramHeightFlow::None;
-    const bool work_queue = plan.flow == DramHeightFlow::WorkQueue;
-    const bool burst = shard_rotate && plan.flow != DramHeightFlow::StaticOnePage;
+        get_dram_shard_plan(ops_chain, input.tensor_spec(), output.tensor_spec(), all_device_cores.num_cores());
+    const bool shard_rotate = plan.flow != DramShardFlow::None;
+    const bool work_queue = plan.flow == DramShardFlow::WorkQueue;
+    const bool burst = shard_rotate && plan.flow != DramShardFlow::StaticOnePage;
     const uint32_t kReadBurst = burst ? 8 : 1;
     const uint32_t kWriteBurst = burst ? 2 : 1;
 
@@ -554,10 +547,11 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
                 }}},
             });
         };
-        ctrl_cb(dram_hs::kCbComputeCount, 8);
-        ctrl_cb(dram_hs::kCbWriterChunk, 8);
-        ctrl_cb(dram_hs::kCbRequestTable, tt::div_up(all_device_cores.num_cores() * sizeof(uint32_t), kCtrlPageBytes));
-        for (const uint32_t id : {dram_hs::kReplySemaphore, dram_hs::kGoSemaphore}) {
+        ctrl_cb(dram_shard::kCbComputeCount, 8);
+        ctrl_cb(dram_shard::kCbWriterChunk, 8);
+        ctrl_cb(
+            dram_shard::kCbRequestTable, tt::div_up(all_device_cores.num_cores() * sizeof(uint32_t), kCtrlPageBytes));
+        for (const uint32_t id : {dram_shard::kReplySemaphore, dram_shard::kGoSemaphore}) {
             desc.semaphores.push_back(
                 SemaphoreDescriptor{.id = id, .core_ranges = all_device_cores, .initial_value = 0});
         }
@@ -643,12 +637,14 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     // --- Per-core runtime args ---
     // Work split + per-core values come from enumerate_core_rt_args, shared with
     // override_runtime_arguments so the cache-hit patch and the miss path cannot disagree.
-    // Sharded readers/writers take {buffer, units, start_id}; interleaved add the five chunk fields.
-    constexpr uint32_t kShardedDataMovementArgs = 3, kInterleavedDataMovementArgs = 8, kComputeArgs = 3;
+    // Sharded readers/writers take {buffer, units, start_id}; row-major interleaved add the five chunk fields.
+    constexpr uint32_t kShardedDataMovementArgs = 3, kRmDataMovementArgs = 8, kComputeArgs = 3;
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
             if (w.noop) {
-                const uint32_t n = has_sharding ? kShardedDataMovementArgs : kInterleavedDataMovementArgs;
+                const uint32_t n = has_sharding     ? kShardedDataMovementArgs
+                                   : rm_interleaved ? kRmDataMovementArgs
+                                                    : kTileDataMovementArgs;
                 reader_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
                 writer_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
                 compute_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(kComputeArgs, 0));

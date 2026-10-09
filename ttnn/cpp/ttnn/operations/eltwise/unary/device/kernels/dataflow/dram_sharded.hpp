@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRAM height-sharded unary: page order (SHARD_ROTATE) and work queue (WORK_QUEUE).
+// DRAM-sharded unary (height or width shards): page order (SHARD_ROTATE) and work queue (WORK_QUEUE).
 //
 // Each shard sits in one bank, so pages are visited in rotated order: position q is slot q / num_shards of
-// shard q % num_shards. Consecutive pages then come from different banks.
+// shard q % num_shards. Consecutive pages then come from different banks. Slot k of shard s is page
+// s * shard_stride + (k / shard_width) * row_pages + k % shard_width: a height shard is whole rows
+// (shard_width == row_pages), a width shard is a column band of every row.
 //
 // The work queue cuts the rotated order into chunks. Worker w starts on chunk w and gets each next chunk from a
 // scheduler in one core's writer: the worker writes kRequestTag | seq into its word of the scheduler's request
@@ -17,9 +19,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_height_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
 
-namespace dram_hs {
+namespace dram_shard {
 
 constexpr uint32_t kRequestTag = 0xA5000000u;
 constexpr uint32_t kSeqMask = 0xFFFu;
@@ -27,11 +29,16 @@ constexpr uint32_t kSeqShift = 20;
 constexpr uint32_t kDone = 0xFFFFFu;  // also the chunk mask
 
 struct RotatedPages {
-    uint32_t shard_pages;
+    uint32_t shard_stride;  // page-id distance between consecutive shards
     uint32_t num_shards;
     uint32_t last_shard_pages;  // a short last shard has no page at slots >= last_shard_pages; they are skipped
+    uint32_t shard_width;       // pages per row of a shard
+    uint32_t row_pages;         // pages per row of the tensor
     uint32_t slot = 0;
     uint32_t shard = 0;
+    uint32_t col = 0;           // slot % shard_width
+    uint32_t slot_offset = 0;   // page id of the slot in shard 0
+    uint32_t shard_offset = 0;  // shard * shard_stride
 
     void seek(uint32_t q) {
         const uint32_t full = last_shard_pages * num_shards;
@@ -42,19 +49,44 @@ struct RotatedPages {
             slot = last_shard_pages + (q - full) / (num_shards - 1);
             shard = (q - full) % (num_shards - 1);
         }
+        col = slot % shard_width;
+        slot_offset = (slot / shard_width) * row_pages + col;
+        shard_offset = shard * shard_stride;
     }
 
     uint32_t next() {
         if (shard == num_shards - 1 && slot >= last_shard_pages) {
-            shard = 0;
-            slot++;
+            next_slot();
         }
-        const uint32_t page = shard * shard_pages + slot;
+        const uint32_t page = shard_offset + slot_offset;
         if (++shard == num_shards) {
-            shard = 0;
-            slot++;
+            next_slot();
+        } else {
+            shard_offset += shard_stride;
         }
         return page;
+    }
+
+    void next_slot() {
+        shard = 0;
+        shard_offset = 0;
+        slot++;
+        if (++col == shard_width) {
+            col = 0;
+            slot_offset += row_pages - shard_width + 1;
+        } else {
+            slot_offset++;
+        }
+    }
+
+    // Reads the five sizes from runtime args first_arg .. first_arg + 4.
+    static RotatedPages from_args(uint32_t first_arg) {
+        return {
+            .shard_stride = get_arg_val<uint32_t>(first_arg),
+            .num_shards = get_arg_val<uint32_t>(first_arg + 1),
+            .last_shard_pages = get_arg_val<uint32_t>(first_arg + 2),
+            .shard_width = get_arg_val<uint32_t>(first_arg + 3),
+            .row_pages = get_arg_val<uint32_t>(first_arg + 4)};
     }
 };
 
@@ -177,4 +209,4 @@ struct Scheduler {
     bool finished() const { return workers_done >= num_workers; }
 };
 
-}  // namespace dram_hs
+}  // namespace dram_shard

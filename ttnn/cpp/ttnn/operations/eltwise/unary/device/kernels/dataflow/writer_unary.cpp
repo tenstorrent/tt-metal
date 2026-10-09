@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #if SHARD_ROTATE
-#include "dram_height_sharded.hpp"
+#include "dram_sharded.hpp"
 #endif
 
 void kernel_main() {
@@ -62,19 +62,16 @@ void kernel_main() {
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
 #if SHARD_ROTATE
-    // DRAM height-sharded: the reader's rotated page order, WRITE_BURST pages per flush.
+    // DRAM-sharded: the reader's rotated page order, WRITE_BURST pages per flush.
     constexpr uint32_t kWriteBurst = WRITE_BURST;
-    dram_hs::RotatedPages order{
-        .shard_pages = get_arg_val<uint32_t>(3),
-        .num_shards = get_arg_val<uint32_t>(4),
-        .last_shard_pages = get_arg_val<uint32_t>(5)};
-    dram_hs::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
+    auto order = dram_shard::RotatedPages::from_args(3);
+    dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
 #if WORK_QUEUE
     // On the scheduler core, the writer answers requests whenever it would otherwise wait.
     const bool is_scheduler = get_arg_val<uint32_t>(1) != 0;
-    dram_hs::Scheduler sched{
-        .num_workers = get_arg_val<uint32_t>(7),
-        .total_chunks = dram_hs::num_chunks(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(6)),
+    dram_shard::Scheduler sched{
+        .num_workers = get_arg_val<uint32_t>(9),
+        .total_chunks = dram_shard::num_chunks(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(8)),
         .coord_arg = dst_args.next_common_runtime_args_offset()};
     if (is_scheduler) {
         sched.start();
@@ -102,12 +99,12 @@ void kernel_main() {
     };
 #if WORK_QUEUE
     while (true) {
-        serve_until(dram_hs::kCbWriterChunk, 1);
-        cb_wait_front(dram_hs::kCbWriterChunk, 1);
-        auto* chunk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(dram_hs::kCbWriterChunk));
+        serve_until(dram_shard::kCbWriterChunk, 1);
+        cb_wait_front(dram_shard::kCbWriterChunk, 1);
+        auto* chunk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(dram_shard::kCbWriterChunk));
         const uint32_t first = chunk[0];
         const uint32_t count = chunk[1];
-        cb_pop_front(dram_hs::kCbWriterChunk, 1);
+        cb_pop_front(dram_shard::kCbWriterChunk, 1);
         if (count == 0) {
             break;
         }

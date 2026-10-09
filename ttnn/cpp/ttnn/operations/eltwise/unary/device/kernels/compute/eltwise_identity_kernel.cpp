@@ -6,7 +6,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "dram_height_sharded.hpp"
+#include "dram_sharded.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -16,7 +16,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
-    dram_hs::for_each_chunk(num_tiles, [&](uint32_t count) {
+    dram_shard::for_each_chunk(num_tiles, [&](uint32_t count) {
         compute_kernel_lib::copy<
             compute_kernel_lib::input(
                 dfb_input_id,

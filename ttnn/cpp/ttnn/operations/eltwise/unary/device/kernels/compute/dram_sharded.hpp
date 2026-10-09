@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute side of the DRAM height-sharded work queue (../dataflow/dram_height_sharded.hpp).
+// Compute side of the DRAM-sharded work queue (../dataflow/dram_sharded.hpp).
 
 #pragma once
 
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_height_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
 
-namespace dram_hs {
+namespace dram_shard {
 
 // Runs process(n) over this core's tiles: once with num_tiles, or with WORK_QUEUE once per chunk the reader
 // announces, until a count of 0. read_tile_value gives unpack, math and pack the same count.
@@ -32,4 +32,4 @@ ALWI void for_each_chunk(uint32_t num_tiles, Process process) {
 #endif
 }
 
-}  // namespace dram_hs
+}  // namespace dram_shard

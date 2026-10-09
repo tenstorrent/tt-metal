@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "dram_height_sharded.hpp"
+#include "dram_sharded.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -26,7 +26,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    dram_hs::for_each_chunk(num_tiles, [&](uint32_t count) {
+    dram_shard::for_each_chunk(num_tiles, [&](uint32_t count) {
         for (uint32_t i = 0; i < count; ++i) {
             tile_regs_acquire();
 
