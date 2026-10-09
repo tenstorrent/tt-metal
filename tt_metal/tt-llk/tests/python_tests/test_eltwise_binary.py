@@ -1132,7 +1132,10 @@ def test_eltwise_binary_dest_reuse(
     )
 
 
+# The hand-off sweeps below run nightly; the PR smoke runs their subsets at the end of this module, since the LLK smoke splits
+# its tests in two groups by count. The per-tile hand-off itself runs in the smoke through the functional default above.
 # The per-face hand-off (Blackhole's SrcDvalid::PerFace, the compute API default) on the two-operand path, every broadcast form.
+@pytest.mark.nightly
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half],
@@ -1181,6 +1184,7 @@ def test_eltwise_binary_per_face_handoff(
 
 
 # The per-face hand-off on the dest-reuse path.
+@pytest.mark.nightly
 @parametrize(
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -1233,6 +1237,7 @@ def test_eltwise_binary_dest_reuse_per_face_handoff(
 
 # Dest reuse with a row broadcast of B (DEST_TO_SRCA), both hand-offs.
 @blackhole_only
+@pytest.mark.nightly
 @parametrize(
     math_op=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
@@ -1287,6 +1292,7 @@ def _first(values, count):
 
 # Dest reuse with the dest-reuse unpack (as the compute API pairs them), both hand-offs.
 @blackhole_only
+@pytest.mark.nightly
 @parametrize(
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -1342,6 +1348,7 @@ def test_eltwise_binary_dest_reuse_unpack_a(
 
 # The block unpack (_llk_unpack_AB_block_, one call per block of tile pairs) under both hand-offs.
 @blackhole_only
+@pytest.mark.nightly
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half],
@@ -1383,6 +1390,7 @@ def test_eltwise_binary_unpack_ab_block(
 
 # The block unpack with a B stride of 0 (one B tile for every tile of a block, as a broadcast operand), both hand-offs.
 @blackhole_only
+@pytest.mark.nightly
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half],
@@ -1419,4 +1427,248 @@ def test_eltwise_binary_unpack_ab_block_fixed_b(
         False,
         per_face_handoff=per_face_handoff,
         unpack_ab_block=2,
+    )
+
+
+# PR smoke subsets of the nightly hand-off sweeps: bf16 (and fp32 with a 32-bit DEST) on full tiles, the partial-face tiles of
+# the dest-reuse unpack, and the block unpack at 2 and 16 tiles per block as binary_ng's block section runs it.
+SMOKE_FORMATS = {
+    DestAccumulation.No: [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    ],
+    DestAccumulation.Yes: [InputOutputFormat(DataFormat.Float32, DataFormat.Float32)],
+}
+SMOKE_BF16 = SMOKE_FORMATS[DestAccumulation.No]
+
+
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=lambda dest_acc: SMOKE_FORMATS[dest_acc],
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ],
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    transpose_srca=[Transpose.No],
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[256, 32]],
+    acc_to_dest=[False],
+)
+def test_eltwise_binary_per_face_handoff_smoke(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    tile_dimensions,
+    input_dimensions,
+    acc_to_dest,
+):
+    test_eltwise_binary_per_face_handoff(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        tile_dimensions,
+        input_dimensions,
+        acc_to_dest,
+    )
+
+
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=DEST_REUSE_MATH_OPS,
+    formats=SMOKE_BF16,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: _first(
+        get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions),
+        1,
+    ),
+    output_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions, input_dimensions: _first(
+        get_dest_reuse_output_dimensions(
+            dest_acc, dest_sync, formats, tile_dimensions, input_dimensions
+        ),
+        1,
+    ),
+)
+def test_eltwise_binary_dest_reuse_per_face_handoff_smoke(
+    reuse_dest_type,
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+):
+    test_eltwise_binary_dest_reuse_per_face_handoff(
+        reuse_dest_type,
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+    )
+
+
+@blackhole_only
+@parametrize(
+    math_op=DEST_REUSE_MATH_OPS,
+    formats=SMOKE_BF16,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: _first(
+        get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions),
+        1,
+    ),
+    output_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions, input_dimensions: _first(
+        get_dest_reuse_output_dimensions(
+            dest_acc, dest_sync, formats, tile_dimensions, input_dimensions
+        ),
+        1,
+    ),
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_dest_reuse_row_bcast_smoke(
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+    per_face_handoff,
+):
+    test_eltwise_binary_dest_reuse_row_bcast(
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        per_face_handoff,
+    )
+
+
+@blackhole_only
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwmul],
+    formats=SMOKE_BF16,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op)[
+        -1:
+    ],
+    tile_dimensions=[[8, 32], [32, 32], [16, 16]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: _first(
+        get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions),
+        1,
+    ),
+    output_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions, input_dimensions: _first(
+        get_dest_reuse_output_dimensions(
+            dest_acc, dest_sync, formats, tile_dimensions, input_dimensions
+        ),
+        1,
+    ),
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_dest_reuse_unpack_a_smoke(
+    reuse_dest_type,
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+    per_face_handoff,
+):
+    test_eltwise_binary_dest_reuse_unpack_a(
+        reuse_dest_type,
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        per_face_handoff,
+    )
+
+
+@blackhole_only
+@parametrize(
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=SMOKE_BF16,
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[64, 32], [512, 32]],
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_unpack_ab_block_smoke(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    math_op,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    per_face_handoff,
+):
+    test_eltwise_binary_unpack_ab_block(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        math_op,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        per_face_handoff,
     )
