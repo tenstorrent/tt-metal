@@ -586,6 +586,19 @@ TEST(McastReverseTreeTest, XAxisChordAtRootIsCopiedToTargetRows) {
     for (std::uint32_t y = root_y + 1; y <= root_y + 2; y++) {
         EXPECT_NE(actions[y] & Routing2DCodec::ACTION_Z, 0) << "target row " << y << " lost the root's Z tooth";
     }
+
+    // The {start 2, step 4} pattern links column 2 to column 5 (the {0, 8} pattern has no chord at
+    // column 2). A Z-facing router at that landing must decode X only; Y-first would hand it row 1's
+    // spine byte. These are the bytes Routing2DCodec.ZFacingRouterOnXExpressReadsTheXMapOnly hardcodes.
+    constexpr std::uint32_t landing_y = root_y + 1;
+    constexpr std::uint32_t landing_x = 5;
+    EXPECT_EQ(
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, true>(actions.data(), landing_y, landing_x, y_size)),
+        Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_EAST);
+    EXPECT_EQ(
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, false>(actions.data(), landing_y, landing_x, y_size)),
+        Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_EAST |
+            Routing2DCodec::ACTION_Z);
 }
 
 // Galaxy all-gather load-balances an even ring by putting axis/2 hops on the short cardinal

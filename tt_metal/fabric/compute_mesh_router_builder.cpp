@@ -911,9 +911,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
 
-        // FABRIC_2D selects action-map decode for every 2D router. Express capacity is injected
-        // configuration-wide when any local mesh uses express routing; router behavior does not
-        // otherwise specialize on FABRIC_EXPRESS_ENABLED.
+        // FABRIC_2D selects action-map decode for every 2D router. FABRIC_EXPRESS_AXIS is injected
+        // configuration-wide by CreateKernel when any local mesh uses express routing (see
+        // FabricContext::get_fabric_kernel_defines), so it is not added here. The router reads it
+        // through FabricExpressConfig: a Z-facing router decodes the axis its chord runs along.
     }
 
     // Get SOC descriptor for eth core lookup
