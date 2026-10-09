@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 
 # `ttnn` SDPA requires a tile-aligned head dimension.
 _TILE = 32
+# The SDPA op loads `cu_window_seqlens` into one uint32 tile and caps it there.
+_CU_WINDOW_ENTRIES = _TILE * _TILE
 
 
 class VisionParallel(NamedTuple):
@@ -60,6 +62,7 @@ class VisionParallel(NamedTuple):
     sp_axis: int | None = None
     sp_factor: int = 1
     ccl_manager: CCLManager | None = None
+    use_persistent_ccl_buffers: bool = True
 
     @property
     def tp(self) -> bool:
@@ -271,15 +274,25 @@ def pad_patches_for_sp(
     cu_seqlens: Sequence[int],
     *,
     sp_factor: int,
+    pad_to: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
-    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
+    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in phantom windows.
 
-    The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
+    Windowed attention costs each window's length squared, so the pad is carved into windows of
+    `sp_factor * 32` rows, the last taking the remainder. With `pad_to`, pad to at least that many
+    patches and always append a phantom window (empty when nothing is padded), so every batch at one
+    padded size takes the same windowed-attention programs.
+
+    The pad tokens stay in the tower's output; the text encoder's `merge_vision` gathers past them.
     """
     total = patches.shape[0]
     mult = sp_factor * _TILE
     padded = -(-total // mult) * mult
-    if padded == total:
+    if pad_to is not None:
+        if pad_to % mult != 0:
+            raise ValueError(f"pad_to must be a multiple of {mult}, got {pad_to}")
+        padded = max(padded, pad_to)
+    elif padded == total:
         return patches, pos_embeds, rope, tuple(cu_seqlens), total
     if cu_seqlens[-1] != total:
         msg = f"cu_seqlens must span [0, {total}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
@@ -293,9 +306,22 @@ def pad_patches_for_sp(
             torch.cat([cos, torch.ones(npad, cos.shape[-1], dtype=cos.dtype)], dim=0),
             torch.cat([sin, torch.zeros(npad, sin.shape[-1], dtype=sin.dtype)], dim=0),
         ),
-        (*tuple(cu_seqlens), padded),
+        (*tuple(cu_seqlens), *range(total + mult, padded, mult), padded),
         total,
     )
+
+
+def fixed_length_cu_window(cu_seqlens: Sequence[int]) -> tuple[int, ...]:
+    """`cu_seqlens` padded to the op's full capacity by repeating the last boundary.
+
+    The SDPA program-cache key includes the `cu_window_seqlens` tensor's shape, so a fixed length keeps
+    the window count out of the key. The repeats are empty windows, which the kernel's window search and
+    mask generator skip.
+    """
+    if len(cu_seqlens) > _CU_WINDOW_ENTRIES:
+        msg = f"cu_seqlens has {len(cu_seqlens)} entries; the windowed SDPA op holds at most {_CU_WINDOW_ENTRIES}"
+        raise ValueError(msg)
+    return (*cu_seqlens, *[cu_seqlens[-1]] * (_CU_WINDOW_ENTRIES - len(cu_seqlens)))
 
 
 def vision_rope_tensors(
@@ -372,13 +398,6 @@ def _drop_batch_axis(x: ttnn.Tensor, added: bool) -> ttnn.Tensor:
     return ttnn.reshape(x, (x.shape[-2], x.shape[-1])) if added else x
 
 
-def _trim_tokens(x: ttnn.Tensor, real_tokens: int | None) -> ttnn.Tensor:
-    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor."""
-    if real_tokens is None or x.shape[-2] <= real_tokens:
-        return x
-    return x[:real_tokens, :]
-
-
 def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     """All-gather a column-fractured activation back to full width, when TP is on."""
     if not p.tp:
@@ -396,7 +415,12 @@ def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Ten
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
-    out = p.ccl_manager.all_gather(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    out = p.ccl_manager.all_gather(
+        linear.forward(x, use_persistent_buffer=p.use_persistent_ccl_buffers),
+        dim=-1,
+        mesh_axis=p.tp_axis,
+        use_hyperparams=True,
+    )
     return _drop_batch_axis(out, added)
 
 
@@ -412,7 +436,7 @@ def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn
     npad = (-rows) % (p.tp_factor * _TILE)
     if npad:
         x = ttnn.pad(x, [(0, 0), (0, npad), (0, 0)], value=0.0)
-    out = linear.forward(x, reduce_scatter_dim=-2)
+    out = linear.forward(x, reduce_scatter_dim=-2, use_persistent_buffer=p.use_persistent_ccl_buffers)
     out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
         out = out[:, :rows, :]
@@ -505,9 +529,11 @@ class Qwen3VlVisionAttention(Module):
         mesh_device,
         parallel: VisionParallel | None = None,
         linear_compute_kernel_config=None,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
+        self._kv_gather_capacity = kv_gather_capacity
         self.mesh_device = mesh_device
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
@@ -715,8 +741,12 @@ class Qwen3VlVisionAttention(Module):
             empty_joint,
             empty_joint,
             empty_joint,
-            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype),
-            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype),
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
             joint_strategy="rear",
             logical_n=local_seq_len * self._p.sp_factor,
             program_config=self._ring_program_config(local_seq_len),
@@ -747,7 +777,7 @@ class Qwen3VlVisionAttention(Module):
         k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
-            torch.tensor(cu_seqlens, dtype=torch.int32),
+            torch.tensor(fixed_length_cu_window(cu_seqlens), dtype=torch.int32),
             device=self.mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
@@ -787,6 +817,7 @@ class Qwen3VlVisionBlock(Module):
         mesh_device,
         parallel: VisionParallel | None = None,
         linear_compute_kernel_config=None,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
         parallel = parallel or VisionParallel()
@@ -800,6 +831,7 @@ class Qwen3VlVisionBlock(Module):
             mesh_device=mesh_device,
             parallel=parallel,
             linear_compute_kernel_config=linear_compute_kernel_config,
+            kv_gather_capacity=kv_gather_capacity,
         )
         self.norm2 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.mlp = Qwen3VlVisionMLP(
@@ -928,9 +960,13 @@ class Qwen3VlVisionModel(Module):
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
         high_fidelity_linears: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
-        self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)
+        self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)._replace(
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers
+        )
         linear_compute_kernel_config = None
         if high_fidelity_linears:
             linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -964,6 +1000,7 @@ class Qwen3VlVisionModel(Module):
                 mesh_device=mesh_device,
                 parallel=self._p,
                 linear_compute_kernel_config=linear_compute_kernel_config,
+                kv_gather_capacity=kv_gather_capacity,
             )
             for _ in range(depth)
         )
@@ -1011,14 +1048,14 @@ class Qwen3VlVisionModel(Module):
         pos_embeds: ttnn.Tensor,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         cu_seqlens: Sequence[int] | None = None,
-        logical_patches: int | None = None,
     ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
         """`cu_seqlens` confines attention to one image or video frame; see [`vision_cu_seqlens`].
 
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
 
-        `logical_patches` is the real patch count if the input was padded by [`pad_patches_for_sp`].
+        Input padded by [`pad_patches_for_sp`] comes back with its pad tokens after the real ones; the
+        text encoder's `merge_vision` never reads them.
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
 
@@ -1031,21 +1068,19 @@ class Qwen3VlVisionModel(Module):
         #     f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
         # )
 
-        real_tokens = None if logical_patches is None else logical_patches // self.spatial_merge_size**2
-
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
             hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
-                deepstack_features.append(_trim_tokens(self._gather_tokens(merger.forward(hidden_states)), real_tokens))
+                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states)))
 
-        return _trim_tokens(self._gather_tokens(self.merger.forward(hidden_states)), real_tokens), deepstack_features
+        return self._gather_tokens(self.merger.forward(hidden_states)), deepstack_features
 
     def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
 
-        The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
+        The decoder consumes these through `merge_vision`, which walks `vision_runs` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
         a plain concatenation because SP shards rows contiguously, so device order equals token order.
 

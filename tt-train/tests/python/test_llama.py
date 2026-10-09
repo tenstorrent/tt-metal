@@ -12,6 +12,7 @@ import ttml
 from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
+from ttml.models.llama.transformer import compute_swiglu_intermediate_size
 
 
 # =============================================================================
@@ -202,6 +203,27 @@ class TestLlama:
         assert logits_shape[0] == batch_size
         assert logits_shape[2] == seq_len
         assert logits_shape[3] == cfg.vocab_size
+
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    @pytest.mark.parametrize("num_hidden_layers", [1, 3])
+    @pytest.mark.parametrize("intermediate_size", [None, 128])
+    def test_residual_projection_init_std(self, tiny_config, intermediate_size, num_hidden_layers):
+        """Test that out-proj and down-proj init std is 1/sqrt(fan_in * num_residual_writes)."""
+        cfg = replace(tiny_config, intermediate_size=intermediate_size, num_hidden_layers=num_hidden_layers)
+        model = Llama(cfg)
+
+        expected_intermediate = intermediate_size or compute_swiglu_intermediate_size(cfg.hidden_size)
+        num_residual_writes = 2 * cfg.num_hidden_layers
+        block = model.blocks[0]
+        for weight, fan_in in [
+            (block.attention.out_linear.weight, cfg.hidden_size),
+            (block.mlp.w2.weight, expected_intermediate),
+        ]:
+            weight_np = weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
+            assert weight_np.shape[-1] == fan_in
+            expected_std = 1.0 / np.sqrt(fan_in * num_residual_writes)
+            np.testing.assert_allclose(weight_np.std(), expected_std, rtol=0.05)
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 

@@ -30,6 +30,7 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool clear_src = true,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -55,7 +56,7 @@ ALWI void custom_mm_block_init(
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(fp32_dest_acc_en);
 
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
-    UNPACK((_llk_unpack_AB_custom_mm_init_<transpose>(
+    UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
@@ -75,6 +76,7 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool clear_src = true,
     DataFormat F1,
     TensorShape S1>
 ALWI void custom_mm_block_init(
@@ -101,7 +103,7 @@ ALWI void custom_mm_block_init(
             get_operand_num_faces(in0_id),
             experimental::tile_stride_words(F1, S1),
             get_local_cb_interface(in0_id).fifo_page_size);
-        _llk_unpack_AB_custom_mm_init_<transpose>(
+        _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
             get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
     }));
 
@@ -123,6 +125,7 @@ template <
     bool transpose = false,
     bool split_acc = false,
     bool dense_packing = false,
+    bool clear_src = true,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -143,14 +146,20 @@ ALWI void custom_mm_block_init_short(
         "custom_mm_block: in1 tile shape must be [32, 32]");
 
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(DST_ACCUM_MODE);
-    UNPACK((_llk_unpack_AB_custom_mm_init_<transpose>(
+    UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
     MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
 
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false, DataFormat F1, TensorShape S1>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    bool clear_src = true,
+    DataFormat F1,
+    TensorShape S1>
 ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id, experimental::LLKOperand<F1, S1> /*in1*/, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -160,7 +169,7 @@ ALWI void custom_mm_block_init_short(
     constexpr auto in1_register_format = infer_unpack_dst_format(F1, DST_ACCUM_MODE);
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_unpack_AB_custom_mm_init_<transpose>(
+        _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
             get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
     }));
     MATH(({
@@ -174,7 +183,6 @@ ALWI void custom_mm_block_init_short(
 template <
     bool finalize = true,
     bool read_transposed = false,
-    bool clear_src = true,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -192,12 +200,12 @@ ALWI void custom_mm_block(
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
     constexpr std::uint32_t in0_tile_size = experimental::tile_stride_words(F0, S0);
     constexpr std::uint32_t in1_tile_size = experimental::tile_stride_words(F1, S1);
-    UNPACK((_llk_unpack_AB_custom_mm_<read_transposed, clear_src>(
+    UNPACK((_llk_unpack_AB_custom_mm_<read_transposed>(
         in1.l1_address, in0.l1_address, in1_tile_index, in0_tile_index, in1_tile_size, in0_tile_size, kt_dim, ct_dim)));
     MATH((_llk_math_custom_mm_<finalize>(S0.face_r_dim, dst_index, kt_dim, ct_dim)));
 }
 
-template <bool finalize = true, bool read_transposed = false, bool clear_src = true, DataFormat F1, TensorShape S1>
+template <bool finalize = true, bool read_transposed = false, DataFormat F1, TensorShape S1>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     experimental::LLKOperand<F1, S1> in1,
@@ -211,7 +219,7 @@ ALWI void custom_mm_block(
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
         const auto& in0 = get_local_cb_interface(in0_id);
-        _llk_unpack_AB_custom_mm_<read_transposed, clear_src>(
+        _llk_unpack_AB_custom_mm_<read_transposed>(
             in1.l1_address,
             in0.fifo_rd_ptr - 1,
             in1_tile_index,

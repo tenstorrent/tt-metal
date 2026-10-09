@@ -232,38 +232,49 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
-        sfpi::vFloat result = in0 * r;
+        sfpi::vFloat result;
         if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite.
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::is_finite(result)) {
-                // The residual cannot be formed for an infinite divisor either, and that case
-                // reaches here because the quotient is finite: r = 1/inf = 0, result = in0 * 0
-                // = 0, and result * in1 is 0 * inf, so the residual is NaN and the refinement
-                // destroys a correct zero. A NaN divisor is left to refine, which is how its
-                // NaN reaches the result.
-                // One integer compare: `&& !sfpi::is_inf(in1)` in the v_if does not compile.
-                v_and(
-                    sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) !=
-                    sfpi::as<sfpi::vInt>(sfpi::vFloat(std::numeric_limits<float>::infinity())));
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
+            // Refine signed mantissas with magnitudes in [1, 2), so neither the
+            // reciprocal nor the residual underflows, then restore the exponent.
+            sfpi::vFloat ma = sfpi::setexp(in0, 127);
+            sfpi::vFloat mb = sfpi::setexp(in1, 127);
+            // One Newton step suffices when the residual uses a single multiply-add.
+            sfpi::vFloat r = sfpu_reciprocal_iter<1 /*max_iter*/, false /*round_to_bf16*/, true /*normalized*/>(mb);
+            sfpi::vFloat q = ma * r;
+            // Wormhole SFPMAD has no subtract modifier: negate an operand first.
+            sfpi::vFloat residual = ma + q * (-mb);
+            q = q + residual * r;
+
+            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
+            // Split exponent restoration between two factors. Their product
+            // supplies hardware overflow/underflow handling, while power-of-two
+            // scaling is exact for normal results.
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
+            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+
+            // For exceptional inputs only the reciprocal's sign and zero/Inf
+            // classification matter. Inverting its exponent gives Inf for zero,
+            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
+            // XOR inverts the exponent but keeps the divisor's sign, avoiding a copysgn.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
+                sfpi::vInt inf_bits = 0x7f800000;
+                // Clear the mantissa first so XOR can reuse the scale register.
+                sfpi::vInt scale_bits = sfpi::as<sfpi::vInt>(sfpi::setman(in1, 0));
+                sfpi::vFloat scale = sfpi::as<sfpi::vFloat>(scale_bits ^ inf_bits);
+                result = in0 * scale;
+                // The zero scale would hide NaN divisors, so propagate them.
+                v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) > inf_bits);
+                result = in1;
             }
             v_endif;
-        }
-
-        if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
-            // div_no_nan is defined by this arm: a zero divisor of either sign yields zero,
-            // for a zero or NaN dividend too. Everything above it is the ordinary quotient,
-            // which is why the two share one kernel. The magnitude is tested because the
-            // SFPU compare does not read -0.0 as equal to 0.0.
-            v_if(sfpi::setsgn(in1, 0) == 0.0f) { result = 0.0f; }
-            v_endif;
         } else {
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
             v_if(in1 == 0) {
                 v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
                 v_else {
@@ -272,6 +283,15 @@ inline void calculate_sfpu_binary_div(
                 }
                 v_endif;
             }
+            v_endif;
+        }
+
+        if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
+            // div_no_nan is defined by this arm: a zero divisor of either sign yields zero, for a
+            // zero or NaN dividend too. Everything above it is the ordinary quotient, which is why
+            // the two share one kernel. The magnitude is tested because the SFPU compare does not
+            // read -0.0 as equal to 0.0.
+            v_if(sfpi::setsgn(in1, 0) == 0.0f) { result = 0.0f; }
             v_endif;
         }
 

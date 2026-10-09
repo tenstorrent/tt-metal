@@ -8,39 +8,38 @@ from torch import nn
 import ttnn
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
-# Sharded-norm geometry: 8 core columns split the width, up to 8 rows of cores split the rows.
-_GRID = 8
-# Shorter per-core blocks measured slower despite putting more cores on the norm.
-_MIN_BLOCK_H = 4
+# Block-shard geometry: core columns split the width, up to 8 rows of cores split the rows.
+_MAX_GRID_Y = 8
 # Larger per-core blocks fail to allocate the op's circular buffers in L1 (measured).
 _MAX_BLOCK_TILES = 84
 
 
 @functools.cache
 def _block_shard_geometry(rows, width):
-    """(block_h, block_w, grid_y) for block-sharding a rows x width norm over 8 core columns, or None
-    for the default path.
+    """(block_h, block_w, grid_y, grid_x) for block-sharding a rows x width norm, or None for the default path.
 
-    Interleaved ttnn.rms_norm parallelises over rows only, one core per tile row, so a device's 8,
-    16 or 32 tile rows run on as many cores whatever the width. Also splitting the width over 8 core
-    columns puts 16, 32 or 64 cores on the same rows.
+    Interleaved ttnn.rms_norm uses one core per tile row whatever the width; block sharding also splits the width
+    across core columns.
     """
     tile = ttnn.TILE_SIZE
-    if rows % tile or width % tile or (width // tile) % _GRID:
+    # Up to 512 rows, 12 columns with 2-row blocks measured 2.5x faster (256 rows: 25 -> 10 us). At 1024 rows
+    # 12 columns was slower in the model, so taller slabs keep 8 columns with 4-row blocks.
+    grid_x, min_block_h = (12, 2) if rows <= 512 else (8, 4)
+    if rows % tile or width % tile or (width // tile) % grid_x:
         return None
-    rows_t, block_w = rows // tile, width // tile // _GRID
-    block_h = max(_MIN_BLOCK_H, ttnn.core.divup(rows_t, _GRID))
+    rows_t, block_w = rows // tile, width // tile // grid_x
+    block_h = max(min_block_h, ttnn.core.divup(rows_t, _MAX_GRID_Y))
     if rows_t % block_h or block_h * block_w > _MAX_BLOCK_TILES:
         return None
-    return block_h, block_w, rows_t // block_h
+    return block_h, block_w, rows_t // block_h, grid_x
 
 
 @functools.cache
-def _block_sharded_memory_config(block_h, block_w, grid_y):
+def _block_sharded_memory_config(block_h, block_w, grid_y, grid_x):
     tile = ttnn.TILE_SIZE
     return ttnn.create_sharded_memory_config(
         shape=(block_h * tile, block_w * tile),
-        core_grid=ttnn.CoreGrid(x=_GRID, y=grid_y),
+        core_grid=ttnn.CoreGrid(x=grid_x, y=grid_y),
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -48,9 +47,9 @@ def _block_sharded_memory_config(block_h, block_w, grid_y):
 
 
 @functools.cache
-def _block_sharded_program_config(block_h, block_w, grid_y):
+def _block_sharded_program_config(block_h, block_w, grid_y, grid_x):
     return ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[_GRID, grid_y],
+        compute_with_storage_grid_size=[grid_x, grid_y],
         subblock_w=next(s for s in (3, 2, 1) if block_w % s == 0),
         block_h=block_h,
         block_w=block_w,
@@ -89,10 +88,10 @@ class RMSNorm(nn.Module):
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-        # Match the reference's FP32 prefill RMSNorm computation.
+        # FP32 accumulation as in the reference's FP32 norm; HiFi2 multiplies keep the 256k KV-cache PCC gate.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

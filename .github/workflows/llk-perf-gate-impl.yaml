@@ -23,9 +23,22 @@ on:
         required: false
         type: string
       baseline_pipeline:
-        description: "Baseline source: 'baseline' (pinned) or 'nightly' (rolling)"
+        description: "Baseline source: 'baseline' (pinned), 'nightly' (rolling) or 'merge_baseline'"
         required: false
         default: baseline
+        type: string
+      baseline_match_ref:
+        description: >-
+          Take the warehouse run measured at the newest LLK perf change at or before
+          merge-base(this ref, HEAD), where the merge gate uploads one. Blank takes
+          the newest run.
+        required: false
+        default: ""
+        type: string
+      baseline_wait_minutes:
+        description: "How long to wait for that run before taking an older one, marked stale"
+        required: false
+        default: "0"
         type: string
       speed_of_light:
         description: "Which mode's rows to take as the baseline"
@@ -80,6 +93,11 @@ on:
         description: "A point must also move more than this many cycles"
         required: false
         default: "30"
+        type: string
+      gate_name:
+        description: "Name of the gate in the Slack message"
+        required: false
+        default: LLK perf gate
         type: string
       pr_number:
         description: >-
@@ -147,14 +165,27 @@ jobs:
           BASELINE_PIPELINE: ${{ inputs.baseline_pipeline }}
           SPEED_OF_LIGHT: ${{ inputs.speed_of_light }}
           MEASURED_RUN: ${{ inputs.perf_run_id || github.run_id }}
+          MATCH_REF: ${{ inputs.baseline_match_ref }}
+          WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
+          COMMITS_ARG=()
+          if [ -n "$MATCH_REF" ]; then
+            # An empty list is passed on, so the reader skips instead of taking any run.
+            COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
+              || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
+            COMMITS=$(echo "$COMMITS" | paste -sd, -)
+            echo "Expected baseline commit: ${COMMITS%%,*}"
+            COMMITS_ARG=(--commits "$COMMITS")
+          fi
           python3 ${{ env.LLK_PATH }}/perf/baseline_from_warehouse.py \
             --arch "$ARCH" \
             --pipeline "$BASELINE_PIPELINE" \
             --speed-of-light "$SPEED_OF_LIGHT" \
             --exclude-workflow-run "$MEASURED_RUN" \
+            "${COMMITS_ARG[@]}" \
+            --wait-minutes "${WAIT_MINUTES:-0}" \
             --out baseline_perf/baseline.csv \
             --metadata baseline_metadata.json
 
@@ -277,9 +308,16 @@ jobs:
           THRESHOLD: ${{ inputs.threshold }}
           MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          BASELINE_LABEL: >-
+            ${{ inputs.baseline_artifact_pattern && 'branch point on main'
+                || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
+                || 'pinned baseline' }}
         run: |
           set +e
           BASELINE_SHA=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha') or 'unknown')")
+          if python3 -c "import json, sys; sys.exit(not json.load(open('baseline_metadata.json')).get('stale'))"; then
+            BASELINE_LABEL="${BASELINE_LABEL}, stale"
+          fi
 
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
             --current 'current_perf/**/*.csv' \
@@ -292,8 +330,8 @@ jobs:
             --test 'LLK perf' \
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
-            --baseline-label "${{ inputs.baseline_artifact_pattern && 'branch point on main' || 'pinned baseline' }}" \
-            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.ref_name }}"
+            --baseline-label "$BASELINE_LABEL" \
+            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.event_name == 'merge_group' && 'merge queue' || github.ref_name }}"
           EXIT_CODE=$?
           echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           if [ -f perf_gate_report.verdict.json ]; then
@@ -306,9 +344,9 @@ jobs:
 
       - name: Comment on PR
         if: >-
-          always() && github.event_name == 'pull_request'
+          ${{ !cancelled() && github.event_name == 'pull_request'
           && steps.measured.outputs.complete == 'true'
-          && hashFiles('perf_gate_report.md') != ''
+          && hashFiles('perf_gate_report.md') != '' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ARCH: ${{ inputs.arch }}
@@ -346,7 +384,8 @@ jobs:
 
       - name: Build the Slack payload
         id: slack
-        if: always()
+        # Not after a cancel: a person or a newer push stopped the run on purpose.
+        if: ${{ !cancelled() }}
         env:
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '?' }}
@@ -367,11 +406,25 @@ jobs:
           MODE: >-
             ${{ inputs.speed_of_light == 'true'
                 && 'speed of light' || 'non speed-of-light' }}
+          GATE_NAME: ${{ inputs.gate_name }}
+          TRIGGER: >-
+            ${{ github.event_name == 'schedule' && 'nightly'
+                || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
+                || github.event_name }}
+          WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -z "$SLACK_CHANNEL_ID" ]; then
             echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
             echo "should_post=false" >> $GITHUB_OUTPUT
             exit 0
+          fi
+
+          if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+            PR_TITLE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .title) || PR_TITLE=""
+            PR_AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .user.login) || PR_AUTHOR=""
           fi
 
           BASELINE_SHA=$(python3 - <<'PYTHON'
@@ -381,6 +434,22 @@ jobs:
           path = "baseline_metadata.json"
           data = json.load(open(path)) if os.path.exists(path) else {}
           print(data.get("commit_sha", ""))
+          PYTHON
+          )
+
+          NOTE=$(python3 - <<'PYTHON'
+          import json
+          import os
+
+          path = "baseline_metadata.json"
+          data = json.load(open(path)) if os.path.exists(path) else {}
+          if data.get("stale"):
+              wait = float(os.environ.get("WAIT_MINUTES") or 0)
+              print(
+                  f"Stale baseline: none at {data['expected_commit'][:11]} "
+                  f"{f'after {wait:g} min' if wait else 'yet'}, so this compares "
+                  f"with {data.get('commit_sha', '?')[:11]} ({data.get('run_ts', '?')})."
+              )
           PYTHON
           )
 
@@ -402,13 +471,16 @@ jobs:
             --baseline-sha "$BASELINE_SHA" \
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
+            --gate-name "$GATE_NAME" \
+            --trigger "$TRIGGER" \
+            --note "$NOTE" \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> $GITHUB_OUTPUT
 
       - name: Notify Slack
-        if: always() && steps.slack.outputs.should_post == 'true'
+        if: ${{ !cancelled() && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
         run: |

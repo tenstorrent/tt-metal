@@ -443,7 +443,7 @@ public:
     }
 
     // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.
-    std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
+    std::string CompileKernel(const std::string& kernel_path, ttsl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
@@ -473,7 +473,7 @@ public:
     void RunProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
@@ -528,7 +528,7 @@ private:
 
     // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
-    static void SetSingleDmPrintArgs(Program& program, stl::Span<const uint32_t> runtime_args) {
+    static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
             return;
         }

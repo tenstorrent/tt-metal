@@ -69,7 +69,6 @@ void kernel_main() {
     // owns writer_cur_pos alone and can always pop it.
     constexpr auto dfb_cur_pos = dfb::cur_pos;
 #endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
 #ifdef SLIDING_WINDOW
     constexpr auto dfb_sliding_window_mask_in = dfb::sliding_window_mask_in;
 #endif
@@ -231,7 +230,8 @@ void kernel_main() {
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-    dataflow_kernel_lib::prepare_zero_tile<dfb_zero_in>();
+    // Zero tile goes behind the scaler in the same DFB (entry 1); see the factory's identity_scale note.
+    dataflow_kernel_lib::prepare_zero_tile<dfb_identity_scale_in>();
 
     // Generate sliding window mask only if we have local data and need it
 #ifdef SLIDING_WINDOW

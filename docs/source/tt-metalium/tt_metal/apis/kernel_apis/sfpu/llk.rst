@@ -483,10 +483,21 @@ Float comparisons have the following properties:
 
 These features are determined by the hardware.
 
-Note: With the exception of signed integral compares on Quasar, there
-is currently a compiler defect regarding signed and unsigned integer
-comparisons, where ordering comparisons are only correct when the two
-operands are within 2^31 of each other.
+Due to hardware limitations, ordering integral compares (both signed
+and unsigned) are not correct over the full range -- except on Quasar
+for signed compares. This is a compiler defect that is yet to be
+fixed. However, when values are less than 2^31 apart, the
+ordering compares are (a) correct and (b) can be cheaper than the
+full sequence, even on Quasar.  To that and the ``sfpi::nearby``
+wrapper function is provided and may be used to wrap all, or part, of
+comparison sequences. The compiler does not have vector value range
+information to deduce this itself.
+
+.. code-block:: c++
+
+    vInt a = exexp (f, ExponentMode::Biased);
+    v_if (nearby (a < 255)) {
+    } v_endif;
 
 Scalar Values
 ^^^^^^^^^^^^^
@@ -584,7 +595,8 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
 which for the vector case can be slightly faster at the expense of not
-dealing with exponent overflow or underflow.
+dealing with exponent overflow or underflow. Values of ``scale``
+outside of [-127,127] produce unspecified results.
 
 .. code-block:: c++
 
@@ -770,7 +782,9 @@ routine.  It may be ignored, with the loss of consistency checking, if
 one uses the cookieless evaluator.
 
 Note that the 8- and 16-bit formats use a bespoke representation, and
-the 8 bit format in particular has a range of (-2.0, +2.0).
+the 8 bit format in particular has a range of (-2.0, +2.0). Also, as
+its zero representation coincides with a small negative value, small
+values below that threshold are flushed to zero to avoid a discontinuity.
 
 On Quasar, use of these routines conflicts with use of the ``vConst``
 constants.
@@ -936,8 +950,6 @@ vector to memory will result in an error similar to the following:
     tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
       792 |     v = __builtin_rvtt_sfpassign_lv (v, in);
           |       ^
-    /tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
-
 
 Function Calls
 --------------

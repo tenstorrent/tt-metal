@@ -215,7 +215,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     auto grid_size =
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
@@ -404,13 +404,13 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_0_endy_1 = tt::tt_metal::CoreCoord{0, grid_size.y - 2};
     auto core_endx_1_0 = tt::tt_metal::CoreCoord{grid_size.x - 2, 0};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores_no_fabric =
-        transpose_core_grid ? CoreRange(core_0_1, core_endx_endy_2) : CoreRange(core_1_0, core_endx_2_endy);
-    auto in0_receiver_cores_fabric =
-        transpose_core_grid ? CoreRange(core_0_endy_1, core_endx_endy) : CoreRange(core_endx_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
-    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
+    auto in0_sender_cores = tt::tt_metal::CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_receiver_cores_no_fabric = transpose_core_grid ? tt::tt_metal::CoreRange(core_0_1, core_endx_endy_2)
+                                                            : tt::tt_metal::CoreRange(core_1_0, core_endx_2_endy);
+    auto in0_receiver_cores_fabric = transpose_core_grid ? tt::tt_metal::CoreRange(core_0_endy_1, core_endx_endy)
+                                                         : tt::tt_metal::CoreRange(core_endx_1_0, core_endx_endy);
+    auto in1_sender_cores = tt::tt_metal::CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
+    auto in1_receiver_cores = tt::tt_metal::CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -584,7 +584,7 @@ all_gather_minimal_matmul_async_factory_helper(
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
-    std::vector<CoreRange> mux_core_ranges;
+    std::vector<tt::tt_metal::CoreRange> mux_core_ranges;
     mux_core_ranges.reserve(num_mux_cores);
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
@@ -593,7 +593,7 @@ all_gather_minimal_matmul_async_factory_helper(
             mux_core_ranges.emplace_back(in0_mux_logical(link, dir));
         }
     }
-    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
+    tt::tt_metal::CoreRangeSet mux_core_range_set = tt::tt_metal::CoreRangeSet(mux_core_ranges);
 
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -756,7 +756,7 @@ all_gather_minimal_matmul_async_factory_helper(
             fsdp_unicast_forward_args[1] = fsdp_ring_size - 1;  // distance_in_hops = N-1
         }
 
-        std::vector<CoreRange> fsdp_mux_core_ranges;
+        std::vector<tt::tt_metal::CoreRange> fsdp_mux_core_ranges;
         fsdp_mux_core_ranges.reserve(num_mux_cores);
         for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
             uint32_t dir = mux_id % 2;
@@ -771,7 +771,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical(link, dir));
             }
         }
-        CoreRangeSet fsdp_mux_core_range_set = CoreRangeSet(fsdp_mux_core_ranges);
+        tt::tt_metal::CoreRangeSet fsdp_mux_core_range_set = tt::tt_metal::CoreRangeSet(fsdp_mux_core_ranges);
 
         fsdp_mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
             num_full_size_channels,

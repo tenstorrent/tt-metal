@@ -647,12 +647,7 @@ Tensor div_no_nan(
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    // float32 used to take reciprocal + multiply here instead of the SFPU divide,
-    // to keep div(a, +-inf) from coming back NaN. That was a property of the divide
-    // kernel's residual refinement rather than of this op, and it is fixed, so both
-    // dtypes now reach the same kernel. The zero-divisor arm is the only thing that
-    // separates div_no_nan from divide, and it lives inside that kernel rather than
-    // in an eqz and a where over the whole tensor.
+    // The divide kernel with its zero-divisor arm, in place of a divide, an eqz and a where.
     return ttnn::detail::invoke_binary_ng(
         input_a,
         input_b,
@@ -1189,7 +1184,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -1200,7 +1196,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        /*fast_and_approximate_mode=*/std::nullopt,
+        fast_and_approximate_mode.value_or(false),
         sub_core_grids,
         sub_device_id);
 }
@@ -1215,7 +1211,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -1247,7 +1244,7 @@ Tensor bias_gelu(
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
-        true,
+        fast_and_approximate_mode.value_or(false),
         memory_config,
         gelu_output,
         resolved_sub_core_grids);

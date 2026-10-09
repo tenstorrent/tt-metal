@@ -39,7 +39,6 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_id_k = 1;  // cb for K heads (directly from reader)
 #endif
-    const DataFormat data_format = get_dataformat(cb_id_qv);
     const auto sq = TensorAccessor(q_args, q_tensor_addr);
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
     const auto sv = TensorAccessor(v_args, v_tensor_addr);

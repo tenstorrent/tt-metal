@@ -5,7 +5,7 @@
 
 import ttnn
 
-from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
+from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
 
 from .weights import load_attention_weights
 from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
@@ -24,6 +24,9 @@ from .ring_prefill import (
     write_chunk_to_global_ring_cache,
     write_chunk_to_sliding_ring_cache,
 )
+
+# One buffer pair for each of the five sliding layers between global layers.
+NUM_SWA_HALO_BUFFER_PAIRS = 5
 
 
 class Gemma4AttentionConfig:
@@ -284,6 +287,7 @@ class Gemma4Attention:
                 max_seq_len=self.ring_max_seq_len,
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
+                gather_buffer_key=self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS,
                 sliding_window_size=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
@@ -302,6 +306,6 @@ class Gemma4Attention:
             tt_out, self.weights.o_proj, program_config=program_config, compute_kernel_config=compute_kernel_config
         )
         tt_out.deallocate(True)
-        tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
+        tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 
         return tt_out

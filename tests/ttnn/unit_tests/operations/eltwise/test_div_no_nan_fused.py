@@ -14,19 +14,45 @@ import ttnn
 
 ZERO_DIVISOR = [1.0, -1.0, 0.0, -0.0, 7.0, -7.0, 1e30, 1e-30]
 
+# float32 subnormals. They are not zero, so they are not masked: the divide flushes them, as
+# test_div_ops.py::test_div_fp32_special_values[div_no_nan] expects.
+SUBNORMAL = [1e-40, -1e-40, 2.0**-149, -(2.0**-149)]
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("a", ZERO_DIVISOR)
-def test_div_no_nan_zero_divisor(device, dtype, a):
+
+def _run(device, dtype, a, b):
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     ta = torch.full((1, 1, 32, 32), a, dtype=torch_dtype)
-    tb = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
+    tb = torch.full((1, 1, 32, 32), b, dtype=torch_dtype)
 
     ia = ttnn.from_torch(ta, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ib = ttnn.from_torch(tb, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    got = ttnn.to_torch(ttnn.div_no_nan(ia, ib))
+    return ta, tb, ttnn.to_torch(ttnn.div_no_nan(ia, ib))
 
-    assert torch.equal(got, torch.zeros_like(got)), f"div_no_nan({a}, 0) returned {got.flatten()[0]}"
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("b", [0.0, -0.0])
+@pytest.mark.parametrize("a", ZERO_DIVISOR)
+def test_div_no_nan_zero_divisor(device, dtype, a, b):
+    _, _, got = _run(device, dtype, a, b)
+
+    assert torch.equal(got, torch.zeros_like(got)), f"div_no_nan({a}, {b}) returned {got.flatten()[0]}"
+    assert not torch.signbit(got).any(), f"div_no_nan({a}, {b}) returned -0"
+
+
+@pytest.mark.parametrize("b", SUBNORMAL)
+@pytest.mark.parametrize("a", ZERO_DIVISOR + SUBNORMAL)
+def test_div_no_nan_fp32_subnormal_divisor(device, a, b):
+    ta, tb, got = _run(device, ttnn.float32, a, b)
+
+    tiny = torch.finfo(torch.float32).tiny
+    flush = lambda x: torch.where(x.abs() < tiny, torch.copysign(torch.zeros_like(x), x), x)
+    expected = flush(ta) / flush(tb)
+    expected = torch.where(expected == 0, 0.0, expected)
+
+    assert torch.equal(torch.isnan(got), torch.isnan(expected)), f"div_no_nan({a}, {b}) returned {got.flatten()[0]}"
+    finite = ~torch.isnan(expected)
+    assert torch.equal(got[finite], expected[finite]), f"div_no_nan({a}, {b}) returned {got.flatten()[0]}"
+    assert torch.equal(torch.signbit(got[finite]), torch.signbit(expected[finite]))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
