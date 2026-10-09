@@ -8,11 +8,13 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, asdict
 import csv
+import gc
 import inspect
 import json
 import logging
 import math
 import random
+import sys
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, List, Optional, Tuple
@@ -27,6 +29,7 @@ from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_t
 from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
+from .distributed import init_distributed_training, is_rollout_rank
 from .grpo_ttml_model import setup_ttml_model
 
 if TYPE_CHECKING:
@@ -160,21 +163,49 @@ VALID_ROLLOUT_COMBINATIONS = (("ttml", "in_process"), ("ttt", "remote_sync"))
 def build_rollout_sampler(
     source: str,
     *,
-    model: Any,
-    tokenizer: Any,
     max_completion_length: int,
     temperature: float,
     completions_per_prompt: int,
+    model: Any = None,
+    tokenizer: Any = None,
+    model_source: Optional[str] = None,
+    mesh_device: Any = None,
+    remote_rollout: Optional[RemoteRolloutConfig] = None,
 ) -> RolloutSampler:
     """Build the :class:`RolloutSampler` named by ``source``.
 
     ``"ttml"`` builds a :class:`TTMLRolloutSampler` that generates with
     ``model`` and ``tokenizer`` (the trainer's own) on the already-open device.
+    ``"ttt"`` builds a :class:`TTTRolloutSampler` for the Llama ``model_source``
+    on the already-open ``mesh_device``, configured by ``remote_rollout``.
     """
     if source == "ttml":
         from .ttml_rollout_sampler import TTMLRolloutSampler
 
         return TTMLRolloutSampler(model, tokenizer, max_completion_length, temperature, completions_per_prompt)
+    if source == "ttt":
+        from .remote_rollout.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+        from .remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
+
+        if model_source is None or mesh_device is None or remote_rollout is None:
+            raise ValueError("rollout_source='ttt' needs model_source, mesh_device and remote_rollout")
+        stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
+        return TTTRolloutSampler(
+            mesh_device=mesh_device,
+            model_source=model_source,
+            max_batch_size=remote_rollout.max_batch_size,
+            max_seq_len=remote_rollout.max_seq_len,
+            instruct=True,
+            optimizations=bf16_attn_bfp8_mlp_optimizations,
+            stop_token_ids=stop_token_ids,
+            pad_token_id=pad_token_id,
+            completions_per_prompt=completions_per_prompt,
+            max_completion_length=max_completion_length,
+            temperature=temperature,
+            top_k=remote_rollout.top_k,
+            top_p=remote_rollout.top_p,
+            seed=remote_rollout.seed,
+        )
     raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
 
 
@@ -1042,6 +1073,23 @@ def _build_lr_factor_fn(
     return factor
 
 
+def _validate_remote_inputs(config: GRPOConfig, transformer_config: Any, device_config: Any, model_source: str) -> None:
+    if config.rollout_source == "ttt" and transformer_config.model_type != "llama":
+        raise ValueError(
+            f"GRPOTrainer: rollout_source='ttt' supports Llama models only, got model_type={transformer_config.model_type!r}."
+        )
+    if config.rollout_mode != "remote_sync":
+        return
+    if getattr(device_config, "enable_fsdp", False):
+        raise ValueError(
+            "GRPOTrainer: rollout_mode='remote_sync' does not support FSDP: the weight push needs replicated parameters."
+        )
+    if os.path.exists(model_source):
+        raise ValueError(
+            f"GRPOTrainer: rollout_mode='remote_sync' needs a HuggingFace Hub model id, got local path {model_source!r}."
+        )
+
+
 class GRPOTrainer:
     def __init__(
         self,
@@ -1068,18 +1116,25 @@ class GRPOTrainer:
 
         The trainer opens the device and builds the policy model and tokenizer
         (``self.model`` / ``self.tokenizer``) with
-        :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`,
-        then builds its :class:`RolloutSampler` from ``config.rollout_source``
-        with that model and tokenizer, exposed as ``self.rollout_sampler``. It
-        also builds the optimizer, LR scheduler and the
+        :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`.
+        It also builds the optimizer, LR scheduler and the
         :class:`RolloutBatchSource` over the tokenized prompts
-        (``self.rollout_batch_source``), so ``train()`` only runs the loop. The trainer runs its own forward pass
-        with gradients on the model and never changes its run mode.
+        (``self.rollout_batch_source``), so ``train()`` only runs the loop. In
+        ``in_process`` mode the source generates with ``self.rollout_sampler``,
+        built from ``config.rollout_source`` with the trainer's model and
+        tokenizer. The trainer runs its own forward pass with gradients on the
+        model and never changes its run mode.
+
+        In ``remote_sync`` mode the same script runs on both tt-run ranks. Rank
+        1 only opens the rollout mesh and builds its :class:`RolloutSampler`
+        and RPC server; it never calls ``dataset_func``, and ``train()``
+        serves rollouts there.
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
         if not callable(dataset_func):
             raise TypeError("GRPOTrainer: 'dataset_func' must be a zero-argument callable returning the dataset.")
+        _validate_remote_inputs(config, transformer_config, device_config, model_source)
 
         self._init_rewards(reward_func, reward_funcs)
 
@@ -1089,17 +1144,9 @@ class GRPOTrainer:
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
 
-        self.model: Any
-        self.tokenizer: Any
-        self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
-        self.rollout_sampler: RolloutSampler = build_rollout_sampler(
-            config.rollout_source,
-            model=self.model,
-            tokenizer=self.tokenizer,
-            max_completion_length=config.max_completion_length,
-            temperature=config.temperature,
-            completions_per_prompt=config.num_generations,
-        )
+        self.model: Any = None
+        self.tokenizer: Any = None
+        self.rollout_sampler: Optional[RolloutSampler] = None
 
         # Per-step accumulator rebuilt every optimizer step by
         # ``_reset_step_metrics``. Callbacks can inject additional keys here
@@ -1132,20 +1179,66 @@ class GRPOTrainer:
         self._prompts_per_microbatch: int = 0
         self._total_optimizer_steps: int = 0
         self.rollout_batch_source: Optional[RolloutBatchSource] = None
+        self._rollout_mesh: Any = None
+        self._rollout_server: Any = None
+
+        init_distributed_training(config)
+        if is_rollout_rank(config):
+            self._init_remote_rollout()
+        else:
+            self._build_policy(transformer_config, device_config, dataset_func)
+
+    def _build_policy(self, transformer_config: Any, device_config: Any, dataset_func: Callable[[], Any]) -> None:
+        cfg = self.config
+        if cfg.rollout_mode != "in_process":
+            ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
+        self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+        if cfg.rollout_mode == "in_process":
+            self.rollout_sampler = build_rollout_sampler(
+                cfg.rollout_source,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                max_completion_length=cfg.max_completion_length,
+                temperature=cfg.temperature,
+                completions_per_prompt=cfg.num_generations,
+            )
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
         # get a chance to populate ``self.metrics`` before the monitor writes
         # a row.
-        if not self.config.disable_default_monitor:
+        if not cfg.disable_default_monitor:
             # Detect the framework GRPOMonitor (or a subclass) by isinstance, and
             # a legacy local class also named ``GRPOMonitor`` by class name — pre-
             # refactor forks used to define their own monitor with that name.
             # Either way we skip auto-appending to avoid duplicate CSV writes.
             if not any(isinstance(cb, GRPOMonitor) or type(cb).__name__ == "GRPOMonitor" for cb in self.callbacks):
-                self.callbacks.append(GRPOMonitor(self.config))
+                self.callbacks.append(GRPOMonitor(cfg))
 
         self._setup(dataset_func())
+
+    def _init_remote_rollout(self) -> None:
+        from .remote_rollout.mpi_rollout import MPIRolloutServer
+        from .remote_rollout.weight_bridge import TTML_RANK, HostWeightBridge
+
+        cfg = self.config
+        rr = cfg.remote_rollout
+        self._rollout_mesh = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*rr.mesh_shape), offset=ttnn.MeshCoordinate(0, 0)
+        )
+        self.rollout_sampler = build_rollout_sampler(
+            cfg.rollout_source,
+            model_source=self.model_source,
+            mesh_device=self._rollout_mesh,
+            remote_rollout=rr,
+            max_completion_length=cfg.max_completion_length,
+            temperature=cfg.temperature,
+            completions_per_prompt=cfg.num_generations,
+        )
+        bridge = HostWeightBridge.init_receiver(
+            mesh=self._rollout_mesh, peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes
+        )
+        self._rollout_server = MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=self.rollout_sampler)
 
     def _init_rewards(
         self,
@@ -1408,6 +1501,7 @@ class GRPOTrainer:
         self.rollout_batch_source = build_rollout_batch_source(
             grpo_cfg,
             sampler=self.rollout_sampler,
+            mesh_device=device,
             prompts=prompts,
             extra_columns=extra_columns,
             batch_prompts=generation_batch_prompts,
@@ -1688,7 +1782,20 @@ class GRPOTrainer:
                 "weight versions only increase. Build a new GRPOTrainer to train again."
             )
         self._train_called = True
-        self._train_policy()
+        if is_rollout_rank(self.config):
+            self._serve_rollouts()
+        else:
+            self._train_policy()
+
+    def _serve_rollouts(self) -> None:
+        try:
+            self._rollout_server.serve_forever()
+        finally:
+            self._rollout_server = None
+            self.rollout_sampler = None
+            gc.collect()
+            ttnn.close_mesh_device(self._rollout_mesh)
+            self._rollout_mesh = None
 
     def _train_policy(self) -> None:
         for cb in self.callbacks:
