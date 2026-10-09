@@ -31,11 +31,37 @@ struct DeviceBinaryStatus {
     status @1 :BinaryStatus;
 }
 
+struct LogicalCoreRange {
+    start @0 :LogicalCoord;
+    end @1 :LogicalCoord;
+}
+
+enum SemaphoreCoreType {
+    tensix @0;
+    eth @1;
+}
+
+struct SemaphoreData {
+    id @0 :UInt32;
+    coreType @1 :SemaphoreCoreType;
+    initialValue @2 :UInt32;
+    offset @3 :UInt32;  # bytes from kernel_config_base + sem_offset
+    coreRanges @4 :List(LogicalCoreRange);
+}
+
 struct ProgramData {
     programId @0 :UInt64;
     compiled @1 :Bool;
     binaryStatusPerDevice @2 :List(DeviceBinaryStatus);
     kernels @3 :List(KernelData);
+    semaphores @4 :List(SemaphoreData);
+}
+
+struct GlobalSemaphoreRecord {
+    address @0 :UInt64;
+    coreRanges @1 :List(LogicalCoreRange);
+    chipIds @2 :List(UInt32);  # metal device ids this rank owns
+    resetValue @3 :Int64;  # last value the host wrote (initial value or reset), -1 if none
 }
 
 struct MeshDeviceData {
@@ -264,4 +290,7 @@ interface Inspector {
 
     # Get MeshSockets created during this run (config buffer address + graph edges).
     getSockets @12 () -> (sockets :List(MeshSocketRecord));
+
+    # Get GlobalSemaphores currently alive.
+    getGlobalSemaphores @13 () -> (semaphores :List(GlobalSemaphoreRecord));
 }

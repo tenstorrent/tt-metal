@@ -36,7 +36,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     routed_expert_weight_memory_config,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
@@ -297,7 +296,7 @@ SINGLE_EXPERT_MODELS = [
 # CI stays green while linked issues are worked on. Applied strict, only on blackhole, by
 # _xfail_blackhole (these cases pass on other arches, where an unconditional strict xfail would turn
 # CI red on XPASS). Each key is a space-separated set of id tokens that must ALL appear in the param
-# id, so a case can be scoped by any combination of layout ("x_tile"/"x_rm") and model/isl id.
+# id, so a case can be scoped by any combination of layout ("x_rm") and model/isl id.
 # Empty: the program factory now snaps in0_block_w_gu to a divisor of K_gate_tiles on every path
 # (not just when the L1 guard fires), so the prior gptoss_120b TILE-layout K_gate failure is fixed.
 _XFAIL = {}
@@ -352,9 +351,8 @@ def _isl_params(active_sweep, only_models=None):
     return params
 
 
-@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 def test_single_routed_expert_functional(
     device,
     allocated_tokens: int,
@@ -373,12 +371,11 @@ def test_single_routed_expert_functional(
     )
 
 
-@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 # DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
 # of one per tile. Both layouts are swept so the interleaved default stays covered.
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
@@ -410,9 +407,8 @@ def test_single_routed_expert_isl_sweep(
 _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 
 
-@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Kimi K3 routed expert: SiTU-GLU activation at the post-projection dims.
@@ -478,6 +474,7 @@ def test_single_routed_expert_k3_saturated(
         _K3_SATURATION_TOKENS,
         KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
         activation=ttnn.RoutedExpertActivation.SituGlu,
         weight_scale=weight_scale,
         weights_dtype=weights_dtype,
@@ -520,9 +517,9 @@ _DSV4_CLAMP_TOKENS = 512
 
 
 @pytest.mark.parametrize("config, weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _DSV4_CLAMP_CASES)
-# Both layouts: row-major is what production feeds the routed expert, and it tilizes inside the
+# Row-major only: it is what production feeds the routed expert, and it tilizes inside the
 # per-chunk loop, between BINARY_ACT_INIT() and the BINARY_ACT_TILE calls.
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 @pytest.mark.skipif(not is_blackhole(), reason="clamped SiLU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_dsv4_clamped(
     device,

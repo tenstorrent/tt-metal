@@ -11,7 +11,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: LLK ttsim regression
-  cmd: cd tt_metal/tt-llk/tests && ./run_ttsim_regression.sh -n 4
+  cmd: cd tt_metal/tt-llk/tests && ./run_ttsim_regression.sh -n 8
   skus:
     sim_wh_n150_xl:
       timeout: 75

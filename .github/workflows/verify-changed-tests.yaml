@@ -195,6 +195,7 @@ jobs:
     with:
       build-inplace-wheel: true
       tracy: false
+      skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
 
   build-profiler:
     name: Build (profiler)
@@ -208,6 +209,7 @@ jobs:
     with:
       build-inplace-wheel: true
       tracy: true
+      skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
 
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})
@@ -280,7 +282,7 @@ jobs:
               || ((startsWith(matrix.leg.sku, 'bh_') || startsWith(matrix.leg.sku, 'sim_bh')) && 'blackhole')
               || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
+        TT_LOGGER_LEVEL: info
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
@@ -372,6 +374,13 @@ jobs:
           shopt -s nullglob
           pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
           apt install -y "${pkgs[@]}"
+
+      - name: Set up tt-train
+        if: ${{ contains(matrix.leg.cmd, 'tt-train') && !matrix.leg.gate_packages }}
+        uses: ./docker-job/.github/actions/setup-tt-train
+        timeout-minutes: 10
+        with:
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: ⬇️ Setup TTSim
         if: ${{ startsWith(matrix.leg.sku, 'sim_') }}

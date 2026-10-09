@@ -5,11 +5,9 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
-#include <utility>
 #include <unordered_set>
 
 #include <tt-metalium/buffer.hpp>
@@ -140,7 +138,6 @@ public:
 
 private:
     void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec);
-    void validate_total_size(uint32_t total_size);
 
     uint32_t total_size_ = 0;
     std::optional<uint32_t> globally_allocated_address_ = std::nullopt;

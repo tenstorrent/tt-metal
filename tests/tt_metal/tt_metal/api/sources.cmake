@@ -36,6 +36,7 @@ set(UNIT_TESTS_API_SOURCES
     test_bit_utils.cpp
     test_math.cpp
     test_filesystem_utils.cpp
+    test_simulator_target_devices.cpp
     test_tt_memory.cpp
     test_graph_tracking.cpp
     test_cb_statistics.cpp
@@ -90,15 +91,6 @@ set(UNIT_TESTS_API_SOURCES
 
 # Metal 2.0 Host API tests. Their source list lives in metal2_host_api/sources.cmake.
 include(${CMAKE_CURRENT_LIST_DIR}/metal2_host_api/sources.cmake)
-
-# tt-emule ASAN sanitizer tests. Their source list is emule-team-owned (see
-# CODEOWNERS for tests/tt_metal/tt_metal/api/emule/) and lives in that dir's
-# sources.cmake, so adding a new emule api test needs only an emule review — not an
-# infra review of this shared file. They build/pass only under the emule backend, so
-# they're gated here and stay out of the non-emule unit_tests_api binary.
-if(TT_METAL_USE_EMULE)
-    include(${CMAKE_CURRENT_LIST_DIR}/emule/sources.cmake)
-endif()
 
 # Runtime tensor tests build into their own executable (unit_tests_tensor),
 # mirroring unit_tests_ttnn_tensor, so they stay out of the tt-metalium smoke binary.

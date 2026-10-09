@@ -4,6 +4,7 @@
 
 #include "dispatch.hpp"
 
+#include <algorithm>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -49,7 +50,6 @@ DispatchKernel::DispatchKernel(
     dispatch_core_manager& dispatch_core_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     FDKernel(
         node_id,
@@ -61,7 +61,6 @@ DispatchKernel::DispatchKernel(
         dispatch_core_manager,
         get_control_plane,
         get_dispatch_query_manager,
-        get_max_num_eth_cores,
         get_reads_dispatch_cores) {
     TT_FATAL(
         noc_selection.downstream_noc == tt_metal::k_dispatch_downstream_noc,
@@ -116,6 +115,11 @@ void DispatchKernel::GenerateStaticConfigs() {
     static_config_.dispatch_telemetry_control_addr = my_dispatch_constants.get_device_command_queue_addr(
         CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, cq_id_);
 
+    // Must match the host's get_packed_write_max_unicast_sub_cmds(): the worker fan-out, but never below
+    // one sub-command per CQ so event records can reach every dispatch core on a worker grid.
+    const uint32_t packed_write_max_unicast_sub_cmds = std::max<uint32_t>(
+        device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y,
+        device_->num_hw_cqs());
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
@@ -143,18 +147,12 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.prefetch_h_max_credits = 0;  // unused prefetch_downstream_buffer_pages
 
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
-        static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
             descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-        static_config_.unicast_go_signal_addr =
-            (descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? descriptor_.hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
-                : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
         static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
@@ -195,13 +193,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = 0;  // Unused
 
         static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = 0;       // Unused
         static_config_.max_num_worker_sems = 1;                 // Used for array sizing, set to 1 even if unused
-        static_config_.max_num_go_signal_noc_data_entries = 1;  // Used for array sizing, sset to 1 even if unused
         static_config_.mcast_go_signal_addr = 0;                // Unused
-        static_config_.unicast_go_signal_addr = 0;              // Unused
         static_config_.distributed_dispatcher = 0;              // Unused
         static_config_.first_stream_used = 0;                   // Unused
         static_config_.completion_counter_offset = 0;           // Unused
@@ -229,18 +224,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
 
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
-        static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
             descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-        static_config_.unicast_go_signal_addr =
-            (descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? descriptor_.hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
-                : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
         static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
@@ -452,18 +441,6 @@ void DispatchKernel::GenerateDependentConfigs() {
 }
 
 void DispatchKernel::CreateKernel() {
-    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
-    // number of ethernet cores across devices (to essentially fake uniformity). This value is the
-    // max number of ethernet cores across all chip in the cluster.
-    // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
-    // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
-    // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = get_max_num_eth_cores();
-    uint32_t num_physical_active_eth_cores =
-        get_control_plane_ref().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
-    bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
-
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
     auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
@@ -524,10 +501,7 @@ void DispatchKernel::CreateKernel() {
         {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(static_config_.packed_write_max_unicast_sub_cmds.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
-        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
-         std::to_string(static_config_.max_num_go_signal_noc_data_entries.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
-        {"UNICAST_GO_SIGNAL_ADDR", std::to_string(static_config_.unicast_go_signal_addr.value())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"HOST_COMPLETION_Q_WR_PTR", std::to_string(static_config_.host_completion_q_wr_ptr.value())},
         {"DEV_COMPLETION_Q_WR_PTR", std::to_string(static_config_.dev_completion_q_wr_ptr.value())},
@@ -535,9 +509,6 @@ void DispatchKernel::CreateKernel() {
         {"DEV_DISPATCH_PROGRESS_PTR", std::to_string(static_config_.dev_dispatch_progress_ptr.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
-        {"VIRTUALIZE_UNICAST_CORES", std::to_string(virtualize_num_eth_cores)},
-        {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(num_virtual_active_eth_cores)},
-        {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(num_physical_active_eth_cores)},
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},

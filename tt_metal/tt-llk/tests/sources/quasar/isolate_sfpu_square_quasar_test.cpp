@@ -35,6 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
 #include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
 
@@ -46,25 +47,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const Operand& buffer_A      = params.buffer_A;
+    const Operand& buffer_Res    = params.buffer_Res;
+#endif
 
     llk_sfpu_srcs_unary_init(
-        L1_ADDRESS(params.buffer_A[0]),
+        L1_ADDRESS(buffer_A[0]),
         static_cast<DataFormat>(formats.unpack_S_src),
         static_cast<DataFormat>(formats.unpack_S_dst),
-        L1_ADDRESS(params.buffer_Res[0]),
+        L1_ADDRESS(buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
-    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
-    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
-
-    llk_sfpu_srcs_unary(
-        params.TILE_CNT,
-        static_cast<DataFormat>(formats.unpack_S_dst),
-        [load_sfpmem, store_sfpmem](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
-        { calculate_square(load_base_addr, store_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem); });
+    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
+    LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
+    dispatch_sfpu_srcs_format(
+        srcs_format,
+        [&](auto layout)
+        {
+            using Layout = decltype(layout);
+            llk_sfpu_srcs_unary(TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
+        });
 
     wait_sfpu_idle();
     wait_unpack_idle();

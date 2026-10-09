@@ -50,7 +50,6 @@
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/types.hpp>
 
-#include <limits>
 #include <optional>
 #include <string>
 
@@ -308,9 +307,9 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
         << "getDeviceProfilerState() must be false for a mock context even when profiling is requested";
     const auto& profiler_state_manager = MetalContext::instance(mock_context_id).profiler_state_manager();
     ASSERT_NE(profiler_state_manager, nullptr);
-    for (auto* dev : mock_mesh_device.get_devices()) {
-        EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(dev->id()))
-            << "Device profiler was started on mock device " << dev->id()
+    for (auto device_id : mock_mesh_device.get_device_ids()) {
+        EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(device_id))
+            << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
 }
@@ -818,15 +817,13 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
     EXPECT_EQ(sysmem_manager.get_context_id(), context_id);
 }
 
-TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
-    MetalEnv env({
-        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2),
-        .fabric =
-            {
-                .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
-                .reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-                .num_routing_planes = std::numeric_limits<uint8_t>::max(),
-            },
+TEST(MetalEnvMockCCL, FabricConfiguredBeforeCreate_CreatesMeshAndQuerySucceeds) {
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+    // num_routing_planes is left unset on purpose: configure_fabric must treat that as "every plane", or opening
+    // the mesh fatals on a zero plane count.
+    env.configure_fabric({
+        .fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
+        .reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
     });
 
     auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});

@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 #include <mutex>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -133,18 +134,18 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-CoreRangeSet get_worker_grid(
+tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
     // A sharded tensor's grid is in shard_spec or in nd_shard_spec when the config is ND_SHARDED
-    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<CoreRangeSet> {
+    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<tt::tt_metal::CoreRangeSet> {
         if (!mem_config.is_sharded()) {
             return std::nullopt;
         }
@@ -161,8 +162,8 @@ CoreRangeSet get_worker_grid(
     // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
     // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
     // grid is a small vector and copying it keeps the lifetime obvious.
-    auto sub_device_workers_for = [](const CoreRangeSet& grid,
-                                     tt::tt_metal::IDevice* device) -> std::optional<CoreRangeSet> {
+    auto sub_device_workers_for = [](const tt::tt_metal::CoreRangeSet& grid,
+                                     tt::tt_metal::IDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
@@ -229,6 +230,39 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
+}
+
+void require_buffer_distribution_matches_spec(
+    const Tensor& tensor,
+    const std::optional<tt::tt_metal::BufferDistributionSpec>& spec_distribution,
+    const char* slot) {
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    if (buffer_distribution.has_value() && spec_distribution.has_value() &&
+        buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+        buffer_distribution->cores() == spec_distribution->cores()) {
+        return;
+    }
+    const auto describe = [](const std::optional<tt::tt_metal::BufferDistributionSpec>& distribution) {
+        if (!distribution.has_value()) {
+            return std::string("no distribution");
+        }
+        std::string banks;
+        for (const auto& core : distribution->cores()) {
+            banks += (banks.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, banks [{}]", distribution->shard_shape_in_pages(), banks);
+    };
+    TT_THROW(
+        "Unary: the sharded {} tensor's buffer distribution ({}) differs from its TensorSpec distribution ({}); "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        slot,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
+
+void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* slot) {
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    require_buffer_distribution_matches_spec(tensor, sharding_args.buffer_distribution_spec(), slot);
 }
 
 }  // namespace ttnn::operations::unary
