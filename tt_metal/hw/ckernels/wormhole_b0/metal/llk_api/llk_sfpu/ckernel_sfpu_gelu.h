@@ -421,13 +421,20 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
+    // fp32 destination: x*x is hoisted out of the polynomial and tail regions, which each
+    // computed it before, because the NaN case after the region chain needs it on every lane.
+    sfpi::vFloat x2;
+    if constexpr (is_fp32_dest_acc_en) {
+        x2 = x * x;
+    }
+
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
     v_if(x >= 3.1719f) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat u = x * x;
+        sfpi::vFloat u = is_fp32_dest_acc_en ? x2 : x * x;
         sfpi::vFloat h = PolynomialEvaluator::eval(
             u,
             GELU_DERIV_H0,
@@ -455,7 +462,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
-        sfpi::vFloat x2 = x * x;
+        if constexpr (!is_fp32_dest_acc_en) {
+            x2 = x * x;
+        }
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
@@ -472,6 +481,20 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     }
     // For x <= -13.375, saturate to 0
     v_endif;
+
+    // NaN (fp32 destination only; tenstorrent/tt-llk#1701 item 12). Every region test above is
+    // an SFPMAD subtract followed by a sign test, and a NaN out of SFPMAD carries the product's
+    // sign, so a NaN routes like an infinity of its own sign: +NaN saturated to 1.0 and -NaN
+    // fell through to 0. The polynomial region is bounded, so no rewrite of those compares can
+    // send both signs into it; test for NaN explicitly instead. x*x is +NaN for either NaN sign
+    // and lies in [+0, +inf] for every other input, so its bits exceed +inf's exactly on NaN.
+    // A bfloat16 destination is left alone: convert<vFloat16b> in the caller (SFPSTOCHRND)
+    // turns any NaN into an infinity, so that arm could not return NaN anyway.
+    if constexpr (is_fp32_dest_acc_en) {
+        constexpr std::int32_t kInfBits = 0x7F800000;
+        v_if(sfpi::as<sfpi::vInt>(x2) > kInfBits) { result = x; }
+        v_endif;
+    }
 
     return result;
 }
