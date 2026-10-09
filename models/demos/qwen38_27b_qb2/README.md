@@ -11,14 +11,23 @@ The bring-up and queue descriptions below are historical snapshots; consult the
 logbook and current service state before treating a deployment as live or a
 candidate as qualified.
 
-**Oct 9, 11:26 UTC evaluation audit:** the BFP8/HiFi2 run finished at
+**Oct 9, 17:30 UTC corrected GPQA:** **176/198 (88.89%)**, no truncations,
+50m49s. The user accepted this score; the original strict 177/198 gate is still
+recorded as missed. All 198 questions used preserved scientific notation.
+The separate OpenBench run scored 170/190 completed, with eight HTTP timeouts
+(170/198 counting errors as incorrect). Its client retained a 600-second timeout
+and two SDK retries despite the harness's 7,000-second/no-retry settings. A client
+configuration fix and clean full rerun are required. Scores are kept separate.
+See [final results and timeout investigation](galaxy-evidence/gpqa-first-final-v2/README.md).
+
+**Historical Oct 9, 11:26 UTC evaluation audit:** the BFP8/HiFi2 run finished at
 **171/198 (86.36%)**, with no output-budget truncations, in 59m51s. Investigation
 found that the pinned GPQA harness deletes bracketed scientific notation from
 38 answer choices across 12 questions. One question's four distinct choices
 collapse into one displayed string, also changing the derived gold label.
 The evaluator now preserves original answer text and labels the corrected
 protocol `preserve_scientific_notation_v1`; 28 CPU tests and preparation of all
-198 questions pass. A fresh corrected full-model evaluation is still required.
+198 questions pass. The corrected full-model result is recorded above.
 Earlier scores remain preserved measurements of the defective prompt protocol.
 See the [configuration and scoring audit](galaxy-evidence/gpqa-config-audit-v1/README.md)
 and [completed BFP8 result](galaxy-evidence/decoder-gpqa-result-v1/summary.json).

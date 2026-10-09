@@ -1,0 +1,50 @@
+{
+  "captured_at": 1791572679.2054687,
+  "sample_errors": [
+    {
+      "id": 49,
+      "total_time": 1803.131,
+      "message": "RetryError(<Future at 0x7e33a22c0880 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 80,
+      "total_time": 1806.135,
+      "message": "RetryError(<Future at 0x7e33c02d4d00 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 13,
+      "total_time": 1806.223,
+      "message": "RetryError(<Future at 0x7e33c2ebdde0 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 128,
+      "total_time": 1806.071,
+      "message": "RetryError(<Future at 0x7e33a29ce0e0 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 94,
+      "total_time": 1806.117,
+      "message": "RetryError(<Future at 0x7e33a29cc2b0 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 146,
+      "total_time": 1802.104,
+      "message": "RetryError(<Future at 0x7e33c828e6b0 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 148,
+      "total_time": 1802.079,
+      "message": "RetryError(<Future at 0x7e33c02d4d60 state=finished raised APITimeoutError>)"
+    },
+    {
+      "id": 186,
+      "total_time": 1802.294,
+      "message": "RetryError(<Future at 0x7e33a1eced10 state=finished raised APITimeoutError>)"
+    }
+  ],
+  "installed_client_default_timeout_seconds": 600,
+  "installed_sdk_default_retries": 2,
+  "inspect_generate_timeout_seconds": 7000,
+  "inspect_generate_max_retries": 0,
+  "fix": "Set timeout and max_retries on the OpenAI-compatible HTTP client as well as Inspect generation config"
+}

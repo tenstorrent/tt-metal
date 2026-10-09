@@ -1526,3 +1526,32 @@ No session connection is needed for that queue to continue.
 - Remaining release path: container/API/tool validation; publish SHA/digest-pinned
   artifacts and verify Helm deployment; Galaxy dev catalogue and Shield jobs;
   On-dispatch/nightly/release CI, stable alignment and release-team promotion.
+
+## Oct 9, 17:20-19:09 UTC: final GPQA, image handoff and OpenBench timeout fix
+
+- Corrected full GPQA completed 176/198 (88.89%), no truncations, 50m49s.
+  User acceptance is retained separately from the original strict 177 gate,
+  which remains missed in the untouched receipt. Client mean decode TSU was
+  13.01 and aggregate output 419.48 tok/s on this variable-length evaluation.
+- Real BFP8-image startup handoff passed after the external probe supplied
+  `--model` and `--tt-device` to TTIS. This closes wrapper handoff only, not
+  actual hardware inference. Image digest and runtime bytes are unchanged.
+- Separate pinned OpenBench finished 170/190 scored, eight request errors;
+  170/198 (85.86%) including errors. All errors were HTTP read timeouts after
+  1,802-1,806 seconds. The SDK retained 600-second timeout/two retries despite
+  Inspect's separate 7,000-second/no-retry generation policy. Original protocol
+  claimed no retries but did not enforce that at the HTTP layer; preserve it.
+- Set timeout and zero retries on the OpenAI-compatible SDK explicitly. A real
+  delayed-response HTTP regression in the pinned evaluator proves one request
+  on timeout and successful scoring with a longer deadline. Initial diagnostic
+  v2/v3 probes inspected timeout representation incorrectly; v4 passed.
+- Added a bounded TTIS container/API supervisor; 43 targeted CPU checks pass.
+  Replaced its verified waiting-only v1 job with v2, which runs a fresh full
+  OpenBench evaluation after API/tool checks against the resident container.
+  PID 2335933, invocation d369052ee99040c1810ae8d56a76dd51 confirmed active.
+  The current GPQA/perf controller PID 1982991 remained active and unchanged.
+- The image job waits for the exact predecessor and clean completion, then
+  acquires the device lock. It survives disconnect, uses removable host-local
+  caches and has bounded cleanup. No shared CI, registry or Helm deployment
+  was modified. Evidence: galaxy-evidence/gpqa-first-final-v2/ and TTIS branch
+  scripts/release/evidence/qwen38-20261009/.

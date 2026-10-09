@@ -30,7 +30,7 @@ the active cycle and stable refs before preparing promotion PRs.
   `20619e008a236aaf393937b222a60a5b03e49cdc`.
 - TTIS packaging: `tenstorrent/tt-inference-server`, branch
   `anatarajan/qwen38-galaxy-release-20261009`, commit
-  `bbb1ca07e7cd0f97af47745a1686545a16089b9c`.
+  `58d68d4b872738fa9f3cccc3a68c9cb4e6d9dcf0`.
 - Plugin used by the evaluated runtime:
   `b7e4292e4193cba20abe9c7c68ce489201b2e36b`.
 - Runtime Metal: `a08819ddbe23077f8037d3802303939064868ff6`.
@@ -43,9 +43,9 @@ Galaxy candidate's release qualification. Source branches and a built image
 alone do not satisfy the process. Pin release artifacts by commit/digest as
 requested; do not deploy moving branch names or `latest` tags.
 
-GPQA is accepted by the user as of Oct 9, 17:09 UTC. At the acceptance
-check, 194/198 responses were complete with 174 correct and zero truncations.
-The run continues to preserve the final 198-question result. This is explicit
+GPQA is accepted by the user as of Oct 9, 17:09 UTC. The final corrected run
+finished at 17:30 UTC: **176/198 (88.89%)**, zero truncations, 50m49s.
+See `galaxy-evidence/gpqa-first-final-v2/` for original receipts. This is explicit
 user acceptance, not a retroactive claim that the original 177/198 gate passed;
 immutable benchmark receipts and the running protocol remain unchanged.
 
@@ -53,8 +53,11 @@ Remaining gates: tool-calling/agentic acceptance, successful
 container startup and inference, Galaxy catalogue/job integration, passing
 target-device On-dispatch and nightly/release CI, stable-branch alignment and
 release-team staging. The built BFP8 image passed runtime import and entrypoint
-help checks, but its separate startup probe exited 2 because the probe omitted
-the required `--tt-device` wrapper argument. This is a probe invocation failure,
-not evidence of a broken image. Fix the probe, verify the packaged handoff, then
-run container hardware/API checks; container inference remains unqualified. This review did not contact release engineering, change prod
+help checks. The separate startup probe initially exited 2 because it omitted
+the required `--tt-device` wrapper argument. The corrected probe passed against
+the actual immutable BFP8 image at 17:20 UTC, without opening hardware. Container
+hardware/API checks are persistently queued; inference remains unqualified.
+The first separate OpenBench run had eight client timeouts and requires a clean
+rerun with explicit HTTP-client timeout and retry settings. This review did not
+contact release engineering, change prod
 catalogue entries, trigger shared CI, create release tags or publish a release.

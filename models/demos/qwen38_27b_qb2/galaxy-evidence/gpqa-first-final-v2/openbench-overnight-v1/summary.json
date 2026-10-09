@@ -1,0 +1,68 @@
+{
+  "status": "success",
+  "samples": 198,
+  "sample_errors": 8,
+  "stop_reasons": {
+    "stop": 190
+  },
+  "truncated": 0,
+  "results": {
+    "total_samples": 198,
+    "completed_samples": 190,
+    "scores": [
+      {
+        "name": "mcq_scorer",
+        "scorer": "mcq_scorer",
+        "reducer": null,
+        "scored_samples": 190,
+        "unscored_samples": 0,
+        "params": {},
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "value": 0.8947368421052632,
+            "params": {},
+            "metadata": null
+          },
+          "stderr": {
+            "name": "stderr",
+            "value": 0.022323123167731645,
+            "params": {},
+            "metadata": null
+          },
+          "std": {
+            "name": "std",
+            "value": 0.3077030180429277,
+            "params": {},
+            "metadata": null
+          }
+        },
+        "metadata": null
+      }
+    ],
+    "metadata": null
+  },
+  "protocol": {
+    "harness_revision": "d03922ccbbd9004e802c556ef9c2a40ed870659c",
+    "dataset_revision": "c63e9ba02dc3da4c698e2a8485551b35041c3900",
+    "dataset_records": 198,
+    "dataset_matches_original": true,
+    "samples_sha256": "7b517be942a699360e43c4f02706c1f14046559b146fe218a37e93fae5d63f2f",
+    "original_csv_sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305",
+    "upstream_temperature": 0.5,
+    "upstream_epochs": 10,
+    "epochs": 1,
+    "max_tokens": 65536,
+    "max_connections": 128,
+    "max_samples": 128,
+    "differences": [
+      "One epoch instead of ten to fit the eight-hour queue",
+      "Explicit 65536-token output bound",
+      "Local endpoint; OpenRouter private overrides are unknown"
+    ],
+    "prompt_and_scorer": "Unmodified pinned OpenBench",
+    "score_selection": "Single predeclared run; no retries or best-of selection"
+  },
+  "log_location": "/home/ttuser/qwen38-artifacts-20261007/openbench-overnight-v1/evaluation/2026-10-09T17-30-32+00-00_gpqa-diamond_DKZdac3f55ZXTwtdLBBsbQ.eval",
+  "complete": false
+}

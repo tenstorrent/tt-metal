@@ -14,6 +14,21 @@ from pathlib import Path
 REVISION = "d03922ccbbd9004e802c556ef9c2a40ed870659c"
 
 
+def create_model(base_url, request_timeout):
+    from inspect_ai.model import get_model
+
+    # Inspect's generation retry/timeout policy does not configure the separate
+    # OpenAI-compatible HTTP client. Its defaults are 600 seconds and two retries.
+    return get_model(
+        "openai-api/local/Qwen/Qwen3.8-27B",
+        base_url=base_url,
+        api_key="local-unused",
+        responses_api=False,
+        timeout=request_timeout,
+        max_retries=0,
+    )
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -23,7 +38,6 @@ def main(args):
     os.environ["HF_HUB_OFFLINE"] = "0" if args.prepare else "1"
     os.environ["HF_DATASETS_OFFLINE"] = "0" if args.prepare else "1"
     from inspect_ai import eval as evaluate
-    from inspect_ai.model import get_model
     from openbench.evals.gpqa_diamond import gpqa_diamond
 
     revision = subprocess.check_output(
@@ -78,14 +92,16 @@ def main(args):
     protocol = json.loads(protocol_path.read_text())
     if protocol["samples_sha256"] != digest(samples):
         raise ValueError("Prepared OpenBench task changed")
-    output = args.root / "evaluation"
+    result_root = args.output or args.root
+    if args.output:
+        result_root.mkdir(exist_ok=False)
+    protocol = dict(protocol, http_timeout_seconds=args.request_timeout, sdk_max_retries=0, inspect_max_retries=0)
+    (result_root / "run-protocol.json").write_text(json.dumps(protocol, indent=2) + "\n")
+    output = result_root / "evaluation"
     output.mkdir(exist_ok=False)
-    model = get_model(
-        "openai-api/local/Qwen/Qwen3.8-27B",
-        base_url="http://127.0.0.1:8078/v1",
-        api_key="local-unused",
-        responses_api=False,
-    )
+    model = create_model(args.base_url, args.request_timeout)
+    if model.api.client.timeout != args.request_timeout or model.api.client.max_retries != 0:
+        raise RuntimeError("OpenBench HTTP timeout/retry configuration was not applied")
     logs = evaluate(
         task,
         model=model,
@@ -96,7 +112,7 @@ def main(args):
         max_retries=0,
         retry_on_error=0,
         fail_on_error=False,
-        timeout=7000,
+        timeout=args.request_timeout,
         log_dir=str(output),
         display="plain",
         metadata=protocol,
@@ -115,7 +131,7 @@ def main(args):
         log_location=log.location,
         complete=log.status == "success" and len(samples) == 198 and not any(s.error for s in samples),
     )
-    (args.root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (result_root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary), flush=True)
     if not summary["complete"]:
         raise RuntimeError("OpenBench did not complete all 198 samples cleanly")
@@ -126,4 +142,9 @@ if __name__ == "__main__":
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--csv", required=True, type=Path)
     parser.add_argument("--prepare", action="store_true")
+    parser.add_argument(
+        "--output", type=Path, help="New result directory; keep prepared dataset/cache and earlier results unchanged"
+    )
+    parser.add_argument("--base-url", default="http://127.0.0.1:8078/v1")
+    parser.add_argument("--request-timeout", type=float, default=7000)
     main(parser.parse_args())
