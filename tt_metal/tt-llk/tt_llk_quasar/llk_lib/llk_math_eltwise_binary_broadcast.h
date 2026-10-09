@@ -22,10 +22,11 @@ using namespace ckernel::math;
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
+inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySchedule fidelity, const TensorShape& tensor_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
     const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
@@ -44,11 +45,16 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     const std::uint32_t eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(EN_DST_ACC);
 
-    constexpr std::uint32_t replay_buf_len = math_fidelity_phases<MATH_FIDELITY_TYPE>() - 1;
+    const std::uint32_t replay_buf_len = fidelity.phase_count - 1;
 
     if constexpr (EN_DST_ACC)
     {
-        load_replay_buf<0, replay_buf_len>(
+        load_replay_buf(
+            0,
+            replay_buf_len,
+            false,
+            0,
+            0,
             // Lambda function to load reply buffer
             [replay_buf_len, SRCB_BROADCAST_TYPE]
             {
@@ -86,9 +92,10 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param fidelity: Resolved source-format phase schedule.
  */
 template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_addrmod_()
+inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedule fidelity)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
 
@@ -117,7 +124,7 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 
     if constexpr (math_fidelity_enable)
     {
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 1, .clr = 0}}.set(ADDR_MOD_3);
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity.phase_increment, .clr = 0}}.set(ADDR_MOD_3);
     }
 }
 
@@ -168,8 +175,9 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const DataFormat src_a_form
     {
         validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     }
-    _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
-    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+    const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
+    _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>(fidelity);
+    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(fidelity, tensor_shape);
 
     // Each dest tile uses its total face rows, but takes at least one full face.
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));

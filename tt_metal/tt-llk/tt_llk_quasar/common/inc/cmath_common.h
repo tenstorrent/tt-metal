@@ -12,7 +12,7 @@ namespace ckernel::math
 {
 
 /**
- * @brief Return the FPU phase count.
+ * @brief Return the phase count before removing format-redundant phases.
  * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  */
 template <MathFidelity fidelity>
@@ -78,6 +78,33 @@ inline void validate_math_fidelity(const DataFormat src_a_format, const DataForm
     LLK_ASSERT(is_math_fidelity_supported(fidelity, src_a_format, src_b_format), "Unsupported or redundant math fidelity for source register formats");
 }
 
+struct MathFidelitySchedule
+{
+    std::uint8_t phase_count;
+    std::uint8_t phase_increment;
+};
+
+/**
+ * @brief Resolve the issued phase count and counter increment for the source formats.
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Validate the format/fidelity combination with @ref validate_math_fidelity before use.
+ */
+template <MathFidelity fidelity>
+constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    if constexpr (fidelity == MathFidelity::HiFi3)
+    {
+        // A narrow SrcA contributes only phases 0 and 2.
+        if (!is_math_fidelity_supported(MathFidelity::HiFi2, src_a_format, src_b_format))
+        {
+            return {2, 2};
+        }
+    }
+    return {math_fidelity_phases<fidelity>(), fidelity == MathFidelity::LoFi ? std::uint8_t {0} : std::uint8_t {1}};
+}
+
 // Each mask lists allowed requests in LoFi, HiFi2, HiFi3, HiFi4 order.
 constexpr unsigned fidelity_mask(const DataFormat src_a, const DataFormat src_b)
 {
@@ -106,6 +133,19 @@ static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Float16) == 0);
 static_assert(fidelity_mask(DataFormat::MxFp4, DataFormat::MxFp4) == 0);
 static_assert(fidelity_mask(DataFormat::Invalid, DataFormat::Float16) == 0);
 static_assert(!is_math_fidelity_supported(static_cast<MathFidelity>(1), DataFormat::Float16, DataFormat::Float16));
+
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Float16).phase_count == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Float16).phase_increment == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 3);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32).phase_increment == 1);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b).phase_count == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b).phase_increment == 1);
+static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 1);
+static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 0);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 4);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_increment == 1);
 
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
