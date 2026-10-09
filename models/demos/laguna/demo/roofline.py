@@ -139,10 +139,11 @@ def decode_step(m: dict, batch: int, context: int) -> dict:
             "bound": "compute" if compute_s > memory_s else "memory"}  # fmt: skip
 
 
-def prefill(m: dict, tokens: int) -> dict:
+def prefill(m: dict, tokens: int, batch: int = 1) -> dict:
     """max(FLOPs / C, weight bytes / W); attention FLOPs = 4 * heads * head_dim per (query, key) pair per layer
     (scores q.k and the value mix, each a multiply and an add per element); a causal full-attention query sees on average
-    half the prompt, a sliding-window query at most ``window`` tokens."""
+    half the prompt, a sliding-window query at most ``window`` tokens. ``batch`` prompts of ``tokens`` each prefilled in
+    one pass: every user's first token arrives when the whole pass ends, so this is each user's TTFT floor."""
     W, C = DRAM_BYTES_PER_S * CHIPS, FLOPS_PER_S * CHIPS
     linear = 2 * m["active_params"] * tokens
     pairs_full = tokens * (tokens + 1) / 2
@@ -151,7 +152,8 @@ def prefill(m: dict, tokens: int) -> dict:
     attention = sum(4 * m["heads"][i] * m["head_dim"] * pairs_full for i in m["full_layers"]) + sum(
         4 * m["heads"][i] * m["head_dim"] * pairs_sliding for i in m["sliding_layers"]
     )
-    weights = m["other_bytes"] + expert_bytes_read(m, tokens)
+    linear, attention = batch * linear, batch * attention  # attention stays within each prompt
+    weights = m["other_bytes"] + expert_bytes_read(m, batch * tokens)
     compute_s = (linear + attention) / C
     memory_s = weights / W
     return {"ttft_s": max(compute_s, memory_s), "compute_s": compute_s, "memory_s": memory_s,
@@ -211,6 +213,20 @@ def main() -> None:
         p = prefill(m, tokens)
         print(f"| {tokens:,} | {p['memory_s'] * 1e3:.1f} ms | {p['pflop']:.3f} PFLOP | {p['attention_share'] * 100:.0f}% | "
               f"{p['compute_s'] * 1e3:,.1f} ms | {p['ttft_s'] * 1e3:,.1f} ms | {p['bound']} |")  # fmt: skip
+
+    print("\n## README points: batch 1 and batch 32 at the perf demo's input lengths\n\n"
+          "Decode uses the step at a context of the input length; batch-32 TTFT prefills all 32 prompts in one pass "
+          "(every user's first token then arrives together). Target = 50% of speed of light (MoE): half the decode "
+          "speed, twice the TTFT.\n")  # fmt: skip
+    print("| Input tokens | Batch | Decode SoL tok/s/user | Decode target | Decode SoL tok/s total | TTFT SoL | TTFT target |")
+    print("|---:|---:|---:|---:|---:|---:|---:|")
+    for batch in (1, 32):
+        for tokens in (128, 1024, 2048, 4096, 8192):
+            d = decode_step(m, batch, tokens)
+            per_user = 1e3 / d["step_ms"]
+            ttft = prefill(m, tokens, batch)["ttft_s"]
+            print(f"| {tokens:,} | {batch} | {per_user:.0f} | {per_user / 2:.0f} | {batch * per_user:,.0f} | "
+                  f"{ttft * 1e3:,.0f} ms | {2 * ttft * 1e3:,.0f} ms |")  # fmt: skip
 
     link = args.link_gbps * 1e9 / 8 * args.links
     per_layer = 4 * 1 * m["hidden"] * BYTES["bf16"] / (3 * link)
