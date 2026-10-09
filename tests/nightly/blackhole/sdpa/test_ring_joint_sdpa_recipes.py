@@ -14,14 +14,21 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    L2_PCT_BOUND,
+    VARIANTS,
+    fp32_dest_config,
+    key_mask,
+    l2_pct,
+    reference,
+    stored,
+)
 
 RING = 2
 
 pytestmark = pytest.mark.skipif(
-    not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole hardware",
+    ttnn.get_arch_name() not in ("blackhole", "wormhole_b0") or os.environ.get("TT_METAL_SIMULATOR") is not None,
+    reason="SDPA precision recipes run on Blackhole and Wormhole B0 hardware",
 )
 
 
@@ -61,7 +68,7 @@ def length_tensor(mesh, value):
 
 def open_ring_mesh(fabric, ring=RING, **mesh_options):
     if ttnn.GetNumAvailableDevices() < ring:
-        pytest.skip(f"Requires {ring} connected Blackholes")
+        pytest.skip(f"Requires {ring} connected devices")
     ttnn.set_fabric_config(*fabric)
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, ring), trace_region_size=16777216, **mesh_options)
     mesh.enable_program_cache()
@@ -118,6 +125,14 @@ RING_CASES = {
     "multi_q_checkpoint_wide": (1, 10, 10, 2368, 2368, 128, 288, 384, None, None, (8, 4)),
 }
 
+if ttnn.get_arch_name() == "wormhole_b0":
+    # Wormhole: an 8-column worker grid whose last column runs the CCL, and 1464 KiB of L1 (no Q288 chunk). Q160
+    # keeps the odd-chunk coverage.
+    RING_CASES = {
+        name: c[:6] + (160 if c[6] == 288 else c[6],) + c[7:10] + ((min(c[10][0], 7), c[10][1]),)
+        for name, c in RING_CASES.items()
+    }
+
 
 def run_ring(
     mesh,
@@ -133,6 +148,8 @@ def run_ring(
     logical_n,
     logical_l,
     is_cross,
+    is_causal=False,
+    is_balanced=False,
     **options,
 ):
     return ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -143,7 +160,8 @@ def run_ring(
         joint_strategy="rear",
         logical_n=logical_n,
         logical_l=logical_l,
-        is_causal=False,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
         is_cross=is_cross,
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
@@ -270,3 +288,281 @@ def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
     for chip in range(RING):
         got = torch.cat([per_chip(out[0])[chip], per_chip(out[1])[chip]], dim=2)
         assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+@pytest.mark.parametrize("variant", ["standard", "balanced", "accurate"])
+def test_ring_joint_sdpa_recipe_legacy_arguments(ring_mesh, variant):
+    """BFP8 K/V on the BF16-input recipes, a custom scale, and an ignored compute config / exp_approx_mode."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, q_local, k_local, d, q_chunk, k_chunk, _, _, grid = RING_CASES["gqa_batch2"]
+    q = randn(b, nh, RING * q_local, d, seed=1)
+    k, v = (stored(randn(b, nkv, RING * k_local, d, seed=s), ttnn.bfloat8_b) for s in (2, 3))
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    inputs = [
+        ttnn.from_torch(x, dtype=dtype, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        for x, dtype in ((q, ttnn.bfloat16), (k, ttnn.bfloat8_b), (v, ttnn.bfloat8_b))
+    ]
+    backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for _ in range(2)
+    ]
+    out = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        *inputs,
+        None,
+        None,
+        None,
+        persistent_output_buffer_k=backing[0],
+        persistent_output_buffer_v=backing[1],
+        joint_strategy="rear",
+        logical_n=RING * k_local,
+        logical_l=0,
+        is_causal=False,
+        is_cross=q_local != k_local,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
+        ),
+        dim=2,
+        multi_device_global_semaphore=semaphores,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=ttnn.SubDeviceId(0),
+        ccl_core_grid_offset=(ccl_column, 0),
+        use_column_major_ccl=True,
+        scale=0.0625,  # FP32-exact: the binding takes scale with noconvert
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        ),
+        precision=VARIANTS[variant][0],
+    )
+    for chip in range(RING):
+        expected = reference(q.chunk(RING, dim=2)[chip], k, v, scale=0.0625)
+        assert l2_pct(per_chip(out[0])[chip], expected) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+def test_ring_joint_sdpa_precision_routing(ring_mesh):
+    """Without precision, FP32 dest runs ACCURATE when the ring recipe has the call's features: bitwise the explicit
+    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, outputs narrowed back), noncausal and causal."""
+    mesh, semaphores, ccl_column = ring_mesh
+    fp32 = fp32_dest_config(mesh)
+    inputs, joints, backing, logical_n, kwargs, expected, _ = ring_case(mesh, "accurate", "joint_sharded")
+    call = lambda **extra: run_ring(
+        mesh, semaphores, ccl_column, inputs, joints, backing, logical_n=logical_n, **kwargs, **extra
+    )
+    routed, explicit = call(compute_kernel_config=fp32), call(precision=ttnn.SDPAPrecision.ACCURATE)
+    for chip in range(RING):
+        got = torch.cat([per_chip(routed[0])[chip], per_chip(routed[1])[chip]], dim=2)
+        assert torch.equal(got, torch.cat([per_chip(explicit[0])[chip], per_chip(explicit[1])[chip]], dim=2))
+        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND["accurate"], f"chip {chip}"
+
+    b, nh, nkv, q_local, k_local, d, q_chunk, k_chunk, _, _, grid = RING_CASES["gqa_batch2"]
+    q = stored(randn(b, nh, RING * k_local, d, seed=20), ttnn.bfloat8_b)
+    k, v = (stored(randn(b, nkv, RING * k_local, d, seed=s), ttnn.bfloat8_b) for s in (21, 22))
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    packed = [
+        ttnn.from_torch(x, dtype=ttnn.bfloat8_b, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        for x in (q, k, v)
+    ]
+    packed_backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for _ in range(2)
+    ]
+    for causal in (False, True):
+        out = run_ring(
+            mesh,
+            semaphores,
+            ccl_column,
+            packed,
+            [None] * 3,
+            packed_backing,
+            grid=grid,
+            q_chunk=q_chunk,
+            k_chunk=k_chunk,
+            logical_n=RING * k_local,
+            logical_l=0,
+            is_cross=False,
+            is_causal=causal,
+            compute_kernel_config=fp32,
+        )
+        assert out[0].dtype == ttnn.bfloat8_b
+        for chip in range(RING):
+            rows = RING * k_local
+            mask = key_mask(k_local, rows, causal=True, q_offset=chip * k_local) if causal else None
+            want = reference(q.chunk(RING, dim=2)[chip], k, v, mask)
+            rounding = 1.5 * l2_pct(stored(want.bfloat16(), ttnn.bfloat8_b), want)
+            bound = L2_PCT_BOUND["accurate"] + rounding
+            assert l2_pct(per_chip(out[0])[chip], want) < bound, f"causal {causal} chip {chip}"
+
+
+# Causal ring attention: batch, heads, kv_heads, local rows (Q = K), head_dim, q_chunk, k_chunk, SDPA grid. A balanced
+# ring needs Q chunks dividing half the local rows; the K half may straddle a K chunk ("straddle": 480 / 192).
+CAUSAL_CASES = {
+    "q256_k512_d128": (1, 2, 2, 1024, 128, 256, 512, (4, 2)),
+    "q512_k128": (1, 2, 2, 1024, 128, 512, 128, (2, 2)),
+    "gqa_batch2": (2, 4, 2, 1024, 128, 128, 256, (8, 2)),
+    "straddle_q96_k192_d64": (1, 2, 2, 960, 64, 96, 192, (4, 2)),
+    # Several Q chunks per core: checkpointed state, and the balanced early half finishing before the last step.
+    "multi_q_checkpoint": (1, 4, 4, 1024, 128, 128, 256, (2, 2)),
+}
+if ttnn.get_arch_name() == "wormhole_b0":
+    CAUSAL_CASES = {name: c[:7] + ((min(c[7][0], 7), c[7][1]),) for name, c in CAUSAL_CASES.items()}
+
+
+def causal_layout(x, balanced):
+    """The global sequence as the ring holds it: device d gets chunk d (or, balanced, chunks d and 2R - 1 - d)."""
+    if not balanced:
+        return x, torch.arange(x.shape[2])
+    chunks = torch.arange(x.shape[2]).chunk(2 * RING)
+    order = torch.cat([torch.cat([chunks[d], chunks[2 * RING - 1 - d]]) for d in range(RING)])
+    return x[:, :, order], order
+
+
+@pytest.mark.parametrize("balanced", [False, True], ids=["causal", "balanced"])
+@pytest.mark.parametrize("case", CAUSAL_CASES)
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_ring_joint_sdpa_recipe_causal(ring_mesh, variant, case, balanced):
+    """is_causal (and is_balanced): the local step masks its diagonal, later shards are skipped (or, balanced, halved
+    and the early Q half skipped), against an FP64 causal reference over the global sequence."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, local, d, q_chunk, k_chunk, grid = CAUSAL_CASES[case]
+    s = RING * local
+    q, k, v = randn(b, nh, s, d, seed=21), randn(b, nkv, s, d, seed=22), randn(b, nkv, s, d, seed=23)
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    layout = [causal_layout(x, balanced) for x in (q, k, v)]
+    inputs = precision_inputs(mesh, variant, [x for x, _ in layout], shard)
+    if VARIANTS[variant][0] == ttnn.SDPAPrecision.FAST:
+        # The reference takes the prepared values, back in sequence order.
+        order = layout[0][1]
+        q, k, v = (torch.cat(per_chip(x), dim=2)[:, :, torch.argsort(order)] for x in inputs)
+    backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for x in inputs[1:]
+    ]
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        inputs,
+        [None] * 3,
+        backing,
+        grid=grid,
+        q_chunk=q_chunk,
+        k_chunk=k_chunk,
+        logical_n=s,
+        logical_l=0,
+        is_cross=False,
+        is_causal=True,
+        is_balanced=balanced,
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, k, v, key_mask(s, s, causal=True))
+    rows = layout[0][1].chunk(RING)
+    for chip in range(RING):
+        got = per_chip(out[0])[chip]
+        assert l2_pct(got, expected[:, :, rows[chip]]) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_ring_joint_sdpa_recipe_rejects_sliding_window(ring_mesh, variant, expect_error):
+    """The legacy FP32 ring kernel ignores sliding_window_size; the recipes reject it rather than ignore it."""
+    mesh, semaphores, ccl_column = ring_mesh
+    inputs, joints, backing, logical_n, kwargs, _, _ = ring_case(mesh, variant, "multi_q_checkpoint")
+    with expect_error(RuntimeError, "do not support sliding_window_size"):
+        run_ring(
+            mesh,
+            semaphores,
+            ccl_column,
+            inputs,
+            joints,
+            backing,
+            logical_n=logical_n,
+            is_causal=True,
+            sliding_window_size=512,
+            precision=VARIANTS[variant][0],
+            **kwargs,
+        )
+
+
+# Chunked prefill: batch, Q heads, KV heads, Q head dim, V head dim, chunk group rows, groups so far (the call is the
+# last), q_chunk, k_chunk, SDPA grid, indexed cache (kv_cache_batch_idx 1 of a 2-slot cache).
+CHUNKED_CASES = {
+    "q128_k256_d128": (1, 4, 1, 128, 128, 1024, 3, 128, 256, (4, 2), False),
+    "q64_k96_d64_two_groups": (1, 2, 2, 64, 64, 512, 2, 64, 96, (4, 2), False),
+    "mla_dv_lt_dq": (1, 4, 1, 192, 64, 512, 3, 64, 128, (4, 2), False),
+    "multi_q_checkpoint": (1, 4, 4, 128, 128, 1024, 2, 64, 128, (2, 2), False),
+    "indexed_cache": (1, 4, 1, 64, 64, 512, 3, 64, 128, (4, 2), True),
+}
+
+
+def growing_cache_layout(x, group_rows):
+    """Device d's K/V shard holds its slab of each chunk group so far, back to back (the ring's chunked layout); the
+    ring shards the result along the sequence."""
+    slab = group_rows // RING
+    groups = x.shape[2] // group_rows
+    return torch.cat(
+        [
+            x[:, :, g * group_rows + d * slab : g * group_rows + (d + 1) * slab]
+            for d in range(RING)
+            for g in range(groups)
+        ],
+        dim=2,
+    )
+
+
+@pytest.mark.parametrize("case", CHUNKED_CASES)
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_ring_joint_sdpa_recipe_chunked(ring_mesh, variant, case):
+    """Chunked prefill: Q is the newest chunk group (rows [s, e)), K/V the cache of every group so far in the ring's
+    chunked layout; causal over the sequence. Optionally an indexed (kv_cache_batch_idx) cache and V narrower than Q
+    (MLA)."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, d, dv, group, groups, q_chunk, k_chunk, grid, indexed = CHUNKED_CASES[case]
+    precision, kv_dtype = VARIANTS[variant]
+    e = group * groups
+    s = e - group
+    q, k, v = randn(b, nh, e, d, seed=31), randn(b, nkv, e, d, seed=32), randn(b, nkv, e, dv, seed=33)
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    tq = ttnn.from_torch(q[:, :, s:], device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+    if precision == ttnn.SDPAPrecision.FAST:
+        tq = ttnn.transformer.prepare_sdpa_input(tq, is_query=True)
+    caches = []
+    for x, seed in ((k, 34), (v, 35)):
+        cache = growing_cache_layout(x, group)
+        if indexed:
+            # Slot 0 holds finite garbage; the call reads slot 1.
+            cache = torch.cat([8 * randn(*cache.shape, seed=seed), cache], dim=0)
+        tx = ttnn.from_torch(cache, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        if precision == ttnn.SDPAPrecision.FAST:
+            tx = ttnn.transformer.prepare_sdpa_input(tx, is_query=False, dtype=kv_dtype)
+        caches.append(tx)
+    if precision == ttnn.SDPAPrecision.FAST:
+        # The reference takes the prepared values, back in sequence order.
+        q = torch.cat([q[:, :, :s], torch.cat(per_chip(tq), dim=2).float()], dim=2)
+        inverse = torch.argsort(growing_cache_layout(torch.arange(e).reshape(1, 1, e, 1), group).flatten())
+        k, v = (torch.cat(per_chip(x), dim=2)[-1:, :, inverse] for x in caches)
+    backing = [
+        ttnn.allocate_tensor_on_device([b, nkv, e, width], x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for x, width in zip(caches, (d, dv))
+    ]
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        [tq, *caches],
+        [None] * 3,
+        backing,
+        grid=grid,
+        q_chunk=q_chunk,
+        k_chunk=k_chunk,
+        logical_n=e,
+        logical_l=0,
+        is_cross=False,
+        is_causal=True,
+        precision=precision,
+        **(dict(kv_cache_batch_idx=1) if indexed else {}),
+    )
+    expected = reference(q[:, :, s:], k, v, key_mask(group, e, causal=True, q_offset=s))
+    for chip in range(RING):
+        got = per_chip(out[0])[chip]
+        assert l2_pct(got, expected.chunk(RING, dim=2)[chip]) < L2_PCT_BOUND[variant], f"chip {chip}"

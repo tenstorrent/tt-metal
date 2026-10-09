@@ -91,8 +91,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.get_k_chunk_size(),
             head_dim);
         TT_FATAL(
-            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(head_dim)),
-            "Named exp ring recipes require the default 1/sqrt(head_dim) scale");
+            !args.scale || (std::isfinite(*args.scale) && *args.scale > 0.0f),
+            "Named exp ring recipes require a finite positive scale, got {}",
+            args.scale.value_or(0.0f));
     } else {
         // Validate all tensors have the same dtype
         for (const auto& tensor : sdpa_input_tensors) {

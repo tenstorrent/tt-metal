@@ -15,8 +15,9 @@
 
 namespace ttnn::transformer {
 
-// Explicit numerical recipes. Omit precision to preserve the legacy API's
-// independent compute/program controls and broader platform/feature support.
+// Explicit numerical recipes. Without precision, a call that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a
+// recipe on Blackhole: FP32 DEST -> ACCURATE, non-ring joint and the exp ring fallback -> STANDARD (sdpa.cpp,
+// "Precision routing"); BF16-DEST calls keep the streaming kernels.
 enum class SDPAPrecision : uint8_t { STANDARD, BALANCED, ACCURATE, FAST };
 
 // Out-of-place rounding for FAST inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto
@@ -73,7 +74,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     // Sliding window over absolute positions (the kernels offset the window by chunk_start_idx)
     // and a per-head learned attention sink, both as in scaled_dot_product_attention.
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    // Named numerical recipe (as scaled_dot_product_attention, including its routing when omitted).
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
@@ -88,7 +91,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -214,7 +218,8 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 ttnn::Tensor chunked_flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
@@ -225,7 +230,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -239,6 +245,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<operations::transformer::SDPAProgramConfig>& program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
-    std::optional<int64_t> chunk_start_idx = std::nullopt);
+    std::optional<int64_t> chunk_start_idx = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::transformer

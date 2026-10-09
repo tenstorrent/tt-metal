@@ -34,11 +34,10 @@ struct PrecisionPolicy {
     bool operator==(const PrecisionPolicy&) const = default;
 };
 
+// Every recipe takes BF16, BFP8 or BFP4 K/V: the unpacker expands packed K/V into the recipe's BF16 source
+// registers, so K/V storage changes the inputs (and the CB formats), not the recipe's arithmetic.
 constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
     using Fidelity = tt::tt_metal::MathFidelity;
-    if (selection.recipe != Recipe::E && selection.kv_storage != KVStorage::BF16) {
-        TT_THROW("Only FAST accepts BFP8/BFP4 K/V; other SDPA recipes require BF16 K/V");
-    }
     switch (selection.recipe) {
         case Recipe::B: return {selection, Fidelity::HiFi2, false, RecurrentState::ReferenceMaxFP32};
         case Recipe::C: return {selection, Fidelity::HiFi2, true, RecurrentState::FP32};

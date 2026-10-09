@@ -495,16 +495,21 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h);
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
 
-    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
-    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
+    // The kernel has only its streaming compute path (eliminates row buffers via cb_push_back_hold_wr_ptr).
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    const bool use_streaming_compute =
-        fixed_subblock_h || (!fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                             Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1);
+    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap. Without
+    // `precision`, sdpa.cpp runs every other blocking (and FP32 DEST) on a recipe.
+    TT_FATAL(
+        fixed_subblock_h ||
+            detail::exp_ring_streaming_compute_supported(Sq_chunk_t, Sk_chunk_t, dst_size, fp32_dest_acc_en),
+        "The exp ring joint SDPA kernel needs BF16 DEST and a blocking its streaming compute supports (Q chunk {} "
+        "tiles, K chunk {} tiles, DEST {} tiles); pass `precision` to run a recipe",
+        Sq_chunk_t,
+        Sk_chunk_t,
+        dst_size);
 
     auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, 2);
     if (fixed_subblock_h) {
         // The writer drains cb_out in rows of out_out_subblock_h, matching the fixed QK@V cadence.
         out_out_subblock_h = *fixed_subblock_h;
@@ -515,16 +520,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // because every pass runs with q_per_core == 1 (one Q chunk per pass, head-serial), so
     // Phase-2's save_to_staging branch (pack at offset qktv_h*vDHt into a 2*qktv_h*vDHt buffer)
     // never fires — cross-ring-iteration state lives in the L1 state FIFO instead.
-    if (use_streaming_compute) {
-        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
-        TT_FATAL(
-            fixed_subblock_h || Sq_chunk_t % out_out_subblock_h == 0,
-            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
-            Sq_chunk_t,
-            out_out_subblock_h);
-    }
+    out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
+    TT_FATAL(
+        fixed_subblock_h || Sq_chunk_t % out_out_subblock_h == 0,
+        "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+        Sq_chunk_t,
+        out_out_subblock_h);
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -727,7 +729,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         out_out_subblock_w,
         out_out_subblock_h,
         scale_packed,
-        static_cast<std::uint32_t>(use_streaming_compute),
+        1,  // use_streaming_compute (the kernel's only path)
         global_n_partial_col,
         joint_l_partial_col,
         0,  // stream_q placeholder (patched after CB sizing)
@@ -1019,17 +1021,15 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 1 * im_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
-                .data_format = im_df,
-                .page_size = im_tile_size,
-            }}},
-        });
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * im_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // Compute RISCs cannot NoC-read DRAM, so the reader publishes derived values here (slots per
     // ring_joint_derived_slots.hpp) and compute reads them with read_tile_value. Must be UInt32:
@@ -1054,17 +1054,15 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // take (every pass runs with q_per_core == 1); it is NOT allocated — the kernel's cb_sum_out
     // index is only touched in the staging branch, which is dead at q_per_core == 1.
     // c_11 (cb_sum_in) is the running-sum half of the L1 state FIFO — see cb_prev_out (c_7).
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = state_fifo_entries * statistics_tiles * stats_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
-                .data_format = stats_df,
-                .page_size = stats_tile_size,
-            }}},
-        });
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = state_fifo_entries * statistics_tiles * stats_tile_size,
+        .core_ranges = sdpa_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // Streamed-Q fallback: if the CBs do not fit L1 with all num_passes Q chunks resident, keep
     // only one chunk resident; the reader then re-reads each pass's Q every ring iteration and

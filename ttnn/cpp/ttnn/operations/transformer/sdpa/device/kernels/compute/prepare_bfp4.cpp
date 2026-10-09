@@ -21,7 +21,13 @@ namespace ckernel::sfpu {
 
 // The fixed-register body deliberately does not mix live SFPI compiler-managed
 // vectors with raw instructions. LREG0..7 are scratch; no constant is rewritten.
-// ADDR_MOD_7 is the zero-increment SFPU address modifier initialized by startup.
+// ADDR_MOD_7 is the zero-increment SFPU address modifier initialized by startup. Wormhole encodes two
+// address-mode bits; its SFPU launcher's base offset maps ADDR_MOD_3 to ADDR_MOD_7.
+#ifdef ARCH_WORMHOLE
+#define BFP4_SFPU_ADDR_MOD_7 ADDR_MOD_3
+#else
+#define BFP4_SFPU_ADDR_MOD_7 ADDR_MOD_7
+#endif
 inline void bfp4_max_r2_r3() {
     // In VEC_MIN_MAX mode VC gets max and VD gets min: retain max in LREG2.
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, 1);
@@ -43,8 +49,8 @@ inline void bfp4_round_four_face_rows() {
     // Each load is four rows x eight columns of one parity. Their pair covers
     // four independent native BFP groups of 16 adjacent columns, not 32 columns.
     constexpr int dst_format = FP32_DST ? 3 : 2;  // explicit FP32 / BF16
-    TTI_SFPLOAD(p_sfpu::LREG0, dst_format, ADDR_MOD_7, BASE);
-    TTI_SFPLOAD(p_sfpu::LREG1, dst_format, ADDR_MOD_7, BASE + 2);
+    TTI_SFPLOAD(p_sfpu::LREG0, dst_format, BFP4_SFPU_ADDR_MOD_7, BASE);
+    TTI_SFPLOAD(p_sfpu::LREG1, dst_format, BFP4_SFPU_ADDR_MOD_7, BASE + 2);
     TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
     TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
     bfp4_max_r2_r3();
@@ -72,8 +78,15 @@ inline void bfp4_round_four_face_rows() {
     TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG6, 1);
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG6, 0);
+#ifdef ARCH_WORMHOLE
+    // Wormhole's SFPMAD has no negate-VC modifier: subtract a sign-flipped copy of magic (LREG7 is free here).
+    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG7, 1);
+    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LREG5, 0);
+    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, 0);
+#else
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG5, 2);
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG6, 2);
+#endif
 
     // Copy cap before destructive min/max. MOV hides the MAD->SWAP hazard;
     // an explicit NOP follows each SWAP as required by the Blackhole ISA.
@@ -84,8 +97,8 @@ inline void bfp4_round_four_face_rows() {
     TTI_SFPNOP;
     TTI_SFPSETSGN(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
     TTI_SFPSETSGN(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
-    TTI_SFPSTORE(p_sfpu::LREG0, dst_format, ADDR_MOD_7, BASE);
-    TTI_SFPSTORE(p_sfpu::LREG1, dst_format, ADDR_MOD_7, BASE + 2);
+    TTI_SFPSTORE(p_sfpu::LREG0, dst_format, BFP4_SFPU_ADDR_MOD_7, BASE);
+    TTI_SFPSTORE(p_sfpu::LREG1, dst_format, BFP4_SFPU_ADDR_MOD_7, BASE + 2);
 }
 
 template <bool FP32_DST>

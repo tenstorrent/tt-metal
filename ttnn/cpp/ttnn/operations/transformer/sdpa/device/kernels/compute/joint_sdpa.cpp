@@ -9,7 +9,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "compute_common.hpp"
+#include "sdpa_legacy_loops.hpp"
 
 void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(0);

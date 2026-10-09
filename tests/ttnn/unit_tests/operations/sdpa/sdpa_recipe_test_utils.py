@@ -14,11 +14,9 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
-
-blackhole_only = pytest.mark.skipif(
-    not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole hardware (the simulator disables SFPLOADMACRO)",
+recipe_hardware = pytest.mark.skipif(
+    ttnn.get_arch_name() not in ("blackhole", "wormhole_b0") or os.environ.get("TT_METAL_SIMULATOR") is not None,
+    reason="SDPA precision recipes run on Blackhole and Wormhole B0 hardware (the simulator disables SFPLOADMACRO)",
 )
 
 # Recipe and K/V storage. FAST inputs go through prepare_sdpa_input.
@@ -42,11 +40,11 @@ L2_PCT_BOUND = {
 }
 
 
-def reference(q, k, v, mask=None):
+def reference(q, k, v, mask=None, scale=None):
     q, k, v = q.double(), k.double(), v.double()
     rep = q.shape[1] // k.shape[1]
     k, v = k.repeat_interleave(rep, 1), v.repeat_interleave(rep, 1)
-    scores = q @ k.transpose(-1, -2) / math.sqrt(q.shape[-1])
+    scores = (q @ k.transpose(-1, -2)) * (1 / math.sqrt(q.shape[-1]) if scale is None else scale)
     if mask is not None:
         scores = scores + mask.double()
     return torch.softmax(scores, -1) @ v
@@ -58,10 +56,16 @@ def l2_pct(actual, expected):
     return 100 * ((actual - expected).norm() / expected.norm()).item()
 
 
-def to_device(device, x, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+def to_device(device, x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+
+def stored(x, dtype):
+    """The values x holds once stored as dtype (BFP8/BFP4 share an exponent per 16 values); the FP64 reference
+    of a packed-input call uses these, so the bound measures the recipe, not the input format."""
+    if dtype == ttnn.bfloat16:
+        return x
+    return ttnn.to_torch(ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)).bfloat16()
 
 
 def inputs_for(device, variant, q, k, v):
@@ -73,9 +77,9 @@ def inputs_for(device, variant, q, k, v):
     return tq, tk, tv
 
 
-def program_config(device, q_chunk, k_chunk):
+def program_config(device, q_chunk, k_chunk, grid=None):
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=grid or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
     )
@@ -85,10 +89,11 @@ def randn(*shape, seed):
     return torch.randn(shape, generator=torch.Generator().manual_seed(seed)).bfloat16()
 
 
-def sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask=None):
+def sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask=None, scale=None):
     return ttnn.transformer.scaled_dot_product_attention(
         *inputs_for(device, variant, q, k, v),
         is_causal=False,
+        scale=scale,
         attn_mask=None if mask is None else to_device(device, mask),
         program_config=program_config(device, q_chunk, k_chunk),
         precision=VARIANTS[variant][0],
@@ -108,6 +113,14 @@ SHAPES = {
 }
 
 
+def fit_q_chunk(variant, q_chunk, wormhole_cap):
+    """Wormhole's smaller L1 (1464 KiB) does not fit some FP32-state (BALANCED, ACCURATE) layouts that Blackhole
+    does; cap their Q chunk there."""
+    if variant in ("balanced", "accurate") and ttnn.get_arch_name() == "wormhole_b0":
+        return min(q_chunk, wormhole_cap)
+    return q_chunk
+
+
 def check_accuracy(device, variant, shape):
     b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
     q, k, v = randn(b, nh, sq, d, seed=1), randn(b, nkv, sk, d, seed=2), randn(b, nkv, sk, d, seed=3)
@@ -125,7 +138,7 @@ def check_attn_mask(device, variant, mask_kind):
         mask = torch.zeros(1, 1, 512, 1500)
         mask[..., 1100:] = -math.inf
     mask = mask.bfloat16()
-    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, 256, 512, mask))
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, fit_q_chunk(variant, 256, 128), 512, mask))
     assert l2_pct(actual, reference(q, k, v, mask)) < L2_PCT_BOUND[variant]
 
 
@@ -156,6 +169,7 @@ OP_SELECTED_SHAPES = {
     "short_k_cross": (1, 8, 4864, 256, 128, 0),
     "d256": (1, 8, 1024, 1024, 256, 0),
     "joint": (1, 4, 1000, 1000, 128, 77),
+    "d512_one_head": (1, 1, 2048, 2048, 512, 0),
 }
 
 
@@ -183,3 +197,584 @@ def check_op_selected_blocking(device, variant, shape):
         actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
         expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
+
+
+def check_legacy_arguments(
+    device,
+    variant,
+    *,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat16,
+    scale=None,
+    mask=False,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    compute_kernel_config=False,
+    shape=(1, 2, 2, 288, 640, 64, 96, 160),
+    grid=None,
+    q_multiplier=1.0,
+):
+    """Arguments legacy SDPA callers pass, with a recipe: a custom scale (with an attn_mask, which is pre-scaled by
+    1/scale), BFP8/BFP4 Q and K/V, L1 inputs and output, and a compute_kernel_config plus exp_approx_mode=False
+    (ignored: the recipe owns the numerics). FP64 reference on the stored input values. Returns the output."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    precision = VARIANTS[variant][0]
+    q, k, v = randn(b, nh, sq, d, seed=33), randn(b, nkv, sk, d, seed=34), randn(b, nkv, sk, d, seed=35)
+    q = (q * q_multiplier).bfloat16()
+    if precision == ttnn.SDPAPrecision.FAST:
+        assert q_dtype == ttnn.bfloat16 and kv_dtype == ttnn.bfloat16, "FAST inputs come from prepare_sdpa_input"
+        tq, tk, tv = inputs_for(device, variant, q, k, v)
+        if memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            tq, tk, tv = (ttnn.to_memory_config(x, memory_config) for x in (tq, tk, tv))
+    else:
+        q, k, v = stored(q, q_dtype), stored(k, kv_dtype), stored(v, kv_dtype)
+        tq = to_device(device, q, q_dtype, memory_config)
+        tk, tv = (to_device(device, x, kv_dtype, memory_config) for x in (k, v))
+    host_mask, kwargs = None, {}
+    if mask:
+        generator = torch.Generator().manual_seed(36)
+        host_mask = torch.randn(1, 1, sq, sk, generator=generator)
+        host_mask[torch.rand(host_mask.shape, generator=generator) < 0.2] = -math.inf
+        host_mask = host_mask.bfloat16()
+        kwargs["attn_mask"] = to_device(device, host_mask, memory_config=memory_config)
+    if compute_kernel_config:
+        kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        scale=scale,
+        memory_config=memory_config,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid or device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False if compute_kernel_config else None,
+        ),
+        precision=precision,
+        **kwargs,
+    )
+    assert out.dtype == q_dtype and out.memory_config() == memory_config
+    actual = ttnn.to_torch(out)
+    if precision == ttnn.SDPAPrecision.FAST:
+        q, k, v = (ttnn.to_torch(x) for x in (tq, tk, tv))
+    expected = reference(q, k, v, host_mask, scale)
+    # A BFP8/BFP4 output adds its own rounding (legacy SDPA returns Q's dtype too): allow a multiple of the error of
+    # storing the exact result in that format on the host. The device's BFP4 packing loses about 1.8x that.
+    factor = {ttnn.bfloat16: 0.0, ttnn.bfloat8_b: 1.5, ttnn.bfloat4_b: 2.2}[q_dtype]
+    output_rounding = factor * l2_pct(stored(expected.bfloat16(), q_dtype), expected) if factor else 0.0
+    assert l2_pct(actual, expected) < L2_PCT_BOUND[variant] + output_rounding
+    return out
+
+
+def key_mask(sq, sk, *, causal=False, window=None, q_offset=0, cu=None):
+    """Additive {0, -inf} mask of the recipes' key ranges (ttnn's golden semantics): query row i sits at global
+    position q_offset + i; cu are windowed mode's cumulative window bounds (cu_window_seqlens)."""
+    q_pos = torch.arange(q_offset, q_offset + sq).unsqueeze(1)
+    k_pos = torch.arange(sk).unsqueeze(0)
+    allowed = torch.ones(sq, sk, dtype=torch.bool)
+    if cu is not None:
+        bounds = torch.tensor(cu)
+        allowed &= torch.bucketize(q_pos, bounds, right=True) == torch.bucketize(k_pos, bounds, right=True)
+    if causal:
+        allowed &= k_pos <= q_pos
+    if window:
+        if causal:
+            allowed &= k_pos > q_pos - window
+        else:
+            allowed &= (k_pos >= q_pos - window // 2) & (k_pos <= q_pos + window // 2)
+    return torch.zeros(sq, sk).masked_fill(~allowed, -math.inf)
+
+
+def int_tensor(device, values):
+    return ttnn.from_torch(torch.tensor(values, dtype=torch.int32), dtype=ttnn.int32, device=device)
+
+
+# Causal / sliding-window shapes: b, nh, nkv, s, d, q_chunk, k_chunk (Sq == Sk).
+CAUSAL_SHAPES = {
+    "q256_k512": (1, 2, 2, 2048, 128, 256, 512),
+    "q512_k128": (1, 2, 2, 1024, 128, 512, 128),
+    "subtile_tails": (1, 2, 2, 1000, 128, 256, 512),
+    "odd_q96_k160_d64": (1, 2, 2, 864, 64, 96, 160),
+    "gqa_batch2": (2, 8, 2, 768, 128, 128, 256),
+    "more_heads_than_cores": (8, 24, 8, 512, 64, 128, 128),
+}
+
+
+def check_key_range(device, variant, shape, *, causal, window=None, grid=None):
+    """Dense causal and/or sliding-window SDPA (scaled_dot_product_attention with is_causal / sliding_window_size)."""
+    b, nh, nkv, s, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, s, d, seed=33), randn(b, nkv, s, d, seed=34), randn(b, nkv, s, d, seed=35)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        is_causal=causal,
+        sliding_window_size=window,
+        program_config=program_config(device, fit_q_chunk(variant, q_chunk, 256), k_chunk, grid),
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, k, v, key_mask(s, s, causal=causal, window=window))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_windowed(
+    device, variant, cu, *, causal, q_rows=None, q_offset=0, offset_as_tensor=False, chunks=(128, 256), grid=None
+):
+    """Windowed (block-diagonal) SDPA from cu_window_seqlens, optionally on a Q slice at q_offset."""
+    s, d = cu[-1], 128
+    q, k, v = randn(1, 4, s, d, seed=36), randn(1, 2, s, d, seed=37), randn(1, 2, s, d, seed=38)
+    q_rows = q_rows or s
+    q = q[:, :, q_offset : q_offset + q_rows].contiguous()
+    kwargs = dict(cu_window_seqlens=int_tensor(device, cu))
+    if offset_as_tensor:
+        kwargs["windowed_q_token_offset_tensor"] = int_tensor(device, [q_offset])
+    else:
+        kwargs["windowed_q_token_offset"] = q_offset
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        is_causal=causal,
+        program_config=program_config(device, *chunks, grid),
+        precision=VARIANTS[variant][0],
+        **kwargs,
+    )
+    expected = reference(q, k, v, key_mask(q_rows, s, causal=causal, q_offset=q_offset, cu=cu))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def sink_reference(q, k, v, sink, mask=None, scale=None):
+    """FP64 attention with per-head sink logits [1, H, 1, 1] (legacy attention_sink: unscaled logits whose
+    exp(scale * sink) joins each row's softmax denominator)."""
+    q, k, v = q.double(), k.double(), v.double()
+    rep = q.shape[1] // k.shape[1]
+    k, v = k.repeat_interleave(rep, 1), v.repeat_interleave(rep, 1)
+    scale = 1 / math.sqrt(q.shape[-1]) if scale is None else scale
+    scores = (q @ k.transpose(-1, -2)) * scale
+    if mask is not None:
+        scores = scores + mask.double()
+    sinks = (sink.double() * scale).expand(q.shape[0], -1, q.shape[2], 1)
+    weights = torch.softmax(torch.cat([scores, sinks], -1), -1)[..., :-1]
+    return weights @ v
+
+
+class ChunkedCase:
+    """Chunked prefill: Q rows [start, start + sq) of each sequence over a paged K/V cache of blocks_per_seq blocks of
+    `block` rows per sequence. With one block per sequence the page table maps batch b to block blocks[b]; with more,
+    to a shuffled set. `cache_shape` (heads, rows, head dim) declares the cache in another layer's geometry of the
+    same elements per block; the call then passes its view as paged_cache_geometry. head_dim_v (MLA): run
+    chunked_flash_mla_prefill, V being K's first head_dim_v columns. sink: per-head attention sink logits."""
+
+    def __init__(
+        self,
+        device,
+        variant,
+        *,
+        b=1,
+        nh=2,
+        nkv=2,
+        sq=256,
+        block=1024,
+        d=128,
+        blocks=None,
+        blocks_per_seq=1,
+        cache_shape=None,
+        head_dim_v=None,
+        sink=False,
+        seed=40,
+    ):
+        self.device, self.variant, self.head_dim_v = device, variant, head_dim_v
+        if blocks_per_seq == 1:
+            table = [[x] for x in (blocks or list(reversed(range(b))))]
+        else:
+            order = torch.randperm(b * blocks_per_seq + 1, generator=torch.Generator().manual_seed(seed))
+            table = order[: b * blocks_per_seq].reshape(b, blocks_per_seq).tolist()
+        self.table = torch.tensor(table)
+        count = int(self.table.max()) + 1
+        self.q = randn(b, nh, sq, d, seed=seed)
+        self.k, self.v = randn(count, nkv, block, d, seed=seed + 1), randn(count, nkv, block, d, seed=seed + 2)
+        if head_dim_v:
+            self.v = self.k[..., :head_dim_v]
+        stored_k, stored_v = self.k, self.v
+        self.geometry = None
+        if cache_shape:
+            stored_k, stored_v = (x.reshape(count, *cache_shape) for x in (self.k, self.v))
+            self.geometry = ttnn.PagedCacheGeometryOverride(block_size=block, num_kv_heads=nkv)
+        self.inputs = inputs_for(device, variant, self.q, stored_k, stored_v)
+        if variant.startswith("fast"):
+            # FAST stores K/V as prepare_sdpa_input packs them: the reference uses those values.
+            self.k, self.v = (ttnn.to_torch(x).reshape(x.shape[0], nkv, block, -1) for x in self.inputs[1:])
+            if head_dim_v:
+                self.v = self.k[..., :head_dim_v]
+        self.page_table = int_tensor(device, table)
+        self.sink = randn(1, nh, 1, 1, seed=seed + 3) * 4 if sink else None
+
+    def run(self, start, q_chunk, k_chunk, *, window=None, start_tensor=None, grid=None):
+        config = program_config(self.device, q_chunk, k_chunk, grid)
+        precision = VARIANTS[self.variant][0]
+        if self.head_dim_v:
+            return ttnn.transformer.chunked_flash_mla_prefill(
+                self.inputs[0],
+                self.inputs[1],
+                self.head_dim_v,
+                self.page_table,
+                start,
+                program_config=config,
+                precision=precision,
+            )
+        kwargs = dict(chunk_start_idx_tensor=start_tensor) if start_tensor is not None else dict(chunk_start_idx=start)
+        if self.geometry is not None:
+            kwargs["paged_cache_geometry"] = self.geometry
+        if self.sink is not None:
+            kwargs["attention_sink"] = to_device(self.device, self.sink)
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            *self.inputs,
+            self.page_table,
+            program_config=config,
+            sliding_window_size=window,
+            precision=precision,
+            **kwargs,
+        )
+
+    def expected(self, start, window=None):
+        sq = self.q.shape[2]
+        keys = start + sq
+        # Sequence b's keys: its blocks in page-table order.
+        k, v = (
+            torch.cat([x[self.table[:, j]] for j in range(self.table.shape[1])], 2)[:, :, :keys]
+            for x in (self.k, self.v)
+        )
+        mask = key_mask(sq, keys, causal=True, window=window, q_offset=start)
+        if self.sink is not None:
+            return sink_reference(self.q, k, v, self.sink, mask)
+        return reference(self.q, k, v, mask)
+
+    def check(self, out, start, window=None):
+        assert l2_pct(ttnn.to_torch(out), self.expected(start, window)) < L2_PCT_BOUND[self.variant]
+
+
+def check_chunked(device, variant, start, *, q_chunk=128, k_chunk=256, window=None, as_tensor=False, grid=None, **case):
+    chunked = ChunkedCase(device, variant, **case)
+    start_tensor = int_tensor(device, [start]) if as_tensor else None
+    out = chunked.run(start, q_chunk, k_chunk, window=window, start_tensor=start_tensor, grid=grid)
+    chunked.check(out, start, window)
+
+
+# MLA prefill (flash_mla_prefill): b, nh, s_q, s_k, QK head dim, V head dim, q_chunk, k_chunk.
+MLA_SHAPES = {
+    "d192_v128": (1, 4, 512, 512, 192, 128, 128, 256),
+    "d576_v512": (1, 2, 256, 256, 576, 512, 64, 128),
+    "d128_v64_tails": (2, 3, 300, 700, 128, 64, 128, 256),
+}
+
+
+def check_mla(device, variant, shape, *, causal=True, v_tensor=False):
+    """flash_mla_prefill: K [b, 1, s, d] shared by every head; V is K's first head_dim_v columns, or (v_tensor) its own
+    tensor [b, 1, s, head_dim_v]."""
+    b, nh, sq, sk, d, dv, q_chunk, k_chunk = shape
+    q, k = randn(b, nh, sq, d, seed=50), randn(b, 1, sk, d, seed=51)
+    v = randn(b, 1, sk, dv, seed=52) if v_tensor else k[..., :dv]
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k = ttnn.to_torch(tk)
+        v = ttnn.to_torch(tv) if v_tensor else k[..., :dv]
+    kwargs = dict(
+        is_causal=causal, program_config=program_config(device, q_chunk, k_chunk), precision=VARIANTS[variant][0]
+    )
+    if v_tensor:
+        out = ttnn.transformer.flash_mla_prefill(tq, tk, tv, **kwargs)
+    else:
+        out = ttnn.transformer.flash_mla_prefill(tq, tk, dv, **kwargs)
+    assert tuple(out.shape) == (b, nh, sq, dv)
+    expected = reference(q, k, v, key_mask(sq, sk, causal=True) if causal else None)
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_sink(
+    device,
+    variant,
+    *,
+    causal=False,
+    window=None,
+    shape=(1, 4, 2, 512, 1024, 128, 256, 512),
+    sink_offset=0.0,
+    sink_dtype=ttnn.bfloat16,
+):
+    """scaled_dot_product_attention with attention_sink [1, H, 1, 1] (unscaled per-head logits, 4 x normal plus
+    sink_offset)."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=60), randn(b, nkv, sk, d, seed=61), randn(b, nkv, sk, d, seed=62)
+    sink = (randn(1, nh, 1, 1, seed=63) * 4 + sink_offset).bfloat16()
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k, v = ttnn.to_torch(tk), ttnn.to_torch(tv)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=causal,
+        sliding_window_size=window,
+        attention_sink=to_device(device, sink, sink_dtype),
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    mask = key_mask(sq, sk, causal=causal, window=window) if causal or window else None
+    sink = stored(sink, sink_dtype) if sink_dtype != ttnn.float32 else sink
+    assert l2_pct(ttnn.to_torch(out), sink_reference(q, k, v, sink, mask)) < L2_PCT_BOUND[variant]
+
+
+def check_concat_heads(device, variant, *, causal=False, shape=(2, 4, 2, 300, 640, 64, 128, 256)):
+    """output_concat_heads: the output [b, 1, s, nh * d] holds the heads side by side."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=70), randn(b, nkv, sk, d, seed=71), randn(b, nkv, sk, d, seed=72)
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k, v = ttnn.to_torch(tk), ttnn.to_torch(tv)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=causal,
+        output_concat_heads=True,
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    assert tuple(out.shape) == (b, 1, sq, nh * d)
+    expected = reference(q, k, v, key_mask(sq, sk, causal=True) if causal else None)
+    expected = expected.permute(0, 2, 1, 3).reshape(b, 1, sq, nh * d)
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_chunked_trace(device, variant, starts, *, q_chunk=128, k_chunk=256):
+    """chunk_start_idx_tensor is read on device: one captured trace replays at every start offset."""
+    device.enable_program_cache()
+    chunked = ChunkedCase(device, variant)
+    start_tensor = int_tensor(device, [starts[0]])
+    chunked.check(chunked.run(starts[0], q_chunk, k_chunk, start_tensor=start_tensor), starts[0])
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    traced = chunked.run(starts[0], q_chunk, k_chunk, start_tensor=start_tensor)
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for start in starts:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(torch.tensor([start], dtype=torch.int32), dtype=ttnn.int32), start_tensor
+            )
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            chunked.check(traced, start)
+    finally:
+        ttnn.release_trace(device, trace)
+
+
+def check_mixed_kv(device, variant, k_dtype, v_dtype, shape=(1, 4, 2, 500, 700, 96, 128, 256)):
+    """K and V stored in different formats (Qwen-VL vision: K BF16, V BFP8): V's circular buffer takes its own format."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=33), randn(b, nkv, sk, d, seed=34), randn(b, nkv, sk, d, seed=35)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        to_device(device, q),
+        to_device(device, k, k_dtype),
+        to_device(device, v, v_dtype),
+        is_causal=False,
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, stored(k, k_dtype), stored(v, v_dtype))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_joint_empty(device, variant):
+    """Zero-width joint tensors (FLUX.2 single-stream blocks): the dense result and an empty joint output."""
+    q, k, v = randn(1, 2, 600, 128, seed=36), randn(1, 2, 600, 128, seed=37), randn(1, 2, 600, 128, seed=38)
+    empty = [to_device(device, torch.zeros(1, 2, 0, 128)) for _ in range(3)]
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        *empty,
+        joint_strategy="rear",
+        program_config=program_config(device, 128, 256),
+        precision=VARIANTS[variant][0],
+    )
+    assert list(joint_out.shape) == [1, 2, 0, 128]
+    assert l2_pct(ttnn.to_torch(out), reference(q, k, v)) < L2_PCT_BOUND[variant]
+
+
+def fp32_dest_config(device):
+    """The shared HiFi4 + FP32-dest config legacy callers pass (it selected the legacy kernels)."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def check_routing(device, case):
+    """Precision routing: a call without `precision` that would reach a legacy loop runs a recipe (FP32 dest ->
+    ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest), bitwise the explicit recipe at op-chosen
+    blocking (the caller's chunk sizes were tuned for the legacy kernels). The output meets the recipe's FP64 bound."""
+    chosen = lambda: program_config(device, 0, 0)
+    fp32 = fp32_dest_config(device)
+    accurate, standard = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.STANDARD
+    if case in ("dense_causal_bfp8", "dense_mask_q2048"):
+        causal = case == "dense_causal_bfp8"
+        dtype = ttnn.bfloat8_b if causal else ttnn.bfloat16
+        q, k, v = (stored(randn(1, h, 1000, 128, seed=80 + i), dtype) for i, h in enumerate((4, 2, 2)))
+        mask = None if causal else key_mask(1000, 1000, window=512)[None, None]
+        kwargs = dict(is_causal=causal, scale=0.1, attn_mask=None if causal else to_device(device, mask))
+        tensors = [to_device(device, x, dtype) for x in (q, k, v)]
+        cfg = program_config(device, 256, 512) if causal else program_config(device, 2048, 512)
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, program_config=config, **kwargs, **extra
+        )
+        routed, recipe = run(cfg, compute_kernel_config=fp32), accurate
+        expected = reference(q, k, v, key_mask(1000, 1000, causal=True) if causal else mask, 0.1)
+        explicit = run(chosen(), precision=recipe)
+        tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
+    elif case == "dense_mask_short_k":
+        # Keys that fit one K chunk: op-chosen like any routed call (the caller's larger Q384 is not kept).
+        q, k, v = randn(1, 2, 500, 64, seed=83), randn(1, 2, 500, 64, seed=84), randn(1, 2, 500, 64, seed=85)
+        mask = key_mask(500, 500, window=200)[None, None]
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, scale=0.125, attn_mask=to_device(device, mask), program_config=config, **extra
+        )
+        routed, recipe = run(program_config(device, 384, 256), compute_kernel_config=fp32), accurate
+        explicit, expected, tolerance = run(chosen(), precision=recipe), reference(q, k, v, mask, 0.125), 0.0
+    elif case == "chunked_tensor_start":
+        chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
+        start = int_tensor(device, [256])
+        run = lambda **extra: ttnn.transformer.chunked_scaled_dot_product_attention(
+            *chunked.inputs,
+            chunked.page_table,
+            chunk_start_idx_tensor=start,
+            **extra,
+        )
+        routed, recipe = run(program_config=program_config(device, 128, 256), compute_kernel_config=fp32), accurate
+        explicit, expected, tolerance = run(program_config=chosen(), precision=recipe), chunked.expected(256), 0.0
+    elif case == "dense_d512":
+        # Gemma-4 global layers / SD VAEs: head dim 512 fits L1 only below the chooser's fitted range (Q128+ x K256+).
+        q, k, v = randn(1, 2, 640, 512, seed=86), randn(1, 1, 640, 512, seed=87), randn(1, 1, 640, 512, seed=88)
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=True, program_config=config, **extra
+        )
+        routed, recipe = run(program_config(device, 256, 512), compute_kernel_config=fp32), accurate
+        explicit, tolerance = run(chosen(), precision=recipe), 0.0
+        expected = reference(q, k, v, key_mask(640, 640, causal=True))
+    elif case == "dense_mixed_kv":
+        # Qwen-VL vision: K BF16, V BFP8.
+        q, k, v = randn(1, 2, 500, 96, seed=96), randn(1, 2, 500, 96, seed=97), randn(1, 2, 500, 96, seed=98)
+        tensors = [to_device(device, q), to_device(device, k), to_device(device, v, ttnn.bfloat8_b)]
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, program_config=config, **extra
+        )
+        routed, recipe = run(program_config(device, 256, 256), compute_kernel_config=fp32), accurate
+        explicit, tolerance = run(chosen(), precision=recipe), 0.0
+        expected = reference(q, k, stored(v, ttnn.bfloat8_b))
+    elif case == "joint_empty":
+        # FLUX.2 single-stream blocks: zero-width joint tensors run as a plain dense call; the joint output is empty.
+        q, k, v = randn(1, 2, 600, 128, seed=99), randn(1, 2, 600, 128, seed=100), randn(1, 2, 600, 128, seed=101)
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        empty = [to_device(device, torch.zeros(1, 2, 0, 128)) for _ in range(3)]
+        routed, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+            *tensors, *empty, joint_strategy="rear", program_config=program_config(device, 128, 512)
+        )
+        assert list(joint_out.shape) == [1, 2, 0, 128] and joint_out.dtype == ttnn.bfloat16
+        recipe, tolerance = standard, 0.0
+        explicit = ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, program_config=chosen(), precision=recipe
+        )
+        expected = reference(q, k, v)
+    else:  # joint_bf16_dest / joint_fp32_dest
+        recipe = accurate if case == "joint_fp32_dest" else standard
+        q, k, v = randn(1, 2, 600, 128, seed=90), randn(1, 2, 600, 128, seed=91), randn(1, 2, 600, 128, seed=92)
+        jq, jk, jv = randn(1, 2, 77, 128, seed=93), randn(1, 2, 77, 128, seed=94), randn(1, 2, 77, 128, seed=95)
+        tensors = [to_device(device, x) for x in (q, k, v, jq, jk, jv)]
+        run = lambda **extra: torch.cat(
+            [
+                ttnn.to_torch(x)
+                for x in ttnn.transformer.joint_scaled_dot_product_attention(
+                    *tensors, joint_strategy="rear", **extra
+                )
+            ],
+            2,
+        )
+        hint = program_config(device, 128, 256)
+        extra = dict(compute_kernel_config=fp32) if recipe == accurate else {}
+        routed = run(program_config=hint, **extra)
+        explicit, tolerance = run(program_config=chosen(), precision=recipe), 0.0
+        expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+    routed = routed if isinstance(routed, torch.Tensor) else ttnn.to_torch(routed)
+    explicit = explicit if isinstance(explicit, torch.Tensor) else ttnn.to_torch(explicit)
+    assert torch.equal(routed, explicit), "the routed call must run the explicit recipe"
+    name = "accurate" if recipe == accurate else "standard"
+    assert l2_pct(routed, expected) < L2_PCT_BOUND[name] + tolerance
+
+
+def rebind_call(device, case, seed):
+    """One call of check_cache_hit_rebinds' `case` on inputs drawn from `seed`: (output, FP64 reference, variant)."""
+    if case == "dense_mask_sink":
+        q = randn(1, 4, 300, 64, seed=seed)
+        k, v = randn(1, 2, 640, 64, seed=seed + 1), randn(1, 2, 640, 64, seed=seed + 2)
+        mask = randn(1, 1, 300, 640, seed=seed + 3).float()
+        mask[..., 500 + seed % 7 :] = -math.inf
+        mask = mask.bfloat16()
+        sink = (randn(1, 4, 1, 1, seed=seed + 4) * 4).bfloat16()
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs_for(device, "accurate", q, k, v),
+            is_causal=False,
+            attn_mask=to_device(device, mask),
+            attention_sink=to_device(device, sink),
+            program_config=program_config(device, 128, 256),
+            precision=ttnn.SDPAPrecision.ACCURATE,
+        )
+        return out, sink_reference(q, k, v, sink, mask), "accurate"
+    if case == "chunked_paged_sink":
+        chunked = ChunkedCase(device, "accurate", b=2, sq=128, block=128, blocks_per_seq=3, sink=True, seed=seed)
+        out = chunked.run(200, 128, 128, start_tensor=int_tensor(device, [200]))
+        return out, chunked.expected(200), "accurate"
+    if case == "windowed_offset_tensor":
+        cu = [0, 100, 356, 600]
+        q = randn(1, 4, 256, 128, seed=seed)
+        k, v = randn(1, 2, 600, 128, seed=seed + 1), randn(1, 2, 600, 128, seed=seed + 2)
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs_for(device, "accurate", q, k, v),
+            is_causal=True,
+            cu_window_seqlens=int_tensor(device, cu),
+            windowed_q_token_offset_tensor=int_tensor(device, [64]),
+            program_config=program_config(device, 128, 256),
+            precision=ttnn.SDPAPrecision.ACCURATE,
+        )
+        return out, reference(q, k, v, key_mask(256, 600, causal=True, q_offset=64, cu=cu)), "accurate"
+    # joint
+    q, k, v = (randn(1, 2, 300, 64, seed=seed + i) for i in range(3))
+    jq, jk, jv = (randn(1, 2, 77, 64, seed=seed + 3 + i) for i in range(3))
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *inputs_for(device, "standard", q, k, v),
+        *inputs_for(device, "standard", jq, jk, jv),
+        joint_strategy="rear",
+        program_config=program_config(device, 128, 256),
+        precision=ttnn.SDPAPrecision.STANDARD,
+    )
+    expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+    return torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2), expected, "standard"
+
+
+def check_cache_hit_rebinds(device, case):
+    """A program-cache hit runs on the call's own buffers: a second call on other values in other buffers (the first
+    call's still allocated) meets its own FP64 bound without adding a program. Covers every buffer-address runtime
+    arg of the dense / joint recipe program (mask, sink, joint Q/K/V and output, Q offset tensor, cu_window_seqlens,
+    page table)."""
+    device.enable_program_cache()
+    kept = []
+    for seed in (100, 200):
+        out, expected, variant = rebind_call(device, case, seed)
+        if not kept:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "the second call must hit the program cache"
+        actual = out if isinstance(out, torch.Tensor) else ttnn.to_torch(out)
+        assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
+        kept.append(out)

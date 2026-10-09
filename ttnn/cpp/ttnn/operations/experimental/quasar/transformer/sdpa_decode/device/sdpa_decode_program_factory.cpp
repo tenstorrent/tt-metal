@@ -141,7 +141,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bool q_locally_available = false;
     if (is_q_sharded && use_mla) {
         const uint32_t q_shard_height = input_tensor_q.memory_config().shard_spec()->shape[0];
-        const uint32_t max_cores = program_config.has_value() ? program_config->max_cores_per_head_batch : 16;
+        const uint32_t max_cores =
+            program_config.has_value() ? program_config->max_cores_per_head_batch.value_or(16) : 16;
         const uint32_t num_q_shards = input_tensor_q.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         q_heads_parallel_factor = num_groups / B;
@@ -200,7 +201,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
 
     // ========== Core Allocation ==========
     const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+        program_config.has_value() ? program_config->max_cores_per_head_batch.value_or(16) : num_cores_available;
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;

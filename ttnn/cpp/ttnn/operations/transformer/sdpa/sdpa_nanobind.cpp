@@ -225,7 +225,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -236,7 +237,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
@@ -248,7 +250,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -259,7 +262,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
@@ -279,7 +283,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -293,7 +298,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             compute_kernel_config,
             paged_cache_geometry,
             sliding_window_size,
-            attention_sink);
+            attention_sink,
+            precision);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -312,7 +318,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         compute_kernel_config,
         paged_cache_geometry,
         sliding_window_size,
-        attention_sink);
+        attention_sink,
+        precision);
 }
 
 }  // namespace
@@ -337,7 +344,7 @@ void bind_sdpa(nb::module_& mod) {
         dtype BFLOAT4_B, rounded onto each 16-value group's BFP4 grid with saturation so the
         BFP4 pack is exact.
 
-        Requires Blackhole and tiled, interleaved DRAM, rank-four inputs with minimal tile padding.
+        Requires Blackhole or Wormhole B0 and tiled, interleaved DRAM, rank-four inputs with minimal tile padding.
         Values must be finite (normal or zero); for BFP4 each nonzero group's maximum exponent must
         lie in [-124, 106].
         )doc",
@@ -372,7 +379,7 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or exp_approx_mode=False. FAST expects inputs rounded by prepare_sdpa_input.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. When omitted, BF16 DEST runs the streaming kernel and fp32_dest_acc_en=True in compute_kernel_config runs ACCURATE on Blackhole (the legacy FP32 kernel on Wormhole); program_config chunk sizes are then hints. The recipe owns the numerics: compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. FAST expects inputs rounded by prepare_sdpa_input.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. With `is_causal=False` a token attends to its whole window; with `is_causal=True` token t in window [cu[i], cu[i+1]) attends to cu[i]..t (packed variable-length causal sequences). Mutually exclusive with attn_mask/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
@@ -380,12 +387,12 @@ void bind_sdpa(nb::module_& mod) {
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
 
 
-        Precision recipes run on Blackhole with noncausal attention and an optional additive
-        attn_mask ([1|b, 1|nqh, s, s_kv], BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE). Batch and
-        GQA are supported; Q/K/V lengths and chunk sizes need not divide each other. Head dim and
-        chunk sizes must be tile multiples, and the chunks must fit in L1. Inputs are tiled,
-        interleaved DRAM; Q and output are BF16. STANDARD-ACCURATE take BF16 K/V; FAST also
-        accepts BFLOAT8_B/BFLOAT4_B K/V. Unsupported arguments raise; they never fall back.
+        Precision recipes run on Blackhole and Wormhole B0 with an optional additive attn_mask ([1|b, 1|nqh, s, s_kv],
+        BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE) or a causal / sliding-window / windowed key
+        range, and take attention_sink and output_concat_heads. Batch and GQA are supported; Q/K/V
+        lengths and chunk sizes need not divide each other. Head dim and chunk sizes must be tile
+        multiples, and the chunks must fit in L1. Inputs are tiled and interleaved. Unsupported
+        arguments raise; they never fall back.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
@@ -582,6 +589,10 @@ void bind_sdpa(nb::module_& mod) {
                 at absolute position p attends to keys in (p - window, p]. Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Per-head learned sink logit [1 x nqh x 1 x 1],
                 as for `scaled_dot_product_attention`. Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `scaled_dot_product_attention`. Recipes take any chunk_start_idx (a multiple of neither chunk
+                size is needed), paged_cache_geometry and attention_sink. When omitted, routed as for
+                `scaled_dot_product_attention` (FP32 DEST runs ACCURATE on Blackhole). Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -605,7 +616,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("paged_cache_geometry").noconvert() = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
-        nb::arg("attention_sink").noconvert() = nb::none());
+        nb::arg("attention_sink").noconvert() = nb::none(),
+        nb::arg("precision").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
@@ -631,7 +643,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, with the same support rules as scaled_dot_product_attention (no attn_mask). Omit for the legacy kernel.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, with the same support rules as scaled_dot_product_attention (no attn_mask). When omitted, STANDARD on Blackhole (ACCURATE with fp32_dest_acc_en=True in compute_kernel_config; program_config chunk sizes are then hints); the legacy kernel on Wormhole.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -756,8 +768,10 @@ void bind_sdpa(nb::module_& mod) {
                 value must be less than kv_cache_num_layers.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Noncausal only, without cache, window or
-                sink features; logical_n/logical_l may be scalars or device tensors. Omit for the legacy kernel.
-                Cannot be combined with compute_kernel_config or exp_approx_mode=False.
+                sink features; logical_n/logical_l may be scalars or device tensors. When omitted, BF16 DEST runs
+                the streaming kernel; FP32 DEST runs ACCURATE on Blackhole when the call has none of the features
+                above (or MLA / chunked prefill), else the legacy kernel.
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -955,8 +969,9 @@ void bind_sdpa(nb::module_& mod) {
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
-                device tensor. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or
-                exp_approx_mode=False.
+                device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
+                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole. compute_kernel_config and exp_approx_mode are
+                accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -1012,7 +1027,10 @@ void bind_sdpa(nb::module_& mod) {
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
+                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE on Blackhole. Defaults to
+                `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -1034,7 +1052,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()),
         // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::overload_t(
             &flash_mla_prefill_wrapper_input_tensor,
@@ -1047,7 +1066,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()));
 
     const auto* const chunked_mla_doc =
         R"doc(
@@ -1069,9 +1089,12 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `chunked_scaled_dot_product_attention`; V is K's first head_dim_v columns. When omitted, FP32
+                DEST runs ACCURATE on Blackhole. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
 
         )doc";
 
@@ -1088,7 +1111,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(
@@ -1126,6 +1150,11 @@ void bind_sdpa(nb::module_& mod) {
             page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
             chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
                 Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for scaled_dot_product_attention:
+                FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. The recipe owns the numerics:
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. Q chunk sizes
+                must divide the per-device slab (s / (2 * ring_size)); with program_config chunk sizes of 0 the op
+                chooses them. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -1148,6 +1177,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("page_table") = nb::none(),
-        nb::arg("chunk_start_idx") = nb::none());
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("precision") = nb::none());
 }
 }  // namespace ttnn::operations::transformer

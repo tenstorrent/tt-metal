@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -101,18 +102,108 @@ TEST(SDPARecipeBlocking, L1LimitsTheChoice) {
     }
 }
 
+TEST(SDPARecipeBlocking, LargeHeadDimsFindAFittingBlocking) {
+    // D512 (Gemma-4 global layers, SD / FLUX.2 VAEs) and D1152 (Qwen-Image-2.1 VAE) do not fit L1 in the fitted
+    // search range (Q128+ x K256+): the chooser extends down to one-tile chunks, dense and with a causal key range.
+    // D512 fits every recipe; D1152 the FP32-state recipes (routed FP32-dest calls run ACCURATE).
+    for (const auto& selection : kSelections) {
+        const bool fp32 = selection.recipe == Recipe::C || selection.recipe == Recipe::D;
+        for (const uint32_t d_tiles : fp32 ? std::vector{16u, 36u} : std::vector{16u}) {
+            for (const bool causal : {false, true}) {
+                auto p = problem(RecipeOp::Dense, selection, 1, 4096, 4096, d_tiles);
+                if (causal) {
+                    p.key_range = p.causal = true;
+                    p.mask_page_bytes = 576;
+                    p.extra_l1_bytes = 3072;
+                }
+                const auto choice = choose_recipe_blocking(p);
+                ASSERT_TRUE(choice.has_value()) << "D" << d_tiles * 32 << " causal " << causal;
+                expect_valid(p, *choice);
+            }
+        }
+    }
+}
+
+TEST(SDPARecipeBlocking, MoreHeadsThanCoresSplitsJobsOverTheGrid) {
+    // 8 x 24 batch/heads on 110 cores (an encoder batch): every head's Q chunks share the grid, and fewer Q
+    // chunks per head never costs more.
+    for (const auto& selection : kSelections) {
+        auto p = problem(RecipeOp::Dense, selection, 24, 512, 512, 2);
+        p.batch = 8;
+        const auto choice = choose_recipe_blocking(p);
+        ASSERT_TRUE(choice.has_value());
+        expect_valid(p, *choice);
+        EXPECT_EQ(
+            choice->jobs_per_core,
+            (p.batch * p.q_heads * ((512 + choice->q_chunk_size - 1) / choice->q_chunk_size) + 109) / 110);
+    }
+    // Without forwarding chains every Q chunk reads its head's K/V again: bge_m3 B8 16 heads D64 with a mask is fastest
+    // at Q256/K512 (measured 0.455 ms, Q128/K512 0.488 ms), which the per-core roofline alone ranked below Q128.
+    auto bge = problem(RecipeOp::Dense, {Recipe::D}, 16, 512, 512, 2);
+    bge.batch = 8;
+    bge.mask_page_bytes = 2048;
+    const auto choice = choose_recipe_blocking(bge);
+    ASSERT_TRUE(choice.has_value());
+    EXPECT_EQ(choice->q_chunk_size, 256u);
+    EXPECT_EQ(choice->k_chunk_size, 512u);
+}
+
 TEST(SDPARecipeBlocking, ExplicitChunksAreHonored) {
-    auto p = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8192);
+    auto p = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8064);
     p.fixed_q_tiles = 7;
     p.fixed_k_tiles = 12;
     auto choice = choose_recipe_blocking(p);
     ASSERT_TRUE(choice.has_value());
     EXPECT_EQ(choice->q_chunk_size, 224u);
     EXPECT_EQ(choice->k_chunk_size, 384u);
+    // Unless the program would not fit the kernel config buffer (an odd STANDARD Q chunk with a K tail).
+    p.k_rows = 8192;
+    EXPECT_FALSE(choose_recipe_blocking(p).has_value());
     p.fixed_q_tiles = 0;
     choice = choose_recipe_blocking(p);
     ASSERT_TRUE(choice.has_value());
     EXPECT_EQ(choice->k_chunk_size, 384u);
+}
+
+TEST(SDPARecipeBlocking, KeyRangesCostOnlyTheirKChunks) {
+    // Causal and sliding-window calls process only the K chunks their rows see, dealt over the whole grid. Measured
+    // (one P150b, 8192 rows): causal 10 heads D128 is fastest at Q256/K512 for every recipe; a Gemma-style sliding
+    // window 1024 with 16 heads D256 (ACCURATE 2.55 ms at the choice, 3.15 ms at the caller's Q128/K128) wants short
+    // K chunks, where the dense model picked K256 (3.42 ms).
+    for (auto recipe : {Recipe::B, Recipe::C, Recipe::D}) {
+        auto causal = problem(RecipeOp::Dense, {recipe}, 10, 8192, 8192);
+        causal.key_range = causal.causal = true;
+        causal.mask_page_bytes = 576;
+        const auto choice = choose_recipe_blocking(causal);
+        ASSERT_TRUE(choice.has_value());
+        expect_valid(causal, *choice);
+        EXPECT_EQ(choice->q_chunk_size, 256u);
+        EXPECT_EQ(choice->k_chunk_size, 512u);
+    }
+    auto window = problem(RecipeOp::Dense, {Recipe::D}, 16, 8192, 8192, 8);
+    window.key_range = window.causal = true;
+    window.sliding_window = 1024;
+    window.mask_page_bytes = 576;
+    const auto choice = choose_recipe_blocking(window);
+    ASSERT_TRUE(choice.has_value());
+    expect_valid(window, *choice);
+    EXPECT_LE(choice->k_chunk_size, 192u);
+    auto hint = window;
+    hint.fixed_q_tiles = hint.fixed_k_tiles = 4;
+    EXPECT_LT(choice->cost, choose_recipe_blocking(hint)->cost);
+
+    // A causal call costs less than the dense one at the same blocking (measured STANDARD 1.49 vs 1.62 ms: the
+    // dense call keeps its K/V chain).
+    auto causal = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8192);
+    causal.key_range = causal.causal = true;
+    causal.mask_page_bytes = 576;
+    auto dense = causal;
+    dense.key_range = dense.causal = false;
+    dense.fixed_q_tiles = causal.fixed_q_tiles = 8;
+    dense.fixed_k_tiles = causal.fixed_k_tiles = 16;
+    const double ratio = choose_recipe_blocking(causal)->cost / choose_recipe_blocking(dense)->cost;
+    EXPECT_GT(ratio, 0.5);
+    EXPECT_LT(ratio, 1.0);
 }
 
 TEST(SDPARecipeBlocking, AttnMaskCircularBufferIsBudgeted) {
@@ -172,6 +263,159 @@ TEST(SDPARecipeBlocking, ExpRingChoicesUseAtMostThreePasses) {
             const uint32_t chunks = (s.local + choice->q_chunk_size - 1) / choice->q_chunk_size;
             EXPECT_EQ(chunks % columns, 0u);
             EXPECT_LE(choice->jobs_per_core, 3u);
+        }
+    }
+}
+
+TEST(SDPARecipeBlocking, ProgramsFitTheKernelConfigBuffer) {
+    // Measured (one P150b): an odd fused STANDARD Q chunk of 7+ tiles with BFP8 K/V overflows the 70656 B kernel
+    // config buffer in a joint program (Q224/K256 71344 B, Q288/K256 71072 B) or with an attention sink (Q224 71120 B),
+    // and comes within 0.6 KB of it with a K tail (Q224/K512 70048 B); the plain dense program fits (68608 B).
+    const auto bfp8 = RecipeSelection{Recipe::B, KVStorage::BFP8};
+    auto joint = problem(RecipeOp::Joint, bfp8, 1, 20512, 20512);  // test_sdpa_joint S20481 + 118 joint rows
+    joint.joint_q_rows = joint.joint_k_rows = 128;
+    joint.k_rows_unaligned = true;
+    EXPECT_FALSE(recipe_program_fits(joint, 7, 8));
+    EXPECT_FALSE(recipe_program_fits(joint, 9, 8));
+    EXPECT_TRUE(recipe_program_fits(joint, 8, 8));
+    auto dense = problem(RecipeOp::Dense, bfp8, 1, 20512, 16384);
+    EXPECT_TRUE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows_unaligned = true;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows_unaligned = false;
+    dense.k_rows = 16384 + 32;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows = 16384;
+    dense.attention_sink = true;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    // Odd chunks that STANDARD pads to even (attn_mask, key ranges) and the other recipes are unaffected.
+    dense.mask_page_bytes = 2048;
+    EXPECT_TRUE(recipe_program_fits(dense, 7, 16));
+    for (const auto& selection : kSelections) {
+        if (selection.recipe != Recipe::B) {
+            auto p = joint;
+            p.policy = resolve_precision_policy(selection);
+            EXPECT_TRUE(recipe_program_fits(p, 7, 8));
+        }
+    }
+    // The chooser never emits such a geometry (op-chosen joint blocking picked Q224/K256 here before the rule).
+    for (uint32_t heads : {1u, 3u}) {
+        for (uint32_t batch : {1u, 2u}) {
+            for (auto* p : {&joint, &dense}) {
+                auto q = *p;
+                q.q_heads = heads;
+                q.batch = batch;
+                q.mask_page_bytes = 0;
+                q.attention_sink = false;
+                q.k_rows_unaligned = true;
+                const auto choice = choose_recipe_blocking(q);
+                ASSERT_TRUE(choice.has_value());
+                EXPECT_TRUE(recipe_program_fits(q, tiles(choice->q_chunk_size), tiles(choice->k_chunk_size)));
+                for (const auto& candidate : recipe_blocking_candidates(q)) {
+                    EXPECT_TRUE(recipe_program_fits(q, tiles(candidate.q_chunk_size), tiles(candidate.k_chunk_size)));
+                }
+            }
+        }
+    }
+}
+
+TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
+    // Measured (one P150b) over feature combinations the single-feature exclusions admitted.
+    const auto bfp8 = RecipeSelection{Recipe::B, KVStorage::BFP8};
+    // STANDARD: a sink with a K tail (S1000) at Q256/K256: BFP8 D64 71120 B (each alone fits: 70368 B, 68736 B).
+    auto sink = problem(RecipeOp::Dense, bfp8, 2, 1000, 1000, 2);
+    sink.attention_sink = true;
+    sink.k_rows_unaligned = true;
+    EXPECT_FALSE(recipe_program_fits(sink, 8, 8));
+    EXPECT_FALSE(recipe_program_fits(sink, 10, 8));
+    EXPECT_TRUE(recipe_program_fits(sink, 8, 16));
+    EXPECT_TRUE(recipe_program_fits(sink, 6, 8));
+    auto mixed = sink;  // BFP8 K, BF16 V: 71024 B
+    mixed.policy = resolve_precision_policy(RecipeSelection{Recipe::B});
+    mixed.v_storage = KVStorage::BFP8;
+    EXPECT_FALSE(recipe_program_fits(mixed, 8, 8));
+    auto bf16_d64 = sink;  // 68832 B
+    bf16_d64.policy = resolve_precision_policy(RecipeSelection{Recipe::B});
+    EXPECT_TRUE(recipe_program_fits(bf16_d64, 8, 8));
+    auto bf16_d96 = bf16_d64;  // 70976 B
+    bf16_d96.d_tiles = 3;
+    EXPECT_FALSE(recipe_program_fits(bf16_d96, 8, 8));
+    bf16_d96.k_rows_unaligned = false;
+    bf16_d96.k_rows = 1024;  // the sink alone: 70240 B
+    EXPECT_TRUE(recipe_program_fits(bf16_d96, 8, 8));
+    auto causal = sink;  // a key range with a sink and a K tail: 69728 B
+    causal.key_range = causal.causal = true;
+    causal.mask_page_bytes = 576;
+    EXPECT_TRUE(recipe_program_fits(causal, 8, 8));
+    // A paged sliding window, BFP8 D96 Q256/K256: 70768 B (non-paged 69504 B).
+    auto paged = problem(RecipeOp::Dense, bfp8, 2, 512, 2048, 3);
+    paged.key_range = paged.causal = true;
+    paged.mask_page_bytes = 576;
+    paged.sliding_window = 300;
+    EXPECT_TRUE(recipe_program_fits(paged, 8, 8));
+    paged.paged = true;
+    EXPECT_FALSE(recipe_program_fits(paged, 8, 8));
+    // FAST, odd Q chunks outside a key range: BFP8 D64 Q224/K256 sink + K tail 71424 B; D96 K tail 71200 B; D128
+    // sink + attn_mask 70704 B. Even Q chunks and BF16 K/V at D64 (69136 B) fit.
+    auto fast = sink;
+    fast.policy = resolve_precision_policy(RecipeSelection{Recipe::E, KVStorage::BFP8});
+    EXPECT_FALSE(recipe_program_fits(fast, 7, 8));
+    EXPECT_FALSE(recipe_program_fits(fast, 5, 8));
+    EXPECT_TRUE(recipe_program_fits(fast, 8, 8));
+    auto fast_bf16 = fast;
+    fast_bf16.policy = resolve_precision_policy(RecipeSelection{Recipe::E, KVStorage::BF16});
+    EXPECT_TRUE(recipe_program_fits(fast_bf16, 7, 8));
+    auto fast_d96 = fast;
+    fast_d96.attention_sink = false;
+    fast_d96.d_tiles = 3;
+    EXPECT_FALSE(recipe_program_fits(fast_d96, 7, 8));
+    auto fast_mask = fast;
+    fast_mask.d_tiles = 4;
+    fast_mask.k_rows_unaligned = false;
+    fast_mask.k_rows = 1024;
+    fast_mask.mask_page_bytes = 2048;
+    EXPECT_FALSE(recipe_program_fits(fast_mask, 7, 16));
+    fast_mask.attention_sink = false;
+    EXPECT_TRUE(recipe_program_fits(fast_mask, 7, 16));
+    // BALANCED, Q chunks of 5+ tiles: D96 attn_mask 72048 B (plain 70384 B, Q128 with every feature 65056 B); D64 key
+    // range + sink 71776 B (D128 64256 B).
+    auto balanced = problem(RecipeOp::Dense, RecipeSelection{Recipe::C, KVStorage::BFP8}, 2, 1024, 1024, 3);
+    EXPECT_TRUE(recipe_program_fits(balanced, 5, 16));
+    balanced.mask_page_bytes = 2048;
+    EXPECT_FALSE(recipe_program_fits(balanced, 5, 16));
+    EXPECT_TRUE(recipe_program_fits(balanced, 4, 16));
+    auto balanced_d64 = causal;
+    balanced_d64.policy = balanced.policy;
+    EXPECT_FALSE(recipe_program_fits(balanced_d64, 6, 12));
+    balanced_d64.d_tiles = 4;
+    EXPECT_TRUE(recipe_program_fits(balanced_d64, 6, 12));
+    // ACCURATE peaks at 64.9 KB.
+    for (auto* p : {&sink, &bf16_d96, &paged, &fast_d96, &fast_mask, &balanced}) {
+        auto q = *p;
+        q.policy = resolve_precision_policy(RecipeSelection{Recipe::D});
+        EXPECT_TRUE(recipe_program_fits(q, 7, 8));
+    }
+    // The chooser always keeps a candidate (one-tile-subblock K chunks, even or small Q chunks), none excluded.
+    for (const auto& selection : kSelections) {
+        for (uint32_t d_tiles : {2u, 3u, 4u, 5u}) {
+            for (bool key_range : {false, true}) {
+                auto p = problem(RecipeOp::Dense, selection, 2, 1000, 1000, d_tiles);
+                p.attention_sink = true;
+                p.k_rows_unaligned = true;
+                p.key_range = p.causal = key_range;
+                p.mask_page_bytes = key_range ? 576 : 0;
+                const auto choice = choose_recipe_blocking(p);
+                ASSERT_TRUE(choice.has_value());
+                uint32_t max_q = 0;
+                for (const auto& candidate : recipe_blocking_candidates(p)) {
+                    EXPECT_TRUE(recipe_program_fits(p, tiles(candidate.q_chunk_size), tiles(candidate.k_chunk_size)));
+                    max_q = std::max(max_q, tiles(candidate.q_chunk_size));
+                }
+                // An excluded odd Q chunk does not end the search (FAST: even Q chunks past it stay candidates).
+                if (selection.recipe == Recipe::E) {
+                    EXPECT_GE(max_q, 8u);
+                }
+            }
         }
     }
 }

@@ -22,7 +22,13 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa_recipes import (
     precision_inputs,
     randn,
 )
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    L2_PCT_BOUND,
+    VARIANTS,
+    fp32_dest_config,
+    l2_pct,
+    reference,
+)
 
 pytestmark = pytest.mark.skipif(
     not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
@@ -172,3 +178,20 @@ def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant)
     )
     for chip in range(EXP_RING):
         assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+def test_exp_ring_joint_sdpa_precision_routing(exp_ring_mesh):
+    """Without precision, calls the legacy exp ring kernel cannot build run a recipe: FP32 dest runs ACCURATE
+    (bitwise the explicit call), and a BF16-dest Q chunk of one tile row (a single Q subblock, outside the streaming
+    kernel's rule) runs STANDARD. Both used to fail to compile."""
+    mesh, semaphores = exp_ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, _ = exp_ring_case(mesh, "accurate", "q256_aligned")
+    call = lambda **extra: run_exp_ring(mesh, semaphores, inputs, joints, backing, logical_n=logical_n, **extra)
+    routed = call(compute_kernel_config=fp32_dest_config(mesh), **kwargs)
+    explicit = call(precision=ttnn.SDPAPrecision.ACCURATE, **kwargs)
+    for chip in range(EXP_RING):
+        assert torch.equal(per_chip(routed[0])[chip], per_chip(explicit[0])[chip]), f"chip {chip}"
+        assert l2_pct(per_chip(routed[0])[chip], expected(chip)) < L2_PCT_BOUND["accurate"], f"chip {chip}"
+    out = call(grid=kwargs["grid"], q_chunk=32)
+    for chip in range(EXP_RING):
+        assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND["standard"], f"chip {chip}"

@@ -4,7 +4,7 @@
 
 // Streaming SDPA compute helpers.
 // Included by sdpa_recipe.cpp for the explicit Blackhole numerical recipes.
-// Depends on primitives from compute_common.hpp (must be included first).
+// Depends on primitives from sdpa_block_ops.hpp (must be included first).
 
 #pragma once
 
@@ -47,6 +47,25 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+#if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
+// Wormhole BF16-state normalize (as legacy streaming SDPA): the generic unary-SFPU launcher records a replay
+// program over the no-MOP matmul's replay slots. Same first-column reciprocal of DST tile 0, traversed inline.
+ALWI void recipe_recip_first_column_wh() {
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    math::set_addr_mod_base();
+#pragma GCC unroll 0
+    for (int face = 0; face < 2; face++) {
+        ckernel::sfpu::calculate_recip_first_column<DST_ACCUM_MODE>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+    math::clear_addr_mod_base();
+}
+#endif
+
 // --- Outlined out-of-order pack (code-size) ---
 #ifdef SDPA_RECIPE_FP32
 // A full tile's four contiguous FP32 faces extend naturally to eight faces
@@ -78,11 +97,18 @@ struct AccumulatorHalf {
 // HiFi replays clear outside the image and need none of this.
 #ifdef SDPA_RECIPE_LOFI
 static bool recipe_mm_reuse_a = true;
+#ifdef ARCH_WORMHOLE
+// Wormhole's LoFi image also depends on whether the reused operand serves more than one output row.
+static bool recipe_mm_multi_row = false;
+#endif
 #endif
 ALWI void recipe_mm_init(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
     mm_no_mop_init_short(in0, in1, transpose, ct, rt, kt);
 #ifdef SDPA_RECIPE_LOFI
     recipe_mm_reuse_a = ct >= rt;
+#ifdef ARCH_WORMHOLE
+    recipe_mm_multi_row = rt > 1;
+#endif
 #endif
 }
 ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
@@ -92,7 +118,11 @@ ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t 
     recipe_mm_init(in0, in1, transpose, ct, rt, kt);
 #else
 #ifdef SDPA_RECIPE_LOFI
+#ifdef ARCH_WORMHOLE
+    if (ct < rt || !recipe_mm_reuse_a || recipe_mm_multi_row != (rt > 1)) {
+#else
     if (ct < rt || !recipe_mm_reuse_a) {
+#endif
         recipe_mm_init(in0, in1, transpose, ct, rt, kt);
         return;
     }
@@ -132,8 +162,13 @@ constexpr uint32_t INVALID_CB = 32;
 #ifdef SDPA_RECIPE_FP32
 static bool sdpa_skip_prev_sum_pop = false;
 #endif
-// Blackhole benefits from blocked packing at width four.
+// Blackhole benefits from blocked packing at width four; Wormhole keeps eight (as legacy streaming SDPA): width-4
+// blocked packs there corrupt the recipe outputs (STANDARD rel-L2 30-50%).
+#ifdef ARCH_BLACKHOLE
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
+#else
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
+#endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 template <typename... Args>
@@ -298,7 +333,20 @@ ALWI void pack_contiguous_rows(
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
+// Wormhole ACCURATE's PV takes one more argument, pv_l1_acc (below). Other builds keep the shorter signature: an unused
+// parameter changes GCC's constprop clones, and Blackhole FAST then hits an SFPI internal compiler error
+// (rvtt_synth_renumber in blocked_matmul_and_pack.constprop).
+#if defined(SDPA_RECIPE_ACCURATE) && defined(ARCH_WORMHOLE)
+#define RECIPE_WH_PV_L1_ACC(...) , __VA_ARGS__
+#else
+#define RECIPE_WH_PV_L1_ACC(...)
+#endif
+
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
+#if defined(ARCH_WORMHOLE) && !defined(SDPA_RECIPE_RING)
+// Wormhole (as legacy streaming SDPA): keeps the callers' frames small on the 2 KiB TRISC stack.
+__attribute__((noinline))
+#endif
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -311,7 +359,44 @@ void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-    bool skip_pack_configure = false) {
+    bool skip_pack_configure = false RECIPE_WH_PV_L1_ACC(bool pv_l1_acc = false)) {
+#if defined(SDPA_RECIPE_ACCURATE) && defined(ARCH_WORMHOLE)
+    // Wormhole ACCURATE PV (FP32 P, HiFi4, FP32 DEST): one K tile per DEST pass, the passes added by the packer's FP32
+    // L1 accumulation (exact). Summing several K tiles in DEST at HiFi4 occasionally (about one output element in a
+    // million) comes out off by an exact power of two, e.g. -8.48 for -0.48 from a 32 x 128 P block, with the MOP
+    // matmul as well; each K tile on its own and the four summed in L1 are exact. pv_l1_acc: the packer's L1
+    // accumulation on entry (restored on exit).
+    if constexpr (!transpose) {
+        for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+            tile_regs_acquire();
+            matmul_block_no_mop(
+                in0_cb,
+                in1_cb,
+                in0_index_start + inner,
+                in1_index_start + inner * in1_stride,
+                0,
+                false,
+                subblock_w,
+                subblock_h,
+                matmul_stride);
+            tile_regs_commit();
+            tile_regs_wait();
+            if (inner == 0 && !skip_pack_configure) {
+                configure_row_pack_width(out_cb, subblock_w);
+            }
+            if (inner == 1 && !pv_l1_acc) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            pack_contiguous_rows_nocfg(
+                out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
+            tile_regs_release();
+        }
+        if (inner_dim > 1 && !pv_l1_acc) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+        return;
+    }
+#endif
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -341,8 +426,11 @@ void blocked_matmul_and_pack(
     tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
     if constexpr (transpose) {
+#ifdef SDPA_RECIPE_RING_CAUSAL
+        recipe_causal_row0 = row_subblock_idx * subblock_h;
+#endif
 #ifdef SDPA_RECIPE_RING
-        if (recipe_k_valid_rows < recipe_k_chunk_rows)
+        if (recipe_ring_chunk_masked())
 #endif
             mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
     }
@@ -354,6 +442,17 @@ void blocked_matmul_and_pack(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     tile_regs_release();
 }
+
+// Whether the current K chunk takes the additive mask: every chunk with an attn_mask, a key-range call's edge
+// chunks only (the reader's control page per Q chunk, recipe_read_key_range), none otherwise.
+#if defined(SDPA_RECIPE_KRANGE)
+static bool recipe_edge_chunk;
+ALWI bool recipe_chunk_masked() { return recipe_edge_chunk; }
+#elif defined(SDPA_RECIPE_MASK)
+ALWI constexpr bool recipe_chunk_masked() { return true; }
+#else
+ALWI constexpr bool recipe_chunk_masked() { return false; }
+#endif
 
 // Row maxima combine the current QK block with the previous online maximum.
 //
@@ -381,8 +480,10 @@ constexpr uint32_t kRefMaxExpOctaves = 28;
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;
-// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and FAST without an attn_mask), see sdpa_fused_chunk.
-#if defined(SDPA_RECIPE_FUSED) && !defined(SDPA_RECIPE_MASK)
+// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and FAST without an attn_mask), see sdpa_fused_chunk. Key-range
+// calls (SDPA_RECIPE_KRANGE: causal, sliding window, chunked, windowed) mask only their edge K chunks, so their
+// full chunks stay fused.
+#if defined(SDPA_RECIPE_FUSED) && (!defined(SDPA_RECIPE_MASK) || defined(SDPA_RECIPE_KRANGE))
 #define SDPA_RECIPE_FUSED_ACTIVE 1
 // One BF16 tile: a row group's saturation check (max of its chunk row-sum tiles).
 constexpr uint32_t kFusedCheckCb = 31;
@@ -633,11 +734,13 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
             unary_bcast<BroadcastType::NONE>(7, index, 0);
             // The generic one-tile helper cleared tile 0's zero flags. Preserve
             // the Blackhole unpack-to-DST workaround for tile 1 as well.
+#ifdef ARCH_BLACKHOLE
             MATH(for (uint32_t tile = 1; tile < score_batch; ++tile) {
                 for (uint32_t face = 0; face < 4; ++face) {
                     TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
                 }
             })
+#endif
             sdpa_score_unpack_mop(4);
             unary_bcast_uninit<BroadcastType::NONE>(7);
             tile_regs_commit();
@@ -1003,10 +1106,68 @@ void salad_correct_fused(
 }
 #endif
 
+#ifdef SDPA_RECIPE_SINK
+// Attention sink (SDPA_RECIPE_SINK is its page CB): the reader's page per Q chunk holds the head's sink logit (FP32,
+// or BF16 in the low half word). Normalization adds k * exp(scale * (sink - m)) to every row's denominator
+// (calculate_sdpa_sink_denominator), m being the maxima the row's P were taken against, in row order.
+static uint32_t recipe_sink_bits, recipe_sink_row;
+// The CB holding the Q chunk's maxima the rows' P were taken against (set before normalizing).
+static uint32_t recipe_sink_max_cb;
+static __attribute__((noinline)) void recipe_read_sink() {
+    CircularBuffer(SDPA_RECIPE_SINK).wait_front(1);
+    const uint32_t word = ckernel::read_tile_value(SDPA_RECIPE_SINK, 0, 0);
+#ifdef SDPA_RECIPE_SINK_BF16
+    recipe_sink_bits = word << 16;
+#else
+    recipe_sink_bits = word;
+#endif
+    CircularBuffer(SDPA_RECIPE_SINK).pop_front(1);
+    recipe_sink_row = 0;
+}
+// The score path's mean factor k: P (as PV and l see it) over exp(scale * (s - m)). Measured on device with a sink
+// that takes nearly all of each row's weight (output / reference -> k / kRecipeSinkExpFactor), next to the exps'
+// emulated means: the FP32 grid's offset 2^(-44.73/1024) = 0.9702 with the cubic's mean ripple (ACCURATE 1.0,
+// BALANCED 1.0006, whose BF16 P and HiFi2 PV take about 0.6% more), and STANDARD / FAST's linear-mantissa exp
+// (offset 2^(-11.18/256), mean (1 + f) / 2^f = 1.0407: 1.0096, measured 1.0051) with its 2^-28 headroom.
+#if defined(SDPA_RECIPE_ACCURATE)
+constexpr float kRecipeSinkExpFactor = 0.9699356f;
+#elif defined(SDPA_RECIPE_FP32)
+constexpr float kRecipeSinkExpFactor = 0.9650970f;
+#else
+constexpr float kRecipeSinkExpFactor = 1.0051060f / static_cast<float>(1u << kRefMaxExpOctaves);
+#endif
+constexpr uint32_t kRecipeSinkExpFactorBits = __builtin_bit_cast(uint32_t, kRecipeSinkExpFactor);
+// This row's maxima into dest tile `dest` (the denominator is in tile 0).
+ALWI void recipe_sink_load_max(uint32_t max_cb, uint32_t dest) {
+    CircularBuffer(max_cb).wait_front(recipe_sink_row + 1);
+    sdpa_stream_reconfig_srca(max_cb);
+    copy_init(max_cb);
+    copy_tile(max_cb, recipe_sink_row, dest);
+}
+#ifdef SDPA_RECIPE_FP32
+template <uint32_t scale_fp32>
+struct RecipeSinkHook {
+    ALWI void load(uint32_t dest) const { recipe_sink_load_max(recipe_sink_max_cb, dest); }
+    ALWI void apply() const {
+        PACK((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sdpa_sink_denominator,
+            (scale_fp32, kRecipeSinkExpFactorBits),
+            0,
+            VectorMode::C,
+            recipe_sink_bits)));
+        recipe_sink_row++;
+    }
+};
+#endif
+#endif
+
 /**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
+ * Attention sink (SDPA_RECIPE_SINK): recipe_sink_max_cb holds the Q chunk's maxima the rows' P were taken against.
  */
 template <
     bool profiling_enabled,
@@ -1014,12 +1175,22 @@ template <
     uint32_t dst_size,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
-    uint32_t normalized_out_cb>
-static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming(
-    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0>
+#if defined(ARCH_WORMHOLE) && defined(TRISC_UNPACK) && defined(SDPA_RECIPE_RING)
+// Wormhole ring kernels: the normalization's callees inlined, so their frames do not stack on the fused chunk's.
+__attribute__((flatten))
+#endif
+static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void
+normalize_row_streaming(uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
 #ifdef SDPA_RECIPE_FP32
+#ifdef SDPA_RECIPE_SINK
+    sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
+        cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack, RecipeSinkHook<scale_fp32>{});
+#else
     sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
         cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack);
+#endif
 #else
 
     configure_single_tile_pack(scratch_cb);
@@ -1072,9 +1243,26 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
 #else
             matmul_block(norm_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #endif
+#ifdef SDPA_RECIPE_SINK
+            recipe_sink_load_max(recipe_sink_max_cb, 1);
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_sdpa_sink_denominator,
+                (scale_fp32, kRecipeSinkExpFactorBits),
+                0,
+                VectorMode::C,
+                recipe_sink_bits)));
+            recipe_sink_row++;
+            sdpa_stream_reconfig_srca(norm_sum_cb);
+#endif
 
             recip_tile_init();
+#ifdef ARCH_WORMHOLE
+            MATH((recipe_recip_first_column_wh()));
+#else
             MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+#endif
             tile_regs_commit();
 
             tile_regs_wait();
@@ -1302,8 +1490,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         TTI_SFPCONFIG(0, 13, 0);
     })
 #endif
-#ifdef SDPA_RECIPE_FUSED_ACTIVE
-    if (!is_first_iter) {
+#if defined(SDPA_RECIPE_FUSED_ACTIVE) && !defined(ARCH_WORMHOLE)
+    if (!is_first_iter && !recipe_chunk_masked()) {
         sdpa_fused_chunk<
             Sq_chunk_t,
             Sk_chunk_t,
@@ -1365,12 +1553,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
 
-#ifdef SDPA_RECIPE_MASK
         // The first-half max reduce must not read scores before the mask lands on them.
-        constexpr bool overlap_first_half = false;
-#else
-        const bool overlap_first_half = reduce_trigger;
-#endif
+        const bool overlap_first_half = reduce_trigger && !recipe_chunk_masked();
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -1454,7 +1638,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #endif
 
 #ifdef SDPA_RECIPE_MASK
-        recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+        if (recipe_chunk_masked()) {
+            recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+        }
 #endif
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
@@ -1793,7 +1979,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                 first_h,
                                 matmul_inner,
                                 KT_stride,
-                                /*skip_pack_configure=*/true);
+                                /*skip_pack_configure=*/true RECIPE_WH_PV_L1_ACC(kt_sub > 0 || inplace_numerator));
 #ifndef SDPA_RECIPE_FP32
                             UNPACK({
                                 if (!is_first_iter && kt_sub == 0 && v_subblock == 0) {
@@ -1872,6 +2058,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     .srcb = {.incr = 0, .clr = 1, .cr = 1},
                     .dest = {.incr = 0, .clr = 1, .cr = 1},
                     .fidelity = {.incr = 2, .clr = 0},
+#ifdef ARCH_WORMHOLE
+                    // Wormhole's MOP reaches ADDR_MOD_5 through the bias bit; it must toggle back.
+                    .bias = {.incr = 1},
+#endif
                 }
                           .set(ADDR_MOD_5)));
 #endif
@@ -1908,14 +2098,17 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             fold_first(sbh);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
+#ifdef SDPA_RECIPE_SINK
+            recipe_sink_max_cb = cur.max;
+#endif
             normalize_row_streaming<
                 profiling_enabled,
                 vDHt,
                 dst_size,
                 cb_col_identity,
                 cb_recip_scratch,
-                cb_normalized_out>(
-                cur.sum, out_cb, sbh);
+                cb_normalized_out,
+                scale_fp32>(cur.sum, out_cb, sbh);
 
             pushed++;
         };
@@ -2033,7 +2226,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         cur_h,
                         active_Sk,
                         KT_stride,
-                        /*skip_pack_configure=*/true);
+                        /*skip_pack_configure=*/true RECIPE_WH_PV_L1_ACC(inplace_numerator));
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
@@ -2161,6 +2354,101 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     return false;
 }
 
+#ifdef SDPA_RECIPE_KRANGE
+// Key-range calls: the writer's control page per Q chunk (writer_recipe.cpp, recipe_key_range.hpp) holds its K
+// chunks [first, end) and the fully visible ones [full_begin, full_end) within them; the rest are edge chunks. The
+// edge chunks are processed first (trailing, then leading), so only a Q chunk's first K chunk misses the fused path.
+constexpr uint32_t kRecipeKeyRangeCb = 17;
+static uint32_t recipe_k_edges;
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+static uint32_t recipe_k_first, recipe_full_begin, recipe_full_end, recipe_k_end;
+// RecipeChunkRange::at: the K chunk processed i-th.
+static uint32_t recipe_k_chunk_at(uint32_t i) {
+    const uint32_t trailing = recipe_k_end - recipe_full_end;
+    if (i < trailing) {
+        return recipe_full_end + i;
+    }
+    i -= trailing;
+    const uint32_t leading = recipe_full_begin - recipe_k_first;
+    return i < leading ? recipe_k_first + i : recipe_full_begin + (i - leading);
+}
+#endif
+static __attribute__((noinline)) uint32_t recipe_read_key_range() {
+    CircularBuffer(kRecipeKeyRangeCb).wait_front(1);
+    const uint32_t first = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 0);
+    const uint32_t end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 1);
+    const uint32_t full_begin = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 2);
+    const uint32_t full_end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 3);
+    CircularBuffer(kRecipeKeyRangeCb).pop_front(1);
+    recipe_k_edges = (end - first) - (full_end - full_begin);
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+    recipe_k_first = first;
+    recipe_full_begin = full_begin;
+    recipe_full_end = full_end;
+    recipe_k_end = end;
+#endif
+    return end - first;
+}
+#endif
+
+#if defined(SDPA_RECIPE_FUSED_ACTIVE) && defined(ARCH_WORMHOLE)
+// Wormhole TRISCs have 2 KiB of local memory, of which the firmware's CB state takes about 1 KiB. The segment loop
+// runs the fused chunks itself rather than under sdpa_inner_loop_step's frame, or UNPACK's stack overflows into
+// the kernel's statics during the last chunk's normalization. Returns whether it ran this chunk.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t qkt_subblock_w,
+    uint32_t qktv_subblock_w,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_normalized_out,
+    bool independent_q_release>
+ALWI bool recipe_fused_chunk_step(
+    AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool is_first_iter, bool release_q) {
+    if (is_first_iter || recipe_chunk_masked()) {
+        return false;
+    }
+    // As sdpa_inner_loop_step's entry: the fast exp and its headroom constant.
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    PACK({
+        constexpr float exp_c = 32500.818359375f - 256.0f * kRefMaxExpOctaves;
+        constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
+        TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
+        TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
+        TTI_SFPCONFIG(0, 13, 0);
+    })
+    sdpa_fused_chunk<
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        vDHt,
+        scale_fp32,
+        qkt_subblock_w,
+        qktv_subblock_w,
+        cb_q_in,
+        cb_kt_in,
+        cb_v_in,
+        cb_qkt_im,
+        cb_identity_scale_in,
+        cb_exp_max_diff,
+        cb_col_identity,
+        cb_recip_scratch,
+        cb_normalized_out,
+        independent_q_release>(prev, cur, is_last_iter, release_q);
+    return true;
+}
+#endif
+
 // One Q chunk over k_num_chunks K chunks: the online-softmax loop for recipes B-E. Called once per Q chunk
 // by sdpa_standard_v2 (dense and joint). A caller may split one Q chunk's K range into several segments,
 // setting final_segment on the last.
@@ -2186,8 +2474,8 @@ template <
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
-        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        DHt >= 1);
+        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt <= DHt &&
+        vDHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
@@ -2197,38 +2485,59 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
     const uint32_t cb_out_im_B = cur.out;
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+#ifdef SDPA_RECIPE_KRANGE
+        recipe_edge_chunk = state.processed_chunks + k_chunk < recipe_k_edges;
 #ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+        recipe_k_tile_offset = recipe_k_chunk_at(state.processed_chunks + k_chunk) * Sk_chunk_t;
+#endif
+#elif defined(SDPA_RECIPE_K_PRIMARY_ROWS)
         recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
 #endif
         const bool is_first = state.processed_chunks == 0 && k_chunk == 0;
         const bool last_local = k_chunk == k_num_chunks - 1;
         const bool is_last = final_segment && last_local;
-        [[maybe_unused]] const bool fused = sdpa_inner_loop_step<
-            false,
-            Sq_chunk_t,
-            Sk_chunk_t,
-            DHt,
-            vDHt,
-            scale_fp32,
-            qkt_subblock_h,
-            qkt_subblock_w,
-            qktv_subblock_h,
-            qktv_subblock_w,
-            cb_q_in,
-            cb_kt_in,
-            cb_v_in,
-            cb_qkt_im,
-            cb_identity_scale_in,
-            cb_exp_max_diff,
-            cb_col_identity,
-            cb_recip_scratch,
-            cb_normalized_out,
-            independent_q_release>(
-            prev,
-            cur,
-            is_last,
-            is_first,
-            release_q && last_local);
+        [[maybe_unused]] const bool fused =
+#if defined(SDPA_RECIPE_FUSED_ACTIVE) && defined(ARCH_WORMHOLE)
+            recipe_fused_chunk_step<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                scale_fp32,
+                qkt_subblock_w,
+                qktv_subblock_w,
+                cb_q_in,
+                cb_kt_in,
+                cb_v_in,
+                cb_qkt_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_normalized_out,
+                independent_q_release>(prev, cur, is_last, is_first, release_q && last_local) ||
+#endif
+            sdpa_inner_loop_step<
+                false,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                scale_fp32,
+                qkt_subblock_h,
+                qkt_subblock_w,
+                qktv_subblock_h,
+                qktv_subblock_w,
+                cb_q_in,
+                cb_kt_in,
+                cb_v_in,
+                cb_qkt_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_normalized_out,
+                independent_q_release>(prev, cur, is_last, is_first, release_q && last_local);
 #ifdef SDPA_RECIPE_FP32
         // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
         if (!is_first) {
@@ -2286,6 +2595,12 @@ void sdpa_standard_v2(
     init_sdpa_streaming_semaphores();
     for (uint32_t q = 0; q < q_chunks_per_core; ++q) {
         RecipeAccumulatorState state{{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}};
+#ifdef SDPA_RECIPE_KRANGE
+        k_num_chunks = recipe_read_key_range();
+#endif
+#ifdef SDPA_RECIPE_SINK
+        recipe_read_sink();
+#endif
         sdpa_segment_v2<Configuration...>(state, k_num_chunks, true, true);
     }
 }
