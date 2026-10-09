@@ -74,6 +74,19 @@ python models/demos/stable_diffusion_xl_base/quasar/tests/ops/generate_cases.py 
 | `test_silu.py -k 00_` | `NotImplementedError` from `qsr` (op missing), as designed |
 | `test_linear.py -k 00_1x320` | with bfp8_b weights: `TT_FATAL ... Bfp8_b ... not supported on architecture quasar`; with bf16 weights: `TT_FATAL: DataMovementKernel is not supported on Quasar` (this `[1,320] x [320,1280] + bias + silu` shape with no program config lands in a legacy matmul factory) |
 
+## Quasar-native sync notes (learned while porting)
+
+* `upsample` (sharded, nearest) and the tiled `reshape` behind `unsqueeze` use DFB **implicit sync**:
+  `noc.async_read<NocOptions::TXN_ID>(accessor, dfb, {.page_id}, {})` / `async_write<TXN_ID>` plus
+  `finish()`, no reserve/push/pop, credits posted by the DM0 ISR. `upsample` runs a reader and a writer
+  kernel with `num_threads` DM threads each (default 2, `TT_METAL_QSR_UPSAMPLE_THREADS`, must divide the
+  output shard height) over a plain L1 staging ring, no host config tensor.
+* A DFB **borrowed from a tensor cannot be an implicit-sync endpoint**: the producer's `finish()` spins at
+  waypoint `WTP2` forever because the ISR never posts (the in-tree borrowed-memory DFB test opts out of
+  implicit sync for the same reason). Stage through a plain DFB and write the tensor with the accessor.
+* Reads whose result the same kernel must parse (the reshape page map) keep explicit credits; opt a single
+  DFB out with `config_2xx->disable_dfb_implicit_sync_for = {dfb}` instead of disabling it for the kernel.
+
 ## Known gaps / notes
 
 * **No `bfloat8_b` on Quasar.** `tt_metal/common/tt_backend_api_types.cpp::is_supported_quasar`

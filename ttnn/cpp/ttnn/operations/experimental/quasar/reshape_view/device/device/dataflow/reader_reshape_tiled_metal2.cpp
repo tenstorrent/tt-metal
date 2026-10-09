@@ -7,6 +7,8 @@
 //   - input / mapping buffers come from bound tensor parameters (tensor::input / tensor::map), NOT from
 //     RTA addresses + TensorAccessorArgs;
 //   - the mapping / input CBs are bound DataflowBuffers (dfb::mapping / dfb::input) shared with the writer;
+//     on Quasar the input-tile DFB is filled with implicit-sync TXN_ID reads while the map DFB keeps explicit
+//     credits (the reader parses each map entry before deciding which tiles to fetch);
 //   - args are named via get_arg(args::...).
 //
 // Compile args (named): max_map_size_bytes, tile_size_bytes.
@@ -91,26 +93,14 @@ void kernel_main() {
                 }
             }
 
-            input_cb.reserve_back(One_Tile_Reserve);
-            {
-                // Same pattern as the map read: the write lock covers the NOC fill of this entry.
-                const auto input_lock = input_cb.scoped_write_lock(One_Tile_Reserve);
-                // [#48552] TRID read (see map read above) — the input_cb slot is also reused
-                // (num_entries=1), so the same no-op-barrier / no-re-deliver problem applies. Poll
-                // is_read_trid_flushed for completion.
-                constexpr uint8_t input_trid = 2;
-                noc.async_read<NocOptions::TXN_ID>(
-                    input_addr_gen,
-                    input_lock.get_ptr(),
-                    Tile_Size_Bytes,
-                    {.page_id = input_page_idx, .offset_bytes = 0},
-                    {.offset_bytes = 0},
-                    NocOptVals{.trid = input_trid});
-                previous_input_page_idx = input_page_idx;
-                while (!noc.is_read_trid_flushed(input_trid)) {
-                }
-            }
-            input_cb.push_back(1);
+            // DFB implicit sync: one full-entry TXN_ID read into input_cb's next entry. No reserve_back /
+            // push_back / completion poll: the DFB stamps the read with its own transaction id and the DM0
+            // ISR posts the entry's credit once the NoC completes it (the writer wait_front()s on that
+            // credit). The reader never inspects the tile itself, unlike the map entry above, so it does
+            // not need the completion.
+            noc.async_read<NocOptions::TXN_ID>(input_addr_gen, input_cb, {.page_id = input_page_idx}, {});
+            previous_input_page_idx = input_page_idx;
         }
     }
+    input_cb.finish();  // implicit-sync producer epilogue: hand over the tail credits
 }

@@ -33,6 +33,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     reallocate/reallocate.hpp
     reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
+    unsqueeze/unsqueeze.hpp
+    upsample/upsample.hpp
     typecast/typecast.hpp
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
@@ -169,6 +171,13 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
     matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
     matmul/device/factory/matmul_unified_program_factory.cpp
+    # unsqueeze (thin wrapper over the quasar reshape)
+    unsqueeze/unsqueeze.cpp
+    # upsample (nearest, integer scales: sharded + interleaved Metal 2.0 factories)
+    upsample/upsample.cpp
+    upsample/device/upsample_device_operation.cpp
+    upsample/device/upsample_program_factory_multicore_sharded.cpp
+    upsample/device/upsample_program_factory_multicore_interleaved.cpp
     # reshape_view
     reshape_view/reshape.cpp
     reshape_view/reshape_common.cpp
@@ -260,6 +269,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     to_layout/to_layout_nanobind.cpp
     reallocate/reallocate_nanobind.cpp
     to_device/to_device_nanobind.cpp
+    unsqueeze/unsqueeze_nanobind.cpp
+    upsample/upsample_nanobind.cpp
     typecast/typecast_nanobind.cpp
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp

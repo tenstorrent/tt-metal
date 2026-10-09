@@ -42,6 +42,9 @@ const KernelSpecName RT_WRITER{"reshape_tiled_writer"};
 
 // PCC fails when this is greater than 1 (matches the legacy factory's reader_cb_len). TODO figure out why.
 constexpr uint32_t reader_cb_len = 1;
+// Input-tile DFB depth on the implicit-sync producer side: must be a multiple of the DFB's transaction ids x
+// producers (2 x 1), so the ring is two deep (one tile in flight while the writer drains the other).
+constexpr uint32_t implicit_input_cb_len = 2;
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::create_program_artifacts(
@@ -119,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
         DataflowBufferSpec{
             .unique_id = RT_INPUT_DFB,
             .entry_size = input_tile_size_bytes,
-            .num_entries = reader_cb_len,
+            .num_entries = implicit_input_cb_len,
             .data_format_metadata = input_cb_data_format},
     };
 
@@ -129,6 +132,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
     };
 
     // ---- Reader kernel ----
+    auto reader_hw_config = ttnn::create_reader_datamovement_config();
+    reader_hw_config.config_2xx->disable_dfb_implicit_sync_for = {RT_MAP_DFB};
     KernelSpec reader{
         .unique_id = RT_READER,
         .source =
@@ -141,8 +146,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
         .compile_time_args =
             {{"max_map_size_bytes", mapping_page_size_bytes}, {"tile_size_bytes", input_tile_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
-        // Explicit CB credit ops (staged reads) -> disable implicit sync (Quasar tile-counter double-count).
-        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        // Input tiles: implicit sync (TXN_ID reads, ISR-posted credits). Map pages: explicit credits, because the
+        // reader parses each map entry right after reading it and needs a completion the implicit path cannot give.
+        .hw_config = reader_hw_config,
     };
 
     // ---- Writer kernel ----
