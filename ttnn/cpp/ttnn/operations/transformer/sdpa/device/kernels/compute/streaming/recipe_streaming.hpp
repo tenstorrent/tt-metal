@@ -333,6 +333,15 @@ ALWI void pack_contiguous_rows(
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
+// Wormhole ACCURATE's PV takes one more argument, pv_l1_acc (below). Other builds keep the shorter signature: an unused
+// parameter changes GCC's constprop clones, and Blackhole FAST then hits an SFPI internal compiler error
+// (rvtt_synth_renumber in blocked_matmul_and_pack.constprop).
+#if defined(SDPA_RECIPE_ACCURATE) && defined(ARCH_WORMHOLE)
+#define RECIPE_WH_PV_L1_ACC(...) , __VA_ARGS__
+#else
+#define RECIPE_WH_PV_L1_ACC(...)
+#endif
+
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
 #if defined(ARCH_WORMHOLE) && !defined(SDPA_RECIPE_RING)
 // Wormhole (as legacy streaming SDPA): keeps the callers' frames small on the 2 KiB TRISC stack.
@@ -350,8 +359,7 @@ void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-    bool skip_pack_configure = false,
-    bool pv_l1_acc = false) {
+    bool skip_pack_configure = false RECIPE_WH_PV_L1_ACC(bool pv_l1_acc = false)) {
 #if defined(SDPA_RECIPE_ACCURATE) && defined(ARCH_WORMHOLE)
     // Wormhole ACCURATE PV (FP32 P, HiFi4, FP32 DEST): one K tile per DEST pass, the passes added by the packer's FP32
     // L1 accumulation (exact). Summing several K tiles in DEST at HiFi4 occasionally (about one output element in a
@@ -1971,12 +1979,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                 first_h,
                                 matmul_inner,
                                 KT_stride,
-                                /*skip_pack_configure=*/true,
-#ifdef SDPA_RECIPE_FP32
-                                kt_sub > 0 || inplace_numerator);
-#else
-                                false);
-#endif
+                                /*skip_pack_configure=*/true RECIPE_WH_PV_L1_ACC(kt_sub > 0 || inplace_numerator));
 #ifndef SDPA_RECIPE_FP32
                             UNPACK({
                                 if (!is_first_iter && kt_sub == 0 && v_subblock == 0) {
@@ -2223,12 +2226,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         cur_h,
                         active_Sk,
                         KT_stride,
-                        /*skip_pack_configure=*/true,
-#ifdef SDPA_RECIPE_FP32
-                        inplace_numerator);
-#else
-                        false);
-#endif
+                        /*skip_pack_configure=*/true RECIPE_WH_PV_L1_ACC(inplace_numerator));
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
