@@ -733,22 +733,32 @@ def test_repeat_nd_sharded_output(shape, repeat_shape, layout, input_factory, ou
     assert_equal(x.repeat(*repeat_shape), ttnn.to_torch(result))
 
 
-def test_repeat_nd_sharded_preallocated_output(device):
+# The preallocated tensor's memory config is what repeat places into. One that fits a 2D shard is normalized
+# to a legacy shard_spec (interleaved_to_sharded path); a round-robin one stays ND-only (to_memory_config path).
+@pytest.mark.parametrize(
+    "shape, repeat_shape, shard_shape",
+    [
+        pytest.param((1, 1, 64, 64), (1, 1, 1, 2), (1, 1, 64, 32), id="fits_2d"),
+        pytest.param((1, 2, 64, 64), (1, 2, 1, 1), (1, 1, 32, 64), id="round_robin"),
+    ],
+)
+def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, device):
     torch.manual_seed(12345)
-    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
-    output_mem_config = _nd_shard_config((1, 1, 64, 32), num_cores=4)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    expected = x.repeat(*repeat_shape)
+    output_mem_config = _nd_shard_config(shard_shape, num_cores=4)
     ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
     out = ttnn.from_torch(
-        torch.zeros((1, 1, 64, 128), dtype=torch.bfloat16),
+        torch.zeros(expected.shape, dtype=torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
     )
 
-    result = ttnn.repeat(ttnn_input, [1, 1, 1, 2], optional_output_tensor=out)
+    result = ttnn.repeat(ttnn_input, list(repeat_shape), optional_output_tensor=out)
 
     _assert_nd_output(result, output_mem_config)
-    assert_equal(x.repeat(1, 1, 1, 2), ttnn.to_torch(out))
+    assert_equal(expected, ttnn.to_torch(out))
 
 
 # TILE universal-I/O matrix: essential input × output routing paths.
