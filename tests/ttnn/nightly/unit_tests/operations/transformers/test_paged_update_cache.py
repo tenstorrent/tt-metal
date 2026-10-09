@@ -1380,3 +1380,33 @@ def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device,
 
     with expect_error(RuntimeError, r"Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_paged_update_cache_preserves_fp32_neighbors(input_dtype, device):
+    """Paged decode must leave the other rows in a FLOAT32 cache bit exact."""
+    num_users, num_heads, seq_len, head_dim = 4, 1, 64, 64
+    exponent = torch.arange(num_users * num_heads * seq_len * head_dim) % 23 + 1
+    cache = (1.0 + torch.pow(2.0, -exponent.double())).float().reshape(num_users, num_heads, seq_len, head_dim)
+    update = torch.full((1, num_users, num_heads, head_dim), 3.0)
+    update_padded = torch.nn.functional.pad(update, (0, 0, 0, 32 - num_heads))
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.Tensor(update_padded, input_dtype).to(ttnn.TILE_LAYOUT)
+    update_tt = ttnn.reshape(update_tt, ttnn.Shape(update.shape))
+    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(
+        grid,
+        [update_tt.volume() // update_tt.padded_shape[-1] // num_users, update_tt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    update_tt = update_tt.to(device, memory_config)
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for indices in ([5, 7, 9, 11], [37, 39, 41, 43]):
+        indices_tt = ttnn.Tensor(torch.tensor(indices), ttnn.int32).to(device)
+        ttnn.experimental.paged_update_cache(cache_tt, update_tt, update_idxs_tensor=indices_tt)
+        for user, index in enumerate(indices):
+            expected[user, 0, index, :] = 3.0
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1

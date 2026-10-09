@@ -408,3 +408,39 @@ def test_paged_fused_update_cache_decode_attr_idxs_program_caching(
         use_attr_idxs=True,
     )
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("use_index_tensor", [False, True])
+def test_paged_fused_update_cache_preserves_fp32_neighbors(input_dtype, use_index_tensor, device):
+    """Tiled fused update must retain untouched FLOAT32 cache rows exactly."""
+    seq_len, head_dim, update_idx = 64, 64, 5
+    exponent = torch.arange(seq_len * head_dim) % 23 + 1
+    cache = (1.0 + torch.pow(2.0, -exponent.double())).float().reshape(1, 1, seq_len, head_dim)
+    cache1_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    cache2_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    padded_heads = 32
+    inputs = []
+    for core, value in enumerate((3.0, 5.0)):
+        update = torch.full((1, 1, padded_heads, head_dim), value, dtype=torch.float32)
+        update_tt = ttnn.Tensor(update, input_dtype).to(ttnn.TILE_LAYOUT)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core, 0), ttnn.CoreCoord(core, 0))})
+        shard_spec = ttnn.ShardSpec(grid, [padded_heads, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        inputs.append(update_tt.to(device, memory_config))
+
+    expected1, expected2 = cache.clone(), cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for index in (update_idx, update_idx + 32):
+        kwargs = (
+            {"update_idxs_tensor": ttnn.Tensor(torch.tensor([index]), ttnn.int32).to(device)}
+            if use_index_tensor
+            else {"update_idxs": [index]}
+        )
+        ttnn.experimental.paged_fused_update_cache(cache1_tt, inputs[0], cache2_tt, inputs[1], **kwargs)
+        expected1[0, 0, index, :] = 3.0
+        expected2[0, 0, index, :] = 5.0
+        assert torch.equal(ttnn.to_torch(cache1_tt), expected1)
+        assert torch.equal(ttnn.to_torch(cache2_tt), expected2)
+    assert device.num_program_cache_entries() - entries_before == 1

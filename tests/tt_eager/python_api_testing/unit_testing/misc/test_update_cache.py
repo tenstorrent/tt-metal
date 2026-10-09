@@ -625,3 +625,30 @@ def test_fill_cache_cross_head_program_cache_hits(device):
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
 
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_update_cache_preserves_fp32_neighbors(fp32_dest_acc_en, device):
+    """Updating one row must preserve every other row's full FP32 mantissa."""
+    batch, heads, seq_len, head_dim, cache_idx = 2, 1, 64, 64, 5
+    exponent = torch.arange(batch * heads * seq_len * head_dim) % 23 + 1
+    cache = (1.0 + torch.pow(2.0, -exponent.double())).float().reshape(batch, heads, seq_len, head_dim)
+    update = torch.full((1, heads, 32, head_dim), 3.0)
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {}
+    if fp32_dest_acc_en:
+        config_cls = (
+            ttnn.types.BlackholeComputeKernelConfig
+            if ttnn.get_arch_name() == "blackhole"
+            else ttnn.WormholeComputeKernelConfig
+        )
+        kwargs["compute_kernel_config"] = config_cls(fp32_dest_acc_en=True)
+
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for index in (cache_idx, cache_idx + 32):
+        ttnn.update_cache(cache_tt, update_tt, index, **kwargs)
+        expected[:, :, index, :] = 3.0
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1
