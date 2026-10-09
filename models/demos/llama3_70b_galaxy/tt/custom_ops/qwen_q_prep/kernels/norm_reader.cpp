@@ -12,9 +12,11 @@
 //   gamma:  row-major [1, 1, 4, 32] bf16; stick k (64 B) -> tile k at byte 0, then bytes 32..63
 //           copied to face 1 row 0 (byte 512), as the stock reader does
 //
-// Compile-time args: 0 eps fp32 bits, 1+ accessors q, gamma
-// Runtime args: 0 q_addr, 1 gamma_addr, 2 num_rows, 3 h0, 4 j0, 5 tl0, 6 sl_t, 7 s0_t, 8 s1_t, 9 ht,
-//               10 n_heads
+// Compile-time args: 0 eps fp32 bits, 1+ accessors src, gamma
+// Runtime args: 0 src_addr, 1 gamma_addr, 2 num_rows, 3 h0, 4 j0, 5 tl0, 6 sl_t, 7 s0_t, 8 s1_t, 9 ht,
+//               10 n_heads, 11 src_base, 12 src_row_stride, 13 src_head_stride
+// The source tile of (head h, tile row t, column i) is page src_base + t * src_row_stride + h * src_head_stride + i:
+// the q buffer itself ([1, H, S, 128]: 0, 4, S/32 * 4) or the fused QKV buffer ([1, 1, S, W]: column offset, W/32, 4).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -45,6 +47,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(9),
         get_arg_val<uint32_t>(10)};
 
+    const uint32_t src_base = get_arg_val<uint32_t>(11);
+    const uint32_t src_row_stride = get_arg_val<uint32_t>(12);
+    const uint32_t src_head_stride = get_arg_val<uint32_t>(13);
     const auto q = TensorAccessor(q_args, q_addr);
     const auto gamma = TensorAccessor(g_args, gamma_addr);
     Noc noc;
@@ -89,7 +94,7 @@ void kernel_main() {
     constexpr uint32_t q_bytes = get_tile_size(CB_QIN);
     CircularBuffer cb_q(CB_QIN);
     for (uint32_t r = 0; r < num_rows; ++r) {
-        const uint32_t page = w.q_page();
+        const uint32_t page = src_base + w.t() * src_row_stride + w.h * src_head_stride;
         cb_q.reserve_back(WT);
         uint32_t dst = cb_q.get_write_ptr();
         for (uint32_t i = 0; i < WT; ++i) {

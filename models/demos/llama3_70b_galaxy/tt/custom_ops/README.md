@@ -23,9 +23,14 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
 
 ## Status
 
-`qwen_q_prep` runs in the model: `TtLlamaAttention._qwen_local_q_prep` calls it on the Qwen
-Wormhole long-prefill path (batch 1, S > 8192, prefetcher). `test_qwen_q_prep_op.py` passes
-`torch.equal` on all 32 devices at S=16384 and 40960, and the 40k gate numbers are unchanged.
+`qwen_q_prep` runs in the model on the Qwen Wormhole long-prefill path (batch 1, S > 8192, prefetcher):
+`TtLlamaAttention._qwen_qkv_prep_direct` calls it twice per layer, for Q (this column's two ring slices)
+and for K (`all_rows=True`), both reading their heads straight from the fused QKV buffer (`src=`), so
+`nlp_create_qkv_heads` does not run there. `test_qwen_q_prep_op.py` (Q, in place),
+`test_qwen_k_prep_op.py` (K, in place) and `test_qwen_qkv_direct_op.py` (Q/K/V from the fused buffer)
+pass `torch.equal` on all 32 devices at S=16384 and 40960 against the stock-op methods
+(`_qwen_local_q_prep_stock`, `_k_prep_stock`, `nlp_create_qkv_heads`), including a second call on
+fresh buffers (program-cache hit path), and the 40k gate numbers are unchanged.
 Measured: isolated wall 1.278 -> 0.889 ms at S=40960 (0.590 -> 0.984 ms at 16384, host-dispatch
 bound); b1 40k TTFT 3655.0 -> 3596.3 ms.
 
@@ -52,6 +57,16 @@ Per device of a `(rows, cols)` mesh, column `c` owns ring slices `c` and `2*cols
 | `eps` | float | `q_norm.eps`. The reader truncates it to bf16, as the stock reader does. |
 
 `S % (2 * cols * 32) == 0`. For the 8x4 Galaxy that means `S % 256 == 0`, so every multiple of 8192 works.
+
+Options (keyword-only):
+
+- `all_rows=True`: process every position (two "slices" of S/2 rows on every device) instead of the
+  column's ring slices. Used for K (`H = 1`), with `k_norm`'s gamma and eps.
+- `src=xqkv, src_col=c`: read the input rows from a fused `[1, 1, S, W]` bf8 buffer, head `h` at columns
+  `c + 128 * h`, instead of from `q`; `q` is then only written (rows the op does not own stay as they
+  were, uninitialised for a fresh buffer). The N reader computes the source page as
+  `src_base + t * src_row_stride + h * src_head_stride` (runtime args 11-13); without `src` these are
+  `(0, 4, S/32 * 4)`, i.e. the `q` buffer itself.
 
 ### Program
 

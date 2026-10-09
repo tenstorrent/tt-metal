@@ -1183,6 +1183,45 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
         return k_heads_1KSD_8b
 
+    def _qwen_qkv_prep_direct(self, xqkv_fused, rot_mats, seq_len):
+        """Qwen long prefill: Q, K and V straight from the fused [1, 1, S, (H + 2) * D] bf8 QKV buffer, without
+        nlp_create_qkv_heads. Q prep (this column's two ring slices) and K prep (all positions) are qwen_q_prep
+        programs that read their head columns from xqkv_fused and write fresh bf8 buffers; V is a tile-aligned
+        column slice. Bit-identical to nlp_create_qkv_heads + _qwen_local_q_prep + _k_prep_stock + the V typecast
+        (test_qwen_qkv_direct_op.py). The Q buffer's other slices are left unwritten: ring SDPA does not read them."""
+        H, D = self.n_local_heads, self.head_dim
+        q_8b = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, H, seq_len, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        k_8b = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, seq_len, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        qwen_q_prep(
+            q_8b,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            self.q_norm.weight,
+            eps=self.q_norm.eps,
+            src=xqkv_fused,
+            src_col=0,
+        )
+        qwen_q_prep(
+            k_8b,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            self.k_norm.weight,
+            eps=self.k_norm.eps,
+            all_rows=True,
+            src=xqkv_fused,
+            src_col=H * D,
+        )
+        v_8b = ttnn.slice(
+            xqkv_fused, [0, 0, 0, (H + 1) * D], [1, 1, seq_len, (H + 2) * D], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return q_8b, k_8b, v_8b
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1272,18 +1311,37 @@ class TtLlamaAttention(LightweightModule):
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        # split qkv into heads
-        (
-            q_heads_1QSD_pre_rot,
-            k_heads_1KSD_pre_rot,
-            v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Qwen long prefill on Wormhole: Q/K/V prep reads the fused buffer directly (_qwen_qkv_prep_direct).
+        use_direct_qkv = (
+            self.is_qwen
+            and self.use_prefetcher
+            and not self.is_blackhole
+            and batch_size == 1
+            and seq_len > 8192
+            and seq_len % 256 == 0
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and self.qk_norm
+            and self.n_local_kv_heads == 1
+            and xqkv_fused.dtype == ttnn.bfloat8_b
+            and tuple(xqkv_fused.shape) == (1, 1, seq_len, (self.n_local_heads + 2) * self.head_dim)
         )
+        if use_direct_qkv:
+            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD = self._qwen_qkv_prep_direct(xqkv_fused, rot_mats, seq_len)
+            ttnn.deallocate(xqkv_fused)
+            q_heads_1QSD_pre_rot = k_heads_1KSD_pre_rot = None
+        else:
+            # split qkv into heads
+            (
+                q_heads_1QSD_pre_rot,
+                k_heads_1KSD_pre_rot,
+                v_heads_1VSD,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # ttnn.deallocate(xqkv_fused)
 
@@ -1294,7 +1352,8 @@ class TtLlamaAttention(LightweightModule):
         # Qwen long prefill on Wormhole: ring SDPA on mesh column c reads only Q slices c and 7-c of 8, so Q prep
         # (typecast, q_norm, RoPE, typecast) runs on those two S/8 slices and is written back into the bf8 Q buffer.
         use_local_q_prep = (
-            self.is_qwen
+            not use_direct_qkv
+            and self.is_qwen
             and self.use_prefetcher
             and not self.is_blackhole
             and batch_size == 1
@@ -1302,7 +1361,9 @@ class TtLlamaAttention(LightweightModule):
             and (chunk_start_idx is None or chunk_start_idx == 0)
             and q_heads_1QSD_pre_rot.dtype == ttnn.bfloat8_b
         )
-        if use_local_q_prep:
+        if use_direct_qkv:
+            pass
+        elif use_local_q_prep:
             q_heads_1QSD_8b = self._qwen_local_q_prep(q_heads_1QSD_pre_rot, rot_mats, seq_len)
         else:
             if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
@@ -1327,7 +1388,9 @@ class TtLlamaAttention(LightweightModule):
         use_fused_k_prep = (
             use_local_q_prep and self.qk_norm and k_heads_1KSD_pre_rot.dtype == ttnn.bfloat8_b and seq_len % 64 == 0
         )
-        if use_fused_k_prep:
+        if use_direct_qkv:
+            pass
+        elif use_fused_k_prep:
             k_heads_1KSD_8b = qwen_q_prep(
                 k_heads_1KSD_pre_rot,
                 rot_mats[0],
@@ -1348,7 +1411,7 @@ class TtLlamaAttention(LightweightModule):
 
         k_fill = k_heads_1KSD_8b
 
-        if use_fused_k_prep and v_heads_1VSD.dtype == ttnn.bfloat8_b:
+        if (use_fused_k_prep or use_direct_qkv) and v_heads_1VSD.dtype == ttnn.bfloat8_b:
             # bf8 -> bf8 typecast is the identity (test_qwen_k_prep_op.py); use V as is.
             v_heads_1VSD_8b = v_heads_1VSD
         else:
@@ -1388,7 +1451,7 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        if not use_local_q_prep:
+        if not use_local_q_prep and not use_direct_qkv:
             q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q_heads_1QSD)
 
