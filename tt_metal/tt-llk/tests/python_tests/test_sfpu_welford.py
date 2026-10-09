@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional coverage for the Welford SFPU kernel: the mean and the population variance of T tiles
-against a float64 reference, with and without a reciprocal table, and the no-table reciprocal against
-the host's fp32 division, bit for bit, for every count from 1 to 65536 and in windows up to the top of uint32.
-"""
+"""Welford SFPU kernel: mean and population variance against float64, with and without a reciprocal
+table, and the no-table reciprocal against the host's fp32 division bit for bit."""
 
 import numpy as np
 import pytest

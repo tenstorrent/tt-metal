@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional coverage for the column-wise cumulative sum (llk_sfpu/ckernel_sfpu_cumsum.h) over two
-tiles in one DEST block: with `chain` off every tile is its own 32-row scan, with `chain` on the second
-tile continues the first (`first = false`). LLK_CUMSUM_DUMP=<path> appends the raw output bits.
-"""
+"""Column-wise cumulative sum over two tiles in one DEST block, each tile its own scan or, with `chain`,
+the second continuing the first. LLK_CUMSUM_DUMP=<path> appends the raw output bits."""
 
 import os
 import struct

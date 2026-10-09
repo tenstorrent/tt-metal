@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf driver for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h), modelled on sfpu_ema_perf.cpp: one
-// full-tile Welford update per input tile, the running mean and M2 kept in LREG4 and LREG5, the count wrapping
-// every 8 tiles. WELFORD_RECIP_SIZE: N > 0 an N-entry table of 1 / (i + 1), 0 the no-table form.
+// Perf driver for the Welford SFPU kernel: one full-tile update per input tile, the running mean and M2 kept in LREG4
+// and LREG5, the count wrapping every 8 tiles. WELFORD_RECIP_SIZE 0 selects the no-table form.
 
 #include <array>
 #include <cstdint>
@@ -86,10 +85,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// The reciprocal table the kernel reads through a reference. Empty when WELFORD_RECIP_SIZE is 0.
 static std::array<std::uint32_t, WELFORD_RECIP_SIZE> reciprocal_lut;
 
-// One input tile: the copy into DEST (unless the unpacker wrote it) and the Welford update.
 template <bool COPY>
 inline void welford_tile(std::uint32_t tile)
 {
@@ -115,7 +112,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
 
-        // Copy input tile from SrcA into dst.
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
             is_fp32_dest_acc_en,
@@ -125,7 +121,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-        // Welford init: the SFPU configuration, the address mode, the replay buffer, a clear of the state.
         _llk_math_welfords_sfpu_init_();
         ckernel::sfpu::_clear_previous_mean_and_m2_();
 

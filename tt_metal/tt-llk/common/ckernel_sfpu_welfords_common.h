@@ -29,7 +29,6 @@
 #include "sfpi.h"
 
 #ifdef WELFORD_SFPU_EXACT_RECIP
-// Loads a 32-bit value into every lane of an LReg.
 sfpi_inline void _welford_sfpu_load_u32_(const std::uint32_t lreg, const std::uint32_t value)
 {
     if (value < 0x10000)

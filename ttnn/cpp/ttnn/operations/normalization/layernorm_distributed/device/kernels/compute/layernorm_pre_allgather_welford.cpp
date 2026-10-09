@@ -210,7 +210,7 @@ void kernel_main() {
             }
             if constexpr (welford_state_in_lregs) {
                 if constexpr (!DST_ACCUM_MODE) {
-                    // Through a 16-bit DEST and back, the state is rounded to bfloat16 as the spill buffers rounded it.
+                    // A round trip through the 16-bit DEST rounds the state to bfloat16, as the spill path below does.
                     welford_save_state(dst1);
                     welford_restore_state(dst1);
                 }

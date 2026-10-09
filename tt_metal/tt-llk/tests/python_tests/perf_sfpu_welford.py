@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf for the Welford SFPU kernel (sfpu/ckernel_sfpu_welfords.h): one full-tile `welford_update`
-per input tile with the running mean and M2 kept in the SFPU registers. The rows sweep the
-reciprocal form (a 256-entry table or none), the DEST width and a Float32 input through unpack to DEST.
-"""
+"""Perf for the Welford SFPU kernel: one full-tile update per input tile, the running mean and M2
+kept in the SFPU registers, with and without the reciprocal table."""
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
