@@ -694,9 +694,11 @@ void kernel_main() {
                     constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
                     uint32_t real_sticks = 0;
                     if (valid_tile_rows > 0) {
-                        const uint32_t last_valid = this_core_first_row + valid_tile_rows - 1;
+                        // Same bound as the read loop: count_value is the unclamped count, so a
+                        // last row at the count_tiles clamp must still cap at TILE_HEIGHT sticks.
+                        const uint32_t last_base = (this_core_first_row + valid_tile_rows - 1) * TILE_HEIGHT;
                         const uint32_t real_r_last =
-                            (last_valid == count_tiles - 1) ? (count_value - last_valid * TILE_HEIGHT) : TILE_HEIGHT;
+                            (last_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - last_base);
                         real_sticks = (valid_tile_rows - 1) * TILE_HEIGHT + real_r_last;
                     }
                     mcast_bytes = real_sticks * rm_kblock_bytes;

@@ -73,6 +73,7 @@ def run_single_routed_expert(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
+    count_overshoot: int = 0,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -107,6 +108,10 @@ def run_single_routed_expert(
     each element is the floor for both of that half's tails). Set it on any case whose point is the saturated
     region: without it, a change to ``weight_scale``, the dims or the seed would quietly drop
     the case back into the near-linear middle of both tanhs while still passing.
+
+    ``count_overshoot`` is added to the token count handed to the device only, so the op sees
+    more active rows than its ``allocated_tokens`` capacity. The kernels must clamp it to the
+    capacity; the reference and the PCC still cover the ``active_tokens`` real rows.
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -216,7 +221,7 @@ def run_single_routed_expert(
         )
 
     global_expert_idx_tt = _make_idx_tensor([0])
-    expert_token_counts_tt = _make_idx_tensor([active_tokens])
+    expert_token_counts_tt = _make_idx_tensor([active_tokens + count_overshoot])
     expert_region_offsets_tt = _make_idx_tensor([0])
 
     # Create TtRoutedExpert
@@ -549,4 +554,38 @@ def test_single_routed_expert_dsv4_clamped(
         weights_dtype=weights_dtype,
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
+    )
+
+
+# Over-capacity counts: counts[] is device-produced and only its shape is validated on the host, so
+# a count past the expert's region reaches the kernels unchecked. They clamp it to the program's
+# capacity; every row past that must be dropped without corrupting L1 or hanging. A buffer that is
+# full (allocated == active) puts the clamped last tile-row exactly at capacity, the case where the
+# row-major x multicast used to size its last tile-row from the unclamped count. Overshoots: one
+# stick past a tile-row, a few tile-rows, and far past L1.
+_OVER_CAPACITY_TOKENS = 512
+_OVER_CAPACITY_OVERSHOOTS = [1, 100, 100_000]
+
+
+@pytest.mark.parametrize("count_overshoot", _OVER_CAPACITY_OVERSHOOTS, ids=lambda o: f"over-{o}")
+@pytest.mark.parametrize("model_name", ["glm_53", "kimi_k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_over_capacity_count(device, model_name: str, count_overshoot: int):
+    config = {name: cfg for name, cfg, _ in SINGLE_EXPERT_MODELS}[model_name]
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
+        count_overshoot=count_overshoot,
+    )
+    # The device must still be healthy afterwards: a normal in-capacity run on the same device.
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        active_tokens=_OVER_CAPACITY_TOKENS - 40,
+        x_row_major=True,
     )
