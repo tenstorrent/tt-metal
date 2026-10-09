@@ -30,9 +30,7 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, c
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    // Match the non-broadcast path: pad a short face out to the FPU row stride, then
-    // count instructions. On quasar_4row that is two ELWs per tiny face, so SrcA and
-    // dest stay aligned with unpack and pack, which space faces MAX_FPU_ROWS apart.
+    // Same count as non-broadcast math: two ELWs per tiny face on quasar_4row.
     const std::uint32_t num_eltwise_instrn_per_face = _eltwise_binary_rows_per_face_(tensor_shape) >> rows_log2(ELTWISE_MATH_ROWS);
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
