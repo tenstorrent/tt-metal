@@ -933,3 +933,30 @@ the exact predecessor exited; all later followers remain live and waiting.
 No session connection is needed for that queue to continue.
 
 [Complete delivery results](../galaxy-evidence/delivery-extended-v2/README.md).
+
+## Oct 9, 07:13-07:22 UTC: agentic failure attribution while head G0 loads
+
+- Reviewed all three naturally completed Tau3 failures, retaining 3/12 overall.
+  Task 019's simulated user substituted a wrong ID despite the agent's correct
+  tool handoff; task 051 contains an agent-invented verification time plus a
+  stuck resubmission; task 102 failed verification/referral constraints. The
+  initial theory of simulator-invented company age in task 102 was contradicted
+  by the original instructions, which intentionally contain misleading facts.
+  The local judge's rationale missed that distinction; DB scoring still failed.
+- Added a read-only audit and invoked actual pinned upstream banking tools
+  against a fresh synthetic in-memory database. Submission then denial leaves
+  the original request pending and inserts a separate denial; resubmission
+  reproduces the recorded duplicate-request error. No model calls, benchmark
+  modifications or score repairs were made. This is not proof that correcting
+  that blocker alone makes task 051 pass.
+- Initial audit import lacked the task's PortAudio library path. The retry used
+  the already installed task-owned path and completed; no native installation
+  changed. Collected task/source hashes and diagnostic counts without exporting
+  full conversations. Literal tool errors can have `error=false`; zero malformed
+  JSON alone is insufficient evidence of tool correctness.
+- Rechecked the experimental 6,010,501,632-byte OCI artifact on host disk and
+  clean pushed TTIS packaging source `5f5302944`. Image runtime/hardware and
+  SJC3 Helm qualification remain pending. Head-control PID 1103813 remains live
+  loading replicas for G0; the most recent GPQA remains 170/198.
+
+[Audit and reproduction](../galaxy-evidence/tau-review-v1/README.md).

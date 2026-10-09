@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T07:11:07.749121+00:00",
+  "generated_at": "2026-10-09T07:22:25.789258+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -49,8 +49,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 72923,
-      "sha256": "90506f0f9f1c79c876b2987c89312840ee3f65f4622046a40f1e80a621e379b4"
+      "bytes": 74725,
+      "sha256": "b0e4aee5cdf39b04654d4c048cf004f9a553ca10d7f0f69e7261e5b66c4a13e7"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -4692,8 +4692,8 @@
     },
     {
       "path": "galaxy-evidence/tau-pilot-v2/README.md",
-      "bytes": 1708,
-      "sha256": "9099f478402d554505b8893626dbf5b20228784e6c63692e4f062840adce1688"
+      "bytes": 1883,
+      "sha256": "0ffb887144b8b4faac0fd0cc69995de442b1fdbceeaffc389a8207ac3a0ee9f8"
     },
     {
       "path": "galaxy-evidence/tau-pilot-v2/protocol.json",
@@ -4704,6 +4704,16 @@
       "path": "galaxy-evidence/tau-pilot-v2/summary.json",
       "bytes": 4986,
       "sha256": "8182512fecb958421a78fe09061020509b7ea14eb505426998564a218c5ec272"
+    },
+    {
+      "path": "galaxy-evidence/tau-review-v1/README.md",
+      "bytes": 4981,
+      "sha256": "63a4141d3c8372391e63c4b456be3c74f0a7966084bf917b223e757627e889d6"
+    },
+    {
+      "path": "galaxy-evidence/tau-review-v1/audit.json",
+      "bytes": 8801,
+      "sha256": "700792d01ab1c4f6281c5bac4f74765727e5e8417494f036b0a97e7bccc899fa"
     },
     {
       "path": "galaxy-evidence/unit.xml",
@@ -4730,6 +4740,11 @@
       "path": "tests/reference_comparison.py",
       "bytes": 2934,
       "sha256": "bdf7923c362c6fb3c607b74da3d22eb022c149067e8b546a6a8da25870470589"
+    },
+    {
+      "path": "tests/tau_failure_audit.py",
+      "bytes": 6168,
+      "sha256": "533e262ad5d6ab9f5b5991278cc1c5aab20ccf24b3d7066214e468f9b9347dcd"
     },
     {
       "path": "tests/test_chunked_prefill_hardware.py",

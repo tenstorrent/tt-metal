@@ -3,12 +3,15 @@
 The corrected twelve-task banking pilot completed all attempts in **32m36s**:
 **3/12 successes (25%)**, with all twelve tasks retained in the denominator.
 This is a short integration/agentic pilot, not a matched published reference
-score. Qwen supplies the agent, user simulator and assertion verifier; manual
-review of the simulated conversations and judgments is still pending.
+score. Qwen supplies the agent, user simulator and assertion verifier. A
+[partial failure review](../tau-review-v1/README.md) found genuine agent errors,
+simulator mistakes and a reproduced upstream tool-state blocker. It did not
+change any score; full manual review remains incomplete.
 
 It made 298 model calls and emitted 277 tool calls. No malformed tool-call
 arguments or output-budget truncations were recorded. Successful tool parsing
-does not imply task success. The five incomplete trials also prevent treating
+does not imply task success. The six trials ending on time/step limits or a
+request timeout also prevent treating
 the headline reward as a clean measure of model quality.
 
 | Outcome | Tasks |

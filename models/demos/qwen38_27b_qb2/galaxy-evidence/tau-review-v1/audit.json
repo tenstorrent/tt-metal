@@ -1,0 +1,314 @@
+{
+  "revision": "17e07b1da2bbc0cadfddeea36412686e0604127b",
+  "score_unchanged": {
+    "correct": 3,
+    "total": 12
+  },
+  "matched_published_reference": false,
+  "hardware_opened": false,
+  "model_calls_made": 0,
+  "full_manual_review_completed": false,
+  "trials": [
+    {
+      "task_id": "task_032",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 370.85237981704995
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "5c91f20218324537c7774a1c320bdf4779c4631b9516d1cad5877f0679070d71",
+        "completed-result.json": "155a1eecbfe72ad6fdbe8e819a402c7e39e0803ee64fe5e7de312db2728e67eb"
+      },
+      "calls": 18,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "ACTION"
+      ],
+      "reward_breakdown": {
+        "ACTION": 1.0
+      },
+      "tool_messages": 7,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_050",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 402.60775388404727
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "eb405563d6b89e18fcb92cba986013dd012e3b9c9d53da9dc7591d1c59637d36",
+        "completed-result.json": "2725f9749b3063ef472f58b5542287fa6074138bccf545129505d8b866d5d658"
+      },
+      "calls": 20,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "DB"
+      ],
+      "reward_breakdown": {
+        "DB": 1.0
+      },
+      "tool_messages": 21,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_019",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 938.2109041591175
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "88e6ee7b37294dbd40d845c7b6cefc212347eff8fd37bc580a60e8d312f30fbc",
+        "completed-result.json": "b36ff4b32a3aebe613630446a642f73ca6031b627e12cfe55094f33f51184f6d"
+      },
+      "calls": 37,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "DB"
+      ],
+      "reward_breakdown": {
+        "DB": 0.0
+      },
+      "tool_messages": 24,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [
+        34
+      ],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_016",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 423.80713403364643
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "f25cb3cbb1e7f7297df8d7639f9378d87953d0c3b2ebc7128c857b6e8900612e",
+        "completed-result.json": "2df89f7ca3b4bb70e01f87f64dcb30a5bac213ad6687472823f264690868f240"
+      },
+      "calls": 19,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "DB"
+      ],
+      "reward_breakdown": {
+        "DB": 1.0
+      },
+      "tool_messages": 10,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_057",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1513238348998
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "65d26d67ec085f625867bbc87ad47bdc41cc0f9d85340b148f9ad649772920a7"
+      },
+      "calls": 33,
+      "errors": {},
+      "length_finishes": 0
+    },
+    {
+      "task_id": "task_047",
+      "passed": false,
+      "termination": "max_steps",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 993.5662800329737
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "2cdf420a1f8ed865fa38540f7c2cbabbd6be9a2995dfe89b542ab0a09d8e14b1",
+        "completed-result.json": "6e1e6b197dd732e9a421d389b23f0a0d30aadb8fa0351478e62ca5ce1263f38b"
+      },
+      "calls": 39,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": null,
+      "reward_breakdown": null,
+      "tool_messages": 36,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": "tool"
+    },
+    {
+      "task_id": "task_060",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1508802236058
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "2cf07864441a9a3acdf704dc40d0ab7fbf98e91e4377520e4aba193d4b2845f5"
+      },
+      "calls": 25,
+      "errors": {},
+      "length_finishes": 0
+    },
+    {
+      "task_id": "task_026",
+      "passed": false,
+      "termination": "infrastructure_error",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 755.3893045959994
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "32fbb5cfdf82b8ddee2e057cc4873a3e0fa829416626fa7495239c087084906b",
+        "completed-result.json": "5aed3c4c65f5f62cddf8b5f57f4c8647b14e2b011aec9d529b9bada17711fa9a"
+      },
+      "calls": 11,
+      "errors": {
+        "Timeout": 1
+      },
+      "length_finishes": 0,
+      "reward_basis": null,
+      "reward_breakdown": null,
+      "tool_messages": 0,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": null
+    },
+    {
+      "task_id": "task_051",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 785.6917039621621
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "fa19ef75aa82f9bd08ef310a2c882ecc4406a1b0edbc40e86834409fdaed25b5",
+        "completed-result.json": "32cdb7f35f4b8af3e7b570a552518f558a3eb8d2406a20ff3b6a70c148fe1458"
+      },
+      "calls": 35,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "DB"
+      ],
+      "reward_breakdown": {
+        "DB": 0.0
+      },
+      "tool_messages": 29,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [
+        52,
+        56,
+        60
+      ],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_102",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 995.9713290068321
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "b14679463867b3c48c7ace0e0b08b3962c4beea404f77b3334f685138320d63e",
+        "completed-result.json": "c3c6948e485e27595696330b1cbc1a7ed9186779ef6116359d5db7e165d6f9d3"
+      },
+      "calls": 19,
+      "errors": {},
+      "length_finishes": 0,
+      "reward_basis": [
+        "DB",
+        "NL_ASSERTION"
+      ],
+      "reward_breakdown": {
+        "DB": 0.0,
+        "NL_ASSERTION": 1.0
+      },
+      "tool_messages": 23,
+      "tool_error_flags": 0,
+      "tool_output_error_prefixes": [],
+      "final_message_role": "user"
+    },
+    {
+      "task_id": "task_066",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1936748670414
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "7e3e01aafeee31ef92b295b155632b70182f59e6bba21c7bd62052e4c79ecc9e"
+      },
+      "calls": 21,
+      "errors": {},
+      "length_finishes": 0
+    },
+    {
+      "task_id": "task_097",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1634010709822
+      },
+      "source_sha256": {
+        "raw-calls.jsonl": "f3f7d9cdda2d93b17c6958606d21f9f1dc21ea6e4dabff9737500f75cf46cab6"
+      },
+      "calls": 21,
+      "errors": {},
+      "length_finishes": 0
+    }
+  ],
+  "source_sha256": {
+    "tools.py": "deb0132254516d00b9eefcc4b178462ef656759f2d445c8930623e3d4219799d",
+    "db_query.py": "0f42b5cba53fdb8f41984af160bd6f2bc20416460973b3256542785fd318065a",
+    "utils.py": "ff116aef99e023d7492690fafff54fc24e9b6f3d3af18b7402a26b974b41fc66",
+    "data_model.py": "8451829795c7cf18668b26adc2db06c10426f4e69b553824ea886c40765ee3c4"
+  },
+  "credit_limit_tool_reproduction": {
+    "reproduced": true,
+    "first_submission_succeeded": true,
+    "denial_succeeded": true,
+    "original_request_remains_pending": true,
+    "retry_error": "Error: A similar request may already exist.",
+    "statuses": [
+      "DENIED",
+      "PENDING"
+    ],
+    "original_task_score_changed": false,
+    "state_scope": "Synthetic in-memory database only"
+  }
+}
