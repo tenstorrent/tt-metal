@@ -6,6 +6,9 @@
 
 #include <fmt/format.h>
 
+#include <cmath>
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
@@ -15,26 +18,13 @@
 
 namespace ttml::optimizers {
 
-namespace {
-// RMSNorm gains and biases are stored as 1-D tensors ({1,1,1,N}); matmul weights and
-// embeddings have >=2 non-unit dims. Decoupled AdamW skips weight decay on the former
-// so normalization scales aren't dragged toward zero.
-bool is_effectively_1d(const ttnn::Tensor& tensor) {
-    const auto& shape = tensor.logical_shape();
-    int non_unit_dims = 0;
-    for (size_t i = 0; i < shape.rank(); ++i) {
-        non_unit_dims += static_cast<int>(shape[i] > 1);
-    }
-    return non_unit_dims < 2;
-}
-}  // namespace
-
 std::string AdamW::get_name() const {
     return "AdamW";
 }
 
-AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig& config) :
-    OptimizerBase(std::move(parameters)), m_config(config) {
+AdamW::AdamW(
+    ttml::serialization::NamedParameters parameters, const AdamWConfig& config, std::vector<ParamGroup> param_groups) :
+    OptimizerBase(std::move(parameters)), m_amsgrad(config.amsgrad), m_stochastic_rounding(config.stochastic_rounding) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_exp_avg.emplace(
@@ -49,9 +39,12 @@ AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig&
                     /* requires_grad */ false));
         }
     }
-    if (m_config.amsgrad) {
+    if (m_amsgrad) {
         init_max_exp_avg_sq();
     }
+
+    init_param_groups(param_group_defaults(config), std::move(param_groups));
+    reset_beta_pows();
 }
 
 void AdamW::zero_grad() {
@@ -68,85 +61,79 @@ void AdamW::step() {
     }
 
     m_steps++;
-    // Update beta powers: multiply by beta values each step instead of computing pow(beta, step)
-    m_beta1_pow *= m_config.beta1;
-    m_beta2_pow *= m_config.beta2;
 
-    for (const auto& [name, theta_ptr] : m_parameters) {
-        if (!theta_ptr->is_grad_initialized()) {
-            continue;
+    for (size_t group_idx = 0; group_idx < m_param_groups.size(); ++group_idx) {
+        const auto& group = m_param_groups[group_idx];
+        const float lr = group.options.at("lr");
+        const float beta1 = group.options.at("beta1");
+        const float beta2 = group.options.at("beta2");
+        const float epsilon = group.options.at("epsilon");
+        const float weight_decay = group.options.at("weight_decay");
+        const float beta1_pow = m_beta1_pows[group_idx] *= beta1;
+        const float beta2_pow = m_beta2_pows[group_idx] *= beta2;
+
+        for (const auto& name : group.params) {
+            const auto& theta_ptr = m_parameters.at(name);
+            if (!theta_ptr->is_grad_initialized()) {
+                continue;
+            }
+
+            auto gradients = theta_ptr->get_grad();
+            auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
+
+            const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::HALF);
+            const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
+
+            std::optional<ttnn::Tensor> max_exp_avg_sq;
+            if (m_amsgrad) {
+                max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
+            }
+
+            ttml::metal::adamw(
+                param,
+                gradients,
+                exp_avg,
+                exp_avg_sq,
+                max_exp_avg_sq,
+                lr,
+                beta1,
+                beta2,
+                beta1_pow,
+                beta2_pow,
+                epsilon,
+                weight_decay,
+                static_cast<ttml::metal::StochasticRounding>(m_stochastic_rounding),
+                m_stochastic_rounding
+                    ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
+                    : std::nullopt);
         }
-
-        auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
-
-        const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::HALF);
-        const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
-
-        std::optional<ttnn::Tensor> max_exp_avg_sq;
-        if (m_config.amsgrad) {
-            max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
-        }
-
-        float weight_decay = m_config.weight_decay;
-        if (m_config.weight_decay_skip_1d && is_effectively_1d(param)) {
-            weight_decay = 0.0F;
-        }
-
-        ttml::metal::adamw(
-            param,
-            gradients,
-            exp_avg,
-            exp_avg_sq,
-            max_exp_avg_sq,
-            m_config.lr,
-            m_config.beta1,
-            m_config.beta2,
-            m_beta1_pow,
-            m_beta2_pow,
-            m_config.epsilon,
-            weight_decay,
-            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
-            m_config.stochastic_rounding
-                ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
-                : std::nullopt);
     }
 }
 
 serialization::StateDict AdamW::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    dict["lr"] = m_config.lr;
-    dict["beta1"] = m_config.beta1;
-    dict["beta2"] = m_config.beta2;
-    dict["epsilon"] = m_config.epsilon;
-    dict["weight_decay"] = m_config.weight_decay;
-    dict["amsgrad"] = m_config.amsgrad;
-    dict["stochastic_rounding"] = m_config.stochastic_rounding;
+    dict["amsgrad"] = m_amsgrad;
+    dict["stochastic_rounding"] = m_stochastic_rounding;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
-    if (m_config.amsgrad) {
+    if (m_amsgrad) {
         dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
     }
-    save_initial_lr(dict);
+    save_param_groups(dict);
     return dict;
 }
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
-    set_lr(serialization::get_value_type<float>(dict, "lr"));
-    restore_initial_lr(dict);
-    set_beta1(serialization::get_value_type<float>(dict, "beta1"));
-    set_beta2(serialization::get_value_type<float>(dict, "beta2"));
-    m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");
-    m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
-    m_config.stochastic_rounding = serialization::get_value_type<bool>(dict, "stochastic_rounding");
-    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
+    restore_param_groups(dict);
+    m_stochastic_rounding = serialization::get_value_type<bool>(dict, "stochastic_rounding");
+    set_steps(serialization::get_value_type<size_t>(dict, "steps"));  // rebuilds the beta powers with pow
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 
     const bool amsgrad = serialization::get_value_type<bool>(dict, "amsgrad");
     if (amsgrad && dict.contains("max_exp_avg_sq")) {
-        m_config.amsgrad = true;
+        m_amsgrad = true;
         m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("max_exp_avg_sq"));
     } else {
         set_amsgrad(amsgrad);
@@ -158,73 +145,44 @@ size_t AdamW::get_steps() const {
 }
 
 void AdamW::set_steps(size_t steps) {
-    this->m_beta1_pow = std::pow(m_config.beta1, steps);
-    this->m_beta2_pow = std::pow(m_config.beta2, steps);
-    this->m_steps = steps;
+    m_steps = steps;
+    reset_beta_pows();
 }
 
-float AdamW::get_lr() const {
-    return m_config.lr;
-}
-
-void AdamW::set_lr(float lr) {
-    m_config.lr = lr;
-}
-
-float AdamW::get_beta1() const {
-    return m_config.beta1;
-}
-
-void AdamW::set_beta1(float beta1) {
-    m_config.beta1 = beta1;
-    // Bias correction uses beta^t with the current beta (PyTorch semantics), so the
-    // beta powers must be rebuilt from the new value; set_steps owns that derivation.
-    set_steps(m_steps);
-}
-
-float AdamW::get_beta2() const {
-    return m_config.beta2;
-}
-
-void AdamW::set_beta2(float beta2) {
-    m_config.beta2 = beta2;
-    set_steps(m_steps);
-}
-
-float AdamW::get_epsilon() const {
-    return m_config.epsilon;
-}
-
-void AdamW::set_epsilon(float epsilon) {
-    m_config.epsilon = epsilon;
-}
-
-float AdamW::get_weight_decay() const {
-    return m_config.weight_decay;
-}
-
-void AdamW::set_weight_decay(float weight_decay) {
-    m_config.weight_decay = weight_decay;
+void AdamW::set_param_group_option(size_t group_idx, const std::string& key, float value) {
+    OptimizerBase::set_param_group_option(group_idx, key, value);
+    if (key == "beta1" || key == "beta2") {
+        reset_beta_pows();
+    }
 }
 
 bool AdamW::get_amsgrad() const {
-    return m_config.amsgrad;
+    return m_amsgrad;
 }
 
 void AdamW::set_amsgrad(bool amsgrad) {
-    if (m_config.amsgrad == amsgrad) {
+    if (m_amsgrad == amsgrad) {
         return;
     }
-    m_config.amsgrad = amsgrad;
+    m_amsgrad = amsgrad;
     amsgrad ? init_max_exp_avg_sq() : m_max_exp_avg_sq.clear();
 }
 
 bool AdamW::get_stochastic_rounding() const {
-    return m_config.stochastic_rounding;
+    return m_stochastic_rounding;
 }
 
 void AdamW::set_stochastic_rounding(bool stochastic_rounding) {
-    m_config.stochastic_rounding = stochastic_rounding;
+    m_stochastic_rounding = stochastic_rounding;
+}
+
+void AdamW::reset_beta_pows() {
+    m_beta1_pows.clear();
+    m_beta2_pows.clear();
+    for (const auto& group : m_param_groups) {
+        m_beta1_pows.push_back(static_cast<float>(std::pow(group.options.at("beta1"), m_steps)));
+        m_beta2_pows.push_back(static_cast<float>(std::pow(group.options.at("beta2"), m_steps)));
+    }
 }
 
 void AdamW::init_max_exp_avg_sq() {

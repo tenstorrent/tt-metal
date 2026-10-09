@@ -59,14 +59,12 @@ public:
     [[nodiscard]] virtual size_t get_steps() const = 0;
     virtual void set_steps(size_t steps) = 0;
 
-    virtual void set_lr(float lr) = 0;
-    [[nodiscard]] virtual float get_lr() const = 0;
-
-    // LR recorded the first time this is called, mirroring PyTorch's
-    // ``param_group["initial_lr"]`` (set once via ``setdefault``). Schedulers
-    // read their base LR from here so that several schedulers attached to the
-    // same optimizer (e.g. a warmup/decay chain) share one base even after an
-    // earlier scheduler has already scaled ``get_lr()`` at construction.
+    // Single-LR API on top of the param groups, for callers that drive one LR (LR schedulers, trainers): get_lr() is
+    // the first group's LR, and set_lr(lr) applies the same factor lr / initial_lr[0] to every group's initial LR, so
+    // the groups keep their ratios.
+    virtual void set_lr(float lr);
+    [[nodiscard]] virtual float get_lr() const;
+    // The first group's initial LR (see get_initial_group_lrs).
     [[nodiscard]] float get_initial_lr();
 
     // Value of hyperparameter in every param group, indexed like the groups.
@@ -108,17 +106,9 @@ protected:
     void save_param_groups(serialization::StateDict& dict) const;
     void restore_param_groups(const serialization::StateDict& dict);
 
-    // ``initial_lr`` is always serialized with the optimizer state dict
-    // (mirroring PyTorch, where ``param_group["initial_lr"]`` rides along in
-    // ``optimizer.state_dict()``) and is required on load. Concrete optimizers
-    // call these from their get_state_dict / set_state_dict overrides.
-    void save_initial_lr(serialization::StateDict& dict) const;
-    void restore_initial_lr(const serialization::StateDict& dict);
-
     serialization::NamedParameters m_parameters;
 
 private:
-    std::optional<float> m_initial_lr;
     std::optional<std::vector<float>> m_initial_lrs;
 };
 

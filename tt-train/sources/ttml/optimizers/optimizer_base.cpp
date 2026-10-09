@@ -39,25 +39,28 @@ std::invalid_argument unknown_option_error(
 }
 }  // namespace
 
+float OptimizerBase::get_lr() const {
+    return get_group_lrs().front();
+}
+
+void OptimizerBase::set_lr(float lr) {
+    const auto initial_lrs = get_initial_group_lrs();
+    const float first_initial_lr = initial_lrs.front();
+    const bool all_zero = std::ranges::all_of(initial_lrs, [](float value) { return value == 0.0F; });
+    if (first_initial_lr == 0.0F && !all_zero) {
+        throw std::invalid_argument(fmt::format(
+            "{}::set_lr cannot scale param groups whose first group has an initial lr of 0; set each group's lr "
+            "with set_group_lrs instead",
+            get_name()));
+    }
+    for (size_t group_idx = 0; group_idx < m_param_groups.size(); ++group_idx) {
+        // Ratio first, so a group sharing the first group's initial lr gets exactly `lr`.
+        set_param_group_option(group_idx, "lr", all_zero ? lr : lr * (initial_lrs[group_idx] / first_initial_lr));
+    }
+}
+
 float OptimizerBase::get_initial_lr() {
-    if (!m_initial_lr.has_value()) {
-        m_initial_lr = get_lr();
-    }
-    return *m_initial_lr;
-}
-
-void OptimizerBase::save_initial_lr(serialization::StateDict& dict) const {
-    // If no scheduler has recorded a base LR yet, the current LR is the base.
-    dict["initial_lr"] = m_initial_lr.value_or(get_lr());
-}
-
-void OptimizerBase::restore_initial_lr(const serialization::StateDict& dict) {
-    if (!dict.contains("initial_lr")) {
-        throw std::runtime_error(
-            "Optimizer state dict has no \"initial_lr\" entry. Optimizer checkpoints must include initial_lr; "
-            "checkpoints written before it was added are not supported and must be regenerated.");
-    }
-    m_initial_lr = serialization::get_value_type<float>(dict, "initial_lr");
+    return get_initial_group_lrs().front();
 }
 
 std::string OptimizerBase::param_group_key(size_t group_idx, const std::string& key) {

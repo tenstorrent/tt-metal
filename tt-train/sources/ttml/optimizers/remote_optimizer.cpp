@@ -22,6 +22,7 @@ RemoteOptimizer::RemoteOptimizer(serialization::NamedParameters parameters, int 
     OptimizerBase(std::move(parameters)) {
     m_aggregator_rank = core::distributed::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
+    init_param_groups({{"lr", 0.0F}}, {});
 
     auto workers_and_aggregator_ranks = get_workers_and_aggregator_ranks(static_cast<uint32_t>(*m_aggregator_rank));
     m_distributed_ctx = autograd::ctx().get_distributed_context()->create_sub_context(workers_and_aggregator_ranks);
@@ -45,13 +46,13 @@ void RemoteOptimizer::step() {
 serialization::StateDict RemoteOptimizer::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    save_initial_lr(dict);
+    save_param_groups(dict);
     return dict;
 }
 
 void RemoteOptimizer::set_state_dict(const serialization::StateDict& dict) {
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    restore_initial_lr(dict);
+    restore_param_groups(dict);
 }
 
 size_t RemoteOptimizer::get_steps() const {
@@ -83,15 +84,6 @@ void RemoteOptimizer::receive_weights() {
         tensor = socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
         tensor_ptr->set_value(tensor);
     }
-}
-
-void RemoteOptimizer::set_lr(float lr) {
-    // No-op: learning rate is managed by the remote optimizer
-}
-
-float RemoteOptimizer::get_lr() const {
-    // Remote optimizer doesn't store learning rate locally
-    return 0.F;
 }
 
 }  // namespace ttml::optimizers

@@ -32,6 +32,26 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
+namespace {
+
+std::vector<float> floats_from_py(const nb::sequence& values) {
+    std::vector<float> result;
+    for (const auto& value : values) {
+        result.push_back(nb::cast<float>(value));
+    }
+    return result;
+}
+
+nb::list floats_to_py(const std::vector<float>& values) {
+    nb::list result;
+    for (const float value : values) {
+        result.append(value);
+    }
+    return result;
+}
+
+}  // namespace
+
 class OptimizerBaseTrampoline : public ttml::optimizers::OptimizerBase {
     NB_TRAMPOLINE(OptimizerBase, 10);
 
@@ -117,6 +137,46 @@ YAML::Node obj_to_yaml(nb::object obj) {
     return YAML::Node();
 }
 
+std::vector<ParamGroup> param_groups_from_py(const nb::list& groups) {
+    std::vector<ParamGroup> result;
+    for (auto group_obj : groups) {
+        auto group_dict = nb::cast<nb::dict>(group_obj);
+        if (!group_dict.contains("params")) {
+            throw std::invalid_argument("Every param group dict needs a \"params\" entry");
+        }
+        ParamGroup group;
+        for (auto [key, value] : group_dict) {
+            const auto key_str = nb::cast<std::string>(key);
+            if (key_str == "params") {
+                for (auto name : value) {
+                    group.params.push_back(nb::cast<std::string>(name));
+                }
+            } else {
+                group.options[key_str] = nb::cast<float>(value);
+            }
+        }
+        result.push_back(std::move(group));
+    }
+    return result;
+}
+
+nb::list param_groups_to_py(const std::vector<ParamGroup>& groups) {
+    nb::list result;
+    for (const auto& group : groups) {
+        nb::dict group_dict;
+        nb::list params;
+        for (const auto& name : group.params) {
+            params.append(name);
+        }
+        group_dict["params"] = params;
+        for (const auto& [key, value] : group.options) {
+            group_dict[key.c_str()] = value;
+        }
+        result.append(group_dict);
+    }
+    return result;
+}
+
 }  // namespace
 
 void py_module(nb::module_& m) {
@@ -131,12 +191,10 @@ void py_module(nb::module_& m) {
         [py_registry](nb::dict config, serialization::NamedParameters params) -> nb::object {
             auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));
             if (py_registry.contains(type.c_str())) {
-                // Python-registered optimizers bypass OptimizerRegistry::create, so repeat its
-                // weight_decay_skip_1d guard or the key silently does nothing.
-                auto skip_1d = config.attr("get")("weight_decay_skip_1d", false);
-                if (!skip_1d.is_none() && nb::cast<bool>(skip_1d)) {
-                    throw std::runtime_error(
-                        "weight_decay_skip_1d is only supported by AdamW, got optimizer type: " + type);
+                // Python-registered optimizers bypass OptimizerRegistry::create and have no param groups,
+                // so reject the key or it silently does nothing.
+                if (config.contains("param_groups")) {
+                    throw std::runtime_error("param_groups is not supported by optimizer type: " + type);
                 }
                 return py_registry[type.c_str()](config, std::move(params));
             }
@@ -165,11 +223,45 @@ void py_module(nb::module_& m) {
             "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
         py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
         py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
-        py_optimizer_base.def(
-            "get_initial_lr",
-            &OptimizerBase::get_initial_lr,
-            "Get the LR recorded when the first scheduler attached (mirrors PyTorch's param_group['initial_lr'])");
         py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
+        py_optimizer_base.def(
+            "get_group_lrs",
+            [](const OptimizerBase& self) { return floats_to_py(self.get_group_lrs()); },
+            "LR of every param group, indexed like get_param_groups");
+        py_optimizer_base.def(
+            "set_group_lrs",
+            [](OptimizerBase& self, const nb::sequence& lrs) { self.set_group_lrs(floats_from_py(lrs)); },
+            nb::arg("lrs"),
+            "Set the LR of every param group (indexed like get_group_lrs). This is what LR schedulers call");
+        py_optimizer_base.def(
+            "get_group_options",
+            [](const OptimizerBase& self, const std::string& key) { return floats_to_py(self.get_group_options(key)); },
+            nb::arg("key"),
+            "Value of a param group option ('lr', 'weight_decay', ...) in every param group");
+        py_optimizer_base.def(
+            "set_group_options",
+            [](OptimizerBase& self, const std::string& key, const nb::sequence& values) {
+                self.set_group_options(key, floats_from_py(values));
+            },
+            nb::arg("key"),
+            nb::arg("values"),
+            "Set a param group option in every param group, one value per group (indexed like get_param_groups)");
+        py_optimizer_base.def(
+            "get_initial_group_lrs",
+            [](OptimizerBase& self) { return floats_to_py(self.get_initial_group_lrs()); },
+            "Per-group LRs recorded the first time this is called (PyTorch's param_group['initial_lr'])");
+        py_optimizer_base.def(
+            "get_param_groups",
+            [](const OptimizerBase& self) { return param_groups_to_py(self.get_param_groups()); },
+            "Param groups as PyTorch-style dicts: {'params': [names], <option>: value, ...}");
+        py_optimizer_base.def("get_defaults", &OptimizerBase::get_defaults, "Default param group options");
+        py_optimizer_base.def(
+            "set_param_group_option",
+            &OptimizerBase::set_param_group_option,
+            nb::arg("group_idx"),
+            nb::arg("key"),
+            nb::arg("value"),
+            "Set one option of one param group");
     }
 
     {
@@ -196,7 +288,13 @@ void py_module(nb::module_& m) {
     {
         auto py_sgd = static_cast<nb::class_<SGD, OptimizerBase>>(m.attr("SGD"));
         py_sgd.def(
-            nb::init<serialization::NamedParameters, const SGDConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            "__init__",
+            [](SGD* self, serialization::NamedParameters parameters, const SGDConfig& config, nb::list param_groups) {
+                new (self) SGD(std::move(parameters), config, param_groups_from_py(param_groups));
+            },
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::arg("param_groups") = nb::list());
     }
 
     {
@@ -210,8 +308,7 @@ void py_module(nb::module_& m) {
                float epsilon,
                float weight_decay,
                bool amsgrad,
-               bool stochastic_rounding,
-               bool weight_decay_skip_1d) {
+               bool stochastic_rounding) {
                 return AdamWConfig{
                     .lr = lr,
                     .beta1 = beta1,
@@ -219,8 +316,7 @@ void py_module(nb::module_& m) {
                     .epsilon = epsilon,
                     .weight_decay = weight_decay,
                     .amsgrad = amsgrad,
-                    .stochastic_rounding = stochastic_rounding,
-                    .weight_decay_skip_1d = weight_decay_skip_1d};
+                    .stochastic_rounding = stochastic_rounding};
             },
             nb::arg("lr"),
             nb::arg("beta1"),
@@ -229,7 +325,6 @@ void py_module(nb::module_& m) {
             nb::arg("weight_decay"),
             nb::arg("amsgrad") = false,
             nb::arg("stochastic_rounding") = false,
-            nb::arg("weight_decay_skip_1d") = false,
             "Make an AdamWConfig object");
     }
 
@@ -260,16 +355,32 @@ void py_module(nb::module_& m) {
     {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            "__init__",
+            [](AdamW* self,
+               serialization::NamedParameters parameters,
+               const AdamWConfig& config,
+               nb::list param_groups) {
+                new (self) AdamW(std::move(parameters), config, param_groups_from_py(param_groups));
+            },
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::arg("param_groups") = nb::list());
     }
 
     {
         auto py_adamw_full_precision =
             static_cast<nb::class_<AdamWFullPrecision, OptimizerBase>>(m.attr("AdamWFullPrecision"));
         py_adamw_full_precision.def(
-            nb::init<serialization::NamedParameters, const AdamWFullPrecisionConfig&>(),
+            "__init__",
+            [](AdamWFullPrecision* self,
+               serialization::NamedParameters parameters,
+               const AdamWFullPrecisionConfig& config,
+               nb::list param_groups) {
+                new (self) AdamWFullPrecision(std::move(parameters), config, param_groups_from_py(param_groups));
+            },
             nb::arg("parameters"),
-            nb::arg("config"));
+            nb::arg("config"),
+            nb::arg("param_groups") = nb::list());
     }
 
     {
@@ -289,7 +400,16 @@ void py_module(nb::module_& m) {
     {
         auto py_muon = static_cast<nb::class_<MuonComposite, OptimizerBase>>(m.attr("MuonComposite"));
         py_muon.def(
-            nb::init<serialization::NamedParameters, const MuonConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            "__init__",
+            [](MuonComposite* self,
+               serialization::NamedParameters parameters,
+               const MuonConfig& config,
+               nb::list param_groups) {
+                new (self) MuonComposite(std::move(parameters), config, param_groups_from_py(param_groups));
+            },
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::arg("param_groups") = nb::list());
     }
 
     {
