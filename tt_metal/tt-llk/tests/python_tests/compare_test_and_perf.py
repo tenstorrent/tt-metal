@@ -100,6 +100,39 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     return importlib.import_module(dotted)
 
 
+_IGNORED_LEAF_NAMES = frozenset({"implied_math_format", "ImpliedMathFormat"})
+
+
+def _is_ignored_leaf(name: str, leaf: Any) -> bool:
+    tail = name.rsplit(".", 1)[-1].split("#", 1)[0]
+    if tail in _IGNORED_LEAF_NAMES:
+        return True
+    return isinstance(leaf, enum.Enum) and type(leaf).__name__ == "ImpliedMathFormat"
+
+
+def coverage_canon(value: Any) -> str | None:
+    """Canon used for coverage. Drops packed implied_math_format fields."""
+    if isinstance(value, enum.Enum) and type(value).__name__ == "ImpliedMathFormat":
+        return None
+    if is_dataclass(value) and not isinstance(value, type):
+        members = []
+        for field in fields(value):
+            if field.name in _IGNORED_LEAF_NAMES:
+                continue
+            piece = coverage_canon(getattr(value, field.name))
+            if piece is not None:
+                members.append(f"{field.name}={piece}")
+        return f"{type(value).__name__}({', '.join(members)})"
+    if (
+        isinstance(value, (list, tuple))
+        and value
+        and not all(isinstance(item, _SCALAR_TYPES) for item in value)
+    ):
+        parts = [coverage_canon(item) for item in value]
+        return "[" + ", ".join(part for part in parts if part is not None) + "]"
+    return canon(value)
+
+
 def canon(value: Any) -> str:
     if is_dataclass(value) and not isinstance(value, type):
         members = ", ".join(
@@ -177,7 +210,7 @@ def axis_value_sets(pmarks: list) -> Sweep:
         canonical_row = {}
         raw_row = {}
         for name, val in zip(axis_names, row):
-            key = canon(val)
+            key = coverage_canon(val) or canon(val)
             canonical_row[name] = key
             raw_row[name] = val
             if key not in seen[name]:
@@ -377,17 +410,20 @@ def parameter_values(sweep: Sweep, ignored_axes: frozenset[str]) -> Parameters:
         if axis in ignored_axes:
             continue
         axis_params: set[str] = set()
+        kept_names: list[str] = []
         for value in values:
             leaves = flatten_axis_value(value, axis)
-            if [name for name, _ in leaves] != [axis]:
-                composite_axes.add(axis)
             for name, leaf in leaves:
+                if _is_ignored_leaf(name, leaf):
+                    continue
+                kept_names.append(name)
                 axis_params.add(name)
                 key = canon(leaf)
                 if key not in seen.setdefault(name, set()):
                     seen[name].add(key)
                     per_param.setdefault(name, []).append(key)
-        if axis in composite_axes:
+        if kept_names and kept_names != [axis] * len(values):
+            composite_axes.add(axis)
             from_composite |= axis_params
     return Parameters(per_param, composite_axes, from_composite)
 
@@ -429,20 +465,49 @@ def module_key(path: Path) -> str:
 
 def apply_cross_arch_exceptions(
     left_by_stem: dict[str, Path], right_by_stem: dict[str, Path]
-) -> tuple[dict[str, list[tuple[Path, str, str]]], set[str]]:
-    extras: dict[str, list[tuple[Path, str, str]]] = {}
+) -> tuple[dict[str, list[tuple[Path, str, str, bool]]], set[str]]:
+    """Map a matched stem to ``(extra path, home function, extra function, extra_on_right)``.
+
+    The home stem must exist on both sides. The extra module is consumed only
+    then, so an unmatched architecture file stays in the without-counterpart list.
+    ``extra_on_right`` is false when the extra module lives on the left architecture.
+    """
+    matched = set(left_by_stem) & set(right_by_stem)
+    extras: dict[str, list[tuple[Path, str, str, bool]]] = {}
     consumed: set[str] = set()
-    for (left_stem, left_function), (
-        right_stem,
-        right_function,
+    for (home_stem, home_function), (
+        extra_stem,
+        extra_function,
     ) in CROSS_ARCH_FUNCTION_EXCEPTIONS.items():
-        if left_stem not in left_by_stem or right_stem not in right_by_stem:
+        if home_stem not in matched or extra_stem in matched:
             continue
-        extras.setdefault(left_stem, []).append(
-            (right_by_stem[right_stem], left_function, right_function)
+        if extra_stem in right_by_stem:
+            path, on_right = right_by_stem[extra_stem], True
+        elif extra_stem in left_by_stem:
+            path, on_right = left_by_stem[extra_stem], False
+        else:
+            continue
+        extras.setdefault(home_stem, []).append(
+            (path, home_function, extra_function, on_right)
         )
-        consumed.add(right_stem)
+        consumed.add(extra_stem)
     return extras, consumed
+
+
+def extras_for_paths(
+    left_path: Path, right_path: Path, left_arch: str, right_arch: str
+) -> list[tuple[Path, str, str, bool]]:
+    """Exception modules for one explicit pair, in either architecture order."""
+    kind = module_kind(left_path)
+    if kind is None or module_key(left_path) != module_key(right_path):
+        return []
+    root = find_python_tests_root(left_path)
+    left_map = dict(_collect_kind(arch_directory(root, left_arch), kind))
+    right_map = dict(_collect_kind(arch_directory(root, right_arch), kind))
+    left_map[module_key(left_path)] = left_path
+    right_map[module_key(right_path)] = right_path
+    extras, _consumed = apply_cross_arch_exceptions(left_map, right_map)
+    return extras.get(module_key(left_path), [])
 
 
 def pair_functions(
@@ -553,6 +618,7 @@ def _only_headline(mark: str, owner: str, name: str, kind: str) -> str:
     return f"[{mark}] {name}: {owner}-only {kind}"
 
 
+# verdict, compare, compare_parameters, and write_parameter_csv take ``sides``.
 def verdict(
     name: str,
     t: list[str],
@@ -630,7 +696,15 @@ def compare(
         if axis in ignored_axes:
             ignored.append(axis)
             print(f"  [i] {axis}: {ignored_reason(axis)}")
-            _print_both(sides, shown_t, shown_p, full, label_width, in_t, in_p)
+            _print_both(
+                sides,
+                shown_t,
+                shown_p,
+                full,
+                width=label_width,
+                have_left=in_t,
+                have_right=in_p,
+            )
             continue
 
         bucket, headline = verdict(axis, t, p, in_t, in_p, "axis", sides)
@@ -642,7 +716,15 @@ def compare(
         elif axis in composite_axes and not full:
             print("        values : split per parameter below (--full for tuples)")
         else:
-            _print_both(sides, shown_t, shown_p, full, label_width, in_t, in_p)
+            _print_both(
+                sides,
+                shown_t,
+                shown_p,
+                full,
+                width=label_width,
+                have_left=in_t,
+                have_right=in_p,
+            )
     print(f"\n  Summary: {len(same)} identical axis/axes, {len(diff)} differing.")
     if same:
         print(f"    identical : {', '.join(same)}")
@@ -683,10 +765,10 @@ def compare_parameters(
                 shown_t,
                 shown_p,
                 full,
-                max(len(sides.left), len(sides.right)),
-                in_t,
-                in_p,
-                "          ",
+                width=max(len(sides.left), len(sides.right)),
+                have_left=in_t,
+                have_right=in_p,
+                indent="          ",
             )
     print(
         f"\n  Parameter summary: {len(same)} identical parameter(s), "
@@ -788,8 +870,13 @@ def compare_pair(
     csv_dir: Path | None = None,
     right_arch: str | None = None,
     sides: SideNames = FUNCTIONAL_PERF,
-    extra_right: list[tuple[Path, str, str]] | None = None,
+    extra_right: list[tuple[Path, str, str, bool]] | None = None,
 ) -> bool:
+    """True when at least one function pair was compared, or neither side is parametrized.
+
+    ``sides`` labels the two sweeps. Snapshot the left module before the right
+    import: a same-file Wormhole/Blackhole pair reloads one module object.
+    """
     right_arch = left_arch if right_arch is None else right_arch
     label_width = max(len(sides.left), len(sides.right))
     print("#" * _BANNER_WIDTH)
@@ -797,41 +884,51 @@ def compare_pair(
     print("#" * _BANNER_WIDTH)
     try:
         left_mod = import_test_module(left_path, root, left_arch)
+        # Hold the left functions before reload mutates a shared module.
+        left_funcs = parametrized_functions(left_mod)
         right_mod = import_test_module(right_path, root, right_arch)
     except KeyboardInterrupt:
         raise
     except BaseException as exc:
+        # BaseException, not Exception: sys.exit / pytest.exit at import must not
+        # kill the rest of the sweep.
         print(f"  ! skipped: failed to import ({type(exc).__name__}: {exc})\n")
         return False
 
-    left_funcs = parametrized_functions(left_mod)
     right_funcs = parametrized_functions(right_mod)
-    right_owner = {name: right_mod for name in right_funcs}
+    # home function -> (extra function name, module, marks). Right means the extra
+    # file is the right architecture and fills a missing right function.
     exception_right: dict[str, tuple[str, ModuleType, list]] = {}
-    for extra_path, left_function, right_function in extra_right or []:
+    exception_left: dict[str, tuple[str, ModuleType, list]] = {}
+    for extra_path, home_function, extra_function, extra_on_right in extra_right or []:
+        extra_arch = right_arch if extra_on_right else left_arch
         try:
-            extra_mod = import_test_module(extra_path, root, right_arch)
+            extra_mod = import_test_module(extra_path, root, extra_arch)
             extra_funcs = parametrized_functions(extra_mod)
         except KeyboardInterrupt:
             raise
         except BaseException as exc:
             print(
                 "  ! skipped exception "
-                f"{left_function} -> {extra_path.name} "
+                f"{home_function} -> {extra_path.name} "
                 f"({type(exc).__name__}: {exc})\n"
             )
             continue
         match = next(
-            (name for name in extra_funcs if normalize(name) == right_function),
+            (name for name in extra_funcs if normalize(name) == extra_function),
             None,
         )
         if match is None:
             print(
-                f"  ! skipped exception {left_function}: "
-                f"{right_function} not found in {extra_path.name}\n"
+                f"  ! skipped exception {home_function}: "
+                f"{extra_function} not found in {extra_path.name}\n"
             )
             continue
-        exception_right[left_function] = (match, extra_mod, extra_funcs[match])
+        target = exception_right if extra_on_right else exception_left
+        target[home_function] = (match, extra_mod, extra_funcs[match], extra_path)
+    if not left_funcs and not right_funcs:
+        print("  ! skipped: no parametrized functions on either side\n")
+        return True
     if not left_funcs:
         print(f"  ! no parametrized functions found in {left_path.name}\n")
         return False
@@ -840,21 +937,35 @@ def compare_pair(
         return False
 
     compared = False
+    used_exceptions: set[str] = set()
     for left_name, right_name, match_method in pair_functions(left_funcs, right_funcs):
-        right_mod_for_fn = right_owner.get(right_name) if right_name else right_mod
+        left_mod_for_fn = left_mod
+        right_mod_for_fn = right_mod
+        left_marks = left_funcs.get(left_name) if left_name else None
         right_marks = right_funcs.get(right_name) if right_name else None
         if (
             right_name is None
             and left_name is not None
             and normalize(left_name) in exception_right
         ):
-            right_name, right_mod_for_fn, right_marks = exception_right[
+            right_name, right_mod_for_fn, right_marks, _extra_path = exception_right[
                 normalize(left_name)
             ]
             match_method = "exception"
+            used_exceptions.add(normalize(left_name))
+        if (
+            left_name is None
+            and right_name is not None
+            and normalize(right_name) in exception_left
+        ):
+            left_name, left_mod_for_fn, left_marks, _extra_path = exception_left[
+                normalize(right_name)
+            ]
+            match_method = "exception"
+            used_exceptions.add(normalize(right_name))
         print("=" * _BANNER_WIDTH)
         print(
-            f"{sides.left:<{label_width}}: {left_mod.__name__}.{left_name or '<none>'}"
+            f"{sides.left:<{label_width}}: {left_mod_for_fn.__name__}.{left_name or '<none>'}"
         )
         print(
             f"{sides.right:<{label_width}}: "
@@ -869,7 +980,7 @@ def compare_pair(
         if match_method == "exception":
             print("  ! paired by cross-file exception")
         try:
-            left_sweep = axis_value_sets(left_funcs[left_name])
+            left_sweep = axis_value_sets(left_marks)
             right_sweep = axis_value_sets(right_marks)
         except Exception as exc:
             print(
@@ -913,6 +1024,9 @@ def compare_pair(
             print(f"\n  parameter table written to {target}")
         print()
         compared = True
+    for home, entry in (*exception_right.items(), *exception_left.items()):
+        if home not in used_exceptions:
+            print(f"  ! unused cross-file exception: {home} ({entry[3].name})\n")
     return compared
 
 
@@ -1009,6 +1123,7 @@ def main() -> int:
                     args.csv,
                     right_arch,
                     sides,
+                    extras_for_paths(args.functional, args.perf, left_arch, right_arch),
                 )
                 else 1
             )
@@ -1024,12 +1139,9 @@ def main() -> int:
         left_by_stem.update({module_key(path): path for path in left_only})
         right_by_stem = {key: right_path for key, _left, right_path in matched}
         right_by_stem.update({module_key(path): path for path in right_only})
-        extras, consumed_right = apply_cross_arch_exceptions(
-            left_by_stem, right_by_stem
-        )
-        right_only = [
-            path for path in right_only if module_key(path) not in consumed_right
-        ]
+        extras, consumed = apply_cross_arch_exceptions(left_by_stem, right_by_stem)
+        left_only = [path for path in left_only if module_key(path) not in consumed]
+        right_only = [path for path in right_only if module_key(path) not in consumed]
         print(
             f"Sweeping {directory} for {arch_label(left_arch)} vs "
             f"{arch_label(right_arch)} ({args.kind})"
@@ -1068,7 +1180,7 @@ def main() -> int:
 
     if args.functional and args.perf:
         root = find_python_tests_root(args.functional)
-        print(f"Resolving sweeps for CHIP_ARCH={arch_label(args.arch)}")
+        print(f"Resolving sweeps for CHIP_ARCH={args.arch}")
         return (
             0
             if compare_pair(
@@ -1080,7 +1192,7 @@ def main() -> int:
     directory = args.dir.resolve()
     matched, tests_only, perfs_only = discover_pairs(directory)
 
-    print(f"Sweeping {directory} for CHIP_ARCH={arch_label(args.arch)}")
+    print(f"Sweeping {directory} for CHIP_ARCH={args.arch}")
     print(
         f"Matched {len(matched)} test_/perf_ pair(s): "
         f"{', '.join(k for k, _, _ in matched) or '-'}"

@@ -38,8 +38,10 @@ claim an independent effect for parameters the test does not vary independently.
 Before trending `TILE_LOOP` or `MATH_ISOLATE` across reports, check three
 accounting facts:
 
-- the perf schema version. A version change means the CSV is not comparable
-  to the previous one;
+- the perf schema version, `PERF_TEST_SCHEMAS[...]["version"]` in
+  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
+  change, and that CSV is not comparable to the previous one. A `tile_cnt`
+  accounting change can make rows incomparable without a version bump;
 - whether `tile_cnt` counts operand tiles. The `.post.csv` divides by
   `loop_factor * tile_cnt`, so two operand tiles per SFPU call publish about
   half a result tile;

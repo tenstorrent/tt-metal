@@ -67,7 +67,7 @@ Classify every mismatch:
 | Axis packaging | `formats_dest_acc` vs `formats`+`dest_acc`; tuple `binary_op_mathop_approx` vs `mathop`+`approx_mode` | Unbundle to BH names |
 | Enum alias | QSR `SfpuElwmulInt` vs BH `SfpuMulInt32` | Keep the QSR member; the domain test maps it onto the WH/BH kernel |
 | Perf-only packaging | A functional sweep shared into perf grows by the run-type count | Opt out with a perf-only override such as `_PERF_EXCLUDED_MATHOPS` |
-| Real ISA | QSR has no `RSHFT`; BH int SUB; BH `bcast_dim` | Keep the diff. `implied_math_format` is ignored, not a gap |
+| Real ISA | Quasar int sweep does not include shifts; BH int SUB; BH `bcast_dim` | Keep the diff. `RSHFT` / `LSHFT` / `LOGICAL_RSHFT` exist on Quasar. `implied_math_format` is ignored, not a gap |
 | Family split | BH `div`/`atan2` are separate tests; QSR lumps them into `float` | Split QSR only if the kernel exists; do not invent BH families |
 
 ### 2. Align QSR test vs perf first
@@ -128,16 +128,16 @@ Do not cartesian every in/out × dest_acc pair. Resolve `QuasarSfpuVariant` / `b
 
 ### 4. Shared aliases, not QSR-only enum members
 
-`SfpuGtInt` / `SfpuLtInt` / `SfpuLeInt` / `SfpuGeInt` are deleted. Int compares are `SfpuElwLt/Gt/Le/Ge` on every architecture. `SfpuElwmulInt` stays Quasar-only (`BinaryOp::MUL`); the domain test maps it to `SfpuMulInt32` (`MUL_INT32`) and must not pretend they are the same sweep value. `SfpuCopyDest` (`COPY_DEST`) is declared only on Quasar. Leave `MathOpType.SFPU_BINARY` as it is, and keep a guard that `COPY_DEST` is absent from the WH/BH `BinaryOp` enums.
+`SfpuGtInt` / `SfpuLtInt` / `SfpuLeInt` / `SfpuGeInt` remain in `helpers/llk_params.py` as aliases. They are not sweep values; sweeps use `SfpuElwLt/Gt/Le/Ge` on every architecture. `SfpuElwmulInt` stays Quasar-only (`BinaryOp::MUL`); the domain test maps it to `SfpuMulInt32` (`MUL_INT32`) and must not pretend they are the same sweep value. `SfpuCopyDest` (`COPY_DEST`) is declared only on Quasar. Leave `MathOpType.SFPU_BINARY` as it is, and keep a guard that `COPY_DEST` is absent from the WH/BH `BinaryOp` enums.
 
 ### 5. Then BH vs QSR perf
 
 Equalize only packaging. Typical remaining diffs after a good unbundle:
 
-- **identical**: shared coverage axes whose value sets match (`dest_acc`, perf `approx_mode` No except atan2, Int32 `formats`)
-- **subset**: QSR formats without Bfp8 / MX-only extras
+- **identical**: shared coverage axes whose value sets match (`dest_acc`, Int32 `formats`)
+- **subset**: QSR formats without Bfp8 / MX-only extras. Float perf `approx_mode` is a Blackhole subset of Quasar (`[No]` versus `[No, Yes]`) because atan2 stays in the Quasar float family
 - **DIFFERENT mathop**: intersection is the portable ops; extras are ISA
-- **one architecture only**: `bcast_dim`, `iterations`, `dest_sync`. The report tags these `[B]` or `[Q]`
+- **one architecture only**: `bcast_dim`, `dest_sync`. The report tags these `[B]` or `[Q]`. `iterations` is `[i]`, an ignored measurement axis
 
 `implied_math_format` is `[i]`, not a QSR-only gap. Do not add a dummy `bcast_dim=[None_]` or a fake BH `implied_math_format`. Do not shrink both mathop lists to the intersection just to print `identical`. Do not add Bfp8_b to DIV perf: unpack expands it to BF16 before the SFPU, so the extra rows do not change the math kernel.
 
@@ -212,13 +212,13 @@ Success for BH vs QSR: shared packaging axes identical or an honest subset; rema
 - Override a shared sweep with a keyword after `**FLOAT_SWEEP` (`TypeError`)
 - Cartesian perf `approx_mode` Yes/No onto kernels that ignore it
 - Halve `TILE_COUNT` to make per-tile MATH_ISOLATE match an older one-operand kernel. `tile_cnt` also bounds unpack and dvalids
-- Drop `#1230` from the NONE `_perf_unpack_loop_set_valid` mocks
+- Drop `#1230` from the Wormhole/Blackhole NONE `_perf_unpack_loop_set_valid` mocks
 - Declare success from pytest or a green `[x] mathop` after dropping real ops
 
 ## Measurement notes from the binary SFPU perf alignment
 
-- A schema version bump (binary SFPU perf went v3 to v5) means the CSV is not comparable to the previous one: different kernel, two real operands, and `tile_cnt` counts both operand tiles. Per-tile MATH_ISOLATE is about half a result tile. At 16-bit, `dest_acc=Yes` also doubles dest handshakes; leave that measurement as-is.
+- The perf schema version is `PERF_TEST_SCHEMAS[...]["version"]` in `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns change (binary SFPU perf went v3 to v5: different kernel, two real operands). A `tile_cnt` accounting change can make rows incomparable without a version bump: when `tile_cnt` counts both operand tiles, per-tile MATH_ISOLATE is about half a result tile. At 16-bit, `dest_acc=Yes` also doubles dest handshakes; leave that measurement as-is.
 - Datacopy and SFPU init are hoisted out of the per-block loop on purpose. Production still reconfigs per tile.
-- Keep `#1230` on the NONE dvalid mocks: SrcA plus a SrcB zerosrc dvalid every face, including `dest_acc=No`.
+- Keep `#1230` on the Wormhole/Blackhole NONE dvalid mocks: SrcA plus a SrcB zerosrc dvalid every face, including `dest_acc=No`. Quasar posts per tile, and SrcB only when dest is 32-bit (`<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT)`).
 
 Worked example (eltwise binary SFPU): [examples.md](examples.md)

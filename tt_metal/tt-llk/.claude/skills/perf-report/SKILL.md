@@ -39,8 +39,10 @@ sweep-audit against the functional counterpart (composite `list` = matrix,
 `tuple` = tile shape). Cross-arch perf versus perf is
 `compare_test_and_perf.py --cross-arch blackhole quasar --kind perf`.
 Flag stale-report risk when current test axes are absent from the CSV.
-Record the perf schema version with the report: a version change means the
-CSV is not comparable to the previous one.
+Record the perf schema version with the report. The number is
+`PERF_TEST_SCHEMAS[...]["version"]` in `helpers/perf/test_schemas.py`, not a
+CSV column. It changes when columns change. A `tile_cnt` accounting change
+can make rows incomparable without a version bump.
 
 Decide scope before running. A narrowed sweep (`-k`, `--op`) is right for
 debugging; a report meant for analysis must cover the full intended sweep.
@@ -106,8 +108,11 @@ Rules:
   and `std(...)` columns of `TILE_LOOP` rows by `loop_factor * tile_cnt`,
   giving cycles per staged tile. When `tile_cnt` counts both operand tiles,
   that number is about half a result tile; do not treat the halving as a
-  speedup. A schema version change means this CSV is not comparable to the
-  previous one. `INIT` and `KERNEL` rows are left unnormalized.
+  speedup. The schema version is `PERF_TEST_SCHEMAS[...]["version"]` in
+  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
+  change, and that CSV is not comparable to the previous one. A `tile_cnt`
+  accounting change can make rows incomparable without a version bump.
+  `INIT` and `KERNEL` rows are left unnormalized.
   Analysis uses `.post.csv`.
 
 No report at all usually means the consumer phase never reached session

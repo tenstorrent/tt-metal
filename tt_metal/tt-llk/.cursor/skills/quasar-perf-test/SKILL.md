@@ -199,8 +199,10 @@ Known cases:
 - Row/column broadcast may handshake per face; inspect the MOP.
 - Quasar 32-bit unary datacopy uses ELWADD. Unpack produces real SrcA and
   dummy SrcB, so both mock sides use `<true, true>`.
-- Binary SFPU NONE mocks post a SrcA dvalid plus a SrcB zerosrc dvalid every
-  face, including `dest_acc=No` (`#1230`). Keep that reference on the call.
+- Wormhole and Blackhole binary SFPU NONE mocks post a SrcA dvalid plus a SrcB
+  zerosrc dvalid every face, including `dest_acc=No` (`#1230`). Keep that
+  reference on those calls. Quasar posts per tile, and SrcB only when dest is
+  32-bit: `<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT)`.
 - A block kernel commonly needs
   `LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM`.
 - Do not shrink `TILE_COUNT` to change the published per-tile number.
