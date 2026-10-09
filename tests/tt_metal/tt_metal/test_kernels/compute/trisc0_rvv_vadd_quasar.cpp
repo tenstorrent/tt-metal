@@ -4,7 +4,7 @@
 
 // TRISC0 adds two int32 vectors in L1 with RISC-V Vector instructions (ckernel_vector.h):
 // c[i] = a[i] + b[i], with a, b and c laid out back to back at l1_address.
-// Requires ComputeHardwareConfig::Compute2XXConfig::enable_trisc0_rvv; the other TRISCs do nothing.
+// Requires ComputeHardwareConfig::Compute2XXConfig::enable_unpack_rvv; the other TRISCs do nothing.
 
 #include "api/compute/common.h"
 #include "dev_mem_map.h"
@@ -12,7 +12,7 @@
 
 #ifdef TRISC_UNPACK
 #ifndef __riscv_vector
-#error "TRISC0 was not compiled with the RISC-V Vector extension (enable_trisc0_rvv not applied)"
+#error "TRISC0 was not compiled with the RISC-V Vector extension (enable_unpack_rvv not applied)"
 #endif
 #include "ckernel_vector.h"
 #endif
