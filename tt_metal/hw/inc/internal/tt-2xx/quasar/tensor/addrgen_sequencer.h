@@ -20,8 +20,8 @@
 //     sequence once before the loop, with a pop amount of a.
 //   - The hit check (serve_on_side()): with both of the above, a transfer is a single push or pop.
 //
-// Limitation: the sequencer assumes it owns both address generators of the DM core. It resets and programs them on
-// first use and keeps their state in sides[], so a kernel that also programs an address generator directly (the
+// Limitation: the sequencer assumes it owns both address generators of the DM core. It programs them as it needs and
+// keeps their state in sides[], so a kernel that also programs an address generator directly (the
 // overlay API, addrgen_api.hpp / addrgen_state.h) can have its programming overwritten, or leave the sequencer serving
 // from stale state: silently wrong addresses. Nothing detects mixed use. Until the generators can be handed over (e.g.
 // a scoped ownership guard that makes TensorAccessor transfers use software while it lives, or an API that exposes a
@@ -235,11 +235,9 @@ inline constexpr uint32_t kNumParked = 1;
 
 inline thread_local SideState sides[kNumSides];
 inline thread_local ParkedSequence parked[kNumParked > 0 ? kNumParked : 1];
-inline thread_local uint8_t last_side[2];        // per direction: the side used last (the other one is the LRU)
-inline thread_local uint8_t generator_ready[2];  // this kernel already reset generator g
+inline thread_local uint8_t last_side[2];  // per direction: the side used last (the other one is the LRU)
 
-inline constexpr uint32_t kSequencerTlsBytes =
-    sizeof(sides) + sizeof(parked) + sizeof(last_side) + sizeof(generator_ready);
+inline constexpr uint32_t kSequencerTlsBytes = sizeof(sides) + sizeof(parked) + sizeof(last_side);
 static_assert(
     kSequencerTlsBytes <= 400, "sequence state shares the DM core's thread-local storage and stack; keep it small");
 
@@ -289,15 +287,10 @@ struct Seek {
     uint64_t row_outer = 0;  // the outer-loop value at the current row's start
 };
 
-// A generator is reset once, the first time this kernel uses either of its sides, to clear whatever an earlier kernel
-// left.
-template <overlay::AddrGen G>
-inline __attribute__((always_inline)) void ensure_generator_reset() {
-    if (!generator_ready[G]) {
-        overlay::reset_addrgen<G>();
-        generator_ready[G] = 1;
-    }
-}
+// The DM firmware resets both address generators before each kernel (firmware/src/tt-2xx/dm.cc), so a kernel starts
+// with clean generators and nothing an earlier kernel programmed (face size and the like, which no sequence programs)
+// leaks in. The sequencer never resets a generator itself: the other side may hold a live sequence. Every register a
+// sequence depends on is written when it is programmed.
 
 // Program side S and record the programming in its state (for a later reload). Every register is written each time.
 template <uint32_t S>
@@ -317,7 +310,6 @@ inline void program_side(const SideProgram& prog) {
     s.restorable = (prog.inner_stride >> 32) == 0 && (prog.outer_stride >> 32) == 0 &&
                    (prog.inner_end == kInnerEndSentinel || (prog.inner_end != 0 && (prog.inner_end >> 32) == 0)) &&
                    ((b.base | b.size | b.skip | b.endpoint_id_shift) >> 8) == 0;
-    ensure_generator_reset<G>();
     overlay::setup_banking_addrgen<G, D>(prog.banking);
     overlay::setup_inner_loop_addrgen<G, D>(prog.inner_stride, prog.inner_end, prog.inner_start);
     overlay::setup_outer_loop_addrgen<G, D>(prog.outer_stride, kOuterEndSentinel, prog.outer_start);
@@ -394,7 +386,6 @@ inline void restore_side(const overlay::AddrgenPosition& pos) {
         .outer_stride = s.outer_stride,
         .outer_end = kOuterEndSentinel,
     };
-    ensure_generator_reset<side_generator<S>>();
     overlay::restore_addrgen<side_generator<S>, side_of<S>>(prog, pos);
 }
 

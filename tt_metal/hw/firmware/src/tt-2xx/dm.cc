@@ -18,6 +18,7 @@
 #include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
+#include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -502,6 +503,9 @@ extern "C" uint32_t _start1() {
         // Invalidate the i$ now the kernels have loaded and before running
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
+        // Clear the state to ensure previous state is not leaked
+        overlay::reset_addrgen<overlay::ADDRGEN_0>();
+        overlay::reset_addrgen<overlay::ADDRGEN_1>();
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
             DeviceZoneScopedMainN("DM-FW");
