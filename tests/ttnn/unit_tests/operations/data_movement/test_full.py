@@ -165,6 +165,16 @@ def test_full_tile_bfloat8_b_zero_device_fill(device, input_shape, fill_value):
     assert torch.equal(ttnn.to_torch(tt_output), host_output)
 
 
+@pytest.mark.parametrize("input_shape", [[0, 32], [1, 0, 32, 32]])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+def test_zeros_tile_zero_volume(device, input_shape, tt_dtype):
+    # A zero-volume TILE ttnn.zeros keeps the host path: no program, an empty tensor of the requested shape
+    device.clear_program_cache()
+    tt_output = ttnn.zeros(input_shape, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert device.num_program_cache_entries() == 0
+    assert list(ttnn.to_torch(tt_output).shape) == input_shape
+
+
 # TODO (issue #16579): Add program cache test when ttnn.full is run on device
 
 
