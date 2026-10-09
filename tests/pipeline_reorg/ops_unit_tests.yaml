@@ -282,7 +282,7 @@
   category: moreh
 
 - name: ttnn nightly misc (rand and ssm) tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm tests/ttnn/nightly/unit_tests/base_functionality -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 15
