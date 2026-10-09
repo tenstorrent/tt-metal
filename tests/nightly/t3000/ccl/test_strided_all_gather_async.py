@@ -43,6 +43,7 @@ def run_strided_all_gather_impl(
     allowed_pcc=1,
     skip_check=False,
     num_l1_banks=64,
+    check_program_cache=False,
 ):
     torch.manual_seed(0)
 
@@ -160,6 +161,9 @@ def run_strided_all_gather_impl(
         logger.info(f"Done executing trace")
         signpost("stop")
     else:
+        # Every iteration uses its own input, persistent output buffer and semaphores, so iterations after the
+        # first hit the program cache with new addresses and exercise override_runtime_arguments.
+        num_program_cache_entries_after_first_iter = None
         for i in range(num_iters):
             ttnn.synchronize_device(mesh_device)
             tt_all_gather_out_tensor = run_op(i)
@@ -168,6 +172,16 @@ def run_strided_all_gather_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done op")
+
+            if check_program_cache:
+                num_entries = mesh_device.num_program_cache_entries()
+                if i == 0:
+                    num_program_cache_entries_after_first_iter = num_entries
+                else:
+                    assert num_entries == num_program_cache_entries_after_first_iter, (
+                        f"iteration {i} added program cache entries: {num_entries} != "
+                        f"{num_program_cache_entries_after_first_iter}"
+                    )
 
             logger.info(f"Done iteration {i}")
 
@@ -301,4 +315,74 @@ def test_strided_all_gather_async(
         mm_cores_y=mm_cores_y,
         mm_block_h=mm_block_h,
         mm_block_w=mm_block_w,
+    )
+
+
+# Cache-hit coverage: iterations 2..N reuse the cached program with new tensor and semaphore addresses, and each
+# iteration's output is checked against its own golden. Linear covers the end devices, which have one fabric mux
+# fewer than the middle ones, so the per-device kernel count differs after the worker kernels.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    [
+        ([1, 1, 32, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 4096, 2560], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+    ],
+    ids=["1tile2workers", "4k4k"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_strided_all_gather_async_program_cache(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    other_dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    all_gather_topology,
+    num_workers_per_link,
+    mm_cores_y,
+    mm_block_h,
+    mm_block_w,
+):
+    run_strided_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        other_dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=False,
+        num_iters=3,
+        num_workers_per_link=num_workers_per_link,
+        mm_cores_y=mm_cores_y,
+        mm_block_h=mm_block_h,
+        mm_block_w=mm_block_w,
+        check_program_cache=True,
     )
