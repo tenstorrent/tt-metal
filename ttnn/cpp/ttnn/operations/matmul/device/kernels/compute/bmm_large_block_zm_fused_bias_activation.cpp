@@ -425,7 +425,13 @@ void kernel_main() {
 #endif
 #endif
                                 const uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                // main's per-tile pack: no reading of the fused all-gather matmul resolves it
+                                PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                    start_dst_index, mm_out_dfb_id, out_subblock_num_tiles)));
+#else
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -446,7 +452,12 @@ void kernel_main() {
 #endif
 
                                 const uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                    start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles)));
+#else
                                 pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);
