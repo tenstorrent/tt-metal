@@ -440,9 +440,12 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     // gathered along its last dim on `cluster_axis`, the FSDP weight along its second-to-last (K) dim on
     // `fsdp_cluster_axis`: Replicate on that axis, the tensor's placements elsewhere. Every chunk is a column slice of
     // the matmul of the gathered activation by the (gathered) weight, so each takes the union-default label of
-    // {gathered activation, (gathered) weight, bias} (what launch() gives a plain matmul; the fused addcmul and
-    // SwiGLU are elementwise). No honest gather label (nullopt, already warned about): {} keeps the union default
-    // for every slot.
+    // {gathered activation, (gathered) weight, bias, and the fused addcmul's two ternary operands when present} (what
+    // launch() gives a plain matmul over those operands). The addcmul, fused_ternary_input_a + scalar * matmul *
+    // fused_ternary_input_b, is elementwise on the matmul result, so a ternary operand sharded on a mesh axis the
+    // matmul result replicates makes the result Shard there -- validation does not constrain the ternary tensors'
+    // labels, so they have to be in the union; SwiGLU acts on the result alone and adds nothing. No honest gather
+    // label (nullopt, already warned about): {} keeps the union default for every slot.
     const auto activation_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1);
     if (!activation_topology.has_value()) {
@@ -464,6 +467,10 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
         std::cref(*activation_topology), std::cref(*weight_topology)};
     if (tensor_args.bias_tensor.has_value()) {
         operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
+    }
+    if (tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value()) {
+        operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
+        operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
     }
     auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
     const TensorTopology matmul_topology(
