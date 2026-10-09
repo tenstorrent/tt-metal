@@ -201,13 +201,13 @@ def test_mtp_head_on_real_features(mesh_device, reset_seeds, request):
 def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
     """Qwen36MTP._argmax_sharded on B rows == torch argmax == the gathered argmax_last (same ids).
 
-    No weights: a bare Qwen36MTP carrying just the attributes the sharded pick reads. The logits are
-    uploaded vocab-sharded in the layout the MTP LM head leaves them (ShardTensorToMesh on the last
-    dim, fp32 TILE), with hand-built ties and near-ties so the per-row tie-break and the fp32
-    exactness of the cross-device compare are both pinned:
+    No weights: a bare Qwen36MTP carrying just the attributes the sharded pick reads. The logits are uploaded
+    vocab-sharded as the MTP LM head leaves them (ShardTensorToMesh on the last dim, fp32 TILE), with
+    hand-built ties and near-ties that pin the per-row tie-break and the fp32 exactness of the cross-device
+    compare:
       row 0      identical max at a shard-0 and a shard-2 id      -> the shard-0 (lower) id
-      row 1      identical max twice inside the LAST shard        -> the lower id (and a last-shard win)
-      row 2      shard-1 max 30.0 vs shard-3 max 30.001           -> the shard-3 id (a TF32/bf16 reduce ties)
+      row 1      identical max twice inside the last shard        -> the lower id (and a last-shard win)
+      row 2      shard-1 max 30.0 vs shard-3 max 30.001           -> the shard-3 id (a TF32/bf16 reduce would tie)
       row B-1    unique max in the last shard (B >= 4)
     """
     from types import SimpleNamespace
@@ -224,7 +224,7 @@ def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
     m.device = m.mesh_device = mesh_device
     m.num_devices = nd
     m.tt_ccl = TT_CCL(mesh_device)
-    # ccl_topology depends only on the cluster type and num_devices: take the real args' own method.
+    # ccl_topology depends only on the cluster type and num_devices; reuse the real ModelArgs method.
     m.args = SimpleNamespace(
         vocab_size=vocab,
         max_batch_size=B,

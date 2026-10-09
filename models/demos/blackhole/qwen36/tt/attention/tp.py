@@ -17,40 +17,32 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 def _probe_kv_group_write():
-    """Whether the GROUPED aliased KV write (see TPAttention._write_kv_aliased) can be used.
+    """Whether the grouped aliased KV write (``TPAttention._write_kv_aliased``) can be used.
 
-    The grouped write needs two ttnn.slice capabilities:
-      1. a TILE slice along dim -2 at a TILE-aligned begin (the "height view" that picks candidate j
-         of every user out of [1, n_users, T*32, HD]) — ttnn/cpp/ttnn/operations/data_movement/slice/
-         device/slice_device_operation.cpp:209-214 is the only constraint and both begins are
-         tile-aligned, so this takes SliceTileProgramFactory (same file:345) with no relayout;
-      2. a STRIDED slice of the ROW_MAJOR int32 index / page-table tensors, i.e. ttnn.slice's
-         optional 4th positional argument `slice_step`
-         (ttnn/cpp/ttnn/operations/data_movement/slice/slice_nanobind.cpp:96/130).
-    Probed HERE, at import, with no device: a ttnn build without `slice_step` silently keeps the
-    per-row loop instead of failing inside a captured trace. QWEN36_SPEC_KV_GROUP_WRITE=0 forces the
-    per-row loop (A/B measurement, or a bisect).
+    It needs ``ttnn.slice`` to accept ``slice_step`` (strided slice of the ROW_MAJOR int32 index and
+    page-table tensors). Probed at import, with no device, so a ttnn build without it keeps the
+    per-row loop instead of failing inside a captured trace. ``QWEN36_SPEC_KV_GROUP_WRITE=0`` forces
+    the per-row loop.
     """
     if os.environ.get("QWEN36_SPEC_KV_GROUP_WRITE", "1") != "1":
         return False
     try:
         return "slice_step" in (ttnn.slice.__doc__ or "")
-    except Exception:  # pragma: no cover - a ttnn without slice at all
+    except Exception:  # pragma: no cover
         return False
 
 
-# Import-time capability flag for the grouped aliased KV write. Read by _kv_group_plan only.
 KV_GROUP_WRITE_OK = _probe_kv_group_write()
 
 
 def _aliases(a, b):
-    """Whether two handles name the SAME device buffer (a metadata re-view, not a copy).
-    Unknown -> True, which is reshape's documented tile-view behaviour: the caller then frees one
-    handle, which is exactly right for an alias and would double-free a copy — so only ever use
-    this to decide whether an EXTRA free is needed."""
+    """Whether two handles name the same device buffer (a metadata re-view, not a copy).
+
+    Returns True when the address is unavailable, so the caller skips the extra free: that leaks a
+    copy at worst and never double-frees an alias."""
     try:
         return a.buffer_address() == b.buffer_address()
-    except Exception:  # pragma: no cover - address unavailable for this storage type
+    except Exception:  # pragma: no cover
         return True
 
 
@@ -569,14 +561,12 @@ class TPAttention:
         return cfg
 
     def _kv_group_plan(self, B_total, n_users):
-        """``(n_users, T)`` when the ALIASED KV write can go out as T grouped calls of ``n_users``
+        """``(n_users, T)`` when the aliased KV write can go out as T grouped calls of ``n_users``
         rows each, or None when the caller must keep the per-row loop.
 
-        None at n_users <= 1 (one sequence: every row can collide with every other, which is the
-        whole reason the per-row loop exists), at T < 2 (nothing to group, and the group slice would
-        be full-span — a full-span ttnn.slice returns an ALIAS of its input, which must never be
-        deallocated), at a row count that is not a whole multiple of n_users, and whenever the
-        import-time op-support probe failed."""
+        None at n_users <= 1 (one sequence: every row can collide with every other), at T < 2
+        (nothing to group), when B_total is not a multiple of n_users, and when the import-time
+        probe failed."""
         if not KV_GROUP_WRITE_OK or n_users <= 1:
             return None
         if B_total % n_users:
@@ -589,49 +579,40 @@ class TPAttention:
     def _write_kv_aliased(
         self, keys, values, k_p, v_p, cur_pos_tt, page_table, B_total, HD, spec_n_users=1, spec_user_page_table=None
     ):
-        """KV write for ALIASED decode rows — rows that are NOT independent users.
+        """KV write for aliased decode rows, i.e. rows that are not independent users.
 
-        CONSUMES k_p / v_p (both [1, B_total, 32, HD] TILE interleaved): they are deallocated here.
+        Consumes ``k_p`` / ``v_p`` (both [1, B_total, 32, HD] TILE interleaved): they are deallocated here.
 
-        Why this is not one batched paged_update_cache: aliased rows share a page table, so their
-        consecutive positions land in the same physical block. paged_update_cache shards the rows
-        across cores and each core read-modify-writes a 32-row cache tile, so ONE batched call puts
-        several cores on the SAME tile: last writer wins and the other rows are silently lost
-        (run-to-run nondeterministic acceptance / trajectory forks — see the same note in
-        forward_prefill_paged's exact-KV write).
+        Aliased rows share a page table, so their consecutive positions land in the same physical
+        block. paged_update_cache shards rows across cores and each core read-modify-writes a 32-row
+        cache tile, so one batched call puts several cores on the same tile: the last writer wins and
+        the other rows are silently lost (nondeterministic acceptance).
 
-        GROUPED write (spec_n_users > 1) — the multi-user speculative verify and the batched drafter
-        reseed. The B_total rows are spec_n_users users x T = B_total // spec_n_users candidates,
-        USER-MAJOR (row u*T + j). A user owns its own blocks, so rows of DIFFERENT users are in
-        DIFFERENT physical blocks and can never share a cache tile; only rows of the SAME user can.
-        Group j = {u*T + j : u in [0, n_users)} holds exactly ONE row per user, so it is legal as a
-        single n_users-row call. That is T calls per K and per V instead of B_total.
+        Grouped write (spec_n_users > 1; multi-user verify and batched drafter reseed): the rows are
+        spec_n_users users x T = B_total // spec_n_users candidates, user-major (row u*T + j). Rows of
+        different users live in different blocks and cannot share a tile, so group j = {u*T + j} holds
+        one row per user and is legal as one n_users-row call: T calls per K and V instead of B_total.
 
-            rows       view [1, B_total, 32, HD] as [1, n_users, T*32, HD] — a pure metadata re-view
-                       (identical tile order; the same alias trick the fused spec SDPA uses on q) —
-                       then slice dim -2 at [j*32, (j+1)*32). Both begins are TILE-aligned, so this
-                       is the plain TILE slice factory: no untilize, no relayout.
+            rows       [1, B_total, 32, HD] viewed as [1, n_users, T*32, HD], then sliced on dim -2 at
+                       the tile-aligned [j*32, (j+1)*32).
             cur_pos    strided ROW_MAJOR slice (start j, end B_total, step T) of the [B_total] int32
                        index tensor -> [n_users].
-            page_table ``spec_user_page_table`` when the caller pre-staged the [n_users, nb] per-user
-                       table. The verify can: row u*T+j IS user u's table for every j, so one
-                       persistent buffer serves all T groups and costs no op at all. When it is None
-                       the group's table is the SAME strided ROW_MAJOR slice off the [B_total, nb]
-                       row table — which is what the batched drafter reseed needs, because its
-                       PADDING rows point at a scratch block instead of at their user's blocks.
+            page_table ``spec_user_page_table`` ([n_users, nb]) when given: row u*T + j is user u's
+                       table for every j, so one buffer serves all groups. Otherwise the same
+                       strided slice of the [B_total, nb] row table, which the batched drafter reseed
+                       needs because its padding rows point at a scratch block.
 
-        Slice the rows out of the INTERLEAVED tensor and shard THAT, never the other way round:
-        slicing a sharded tensor along the user dim is unsupported and silently yields wrong rows.
+        Slice rows out of the interleaved tensor and shard that, never the reverse: slicing a sharded
+        tensor along the user dim is unsupported and silently yields wrong rows.
         """
         plan = self._kv_group_plan(B_total, spec_n_users)
         if plan is None:
-            # Per-row fallback: one single-row call per row keeps exactly one core on each tile.
-            # Correct at every layout, and the only correct choice when the rows are one sequence.
+            # One single-row call per row keeps exactly one core on each tile.
             _sc1 = self._kv_update_shard_cfg(1, HD)
             _nb = page_table.shape[-1]
             for i in range(B_total):
-                # B_total > 1 here, so neither slice is full-span (a full-span ttnn.slice returns an
-                # ALIAS of its input, which must never be deallocated).
+                # B_total > 1, so neither slice is full-span (a full-span ttnn.slice returns an
+                # alias of its input, which must never be deallocated).
                 pos_i = ttnn.slice(cur_pos_tt, (i,), (i + 1,))
                 pt_i = ttnn.slice(page_table, (i, 0), (i + 1, _nb))
                 for _cache, _src in ((keys, k_p), (values, v_p)):
@@ -649,19 +630,16 @@ class TPAttention:
         n_users, T = plan
         _tile = ttnn.TILE_SIZE
         _nb = page_table.shape[-1]
-        # One user per core, exactly as the plain n_users-wide decode writes its KV (and at
-        # n_users == self.B this IS args.kv_update_shard_cfg, the production config).
+        # One user per core, as the plain n_users-wide decode write does.
         _kv_cfg = self._kv_shard_cfg(n_users)
         assert spec_user_page_table is None or spec_user_page_table.shape[0] == n_users, (
             f"spec_user_page_table must have one row per user: got "
             f"{tuple(spec_user_page_table.shape)} for {n_users} users"
         )
-        # [1, B_total, 32, HD] -> [1, n_users, T*32, HD]. The tile order is IDENTICAL (tile
-        # (u*T + j) becomes tile (u, j)), so passing an explicit padded shape takes reshape's
-        # tile-view path and returns a metadata alias at the same buffer address — the same trick
-        # the fused spec SDPA uses on q. Compare addresses anyway and free BOTH handles when a ttnn
-        # change ever makes it a real copy: an un-freed buffer inside a captured trace is a leak
-        # that grows the trace region, not a wrong answer.
+        # [1, B_total, 32, HD] -> [1, n_users, T*32, HD]: same tile order (tile u*T + j becomes
+        # (u, j)), so an explicit padded shape takes reshape's tile-view path, a metadata alias at the
+        # same address. Compare addresses and free both handles if it is ever a copy: an un-freed
+        # buffer inside a captured trace grows the trace region.
         _view = ttnn.Shape([1, n_users, T * _tile, HD])
         _srcs = []
         for _t in (k_p, v_p):
@@ -670,7 +648,7 @@ class TPAttention:
         (k_p, k_orig), (v_p, v_orig) = _srcs
         for j in range(T):
             r0 = j * _tile
-            # Strided slices: (j, j+T, j+2T, ...). j < T <= B_total and step > 0, so never full-span.
+            # Strided (j, j+T, j+2T, ...): never full-span (j < T <= B_total), so safe to deallocate.
             pos_j = ttnn.slice(cur_pos_tt, (j,), (B_total,), (T,))
             pt_j = spec_user_page_table
             if pt_j is None:
@@ -709,10 +687,6 @@ class TPAttention:
     #
     # T -> (B groups, max_cores_per_head_batch, k_chunk_size); Tg = T // B. Exact match only: a T
     # that is not listed has no measured-fitting split and takes the legacy path.
-    #
-    # MULTI-USER verify keeps this table as-is: T here is the PER-USER candidate count, so Tg (and
-    # the L1 footprint it sizes) is unchanged; n_users just multiplies the group count and divides
-    # the per-group core budget (see _spec_sdpa_plan).
     _SPEC_SDPA_L1_FIT = {
         4: (1, 64, 0),  # Tg=4 on one row, 64 cores/head (the whole grid on one reduction group)
         8: (2, 55, 0),  # two groups of 4, 55 cores/head each -> 110 active, 1,310,976 B CB
@@ -725,15 +699,13 @@ class TPAttention:
 
     def _spec_sdpa_plan(self, T, n_users=1):
         """(SDPAProgramConfig, groups, tiles-per-group Tg) for the fused spec-verify SDPA at
-        ``n_users`` users x T candidates each, or None when T has no L1-fitting split (caller falls
-        back to the legacy per-row call).
+        ``n_users`` users x T candidates each, or None when T has no L1-fitting split (caller takes
+        the legacy per-row call).
 
-        ``T`` is the PER-USER candidate count (K+1) — the L1 table is keyed on it, because Tg (and
-        so the kernel's CB footprint) comes from the per-user split alone. Multi-user verify runs
-        the SAME Tg split once per user: groups = n_users * table_groups, and the cores each group
-        gets is the grid divided by that total (the table's own core count is the 1-user cap, never
-        exceeded). Rows are USER-MAJOR, so group g belongs to user g // table_groups and its Tg
-        row-tiles are that user's candidates [j*Tg, (j+1)*Tg).
+        ``T`` is the per-user candidate count (K+1): Tg, and so the kernel's CB footprint, comes from
+        the per-user split alone, so the L1 table is keyed on it. Multi-user verify repeats the same
+        split per user: groups = n_users * table_groups. Rows are user-major, so group g belongs to
+        user g // table_groups and its Tg row-tiles are that user's candidates [j*Tg, (j+1)*Tg).
         """
         key = (T, n_users)
         if key not in self._spec_sdpa_cfg_cache:
@@ -743,10 +715,8 @@ class TPAttention:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()
                 groups *= n_users
-                # Every group is its own reduction; the grid is split across all of them, so the
-                # per-group core budget shrinks as users are added (1 user at T=8: 55 cores/head;
-                # 8 users at T=4: 110 // 8 = 13). Never ABOVE the measured 1-user cap, which is
-                # what the L1 table guarantees fits.
+                # The grid is divided across all groups (8 users at T=4: 110 // 8 = 13 cores/head),
+                # capped at the table's 1-user count, which is the one known to fit L1.
                 max_cores = min(max_cores, max(1, (grid.x * grid.y) // groups))
                 plan = (
                     ttnn.SDPAProgramConfig(
@@ -763,9 +733,9 @@ class TPAttention:
         return self._spec_sdpa_cfg_cache[key]
 
     def spec_sdpa_enabled(self, T):
-        """Whether the fused spec-verify SDPA will be used at T candidates PER USER: it is, whenever
+        """Whether the fused spec-verify SDPA will be used at T candidates per user: it is, whenever
         T has an _SPEC_SDPA_L1_FIT entry. Other T fall back to the legacy per-row call (for
-        logging). Independent of the user count, which only rescales the core budget."""
+        logging). The user count does not matter."""
         if T <= 1:
             return False
         return self._spec_sdpa_plan(T) is not None
@@ -794,27 +764,25 @@ class TPAttention:
         alias_kv_write: the B rows are NOT independent users — they all belong to ONE sequence and
         therefore share ONE page table (identical rows), the way the speculative verify runs its
         K+1 candidates as B pseudo-users at consecutive positions. See _write_kv_aliased for why
-        that needs a per-row (or, at spec_n_users > 1, a per-candidate) write instead of one batched
-        update.
+        the KV write cannot be one batched update.
 
         spec_verify_mode / spec_page_table / spec_n_users: set ONLY by the speculative verify (never
         inferred from B — a real B-user decode must not take this path). The B rows are
-        ``spec_n_users`` users x T = B // spec_n_users candidates each, USER-MAJOR (row u*T + j).
+        ``spec_n_users`` users x T = B // spec_n_users candidates each, user-major (row u*T + j).
         They fold into spec_sdpa_groups(T, spec_n_users) batch rows for the SDPA read via
         spec_multi_pos_tiles, using the same-row-count aliased page table in spec_page_table (one
         row per group, pointing at that group's user's blocks). A T with no L1-fitting split takes
         the legacy B-row call.
 
-        spec_n_users ALSO groups the KV write, and there it is NOT limited to spec_verify_mode: the
-        batched drafter reseed passes spec_n_users with spec_verify_mode off. At spec_n_users > 1
-        the write goes out as T calls of spec_n_users rows instead of B single-row calls — see
-        _write_kv_aliased. spec_n_users == 1 keeps the per-row loop, byte-identical to before.
+        spec_n_users also groups the KV write, independent of spec_verify_mode: the batched drafter
+        reseed passes it with spec_verify_mode off. Above 1 the write goes out as T calls of
+        spec_n_users rows (see _write_kv_aliased); 1 keeps the per-row loop.
 
-        spec_user_page_table: OPTIONAL [spec_n_users, nb] int32 ROW_MAJOR table, row u = user u's
+        spec_user_page_table: optional [spec_n_users, nb] int32 ROW_MAJOR table, row u = user u's
         blocks, used as group j's page table for every j. Valid only when row u*T + j of
-        ``page_table`` equals row u of this table for every (u, j) — true for the verify, NOT for
-        the reseed (whose padding rows point at a scratch block). None derives each group's table
-        from ``page_table`` with a strided slice instead.
+        ``page_table`` equals row u of this table for every (u, j): true for the verify, not for the
+        reseed (whose padding rows point at a scratch block). None derives each group's table from
+        ``page_table`` with a strided slice.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
@@ -930,8 +898,8 @@ class TPAttention:
                 f"decode SDPA batch mismatch: q rows {B}, page_table rows {page_table.shape[0]}, "
                 f"cur_pos len {cur_pos_tt.shape[-1]}"
             )
-            # Per-user candidate count: the fused split (and its L1 budget) is keyed on it, not on
-            # the total row count. spec_n_users == 1 makes this exactly the old B == T lookup.
+            # Per-user candidate count: the fused split and its L1 budget are keyed on it, not on
+            # the total row count.
             _spec_T = B // spec_n_users if spec_verify_mode else B
             _spec_plan = (
                 self._spec_sdpa_plan(_spec_T, spec_n_users)

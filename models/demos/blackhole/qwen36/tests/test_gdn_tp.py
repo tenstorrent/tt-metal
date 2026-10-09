@@ -1202,9 +1202,9 @@ def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensur
 @parametrize_mesh_tp()
 @pytest.mark.parametrize("B, T", [(2, 12), (4, 8), (8, 4), (4, 1), (8, 1)])
 def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure_gc, request):
-    """TPGatedDeltaNet._kda_conv_packed packs B users' [K-1 carry ; T tokens] windows into ONE KDA call and
-    gathers the token rows. Every kept row must be BIT-identical to a per-user kda_conv_prefill call that takes
-    user u's carry as its history (the KDA op is batch-1 only)."""
+    """``_kda_conv_packed`` packs B users' [K-1 carry ; T tokens] windows into one KDA call (the op is batch-1
+    only) and gathers the token rows. Every kept row must be bit-identical to a per-user kda_conv_prefill call
+    that takes user u's carry as its history."""
     mesh = mesh_device
     kd, vd = 512, 1536  # 27B at TP4
     C = 2 * kd + vd
@@ -1219,7 +1219,7 @@ def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure
     def to_dev(x, layout):
         return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=mesh, mesh_mapper=rep)
 
-    # REFERENCE: one call per user, the carry as history, tokens right-padded to a tile multiple.
+    # Reference: one call per user, carry as history, tokens right-padded to a tile multiple.
     Tp = -(-T // 32) * 32
     ref = ([], [], [])
     for u in range(B):
@@ -1233,7 +1233,7 @@ def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure
             ttnn.deallocate(t)
     ref = [torch.cat(r, dim=1) for r in ref]  # [1, B*T, width], user-major
 
-    # PACKED: the layer's own method on a weight-free instance holding just what it reads.
+    # Packed: the layer's own method on a weight-free instance holding only the attributes it reads.
     gdn = TPGatedDeltaNet.__new__(TPGatedDeltaNet)
     gdn.mesh, gdn.K = mesh, CONV_K
     gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd

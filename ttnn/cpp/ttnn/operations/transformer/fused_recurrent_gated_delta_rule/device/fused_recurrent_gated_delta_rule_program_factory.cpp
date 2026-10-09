@@ -53,13 +53,10 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
-    // Ring mode: each core picks its initial-state block out of `initial_state` by index, and the
-    // per-token states are written back into that same buffer (outputs[1] aliases it).
     const bool ring = in.initial_state_block_idx.has_value();
     const uint32_t use_blk_idx = ring ? 1u : 0u;
     Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
-    // One ROW_MAJOR page holds the whole [BH] index vector; read it whole (the aligned page size,
-    // not the logical one, so the DRAM read stays page-aligned).
+    // The [BH] index vector is one ROW_MAJOR page; the aligned page size keeps the DRAM read aligned.
     const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;

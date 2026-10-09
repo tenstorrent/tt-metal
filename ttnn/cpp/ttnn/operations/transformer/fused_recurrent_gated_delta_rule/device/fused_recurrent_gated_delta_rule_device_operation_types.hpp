@@ -41,8 +41,8 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //   beta : [BH*T, 1, 1]
 //   initial_state: [BH, K, V] or absent (zeros).
 //
-// "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the
-// state output; the contract is documented on the Python binding.
+// "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
+// see the Python binding for the contract.
 struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;

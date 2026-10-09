@@ -226,7 +226,7 @@
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
-    # Batched spec decode at B=8 (K=3, all 32 verify rows): one test covering lossless vs plain, determinism, traced == eager.
+    # Batched spec decode at B=8, K=3 (all 32 verify rows): lossless vs plain, determinism, traced == eager.
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_batched.py -k "test_spec_batched_lossless and 8"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py

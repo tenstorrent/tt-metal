@@ -90,8 +90,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.v, "v", {BHT, 1u, V});
     check(in.decay, "decay", {BHT, 1u, 1u});
     check(in.beta, "beta", {BHT, 1u, 1u});
-    // Ring mode: initial_state is the [BH*T,K,V] per-token ring AND the (in-place) state output;
-    // each core selects its initial-state block from it by index. Non-ring keeps [BH,K,V].
+    // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
     if (in.initial_state.has_value()) {
         check(
@@ -139,7 +138,6 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
     const auto layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
     ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
-    // Ring mode: the state output IS the caller's ring (in place), so its spec is the ring's spec.
     if (in.initial_state_block_idx.has_value()) {
         return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
     }
@@ -157,8 +155,7 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::create_output_tensors(
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
     outs.push_back(create_device_tensor(specs[0], device));
-    // Ring mode writes the per-token states back into the caller's ring: alias it as the state
-    // output instead of allocating. (The adapter allows an output buffer to alias an input buffer.)
+    // Ring mode: the state output aliases the caller's ring (the adapter allows an output buffer to alias an input).
     if (in.initial_state_block_idx.has_value()) {
         outs.push_back(*in.initial_state);
     } else {

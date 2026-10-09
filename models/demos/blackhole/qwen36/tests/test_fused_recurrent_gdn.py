@@ -456,18 +456,15 @@ def test_fused_verify_batched_matches_fla_naive(mesh_device, B, HV, T):
     ids=["b1h12t12", "b2h12t12", "b8h8t4"],
 )
 def test_fused_verify_ring_select(mesh_device, B, HV, T):
-    """Ring mode: head h starts from ring block idx[h] and writes its per-token states back into
-    the SAME buffer.
+    """Ring mode: head h starts from ring block idx[h] and writes its per-token states back into the same buffer.
 
-    Window A seeds token-slot 0 (blocks [0,BH)) with S0 and uses idx[h] = h, so it is the ordinary
-    verify. Window B then commits a different accepted slot mi[b] per user by setting
-    idx[b*HV+hv] = (mi[b]*B + b)*HV + hv -- i.e. ring block mi[b]*BH + h, which satisfies the
-    idx[h] % BH == h contract. No copy, no extra dispatch.
+    Window A seeds token-slot 0 (blocks [0,BH)) with S0 and uses idx[h] = h, i.e. the ordinary verify.
+    Window B commits a different accepted slot mi[b] per user via idx[b*HV+hv] = mi[b]*BH + h, which satisfies
+    the idx[h] % BH == h contract, with no copy and no extra dispatch.
     """
     BH = B * HV
     nblk = T * BH
 
-    # ---- window A: ring = zeros, token-slot 0 seeded with S0, idx = identity ----
     S0 = torch.randn(B, HV, DK, DV, dtype=torch.float32) * 0.1
     ring = torch.zeros(nblk, DK, DV, dtype=torch.float32)
     ring[:BH] = S0.reshape(BH, DK, DV)  # block h (t=0 slot) <- S0[b, hv], h = b*HV + hv
@@ -493,19 +490,17 @@ def test_fused_verify_ring_select(mesh_device, B, HV, T):
         output_per_token_state=True,
         initial_state_block_idx=idx_a_tt,
     )
-    # The state output IS the ring (same buffer, same shape) -- no copy, no relayout.
     assert stA_tt.buffer_address() == ring_addr, "ring mode must return the initial_state buffer in place"
     assert list(stA_tt.shape) == list(ring_tt.shape), f"ring shape changed: {stA_tt.shape} vs {ring_tt.shape}"
 
     oA = _dev0(mesh_device, oA_tt, first=B)
-    ringA = _dev0(mesh_device, ring_tt, first=nblk)  # read the INPUT handle: proves in-place
+    ringA = _dev0(mesh_device, ring_tt, first=nblk)  # read the input handle: proves in-place
     p_oA = pcc(oA, o_refA)
     p_rA = pcc(ringA, _ring_from_states(stA, T, B, HV, DK, DV))
     logger.info(f"[ring A] B={B} HV={HV} T={T} PCC o={p_oA:.6f} ring={p_rA:.6f}")
     assert p_oA > 0.999, f"window A output PCC {p_oA}"
     assert p_rA > 0.999, f"window A ring PCC {p_rA}"
 
-    # ---- window B: commit a different accepted slot per user, then verify again ----
     # mi[0] = T-1 so even B=1 selects a non-identity block; the rest is a fixed pseudo-random spread.
     mi = ([T - 1, 0] + [(3 * b + 1) % T for b in range(B - 2)])[:B]
     idx_b = torch.tensor([(mi[b] * B + b) * HV + hv for b in range(B) for hv in range(HV)], dtype=torch.int64)
@@ -538,8 +533,8 @@ def test_fused_verify_ring_select(mesh_device, B, HV, T):
 
     cache_after_a = mesh_device.num_program_cache_entries()
     oB, ringB = run_window_b()
-    # Window B reuses the cached program with a DIFFERENT idx buffer: no new cache entry, and the
-    # right answer only if the idx buffer address rebinds on the cache hit.
+    # Window B hits the cached program with a different idx buffer, so it is only right if the idx address
+    # rebinds.
     cache_after_b = mesh_device.num_program_cache_entries()
     logger.info(f"[ring] program cache entries: after A={cache_after_a} after B={cache_after_b}")
     assert cache_after_b == cache_after_a, "window B should hit the program cache (idx address rebinds)"
@@ -551,7 +546,7 @@ def test_fused_verify_ring_select(mesh_device, B, HV, T):
     assert p_rB > 0.999, f"window B ring PCC {p_rB}"
     assert min(per_tok) > 0.999, f"window B per-token ring min PCC {min(per_tok)}"
 
-    # ---- determinism: re-seed the ring to the post-A state and re-run window B ----
+    # Determinism: re-seed the ring to its post-A state and re-run window B.
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(
             ringA,

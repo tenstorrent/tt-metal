@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU unit tests for the batched spec-decode selector helpers in gdn/tp.py.
 
-``spec_state_blk_idx`` and ``spec_conv_sel`` are the whole "commit" of the multi-user speculative
-decoder: after a verify the host knows mi[u] (the last ACCEPTED candidate row of user u) and,
-instead of running a commit phase on device, it hands the next verify replay these two tensors.
-Get them wrong and the model silently continues from the wrong state, so they are pinned here
-against an independent naive construction. No device, no ttnn ops — pure torch.
+``spec_state_blk_idx`` and ``spec_conv_sel`` are the multi-user decoder's whole "commit": after a verify the
+host knows mi[u] (the last accepted candidate row of user u) and passes the next verify replay these two
+tensors instead of running a commit phase on device. A wrong value silently continues from the wrong state,
+so they are pinned against an independent naive construction. Pure torch, no device.
 
 Run:
     pytest models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py -q
@@ -22,15 +21,14 @@ from models.demos.blackhole.qwen36.demo.text_demo import _spec_batch_decision, _
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 from models.demos.blackhole.qwen36.tt.model import spec_kv_write_conflicts
 
-# (B, T) pairs _spec_batch_draft_len packs into the 32-row decode tile (B*T <= 32, T = K+1):
-# K = 11 for B <= 2, 7 for B <= 4, 3 for B <= 8.
+# (B, T) pairs _spec_batch_draft_len packs into the 32-row decode tile (B*T <= 32, T = K+1).
 SHAPES = [(1, 12), (2, 12), (4, 8), (8, 4)]
 KC = 4  # conv kernel size (args.gdn_conv_kernel_size)
 
 
 def _mi_cases(B, T):
-    """mi vectors worth checking: all-zero (the seed), all-last (full acceptance), mixed, and a Latin
-    square (rotations of range(T)) so every (user, mi) pair occurs."""
+    """mi vectors worth checking: all-zero (seed), all-last (full acceptance), mixed, and a Latin square
+    (rotations of range(T)) so every (user, mi) pair occurs."""
     cases = [[0] * B, [T - 1] * B, *([(u + s) % T for u in range(B)] for s in range(T))]
     if T > 2:
         cases.append([(u * 3 + 1) % T for u in range(B)])
@@ -40,22 +38,17 @@ def _mi_cases(B, T):
     return cases
 
 
-# --------------------------------------------------------------------------- #
-# spec_state_blk_idx
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("B,T", SHAPES)
 @pytest.mark.parametrize("nv", [1, 8, 12])
 def test_state_blk_idx_matches_naive(B, T, nv):
-    """Naive: walk the ring the way the kernel lays it out and find each (user, head)'s block.
+    """Naive: walk the ring in the kernel's (token slot, user, head) order and find each (user, head)'s block.
 
-    The fused op also requires idx[h] % (B*nv) == h (head h may only re-target its OWN lane).
+    The fused op also requires idx[h] % (B*nv) == h (head h may only re-target its own lane).
     """
     bh = B * nv
     for mi in _mi_cases(B, T):
         got = spec_state_blk_idx(mi, B, nv)
 
-        # Independent construction: enumerate the ring in (token slot, user, head) order and pick
-        # the block whose token slot is mi[u] and whose (user, head) is (u, h).
         want = torch.full((B * nv,), -1, dtype=torch.int32)
         blk = 0
         for t in range(T):
@@ -81,17 +74,13 @@ def test_state_blk_idx_rejects_bad_mi_length(expect_error):
         spec_state_blk_idx([0, 1], 4, 8)
 
 
-# --------------------------------------------------------------------------- #
-# spec_conv_sel
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("B,T", SHAPES)
 @pytest.mark.parametrize("kc", [2, KC])
 def test_conv_sel_matmul_rebuilds_the_window(B, T, kc):
-    """The load-bearing property: conv_sel @ concat == [E_prev[u, mi+1 : mi+kc] ; qkv_new[u]].
+    """conv_sel @ concat == [E_prev[u, mi+1 : mi+kc] ; qkv_new[u]].
 
-    That is the shift register T sequential decode steps would have left after accepting through
-    row mi[u], followed by this iteration's T new conv inputs — i.e. exactly the window the next
-    depthwise conv1d must see.
+    That is the window the next depthwise conv1d must see: the shift register T sequential decode steps
+    leave after accepting through row mi[u], followed by this iteration's T new conv inputs.
     """
     C = 7  # a stand-in for qkv_dim_tp; the selector is channel-agnostic
     gen = torch.Generator().manual_seed(1234 + B * 100 + T * 10 + kc)
@@ -119,9 +108,6 @@ def test_conv_sel_rejects_out_of_range_mi(expect_error):
         spec_conv_sel([0, 0], 1, 4, KC)
 
 
-# --------------------------------------------------------------------------- #
-# auto spec policy (demo/text_demo.py): K >= 3, so B <= 8 in the 32-row verify tile
-# --------------------------------------------------------------------------- #
 def test_spec_batch_draft_len_floor(monkeypatch):
     monkeypatch.delenv("QWEN36_SPEC_DRAFT_LEN", raising=False)
     for batch, T, sampling in itertools.product(range(1, 9), [128, 4096, 8192], [None, object()]):
@@ -151,9 +137,6 @@ def test_spec_batch_decision_max_batch(monkeypatch):
         assert _spec_batch_decision(model, batch)[0] is False, batch
 
 
-# --------------------------------------------------------------------------- #
-# grouped verify KV write: which cross-user (block, tile) collisions are real
-# --------------------------------------------------------------------------- #
 def test_spec_kv_write_conflicts(expect_error):
     BS, T = 64, 2
     # (a) vLLM-like: B=4, nb=8, user u owns blocks [1+2u, 2+2u], every other column is the null
@@ -161,7 +144,7 @@ def test_spec_kv_write_conflicts(expect_error):
     vllm = torch.zeros(4, 8, dtype=torch.int32)
     for u in range(4):
         vllm[u, :2] = torch.tensor([1 + 2 * u, 2 + 2 * u])
-    assert set(vllm[0].tolist()) & set(vllm[1].tolist()) == {0}  # the old whole-row check would reject it
+    assert set(vllm[0].tolist()) & set(vllm[1].tolist()) == {0}
     assert spec_kv_write_conflicts(vllm, [3, 60, 64 + 3, 100], 8, BS) == []
 
     # (b) same block AND same 32-row tile in call j=0 only: user 0 writes 31, 32; user 1 writes 20, 21.

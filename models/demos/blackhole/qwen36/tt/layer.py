@@ -191,17 +191,14 @@ class Qwen36DecoderLayer:
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
-        # gdn_seed: the spec loop's SEED step (one row per user, T = 1). Everything outside GDN is
-        # the verify body at T = 1; GDN takes forward_seed_recurrent instead of the ring verify,
-        # because the ring and E_prev do not exist until capture_verify_trace allocates them.
-        # n_users / state_blk_idx / conv_sel: the MULTI-USER speculative verify. Its bucket rows are
-        # n_users users x T = rows // n_users candidates each, USER-MAJOR (row u*T + j). GDN reshapes
-        # them to [n_users, T, C] and reads its per-user initial state / conv window through the two
-        # shared device selectors (state_blk_idx, conv_sel — the deferred commit); full attention
-        # folds them into per-user SDPA groups (spec_n_users) AND groups the aliased KV write by
-        # candidate index (T calls of n_users rows instead of n_users*T single-row calls).
-        # n_users=1 is the single-user path, unchanged.
-        # spec_user_page_table: optional [n_users, nb] per-user block table for that grouped write.
+        # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
+        # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
+        # until capture_verify_trace allocates them.
+        # n_users / state_blk_idx / conv_sel: multi-user speculative verify. Bucket rows are n_users
+        # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
+        # [n_users, T, C] and reads each user's initial state / conv window through the shared device
+        # selectors state_blk_idx / conv_sel; full attention groups the SDPA and the aliased KV write
+        # per user (spec_n_users, spec_user_page_table).
         # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
         # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
         # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
@@ -254,10 +251,8 @@ class Qwen36DecoderLayer:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
                     # alias_kv_write: the B rows are not independent users (spec verify's candidates
-                    # as pseudo-users), so the KV write must not be one batched call — see
-                    # TPAttention._write_kv_aliased. At n_users > 1 it groups by candidate index
-                    # (T calls of n_users rows); spec_user_page_table is the optional pre-staged
-                    # [n_users, nb] per-user table that saves the group's page-table slice.
+                    # as pseudo-users), so the KV write cannot be one batched call — see
+                    # TPAttention._write_kv_aliased.
                     # spec_verify_mode/spec_page_table: additionally fold those rows into ONE SDPA
                     # batch row so the KV cache is read once per layer (same place).
                     attn_output = self.attention.forward_decode(
@@ -277,10 +272,8 @@ class Qwen36DecoderLayer:
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
                     if gdn_recurrent and gdn_seed:
-                        # Spec-decode SEED: one row per user, through the VERIFY's conv1d + fused
-                        # recurrent arithmetic but against the DURABLE state (the spec ring and
-                        # E_prev are allocated later, by capture_verify_trace). Same call shape as
-                        # the verify below, minus the two deferred-commit selectors.
+                        # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
+                        # against the durable state and without the deferred-commit selectors.
                         attn_output = self.attention.forward_seed_recurrent(
                             attn_input, valid_len, pre_gathered=decode_cfg, n_users=n_users
                         )

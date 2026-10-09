@@ -99,10 +99,10 @@ def kda_conv_prefill(
 
 
 def kda_pack_gather(n_users, T, kc, rows_padded):
-    """One-hot [1, n_users*T, rows_padded] that picks token rows out of a packed KDA conv output.
+    """One-hot bf16 [1, n_users*T, rows_padded] that picks token rows out of a packed KDA conv output.
 
     The packed input holds n_users windows end to end, each L = kc-1+T rows ([kc-1 carry ; T tokens]).
-    Output row u*T + j selects packed row u*L + (kc-1) + j: user u's token j. Pure torch, bf16."""
+    Output row u*T + j selects packed row u*L + (kc-1) + j: user u's token j."""
     L = kc - 1 + T
     assert n_users * L <= rows_padded, f"{n_users} windows of {L} rows exceed {rows_padded}"
     g = torch.zeros(1, n_users * T, rows_padded, dtype=torch.bfloat16)
@@ -112,13 +112,12 @@ def kda_pack_gather(n_users, T, kc, rows_padded):
 
 
 # --------------------------------------------------------------------------- #
-# Batched (multi-user) spec-decode host helpers. Pure torch: no ttnn, no device.
+# Batched (multi-user) spec-decode host helpers (pure torch)
 # --------------------------------------------------------------------------- #
-# Row layout for a batched verify: B users x T = K+1 candidate rows, packed USER-MAJOR into one
-# 32-row decode tile (row r = u*T + j). After a verify the host knows mi[u], the index of the last
-# ACCEPTED row of user u, and commits by SELECTING rather than by re-running anything: the next
-# replay reads user u's GDN state from the ring block mi[u] wrote, and rebuilds user u's conv
-# shift-register from the window rows mi[u] wrote. These two helpers build the tiny selector
+# A batched verify packs B users x T = K+1 candidate rows user-major into one 32-row decode tile
+# (row r = u*T + j). With mi[u] the index of user u's last accepted row, the host commits by
+# selection: the next replay reads user u's GDN state from the ring block mi[u] wrote and rebuilds
+# its conv shift register from the window rows mi[u] wrote. These helpers build the selector
 # tensors that carry mi into the trace.
 
 
@@ -126,11 +125,10 @@ def spec_state_blk_idx(mi, n_users, nv):
     """Ring block index per (user, value-head) for the fused recurrent op's deferred-select mode.
 
     The ring holds T*n_users*nv state blocks laid out (token slot, user, head)-major, so the state
-    user u produced after accepting through row mi[u] lives at block (mi[u]*n_users + u)*nv + h.
-    Entry (u*nv + h) of the returned tensor is exactly that block.
+    user u has after accepting through row mi[u] is block (mi[u]*n_users + u)*nv + h, which is
+    entry u*nv + h of the result.
 
-    mi: per-user accepted-prefix last index (len n_users, each in [0, T)).
-    Returns torch.int32 [n_users*nv].
+    mi: per-user last accepted row (len n_users, each in [0, T)). Returns torch.int32 [n_users*nv].
     """
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     blk = torch.as_tensor(mi, dtype=torch.int64) * n_users + torch.arange(n_users)
@@ -140,11 +138,11 @@ def spec_state_blk_idx(mi, n_users, nv):
 def spec_conv_sel(mi, n_users, T, kc):
     """One-hot row selector that rebuilds every user's conv window for the next verify.
 
-    The verify concatenates last iteration's window with this iteration's new qkv rows:
+    The verify concatenates the previous window with the new qkv rows:
         concat = cat([E_prev [n_users, kc-1+T, C], qkv_new [n_users, T, C]], dim=1)
     and left-multiplies it by this selector, so for user u:
         out row r        (r < kc-1) <- concat row mi[u] + 1 + r      (E_prev, post-commit window)
-        out row kc-1 + j            <- concat row (kc-1+T) + j       (this iteration's qkv row j)
+        out row kc-1 + j            <- concat row (kc-1+T) + j       (new qkv row j)
     i.e. the kc-1 conv taps that survive the commit, followed by the T new inputs.
 
     Returns torch.bfloat16 [n_users, kc-1+T, kc-1+2T] (one-hot, so the matmul is exact).
@@ -336,33 +334,33 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
-        # ---- Batched (multi-user) spec-decode verify buffers; see prepare_spec_verify. ----
-        # (n_users, T) the spec buffers below are sized for; None => prepare_spec_verify not run.
+        # ---- Batched (multi-user) spec-decode verify buffers, allocated by prepare_spec_verify. ----
+        # (n_users, T) the spec buffers are sized for; None until prepare_spec_verify runs.
         self._spec_shape = None
-        # Per-token recurrent-state RING, fp32 TILE [T*B*Nv, Dk, Dv]. The fused recurrent op reads
-        # each (user, head)'s initial state from the block `state_blk_idx` points at and writes that
-        # token's state back IN PLACE, so "commit" is just the host choosing next iteration's index.
+        # Per-token recurrent-state ring, fp32 TILE [T*B*Nv, Dk, Dv]. The fused recurrent op reads each
+        # (user, head)'s initial state from the block `state_blk_idx` names and writes every token's
+        # state back in place, so a commit is just the host choosing the next iteration's index.
         self._spec_ring = None
         # E_prev: the conv window each verify consumes and rewrites, bf16 TILE [B, K-1+T, C].
         self._verify_win_buf = None
-        # Persistent zero rows [B, T-1, C] used once by seed_spec_state to fill _verify_win_buf's
-        # tail (never read: the first replay runs with mi = 0).
+        # Zero rows [B, T-1, C] that seed_spec_state uses to fill _verify_win_buf's tail (never read:
+        # the first replay runs with mi = 0).
         self._spec_win_pad = None
-        # The DURABLE shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
+        # The durable shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
-        # One-hot matmul config: HiFi4 + fp32 accumulate so a 0/1 selector matmul is EXACT in bf16.
+        # One-hot matmul config: HiFi4 + fp32 accumulate keep a 0/1 selector matmul exact in bf16.
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
         )
-        # Which of the two mirrors is authoritative. The traced batched verify advances ONLY the
-        # window buffers (refilling the K conv_states taps inside the trace cost ~10 ms/iteration
-        # over 48 layers and nothing in the spec loop reads them), so after materialize_spec_state
-        # the taps are BEHIND: _conv_taps_stale. Conversely everything that writes the taps from
-        # outside (prefill capture_state, reset, slot edits, decode's own shift register) leaves the
-        # window behind: _conv_win_stale. Exactly one can be set at a time — each setter clears the
-        # other. The rebuilds are sync_conv_taps() (window -> taps, at every tap CONSUMER) and
-        # sync_conv_win() (taps -> window, lazily in _ensure_conv_win, which only ever runs eagerly).
+        # Which of the two conv mirrors is authoritative. The traced batched verify advances only the
+        # window buffers (refilling the K conv_states taps in the trace would cost ~10 ms/iteration
+        # over 48 layers, and nothing in the spec loop reads them), so after materialize_spec_state
+        # the taps are behind: _conv_taps_stale. Anything that writes the taps from outside (prefill
+        # capture_state, reset, slot edits, decode's own shift register) leaves the window behind:
+        # _conv_win_stale. At most one is set; each setter clears the other. sync_conv_taps()
+        # (window -> taps) runs at every tap consumer; sync_conv_win() (taps -> window) runs lazily
+        # in _ensure_conv_win, which only ever runs eagerly.
         self._conv_taps_stale = False
         self._conv_win_stale = False
         # Spec decode only (set by SpeculativeDecoder): run the ONE fused recurrent device op in
@@ -384,7 +382,7 @@ class TPGatedDeltaNet:
         # the op's actual_start scalar and the row-major zero history of a from-scratch chunk.
         self._kda_actual_start = None
         self._kda_zero_history = None
-        self._kda_gather = {}  # (n_users, T) -> constant one-hot row gather for _kda_conv_packed (see there)
+        self._kda_gather = {}  # (n_users, T) -> constant one-hot row gather for _kda_conv_packed
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -433,8 +431,8 @@ class TPGatedDeltaNet:
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
-        # rec_state/conv_states got fresh addresses here, so every spec-verify buffer derived from
-        # the old ones is stale — drop them (re-allocated by the next prepare_spec_verify).
+        # rec_state/conv_states have new addresses, so the spec buffers seeded from the old ones are
+        # stale; the next prepare_spec_verify reallocates them.
         self._release_spec_bufs()
         if self._conv_win_buf is not None:  # mirrors the now-stale conv_states; re-seeded at capture
             ttnn.deallocate(self._conv_win_buf)
@@ -514,16 +512,15 @@ class TPGatedDeltaNet:
         return kda_conv_prefill(qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start)
 
     def _kda_conv_packed(self, E, T):
-        """KDA conv + SiLU + q/k/v split for n_users independent windows in ONE op call.
+        """KDA conv + SiLU + q/k/v split for B independent windows in one op call.
 
-        E: [B, L, C] bf16 TILE, L = K-1+T rows per user ([K-1 carry rows ; T token rows]). E is read,
-        not consumed (the callers stash it). The KDA op is batch-1 only, so the B windows go end to
-        end into ONE [1, B*L, C] sequence, zero-padded to a tile multiple, with a zero history.
-        Output row u*L + (K-1) + j reads input rows u*L + j .. u*L + j + K-1, all inside user u's
-        window, so every kept row is bit-identical to a per-user call (checked on device: maxdiff 0
-        for B <= 8, T in {1, 4, 8, 12}). The rows at the carry positions straddle two users; the
-        constant one-hot gather (HiFi4, fp32 acc: exact) drops them. The gather is built on the first
-        (eager) call per (B, T): the seed and capture_verify_trace's warm passes run before any trace.
+        E: [B, L, C] bf16 TILE, L = K-1+T rows per user ([K-1 carry rows ; T token rows]); read, not
+        consumed. The KDA op is batch-1 only, so the B windows go end to end into one [1, B*L, C]
+        sequence, zero-padded to a tile multiple, with a zero history. Output row u*L + (K-1) + j reads
+        input rows u*L + j .. u*L + j + K-1, all inside user u's window, so every kept row is
+        bit-identical to a per-user call. The rows at the carry positions straddle two users; the
+        constant one-hot gather (HiFi4, fp32 acc: exact) drops them. The gather is built (host write)
+        on the first call per (B, T), so that call must run before trace capture.
         Returns q [1, B*T, key_dim_tp], k [1, B*T, key_dim_tp], v [1, B*T, value_dim_tp], user-major.
         """
         B, L, C = E.shape[0], E.shape[1], self.qkv_dim_tp
@@ -806,8 +803,7 @@ class TPGatedDeltaNet:
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
                 # Prefill wrote the taps directly, so they are the truth and the [B,K,C] window
-                # mirror the spec seed reads its carry from is now behind (re-seeded lazily by
-                # _ensure_conv_win, on the spec loop's next eager seed).
+                # mirror is behind (_ensure_conv_win re-seeds it at the next eager spec seed).
                 self._conv_taps_stale = False
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
@@ -974,10 +970,10 @@ class TPGatedDeltaNet:
     def _row_shard_memcfg(self, nhw, width):
         """L1 height-shard config for a rank-4 TILE tensor flattened to (nhw, width) rows.
 
-        ``ttnn.experimental.slice_write`` only writes STRAIGHT into an interleaved TILE output when
+        ``ttnn.experimental.slice_write`` writes directly into an interleaved TILE output only when
         its input is sharded; with an interleaved input it round-trips the output through ROW_MAJOR,
         which mints a new buffer and breaks any address a trace baked in. So every slice_write into
-        a persistent buffer shards its source with this.
+        a persistent buffer shards its source with this config.
         """
         grid_size = self.mesh.compute_with_storage_grid_size()
         assert (
@@ -986,11 +982,9 @@ class TPGatedDeltaNet:
         assert nhw % ttnn.TILE_SIZE == 0, f"GDN state write rows {nhw} is not tile-aligned"
         n_tiles = nhw // ttnn.TILE_SIZE
 
-        # Prefer the tuned 8x6=48-core rectangle, but only when the tile count actually divides by
-        # 48 — it depends on the per-device head count, not just on B. At Nv_tp=12, nhw=B*1536 gives
-        # 48*B tiles and the fast path always fires; at Nv_tp=8 (TP=4 on this model) nhw=B*1024 gives
-        # 32*B tiles, so it fires only for B a multiple of 3, and at Nv_tp=6 (TP=8) B=1 gives 24
-        # tiles. Otherwise fall back to the largest core count that divides the tiles evenly.
+        # Prefer the tuned 8x6=48-core rectangle when the tile count divides by 48, which depends on
+        # the per-device head count as well as B (Nv_tp=12: 48*B tiles; Nv_tp=8: 32*B, so only B a
+        # multiple of 3; Nv_tp=6: 24*B). Otherwise use the largest core count that divides the tiles.
         if n_tiles % 48 == 0:
             num_cores = 48
             grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))})
@@ -1409,15 +1403,14 @@ class TPGatedDeltaNet:
     # ------------------------------------------------------------------ #
     # Batched (multi-user) speculative verify
     # ------------------------------------------------------------------ #
-    # One verify advances B users x T = K+1 candidate rows in a single pass over the 32-row decode
-    # tile (rows are USER-MAJOR: row u*T + j). Nothing here commits: the recurrent op writes EVERY
-    # token's state into a persistent ring and the conv window keeps every candidate's shift
-    # register, so after the host reads the accepted prefix it "commits" by handing the NEXT replay
-    # two tiny selector tensors (state_blk_idx, conv_sel) instead of running a commit phase.
+    # One verify advances B users x T = K+1 candidate rows in one pass over the 32-row decode tile
+    # (user-major: row u*T + j). Nothing commits here: the recurrent op writes every token's state
+    # into a persistent ring and the conv window keeps every candidate's shift register, so the host
+    # commits by handing the next replay selectors (state_blk_idx, conv_sel).
     #
-    # Everything the body touches is persistent and allocated by prepare_spec_verify, because the
-    # body runs under a captured trace: a first-time allocation or a host write inside it would
-    # either TT_FATAL at capture or bake a throwaway address into the replay.
+    # Everything the body touches is persistent and allocated by prepare_spec_verify: the body runs
+    # under a captured trace, where a first-time allocation or host write would either TT_FATAL at
+    # capture or bake a throwaway address into the replay.
 
     def prepare_spec_verify(self, n_users, T):
         """Allocate the persistent buffers a batched spec verify reads and writes.
@@ -1432,7 +1425,7 @@ class TPGatedDeltaNet:
           _conv_win_buf   bf16 TILE DRAM [B, K, C]         the durable shift register
           _spec_win_pad   bf16 TILE DRAM [B, T-1, C]       zero tail for the seed (T > 1 only)
 
-        Call it EAGERLY, before the verify warmup pass, so the warmup compiles every program the
+        Call it eagerly, before the verify warmup pass, so the warmup compiles every program the
         captured body replays.
         """
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
@@ -1466,15 +1459,13 @@ class TPGatedDeltaNet:
     def seed_spec_state(self):
         """Load the live decode state into the spec buffers so the first replay can run with mi = 0.
 
-        rec_state -> ring token-slot 0 (blocks [0, B*Nv), which is where a mi = 0 state_blk_idx
-        points), and the conv shift register -> the first K rows of E_prev (which is what a mi = 0
-        conv_sel reads: concat rows 1 .. K-1). The window's remaining T-1 rows are zeroed padding
-        that no mi = 0 selector can reach.
+        rec_state -> ring token slot 0 (blocks [0, B*Nv), where a mi = 0 state_blk_idx points); the
+        conv shift register -> the first K rows of E_prev (a mi = 0 conv_sel reads them as concat
+        rows 1 .. K-1). The window's remaining T-1 rows are zero padding no mi = 0 selector reaches.
         """
         assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
         T = self._spec_shape[1]
-        # --- recurrent state -> ring blocks [0, B*Nv) ---
         # 4D views: slice_write needs input/output/bounds at equal rank and a rank-4 sharded input,
         # and adding a leading unit dim to a TILE tensor is a pure view (same buffer, so the write
         # lands in the ring itself).
@@ -1489,7 +1480,6 @@ class TPGatedDeltaNet:
         ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        # --- conv shift register -> E_prev rows [0, K) ---
         self.sync_conv_win()  # taps are the truth outside the spec loop; mirror them into the window
         full = (
             self._conv_win_buf
@@ -1499,26 +1489,24 @@ class TPGatedDeltaNet:
         ttnn.copy(full, self._verify_win_buf)  # full-shape copy: _verify_win_buf keeps its address
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
-        # Both mirrors now hold the same (live) shift register.
         self._conv_taps_stale, self._conv_win_stale = False, False
 
     def materialize_spec_state(self, mi):
-        """Pull the accepted state out of the spec buffers back into the durable decode state.
+        """Copy the accepted state from the spec buffers back into the durable decode state.
 
-        The spec loop never commits on device; this is what ends it (or hands a plain decode step
-        the right state). For user u: rec_state row u <- ring block (mi[u]*B + u)*Nv, and
-        _conv_win_buf row u <- E_prev rows [mi[u], mi[u]+K) — exactly the shift register T
-        sequential decode steps would have left after accepting through row mi[u].
+        The spec loop never commits on device; this ends it (or hands a plain decode step the right
+        state). For user u: rec_state row u <- ring block (mi[u]*B + u)*Nv, and _conv_win_buf row u <-
+        E_prev rows [mi[u], mi[u]+K), the shift register sequential decode steps would leave after
+        accepting through row mi[u].
 
-        Leaves the K conv_states taps BEHIND the window (``_conv_taps_stale``); the next tap
-        consumer rebuilds them via sync_conv_taps.
+        Leaves the K conv_states taps behind the window (``_conv_taps_stale``); the next tap consumer
+        rebuilds them via sync_conv_taps.
         """
         assert self._spec_ring is not None, "materialize_spec_state before prepare_spec_verify"
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
         assert len(mi) == B, f"need one mi per user: got {len(mi)} for {B} users"
         assert all(0 <= int(m) < T for m in mi), f"mi {list(mi)} out of range [0,{T})"
-        # --- recurrent state: one slice per user, ONE concat, ONE in-place copy ---
         rows = []
         for u in range(B):
             blk = (int(mi[u]) * B + u) * Nv
@@ -1532,7 +1520,6 @@ class TPGatedDeltaNet:
             for r in rows:
                 ttnn.deallocate(r)
         ttnn.deallocate(new_rec)
-        # --- conv window: user u's K rows starting at its own mi[u] ---
         wins = [ttnn.slice(self._verify_win_buf, (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
         new_win = ttnn.concat(wins, dim=0) if B > 1 else wins[0]
         ttnn.copy(new_win, self._conv_win_buf)
@@ -1546,22 +1533,22 @@ class TPGatedDeltaNet:
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
         x : [1, 1, bucket, dim] prefill-normed input; the first ``valid_len`` rows are real and
-        USER-MAJOR (row u*T + j == user u, candidate j). Returns [1, 1, bucket, dim/tp], zero-padded
+        user-major (row u*T + j == user u, candidate j). Returns [1, 1, bucket, dim/tp], zero-padded
         past ``valid_len`` (nothing downstream reads those rows: attention is causal and verify only
         row-selects real rows).
 
         valid_len  : n_users * T real rows; must fit one 32-row decode tile.
-        pre_gathered: the caller already handed us a FULL-dim activation (decode-config verify runs
-                     the layer norms in Mode.DECODE, which gathers pre-norm), so skip the all-gather.
+        pre_gathered: x is already full-dim (decode-config verify runs the layer norms in
+                     Mode.DECODE, which gathers pre-norm), so skip the all-gather.
         n_users    : number of real users packed into the tile; must equal self.B.
         state_blk_idx: device uint32 ROW_MAJOR [B*Nv], from spec_state_blk_idx(mi, B, Nv). Selects
-                     each (user, head)'s initial state block inside the persistent ring.
+                     each (user, head)'s initial state block inside the ring.
         conv_sel   : device bf16 TILE [B, K-1+T, K-1+2T] one-hot, from spec_conv_sel(mi, B, T, K).
                      Rebuilds each user's conv window from the accepted prefix + the new rows.
 
-        Side effects: the ring is updated IN PLACE (every candidate's state, for every user) and
-        _verify_win_buf becomes the new E_prev. Neither rec_state nor conv_states moves — the host
-        commits later, by index (materialize_spec_state), not by copying state here.
+        Side effects: the ring is updated in place (every candidate's state, for every user) and
+        _verify_win_buf becomes the new E_prev. rec_state and conv_states are untouched; the host
+        commits later by index (materialize_spec_state).
         """
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
@@ -1571,20 +1558,18 @@ class TPGatedDeltaNet:
             f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
             "call prepare_spec_verify(n_users, T) before capture"
         )
-        # The decode matmul (matmul_1d_decode) is row-independent and processes a full 32-row M-tile
-        # however many rows are real, so one projection over every user's T rows is per-row identical
-        # to projecting them one at a time. The AGMM prefill projection rounds differently and would
-        # drift the state away from plain decode.
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel)
 
     def _verify_project(self, x, valid_len, pre_gathered):
-        """Gather the real rows to full dim and run ONE decode qkvzab projection over them.
+        """Gather the real rows to full dim and run one decode qkvzab projection over them.
 
-        The front half of every spec-decode GDN pass, shared by the batched verify and the T=1 seed
-        so the two can never drift apart: same slice, same all-gather (or none), same
-        ``_project_qkvzab`` at S = valid_len <= TILE_SIZE, which routes through matmul_1d_decode —
-        the exact projection a plain decode step runs. Returns (qkv, z, a, b, bucket).
+        Shared by the batched verify and the T=1 seed. ``_project_qkvzab`` at S = valid_len <= TILE_SIZE
+        routes through matmul_1d_decode, the projection a plain decode step runs. That matmul is
+        row-independent and processes a full 32-row M-tile however many rows are real, so one
+        projection over every user's rows is per-row identical to projecting them one at a time. The
+        AGMM prefill projection rounds differently and would drift the state away from plain decode.
+        Returns (qkv, z, a, b, bucket).
         """
         mc = ttnn.DRAM_MEMORY_CONFIG
         if self.conv_states is None:
@@ -1606,7 +1591,7 @@ class TPGatedDeltaNet:
             # Already full-dim [1, bucket, dim]: gathering again would quadruple the feature dim.
             xg = x_valid
         else:
-            # x is 3D [1, R, dim/tp] here (reshaped above), so gather the LAST (feature) dim.
+            # x is 3D [1, R, dim/tp] here (reshaped above), so gather the last (feature) dim.
             xg = tt_all_gather(
                 x_valid,
                 self.mesh,
@@ -1626,20 +1611,18 @@ class TPGatedDeltaNet:
         return qkv_all, z_all, a_all, b_all, bucket
 
     def forward_seed_recurrent(self, x, valid_len, pre_gathered=False, n_users=1):
-        """The spec loop's SEED: advance GDN by ONE row per user, with the VERIFY's arithmetic.
+        """The spec loop's seed: advance GDN by one row per user with the verify's arithmetic.
 
-        Same shape as a plain decode step (B users x T = 1 token) but built out of the verify's
-        pieces, not the decode path's: the packed KDA conv over each user's [K, C] window
-        (``_kda_conv_packed``) instead of the K-tap shift-register MAC. Those two are NOT bit-equal,
-        and the state the seed leaves behind is what every later verify replay resumes from, so
-        seeding with the decode formulation plants a low-bit mismatch between the seed state and
-        the formulation the whole loop then uses — enough to fork the greedy trajectory at a near tie.
+        Same shape as a plain decode step (B users x 1 token) but built from the verify's pieces: the
+        packed KDA conv over each user's [K, C] window (``_kda_conv_packed``) instead of the K-tap
+        shift-register MAC. The two are not bit-equal, and the state the seed leaves is what every
+        later verify replay resumes from; seeding with the decode formulation would fork the greedy
+        trajectory at a near tie.
 
-        NON-RING, unlike ``forward_verify_recurrent``: the spec ring and E_prev do not exist yet
-        (``prepare_spec_verify`` runs later, inside ``capture_verify_trace``). This advances the
-        DURABLE state — ``rec_state`` in place and ``_conv_win_buf`` (plus the K taps) to the new
-        window — which is exactly what ``seed_spec_state`` copies into the ring and E_prev after the
-        capture.
+        Non-ring, unlike ``forward_verify_recurrent``: the spec ring and E_prev do not exist yet
+        (``prepare_spec_verify`` runs later, inside ``capture_verify_trace``). It advances the
+        durable state (``rec_state`` in place; ``_conv_win_buf`` and the K taps to the new window),
+        which ``seed_spec_state`` later copies into the ring and E_prev.
 
         x : [1, 1, B, dim] (full-dim when ``pre_gathered``). Returns [1, 1, B, dim/tp].
         """
@@ -1650,21 +1633,14 @@ class TPGatedDeltaNet:
         return self._seed_fullbatch(qkv_all, z_all, a_all, b_all, n_users, bucket)
 
     def _seed_fullbatch(self, qkv_all, z_all, a_all, b_all, n_users, bucket):
-        """``_verify_fullbatch`` at T = 1 against the DURABLE state instead of the ring.
-
-        Op for op the pre-ring verify body: window slice -> concat -> packed KDA conv (q/k/v split) ->
-        sigmoid/softplus gating -> ONE fused recurrent dispatch -> state writeback -> gated norm,
-        SiLU gate, out-proj, all-reduce. At B = 1 every shape here is the shape that body had at
-        T = 1, so the arithmetic is the same arithmetic.
-        """
+        """``_verify_fullbatch`` at T = 1, run against the durable state instead of the ring."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         C, K = self.qkv_dim_tp, self.K
         B = n_users
 
-        # 1) Conv window. The carry is the shift register's previous K-1 inputs, i.e. taps [1, K) of
-        #    the [B, K, C] mirror; E = [carry(K-1) ; this row(1)] is BOTH the conv input and the new
-        #    shift register, so it is built once. _ensure_conv_win() makes the mirror current from
-        #    the live taps first (prefill/reset/a plain decode step all move the taps under it).
+        # The carry is taps [1, K) of the [B, K, C] mirror; E = [carry(K-1) ; this row(1)] is both the
+        # conv input and the new shift register. _ensure_conv_win() first makes the mirror current
+        # (prefill, reset and plain decode steps move the taps under it).
         self._ensure_conv_win()
         qkv_new = self._rows_to_users(qkv_all, B, 1, C)  # [B, 1, C]
         carry = ttnn.slice(self._conv_win_buf, (0, 1, 0), (B, K, C))  # [B, K-1, C]
@@ -1673,13 +1649,11 @@ class TPGatedDeltaNet:
         ttnn.deallocate(qkv_new)
         q_all, k_all, v_all = self._kda_conv_packed(E, 1)  # each [1, B, width], SiLU applied
 
-        # 2) q/k/v heads and gating for every user at once.
         q_all, k_all, v_all, beta_all, g_all = self._heads_and_gates(q_all, k_all, v_all, a_all, b_all, B, 1)
 
-        # 3) ONE recurrence dispatch, PLAIN mode: initial state is the durable rec_state and the op
-        #    returns the final state only (there is no per-token ring yet, and at T = 1 the two are
-        #    the same state anyway). Identical call — and identical [B,1,Nv,*] shapes — to the fused
-        #    recurrent decode step, so it adds no program the decode path does not already have.
+        # Plain mode: the initial state is the durable rec_state and the op returns the final state
+        # only (no per-token ring exists yet, and at T = 1 the two coincide). The call and its
+        # [B,1,Nv,*] shapes match the fused recurrent decode step, so it adds no new program.
         o_all, states = fused_recurrent_gated_delta_rule_ttnn(
             q_all,
             k_all,
@@ -1695,31 +1669,29 @@ class TPGatedDeltaNet:
         for t in (q_all, k_all, v_all, beta_all, g_all):
             ttnn.deallocate(t)
 
-        # 4) State writeback, to the DURABLE buffers. rec_state in place (its address is baked into
-        #    the decode traces); the shift register is E itself, which already has exactly K rows.
-        #    State is always in-place on main, so no stable/unstable branch.
+        # rec_state is written in place (decode traces bake its address); the new shift register is E
+        # itself, which already has exactly K rows.
         ttnn.copy(states, self.rec_state)
         ttnn.deallocate(states)
         ttnn.copy(E, self._conv_win_buf)
         ttnn.deallocate(E)
-        # Push the window straight back out to the K taps rather than leaving them stale. Two
-        # reasons, both about WHEN programs compile: sync_conv_win() branches on _conv_taps_stale,
-        # and the throwaway seed_spec_state() inside capture_verify_trace exists only to compile the
-        # branch the REAL post-capture seed_spec_state() will take — so both calls must see the same
-        # flags. And a stale-tap window would make the next plain decode step (sync_conv_taps) pay
-        # its K slice+copy per layer with the verify trace parked. Costs K copies per layer, once.
+        # Push the window back out to the K taps rather than leaving them stale. sync_conv_win()
+        # branches on _conv_taps_stale, and the throwaway seed_spec_state() inside
+        # capture_verify_trace exists only to compile the branch the real post-capture
+        # seed_spec_state() takes, so both calls must see the same flags. A stale-tap window would
+        # also make the next plain decode step (sync_conv_taps) pay K slice+copy per layer while the
+        # verify trace is parked.
         self._conv_taps_stale, self._conv_win_stale = True, False
         self.sync_conv_taps()  # clears _conv_taps_stale; both mirrors now hold the seeded window
 
-        # 5) Output tail over the B rows.
         return self._out_tail(o_all, z_all, B, bucket)
 
     def _rows_to_users(self, t, B, T, width):
         """[1, B*T, width] -> [B, T, width]. Rows are user-major, so this is a pure regroup.
 
-        B == 1 is the identity (SAME buffer returned — do not free both handles). For B > 1 the
+        B == 1 is the identity (the same buffer is returned, so free only one handle). For B > 1 the
         reshape allocates, because each user's T rows have to start a fresh tile row; the source is
-        freed here. The tiled reshape builds a host page-map on its program-cache MISS, so a traced
+        freed here. The tiled reshape builds a host page-map on a program-cache miss, so a traced
         body must have been warmed up at this exact shape.
         """
         if B == 1:
@@ -1780,47 +1752,34 @@ class TPGatedDeltaNet:
         return o_red
 
     def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel):
-        """The device body of a batched verify. Inputs are the already-projected [1, B*T, *] rows.
-
-        No per-token loop and no commit phase:
-          conv   -> one one-hot matmul rebuilds every user's window, then ONE packed KDA call over
-                    the B windows (_kda_conv_packed);
-          recur. -> ONE fused_recurrent_gated_delta_rule dispatch in ring mode, which reads each
-                    (user, head)'s initial state from the block state_blk_idx names and writes all
-                    B*T per-token states back into the same ring;
-          output -> one gated norm + out-proj + all-reduce over the B*T rows.
-        """
+        """Device body of a batched verify over already-projected [1, B*T, *] rows; no per-token loop."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         C = self.qkv_dim_tp
         B = n_users
 
-        # 1) Conv window. cat = [E_prev(K-1+T) ; new qkv(T)] per user; conv_sel is one-hot, so the
-        #    matmul is an exact row gather (bf16 in, HiFi4 + fp32 accumulate) that both drops the
-        #    rows the last commit rejected and appends this iteration's inputs. E_new is stored as
-        #    the next E_prev AND is the conv input, so nothing is built twice.
+        # cat = [E_prev(K-1+T) ; new qkv(T)] per user; conv_sel is one-hot, so the matmul is an exact
+        # row gather (bf16 in, HiFi4 + fp32 accumulate) that drops the rows the last commit rejected
+        # and appends the new inputs. E_new is both the next E_prev and the conv input.
         qkv_new = self._rows_to_users(qkv_all, B, T, C)
         cat = ttnn.concat([self._verify_win_buf, qkv_new], dim=1, memory_config=mc)  # [B, K-1+2T, C]
         ttnn.deallocate(qkv_new)
         E_new = ttnn.matmul(conv_sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
         ttnn.deallocate(cat)
-        # In place, so the trace's baked address survives. NOTE the staleness flags are deliberately
-        # NOT touched here: for the whole spec loop the durable conv truth is _verify_win_buf plus
-        # the host's mi (which rows of it each user accepted). BOTH mirrors — the K conv_states taps
-        # AND _conv_win_buf — are behind it, and marking one stale would claim the OTHER is current,
-        # which neither is. So no in-loop consumer may read the taps or _conv_win_buf; the loop's
-        # own carry is this buffer and conv_sel. materialize_spec_state restores the two-mirror
-        # invariant when the loop ends: it rebuilds _conv_win_buf from the accepted rows and sets
-        # _conv_taps_stale=True so the next tap consumer (forward_decode, a slot edit) resyncs.
+        # In place, so the trace's baked address survives. The staleness flags are deliberately not
+        # touched: for the whole spec loop the durable conv truth is _verify_win_buf plus the host's
+        # mi, so both the K conv_states taps and _conv_win_buf are behind it, and marking one stale
+        # would claim the other is current. No in-loop consumer may read either; the loop's own carry
+        # is this buffer and conv_sel. materialize_spec_state restores the two-mirror invariant when
+        # the loop ends.
         ttnn.copy(E_new, self._verify_win_buf)
         q_all, k_all, v_all = self._kda_conv_packed(E_new, T)  # each [1, B*T, width], SiLU applied
         ttnn.deallocate(E_new)
 
-        # 2) q/k/v heads and gating for every row at once.
         q_all, k_all, v_all, beta_all, g_all = self._heads_and_gates(q_all, k_all, v_all, a_all, b_all, B, T)
 
-        # 3) ONE recurrence dispatch, ring mode: initial state per (user, head) comes from the ring
-        #    block state_blk_idx names, and every token's state is written back in place. The
-        #    returned state IS self._spec_ring, so there is nothing to copy or free.
+        # Ring mode: each (user, head)'s initial state is the ring block state_blk_idx names, and every
+        # token's state is written back in place. The returned state is self._spec_ring itself, so
+        # there is nothing to copy or free.
         o_all, _ring = fused_recurrent_gated_delta_rule_ttnn(
             q_all,
             k_all,
@@ -1837,7 +1796,6 @@ class TPGatedDeltaNet:
         for t in (q_all, k_all, v_all, beta_all, g_all):
             ttnn.deallocate(t)
 
-        # 4) Output tail over the B*T rows.
         return self._out_tail(o_all, z_all, B * T, bucket)
 
     def _verify_pad_buf(self, rows, width, dtype, layout, mc):
@@ -1858,10 +1816,7 @@ class TPGatedDeltaNet:
     def _ensure_conv_win(self):
         """Allocate the persistent [B, K, qkv_dim_tp] shift register once, seeded from conv_states.
 
-        Row u, tap j of this buffer is user u's conv_states[j] column — the same K taps decode
-        shifts, transposed into one tensor.
-
-        Allocate-and-seed happens on an EAGER call (prepare_spec_verify, the spec loop's seed),
+        Allocate-and-seed happens on an eager call (prepare_spec_verify, the spec loop's seed),
         never lazily inside a captured trace: by capture time the buffer exists and the trace body
         only ever reads/writes it at fixed offsets, which the warmup pass has already compiled.
 
@@ -1882,12 +1837,10 @@ class TPGatedDeltaNet:
     def sync_conv_taps(self):
         """Rebuild conv_states[0..K-1] from the persistent window — the inverse of sync_conv_win.
 
-        A batched verify advances ONLY _conv_win_buf / _verify_win_buf (see _verify_fullbatch), so
-        the K tap buffers go stale for as long as nothing reads them. Every tap CONSUMER calls this
-        first; it is a no-op — zero device ops, so calling it from a traced body is safe — unless a
-        verify actually ran since the taps were last written.
-
-        Tap j is _conv_win_buf[:, j, :] ([B,1,C]) reshaped to conv_states[j]'s [1,B,C]."""
+        A batched verify advances only _conv_win_buf / _verify_win_buf (see _verify_fullbatch), so
+        the K tap buffers go stale while nothing reads them. Every tap consumer calls this first; it
+        is a no-op (zero device ops, so safe in a traced body) unless a verify ran since the taps
+        were last written."""
         if not self._conv_taps_stale:
             return
         self._conv_taps_stale = False
@@ -1899,7 +1852,7 @@ class TPGatedDeltaNet:
             src = ttnn.reshape(row, (1, B, C))
             ttnn.copy(src, self.conv_states[j])
             ttnn.deallocate(src)
-            if B > 1:  # B == 1 makes the reshape an identity (src IS row)
+            if B > 1:  # B == 1 makes the reshape an identity (src is row)
                 ttnn.deallocate(row)
 
     def sync_conv_win(self):
@@ -1911,9 +1864,9 @@ class TPGatedDeltaNet:
         if self._conv_win_buf is None or self.conv_states is None:
             return
         if self._conv_taps_stale:
-            # The WINDOW is the truth here (a verify advanced it and the taps were left behind), so
-            # copying the taps over it would undo the verify. Bring the taps forward instead; both
-            # mirrors then agree and there is nothing left to copy.
+            # The window is the truth here (a verify advanced it and left the taps behind), so copying
+            # the taps over it would undo the verify. Bring the taps forward instead; both mirrors
+            # then agree and there is nothing left to copy.
             self.sync_conv_taps()
             self._conv_win_stale = False
             return
@@ -1922,7 +1875,7 @@ class TPGatedDeltaNet:
         w = ttnn.concat(rows, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, K, C]
         ttnn.copy(w, self._conv_win_buf)
         ttnn.deallocate(w)
-        if B > 1:  # B == 1 makes the reshape an identity (rows[j] IS conv_states[j])
+        if B > 1:  # B == 1 makes the reshape an identity (rows[j] is conv_states[j])
             for r in rows:
                 ttnn.deallocate(r)
         self._conv_win_stale = False

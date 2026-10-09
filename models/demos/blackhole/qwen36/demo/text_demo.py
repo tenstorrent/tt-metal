@@ -40,14 +40,13 @@ fall back to plain decode. Knobs:
                           on-device-sampler baseline.
   QWEN36_SPEC_TIMING=1    per-iteration phase breakdown ([SPEC_TIMING] logs).
 
-Batched serving (batch > 1, TP) also speculates by default, so a batched run
-(batched_*_b8 included) is a spec run and QWEN36_SPEC=0 is how you get the
-plain-batched baseline. Two ceilings gate it: the B*(K+1) verify rows must fit
-one 32-row decode tile, and the fused GDN kernel needs one core per (user,
+Batched serving (batch > 1, TP) also speculates by default; QWEN36_SPEC=0 gives
+the plain batched baseline. Two ceilings gate it: the B*(K+1) verify rows must
+fit one 32-row decode tile, and the fused GDN kernel needs one core per (user,
 value-head), so B * gdn_nv_tp <= worker cores (8*8 = 64 <= 110 on P150x4). The
-automatic policy never uses K < 3, so the max spec batch is 8 (at K=3) on this
-mesh; any B > 8 (B=16, B=32) runs plain. K is capped by batch: B=2 -> 11,
-B=4 -> 7, B=8 -> 3, each snapped down to a supported verify width. Knobs:
+automatic policy never uses K < 3, so the max spec batch is 8 (at K=3); any
+B > 8 runs plain. K is capped by batch: B=2 -> 11, B=4 -> 7, B=8 -> 3, each
+snapped down to a supported verify width. Knobs:
   QWEN36_SPEC_BATCH_DISTINCT=1  give user u the prompt minus its first u tokens
                           (content diversity), instead of replicating one prompt
                           to all users; skips the per-row identity assert.
@@ -297,24 +296,19 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
         # B=8 long-context ladder. Paged KV scales as B x ISL (~1 GB/device at 8k to ~8 GB at
         # 64k), within the P150x4 budget. Each user prefilled via prefill_chunked_peruser; identical
-        # prompts decode identically. These take the spec path by default (B <= 8; QWEN36_SPEC=0 gives
-        # the plain B-wide trace baseline), which prefills every user TWICE (warmup + timed run), so
-        # the sequential per-user TTFT needs a generous per-test timeout well above pytest.ini's 300s
-        # default.
+        # prompts decode identically. B <= 8 takes the spec path by default (QWEN36_SPEC=0 gives the plain
+        # B-wide trace), which prefills every user twice (warmup + timed run), so the sequential per-user
+        # TTFT needs a per-test timeout well above pytest.ini's 300s default.
         pytest.param(8192, 50, True, 8, 1, id="batched_8k_b8", marks=pytest.mark.timeout(900)),
         pytest.param(16384, 50, True, 8, 1, id="batched_16k_b8", marks=pytest.mark.timeout(900)),
         pytest.param(32768, 50, True, 8, 1, id="batched_32k_b8", marks=pytest.mark.timeout(900)),
-        # 64k: ~357s of per-user prefill per pass, so twice that plus decode.
+        # 64k: ~357s of per-user prefill per pass, run twice, plus decode.
         pytest.param(65536, 50, True, 8, 1, id="batched_64k_b8", marks=pytest.mark.timeout(1800)),
-        # Multi-user MTP speculative decode (B users x (K+1) candidate rows in one 32-row decode
-        # tile, and B * gdn_nv_tp <= worker cores -> B <= 8 on P150x4). Auto-K by batch:
-        # B=2 -> K=11, B=4 -> K=7, B=8 -> K=3.
-        # QWEN36_SPEC=0 turns these into the plain batched path (the spec-decode baseline).
+        # Multi-user MTP spec decode (B <= 8 on P150x4; K is picked from B, see the module docstring).
         pytest.param(128, 50, True, 2, 1, id="spec_128_b2"),
         pytest.param(128, 50, True, 4, 1, id="spec_128_b4"),
         pytest.param(128, 50, True, 8, 1, id="spec_128_b8"),
-        # Long-ISL ladder. Per-user prefill is sequential AND runs twice (warmup + timed run), so
-        # these need the same generous per-test timeout the 64k batched case takes.
+        # Long-ISL ladder: the sequential per-user prefill runs twice (warmup + timed run), hence the long timeouts.
         pytest.param(4096, 100, True, 4, 1, id="spec_4k_b4", marks=pytest.mark.timeout(900)),
         pytest.param(4096, 100, True, 8, 1, id="spec_4k_b8", marks=pytest.mark.timeout(900)),
         pytest.param(8192, 100, True, 8, 1, id="spec_8k_b8", marks=pytest.mark.timeout(900)),
@@ -374,11 +368,8 @@ def test_demo_text(
         # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
         # one loaded prompt to all B users, so every row must generate identical tokens (asserted
         # below as a batched-correctness check).
-        # Multi-user MTP spec decode is the default whenever the verify rows fit one 32-row decode
-        # tile (B*(K+1) <= 32) AND the fused GDN kernel's one-core-per-(user, value-head) budget
-        # holds (B <= 8 on P150x4). B > 8 (B=16/B=32), QWEN36_SPEC=0, a missing MTP head or a sampling knob
-        # spec does not wire fall through to plain batched decode. The spec path logs its own
-        # results and makes the same per-row asserts, so it returns straight away.
+        # Multi-user spec decode when _spec_batch_decision allows it (gates documented there); the spec
+        # path logs and asserts its own results, so it returns here.
         _use_spec, _spec_sampling, _spec_why = _spec_batch_decision(model, batch)
         logger.info(f"[TP B={batch}] {_spec_why}")
         if _use_spec:
@@ -572,7 +563,8 @@ def _should_use_chunked_trace(model):
 
 
 def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=None):
-    """MTP speculative decode (default single-user TP path; QWEN36_SPEC=0 opts out): draft -> traced verify -> ring select (no commit step) via SpeculativeDecoder.
+    """MTP speculative decode (default single-user TP path; QWEN36_SPEC=0 opts out): draft -> traced verify -> ring
+    select via SpeculativeDecoder.
     Returns (tokens, perf_dict) like _run_tp_generation. Lossless: greedy (sampling=None) matches plain decode; SpecSamplingParams samples the target distribution via rejection sampling.
     Verify (fully-batched GDN, hybrid decode-SDPA) and reseed shapes are the defaults in gdn/tp.py and spec_decode.py, not configurable here.
     """
@@ -668,8 +660,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     one wrong token cannot derail the rest of the run. Teacher forcing always takes plain decode:
     spec decode commits its own accepted drafts and has no way to feed the reference back.
     """
-    # Sampling knobs, read once for spec routing below and plain-decode _pick(); the seed only feeds spec
-    # sampling (unset = SpecSampler draws one and logs it, replayable).
+    # Sampling knobs, read once for spec routing below and plain-decode _pick().
     # Presence penalty (vLLM): subtracted from every already-generated token's logit before temperature.
     # Wired into spec only when temperature > 0 (penalizes the verify rows the accept test uses); plain
     # _pick() applies it at any temperature, including 0 (penalizes the sampled row).
@@ -1001,19 +992,16 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
 
 _SPEC_MIN_K = 3  # auto policy floor: below K=3 the verify tile is better spent on plain decode
-_SPEC_MAX_BATCH = 32 // (_SPEC_MIN_K + 1)  # = 8 users at K=3 in the 32-row verify tile
+_SPEC_MAX_BATCH = 32 // (_SPEC_MIN_K + 1)  # B*(K+1) verify rows must fit one 32-row tile
 
 
 def _spec_batch_decision(model, batch):
     """Route a batched (B>1) TP run to multi-user MTP spec decode or to plain batched decode.
 
-    Returns ``(use_spec, sampling, reason)``. Same gate as the single-user routing inside
-    _run_tp_generation (spec is the default, QWEN36_SPEC=0 opts out, an MTP head is required,
-    repetition penalty / no-repeat-ngram are not wired into spec, and neither is a presence
-    penalty at temperature <= 0), plus two batch ceilings: verify decodes B*(K+1) rows in ONE
-    32-row tile and the automatic policy keeps K >= 3, so B <= 8 (B > 8 runs plain batched
-    decode); and the fused GDN kernel maps one core per (user, value-head), so B * gdn_nv_tp
-    must fit the worker grid (a backstop here: the tile ceiling binds first for Qwen3.6-27B).
+    Returns ``(use_spec, sampling, reason)``. Gates: QWEN36_SPEC != 0; an MTP head; no repetition penalty /
+    no-repeat-ngram, and no presence penalty at temperature <= 0 (not wired into spec); B*(K+1) verify rows in
+    one 32-row tile with K >= 3, so B <= 8; and B * gdn_nv_tp <= worker cores (the tile ceiling binds first for
+    Qwen3.6-27B).
     """
     knobs = _sampling_knobs()
 
@@ -1028,7 +1016,7 @@ def _spec_batch_decision(model, batch):
                 f"must fit one 32-row tile, so spec runs up to batch={_SPEC_MAX_BATCH} -> plain batched decode"
             ),
         )
-    # Fused GDN verify runs one core per (user, value-head) and TT_FATALs above the worker grid.
+    # The fused GDN verify kernel runs one core per (user, value-head) and TT_FATALs above the worker grid.
     _nv_tp = model.args.gdn_nv_tp
     _grid = model.mesh_device.compute_with_storage_grid_size()
     _cores = _grid.x * _grid.y
@@ -1056,13 +1044,11 @@ def _spec_batch_decision(model, batch):
     return True, sampling, "multi-user MTP speculative decode (default path; QWEN36_SPEC=0 opts out)"
 
 
-# Verify decodes B*(K+1) rows in one 32-row tile, and the fused verify SDPA only has L1 plans for
-# T = K+1 in {4, 8, 12} (plus the legacy per-row path at T=2), so K+1 is snapped down to a multiple of 4.
-# B > 8 never reaches here: _spec_batch_decision routes it to plain decode.
+# The fused verify SDPA only has L1 plans for T = K+1 in {4, 8, 12} (legacy per-row path at T=2), so K+1 is
+# snapped down to a multiple of 4. B > 8 never reaches here: _spec_batch_decision routes it to plain decode.
 def _spec_batch_draft_len(batch, T, sampling):
     """Auto-K for multi-user spec decode. Returns (K, source_str)."""
-    # ISL policy, identical to the single-user path: deeper drafts pay off up to a 4k prompt;
-    # under sampling every depth also pays the u < p(d) rejection test, so K=7 everywhere.
+    # Same ISL policy as _run_tp_spec_generation (K=7 everywhere under sampling).
     K_isl = (11 if T <= 4096 else 7) if sampling is None else 7
     env = os.environ.get("QWEN36_SPEC_DRAFT_LEN")
     if env:
@@ -1085,18 +1071,14 @@ def _spec_batch_draft_len(batch, T, sampling):
 def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_generated_tokens, sampling=None):
     """Multi-user MTP speculative decode (B users, B*(K+1) <= 32 verify rows).
 
-    B=1's _run_tp_spec_generation with the batched path's KV / page-table setup: each user owns a
-    disjoint contiguous block range of one shared paged KV cache, and SpeculativeDecoder prefills
-    the users sequentially (one GDN slot each) inside generate() — the caller must NOT prefill.
-    Each iteration drafts K tokens per user with the MTP head, verifies all B*(K+1) rows in one
-    traced chunk forward, and commits each user's accepted prefix. Lossless: greedy matches plain
-    batched decode token for token; SpecSamplingParams samples the same distribution via rejection
-    sampling.
+    Each user owns a disjoint contiguous block range of one shared paged KV cache. SpeculativeDecoder prefills
+    the users sequentially (one GDN slot each) inside generate(), so the caller must not prefill. Lossless:
+    greedy matches plain batched decode token for token; SpecSamplingParams samples the same distribution via
+    rejection sampling.
 
-    Prompts: the one loaded prompt replicated to all B users (so per-row identity is checkable,
-    like the plain batched demo). QWEN36_SPEC_BATCH_DISTINCT=1 gives user u the prompt with its
-    first u tokens dropped, a content-diversity knob that makes the users diverge (ragged prompt
-    lengths T-u, so the identity assert is skipped).
+    Prompts: the one loaded prompt is replicated to all B users, so per-row identity is checkable.
+    QWEN36_SPEC_BATCH_DISTINCT=1 drops the first u tokens for user u, so the users diverge (ragged prompt
+    lengths T-u; the identity assert is skipped).
     """
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
@@ -1104,9 +1086,7 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     T = token_ids.shape[1]
     K, K_src = _spec_batch_draft_len(B, T, sampling)
 
-    # Per-user prompts. Default: the same prompt for everyone (identical prompts must decode
-    # identically). QWEN36_SPEC_BATCH_DISTINCT=1: drop the first u tokens for user u (T_u = T-u,
-    # clamped to >= 1) so the users run different content through the same batched verify.
+    # Distinct mode: user u drops its first u tokens, clamped so every prompt keeps at least one.
     distinct = os.environ.get("QWEN36_SPEC_BATCH_DISTINCT") == "1"
     if distinct:
         prompt_lists = [token_ids[0, min(u, T - 1) : T].tolist() for u in range(B)]
@@ -1128,9 +1108,8 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
         f"lens={p_lens[0]}..{p_lens[-1]} sampling={_samp}"
     )
 
-    # Per-user block budget: prompt + generation + the K draft slots the verify writes past the
-    # committed position. Rounded up to a multiple of 32, as the single-user spec path rounds its
-    # whole budget, so every user's page-table row stays aligned for chunked-SDPA stick reads.
+    # Per-user blocks: prompt + generation + the K draft slots verify writes past the committed position,
+    # rounded up to a multiple of 32 so each page-table row stays aligned for chunked-SDPA stick reads.
     bpu = max(8, -(-(T + max_generated_tokens + K + 1) // BLOCK_SIZE))
     bpu = ((bpu + 31) // 32) * 32
     total_blocks = B * bpu
@@ -1139,7 +1118,7 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     page_tables = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
     logger.info(f"[TP SPEC B={B}] paged KV: {bpu} blocks/user x {B} = {total_blocks} blocks")
 
-    # Warmup on a throwaway decoder (compiles prefill / verify / decode / MTP programs; discarded).
+    # Warmup on a throwaway decoder: compiles prefill / verify / decode / MTP programs.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math.
     model.set_gdn_fused_decode(True)
@@ -1149,7 +1128,6 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     )
     model.free_kv_caches()
 
-    # Timed run. generate() records dec.prefill_time (all B prefills = TTFT) and dec.decode_time.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     dec = SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling)
     signpost("inference_prefill")
@@ -1194,7 +1172,7 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     for u in range(B):
         assert len(rows[u]) == max_generated_tokens, f"user {u}: {len(rows[u])} != {max_generated_tokens}"
     if not distinct and sampling is None:
-        # Same check the plain batched path makes: replicated prompts + greedy must decode identically.
+        # Replicated prompts + greedy must decode identically.
         for u in range(B):
             assert rows[u] == rows[0], f"user {u} diverged from user 0 (identical prompts must decode identically)"
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"

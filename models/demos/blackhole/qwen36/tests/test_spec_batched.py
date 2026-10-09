@@ -3,37 +3,25 @@
 
 """Multi-user (B > 1) MTP speculative decoding: every user must get its own plain greedy story.
 
-test_spec_lossless.py proves the B=1 guarantee (every committed token is the plain decode path's
-argmax given the same prefix). Batching adds exactly one new way to be wrong: B users share ONE
-32-row verify tile, one GDN state ring, one conv window and one paged KV cache, so user u can be
-fed user v's state, KV block, position, page-table row or candidate row and STILL look healthy --
-acceptance stays high (the drafter and the verify agree with each other on the wrong story) and the
-text stays fluent. Only a per-user comparison against an independent single-user reference catches
-that, so the test deliberately gives every user DIFFERENT content and DIFFERENT prompt lengths:
-with identical prompts a row-mixing bug is invisible, and with equal lengths every user sits at the
-same position and the per-user position/page-table plumbing is never exercised.
+test_spec_lossless.py proves the B=1 guarantee. At B > 1 the users share one 32-row verify tile, one GDN
+state ring, one conv window and one paged KV cache, so a user fed another user's state, KV block, position,
+page-table row or candidate row still looks healthy (acceptance stays high, text stays fluent). Only a
+per-user comparison against an independent single-user reference catches that, so every user gets different
+content and a different prompt length: identical prompts hide row mixing, and equal lengths leave the
+per-user position/page-table plumbing unexercised.
 
 Method (mirrors test_spec_lossless.py, one user at a time):
-  1. run batched spec decode for MAX_NEW tokens at B users, plus the per-B variants that must
-     reproduce that run (see test_spec_batched_lossless);
-  2. TEACHER-FORCE the plain decode path down each user's trajectory on a SEPARATE max_batch_size=1
-     model and record its argmax + top-2 logit gap at every position (test_spec_lossless's
-     _reference_greedy, imported, not copied);
-  3. compare per user with the same near-tie gate: a mismatch is a failure unless the plain argmax
-     there was a bf16 coin flip (top-2 gap < NEAR_TIE_GAP).
-Because the reference is teacher-forced, all MAX_NEW positions are checked for every user; the
-comparison never has to stop at the first fork.
+  1. run batched spec decode for MAX_NEW tokens at B users, plus the variants that must reproduce that run;
+  2. teacher-force the plain decode path down each user's trajectory on a separate max_batch_size=1 model,
+     recording its argmax and top-2 logit gap at every position (test_spec_lossless's _reference_greedy);
+  3. per user, a mismatch fails unless the plain argmax was a bf16 coin flip (top-2 gap < NEAR_TIE_GAP).
 
-Why a second model instance: the reference is a B=1 plain decode (decode_step_paged), the fused GDN
-decode op only supports the full batch width (B == max_batch_size), and spec decode requires that
-op. So the reference cannot run on the B-user model. Teacher forcing needs the spec trajectory
-first, so the order is: build the B-user model, run spec, free it (del + gc, as
-test_model_tp.py::...batched... does), then build the max_batch_size=1 reference model. Only one
-model is resident at a time. mesh_device is function-scoped, so all of it is one test body: the
-B-user model is loaded once and every variant reuses it.
+The reference needs its own model: it is a B=1 plain decode, while the fused GDN decode op (which spec decode
+requires) only supports B == max_batch_size. The B-user model is freed before the reference model is built so
+only one is resident; mesh_device is function-scoped, so everything runs in one test body.
 
-K per batch is the demo's auto-K policy (verify decodes B*(K+1) rows in one 32-row tile and the
-fused verify SDPA only has L1 plans for T = K+1 in {4, 8, 12}): B=2 -> K=11, B=4 -> K=7, B=8 -> K=3.
+K is the demo's auto-K policy: verify decodes B*(K+1) rows in one 32-row tile and the fused verify SDPA only
+has L1 plans for T = K+1 in {4, 8, 12}, so B=2 -> K=11, B=4 -> K=7, B=8 -> K=3.
 
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_spec_batched.py -v -s
 """
@@ -58,8 +46,7 @@ from models.demos.blackhole.qwen36.demo.text_demo import (
     _spec_batch_draft_len,
 )
 
-# The B=1 losslessness contract lives in test_spec_lossless.py; import its reference builder, its
-# gate and its constants instead of restating them, so the two tests can never drift apart.
+# Shares test_spec_lossless's reference, gate and constants so both tests enforce one contract.
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import (
     _N_LAYERS,
     MAX_NEW,
@@ -70,26 +57,16 @@ from models.demos.blackhole.qwen36.tests.test_spec_lossless import (
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-# 32 prompts, 28 of them distinct, each ~130-160 tokens. Entry 0 is skipped everywhere below: it
-# opens with the same "What is your favorite condiment?" text that _get_prompt returns for
-# seqlen <= 256, and user 0 already uses that one.
+# Entry 0 is never used: it opens with the text _get_prompt returns for seqlen <= 256, which is user 0's prompt.
 _PROMPTS_FILE = f"{SHARED_PROMPTS_DIR}/input_data_questions_prefill_256.json"
 
 
 def _batch_prompts(B, tokenizer):
-    """B prompts with DISTINCT content AND distinct lengths. Returns a list of B token-id lists.
+    """B token-id lists with distinct content and distinct lengths.
 
-    Recipe:
-      * user 0 is test_spec_lossless's prompt verbatim -- _get_prompt(130) (the shared 110-token
-        question prompt repeated and clipped to 130), so the B>1 runs cover exactly the prompt the
-        B=1 losslessness test covers;
-      * user u >= 1 is entries u and u+8 of input_data_questions_prefill_256.json joined by a blank
-        line (~260-290 tokens of two different questions), clipped to 129 + 18*u tokens.
-
-    Lengths are therefore 130, 147, 165, 183, 201, 219, 237, 255 for u = 0..7: all in [130, 255],
-    all ragged, and none a multiple of 64 (the KV block) or 32 (the decode tile), so every user
-    starts at a different, unaligned frontier and the per-user position / page-table / KV-offset
-    plumbing is exercised rather than coincidentally aligned.
+    User 0 is test_spec_lossless's prompt, _get_prompt(130). User u >= 1 joins entries u and u+8 of the prompts
+    file, clipped to 129 + 18*u tokens (130..255 for u < 8). No length is a multiple of 64 (KV block) or
+    32 (decode tile), so every user starts at a different, unaligned frontier.
     """
     with open(_PROMPTS_FILE) as f:
         texts = [e["prompt"] for e in json.load(f)]
@@ -109,25 +86,21 @@ def _batch_prompts(B, tokenizer):
 
 
 def _build_model(device, B):
-    """The B-user model. Built before the prompts exist, because the tokenizer comes from it."""
     model = Qwen36Model.from_pretrained(
         device, max_batch_size=B, max_seq_len=NUM_BLOCKS * BLOCK_SIZE, n_layers=_N_LAYERS
     )
     assert model.mtp is not None, "MTP head not built"
-    # Explicit and model-scoped, as in every other spec test: verify runs the fused GDN op, so plain
-    # decode must use the same math or greedy near-ties flip between the two paths.
+    # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip between paths.
     model.set_gdn_fused_decode(True)
     return model
 
 
 def _batched_kv(model, B, K, prompts):
-    """Page tables + KV shape for B users, mirroring the demo's batched spec path: each user owns a
-    disjoint contiguous block range of one shared cache (the MTP cache adds its own scratch block
-    on top, inside allocate_kv_caches). Returns (page_tables [B, bpu], kv_shape).
+    """Returns (page_tables [B, bpu], kv_shape): each user owns a disjoint contiguous block range of one shared cache.
 
-    The per-user width is computed as _run_tp_spec_generation_batched does: prompt + generation + the
-    K+1 candidate slots verify writes past the committed position, rounded up to a multiple of 32 so
-    every user's page-table row stays aligned for chunked-SDPA stick reads."""
+    bpu covers prompt + generation + the K+1 candidate slots verify writes past the committed position,
+    rounded up to a multiple of 32 so every page-table row stays aligned for chunked-SDPA stick reads
+    (as in _run_tp_spec_generation_batched). allocate_kv_caches adds the MTP scratch block."""
     bpu = max(8, -(-(max(len(p) for p in prompts) + MAX_NEW + K + 1) // BLOCK_SIZE))
     bpu = ((bpu + 31) // 32) * 32
     page_tables = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
@@ -137,15 +110,13 @@ def _batched_kv(model, B, K, prompts):
 
 
 def _fresh_kv(model, kv_shape, B):
-    """Free + reallocate the paged KV caches: the reset recipe every spec test uses between runs
-    (the GDN recurrent state is re-zeroed inside the prefill)."""
+    """Free and reallocate the paged KV caches (the GDN recurrent state is re-zeroed inside prefill)."""
     model.free_kv_caches()
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=B)
 
 
 def _setup(mesh_device, B):
-    """Common prelude: skip off the TP mesh, build the B-user model and its tokenizer, the distinct
-    per-user prompts and the shared-KV page tables. Returns (model, tokenizer, prompts, K, page_tables, kv_shape)."""
+    """Skip off the TP mesh. Returns (model, tokenizer, prompts, K, page_tables, kv_shape) for B users."""
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
     from transformers import AutoTokenizer
@@ -162,8 +133,7 @@ def _setup(mesh_device, B):
 def _spec_run(model, kv_shape, B, K, prompts, page_tables, tag, **dec_kwargs):
     """One fresh-KV batched spec generation: (per-user outputs, (accepted, iters, drafted), stats).
 
-    The traced-draft/reseed env flags are read in SpeculativeDecoder.__init__, so every run builds a
-    fresh decoder."""
+    The traced-draft/reseed env flags are read in SpeculativeDecoder.__init__, so every run builds a new decoder."""
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
     _fresh_kv(model, kv_shape, B)
@@ -175,8 +145,8 @@ def _spec_run(model, kv_shape, B, K, prompts, page_tables, tag, **dec_kwargs):
 def _assert_same_runs(a, b, B, tag, counters=True):
     """Per-user outputs token-identical and, unless ``counters`` is off, the acceptance counters equal.
 
-    Equal counters on top of equal tokens catch a rejection landing at a different depth that
-    recovery merely agreed with."""
+    Equal counters on top of equal tokens catch a rejection landing at a different depth that recovery
+    merely agreed with."""
     (a_outs, a_cnt, _), (b_outs, b_cnt, _) = a, b
     for outs in (a_outs, b_outs):
         assert len(outs) == B, f"{tag}: expected {B} output rows, got {len(outs)}"
@@ -190,8 +160,7 @@ def _assert_same_runs(a, b, B, tag, counters=True):
 
 @contextlib.contextmanager
 def _variant(failures, name):
-    """Record a failed variant instead of aborting, so the other variants and the lossless leg
-    still run and one run reports every divergence."""
+    """Record a failed variant instead of aborting, so the remaining variants and the lossless leg still run."""
     try:
         yield
     except AssertionError as e:
@@ -200,10 +169,10 @@ def _variant(failures, name):
 
 
 def _null_padded_tables(page_tables, prompts, K):
-    """vLLM-style block tables: every column past the blocks a user can reach is the null block 0,
-    so all rows share block 0 in their tails. The grouped verify KV write only needs distinct
-    (block, 32-row tile) per user within each candidate call, which still holds (nothing writes the
-    tails)."""
+    """vLLM-style block tables: every column past the blocks a user can reach is the null block 0.
+
+    Rows then share block 0 in their tails. The grouped verify KV write only needs distinct (block, 32-row tile)
+    per user within each candidate call, which still holds because nothing writes the tails."""
     padded = page_tables.clone()
     nb = padded.shape[1]
     needed = [-(-(len(p) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1 for p in prompts]
@@ -215,17 +184,13 @@ def _null_padded_tables(page_tables, prompts, K):
 
 
 def _check_freeze(run, tokenizer, outs_a):
-    """A user that hits a stop token FREEZES, and freezing must be invisible to everyone else.
+    """A user that hits a stop token freezes, and freezing must not move any other user.
 
-    A frozen user keeps replaying its T verify rows (the row count is baked into the trace) with
-    its pre-commit tokens and positions, but its accept result is discarded and neither its
-    tokens, its statistics, nor -- the part that can actually break -- its neighbours' tokens may
-    move. Runs without stop tokens never freeze anyone, so only this variant sees it.
-
-    ``outs_a`` is the no-stop-token run. Re-run with user 0's THIRD token as the only stop token:
-    user 0 must stop exactly there, and user 1 -- which never sees the stop token -- must
-    reproduce its run-A trajectory (cut after the first occurrence of the stop token, which may
-    legitimately occur in its story too) even though its partner spends most of the run frozen.
+    A frozen user keeps replaying its T verify rows (the row count is baked into the trace) with its
+    pre-commit tokens and positions; its accept result is discarded. ``outs_a`` is the no-stop-token run.
+    Re-runs with user 0's third token as the only stop token: user 0 must stop exactly there, and user 1
+    must reproduce its run-A trajectory (cut after the first occurrence of the stop token) even though
+    its partner spends most of the run frozen.
     """
     B = len(outs_a)
     stop = outs_a[0][2]
@@ -236,7 +201,7 @@ def _check_freeze(run, tokenizer, outs_a):
     )
 
     def _cut(ids):
-        """run-A trajectory truncated after the first stop token, i.e. what generate() must emit."""
+        """run-A trajectory truncated after the first stop token (what generate() must emit)."""
         i = next((j for j, t in enumerate(ids) if t == stop), None)
         return ids if i is None else ids[: i + 1]
 
@@ -275,25 +240,21 @@ def _check_freeze(run, tokenizer, outs_a):
 
 
 @run_for_blackhole()
-@pytest.mark.timeout(3600)  # B-user load + up to 7 spec runs, then the B=1 reference load + B references
+@pytest.mark.timeout(3600)  # B-user load and its spec runs, then the B=1 reference load and B references
 @pytest.mark.parametrize("batch", [2, 4, 8])
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
     """Every user's batched spec output is that user's own plain greedy story, token for token.
 
-    Phase 1, on the one B-user model: a base greedy run (distinct prompts, one shared paged KV),
-    then the variants that must reproduce it exactly (outputs and, where noted, the acceptance
-    counters), each from fresh KV:
-      B=2: two repeat runs (a run-to-run difference is a KV read-modify-write race between users
-           sharing the tile); an eager run with the traced draft chain / reseed off; null-block-padded
-           page tables; verify_traced re-staging the page tables on every replay (continuous
-           batching); a stop-token run, where the frozen user must not move its neighbour.
-      B=4: top_k=1 sampling (plumbing of which [B*T, vocab] row belongs to which user's draft;
-           tokens only) and one prompt replicated across all rows, which must give identical rows
-           (the sharpest row-independence test; not required to equal a B=1 spec run, whose SDPA
-           core split differs at ~1e-5).
-      B=8: two repeat runs and an eager run.
+    Phase 1, on the B-user model: a base run, then per-B variants that must reproduce it from fresh KV.
+      B=2, 8: two repeat runs (a difference is a KV read-modify-write race between users sharing the tile)
+              and an eager run with the traced draft chain / reseed off.
+      B=2: null-block-padded page tables, verify_traced re-staging the page tables on every replay, and a
+           stop-token run where the frozen user must not move its neighbour.
+      B=4: top_k=1 sampling (checks the [B*T, vocab] row-to-user mapping; tokens only) and one prompt
+           replicated across all rows, which must give identical rows (not required to equal a B=1 spec
+           run, whose SDPA core split differs at ~1e-5).
     Phase 2: free the B-user model, build the B=1 reference and run the near-tie gate per user.
     """
     B = batch
@@ -304,7 +265,6 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
     def run(tag, prompts=prompts, tables=page_tables, **dec_kwargs):
         return _spec_run(model, kv_shape, B, K, prompts, tables, f"B={B} {tag}", **dec_kwargs)
 
-    # --- phase 1: base run + variants --------------------------------------------------------- #
     base = run("base")
     rows, _, stats = base
     for u in range(B):
@@ -313,8 +273,8 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
     assert len(rows) == B, f"expected {B} output rows, got {len(rows)}"
     for u in range(B):
         assert len(rows[u]) == MAX_NEW, f"user {u} produced {len(rows[u])} tokens, wanted {MAX_NEW}"
-    # Zero acceptance would still emit MAX_NEW correct tokens (one per iteration), so losslessness
-    # alone cannot tell a working drafter from a dead one at B > 1.
+    # Zero acceptance still emits MAX_NEW correct tokens (one per iteration), so losslessness alone cannot
+    # tell a working drafter from a dead one.
     accept = stats["accept_rate"]
     assert accept > 0, f"accept_rate() == {accept}: no draft was accepted for any user at B={B}"
 
@@ -355,8 +315,8 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
 
         with _variant(failures, "top_k=1 sampling"):
             sampling = SpecSamplingParams(temperature=1.0, top_k=1, top_p=1.0, seed=0)
-            # Exact equality is the bar; the one legitimate failure is an EXACT bf16 tie broken
-            # differently by host torch.topk and device ttnn.argmax.
+            # Exact equality; the one legitimate failure is an exact bf16 tie broken differently by host
+            # torch.topk and device ttnn.argmax.
             _assert_same_runs(
                 base, run("topk1", sampling=sampling), B, f"B={B} top_k=1 sampling vs greedy", counters=False
             )
@@ -372,12 +332,11 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
                 )
             assert same_stats["accept_rate"] > 0, f"replicated accept_rate == 0 at B={B}"
 
-    # The B=1 reference model cannot coexist with this one; free it first (see module docstring).
+    # The B=1 reference model cannot coexist with this one.
     model.free_kv_caches()
-    run = model = None  # the closure holds the model; the B=1 model must be the only one resident
+    run = model = None  # `run` closes over the model; drop both so only the B=1 model is resident
     gc.collect()
 
-    # --- phase 2: plain B=1 decode, teacher-forced down each user's trajectory ---------------- #
     ref_model = _build_model(mesh_device, 1)
     pt1 = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
     kv1 = [NUM_BLOCKS, ref_model.args.n_local_kv_heads, BLOCK_SIZE, ref_model.args.head_dim]

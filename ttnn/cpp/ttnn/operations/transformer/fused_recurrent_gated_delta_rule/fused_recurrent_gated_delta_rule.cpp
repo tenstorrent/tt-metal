@@ -118,9 +118,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // pass a persistent state buffer (never absent); the zeros() fallback here is eager-only
     // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
     //
-    // Ring mode: initial_state IS the [T*BH,K,V] per-token ring and also the state output. Pass it
-    // through untouched -- a reshape or typecast here would break the in-place aliasing. The device
-    // op validates it (presence, fp32, shape).
+    // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
+    // reshape or typecast would break the in-place aliasing. The device op validates it.
     const bool ring = initial_state_block_idx.has_value();
     std::optional<ttnn::Tensor> s0 = initial_state;
     if (!ring) {
@@ -166,8 +165,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
 
     std::optional<ttnn::Tensor> state_opt;
     if (ring) {
-        // res[1] IS the caller's ring (the device op aliased it as the state output). Return it
-        // as-is: no relayout, same buffer, same [T*BH,K,V] shape.
+        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
         state_opt = st;
     } else if (output_per_token_state) {
         // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already

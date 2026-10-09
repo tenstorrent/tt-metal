@@ -116,9 +116,9 @@ def _reference_greedy(model, prompt_ids, page_table, kv_shape, force_tokens):
 def _assert_lossless_up_to_near_ties(spec, ref, gaps, tokenizer, tag=""):
     """Compare every position of the spec output against the teacher-forced plain argmaxes.
 
-    A mismatch fails only where the plain argmax was CONFIDENT (top-2 gap >= NEAR_TIE_GAP); below
-    that the two kernels' ~1e-5 bf16 disagreement decides the coin flip and either token is a
-    faithful greedy continuation, so those are logged, not failed. ``tag`` names the user/run.
+    A mismatch fails only where the plain argmax was confident (top-2 gap >= NEAR_TIE_GAP); below that the
+    two kernels' ~1e-5 bf16 disagreement decides the coin flip and either token is a faithful greedy
+    continuation, so those are logged, not failed. ``tag`` names the user/run.
     """
     label = f"{tag}: " if tag else ""
     n = len(spec)
