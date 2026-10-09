@@ -60,7 +60,18 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[torch.randperm(n)].to(torch.bfloat16), up[torch.randperm(n)].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_up=1, dst_out=0):
+def _run(
+    device,
+    gate_t,
+    up_t,
+    in_dtype,
+    page_bytes,
+    fp32_dest,
+    dst_gate=0,
+    dst_up=1,
+    dst_out=0,
+    compute_kernel="clamped_silu_glu.cpp",
+):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -125,7 +136,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_
             config=ttnn.WriterConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
-            kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/clamped_silu_glu.cpp",
+            kernel_source=f"tests/tt_metal/tt_metal/test_kernels/compute/{compute_kernel}",
             core_ranges=core,
             compile_time_args=[num_tiles, dst_gate, dst_up, dst_out],
             runtime_args=[],
@@ -175,3 +186,25 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
     else:
         assert_with_ulp(expected_result=golden, actual_result=actual, ulp_threshold=BF16_ULP)
         assert_with_pcc(g, a, pcc=BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
+@pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
+@pytest.mark.parametrize(
+    "dst_gate, dst_up, dst_out",
+    [
+        pytest.param(0, 1, 0, id="out_aliases_gate"),
+        pytest.param(0, 1, 2, id="out_separate"),
+        pytest.param(1, 3, 1, id="production"),
+    ],
+)
+def test_clamped_silu_glu_sfpu_pack_thread(device, in_name, fp32_dest, dst_gate, dst_up, dst_out):
+    """clamped_silu_glu_tile_pack runs the body of clamped_silu_glu_tile on the pack thread: the same bits."""
+    in_dtype, page_bytes = IN_DTYPES[in_name]
+    gate_t, up_t = _coverage_inputs(8)
+
+    args = (device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate, dst_up, dst_out)
+    on_math = _run(*args)
+    on_pack = _run(*args, "clamped_silu_glu_pack.cpp")
+    assert torch.equal(on_pack, on_math)
