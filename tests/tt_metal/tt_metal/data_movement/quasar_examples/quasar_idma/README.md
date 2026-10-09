@@ -11,8 +11,8 @@ Linear copy of `num_elements × elem_size` bytes from `src` to `dst` in a single
 **Parameters:** `src_base`, `dst_base` (compile-time args)
 
 **Sequence:**
-1. Configure `cmdbuf_0` for IDMA copy (`idma_setup_as_copy_cmdbuf_0`)
-2. Set src/dst addresses via `set_src_cmdbuf_0` / `set_dest_cmdbuf_0`
+1. Configure `cmdbuf_0` for IDMA copy (`idma_setup_as_copy_cmdbuf<CMDBUF_0>`)
+2. Set src/dst addresses via `set_src_cmdbuf<CMDBUF_0>` / `set_dest_cmdbuf<CMDBUF_0>`
 3. Set transfer length and issue one transaction
 4. Wait for IDMA ack
 
@@ -45,7 +45,7 @@ Strided read of `num_elements` elements from `src` (every `src_stride` bytes) in
 **Sequence:**
 1. Configure addrgen src inner loop (stride=16, end=160) and dst inner loop (stride=8, end=81)
 2. Configure `cmdbuf_0` for IDMA copy, `len = elem_size`
-3. Loop `num_elements` times: `push_both_addrgen_0()` + `issue_cmdbuf_0()`
+3. Loop `num_elements` times: `push_both_addrgen<ADDRGEN_0>()` + `issue_cmdbuf<CMDBUF_0>()`
 4. Wait for IDMA ack
 
 **Host verification:** host constructs expected output by applying the same strided pattern to the source data, then compares `dst` after kernel completes.

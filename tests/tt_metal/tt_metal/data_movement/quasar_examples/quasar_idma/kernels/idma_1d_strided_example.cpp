@@ -34,34 +34,34 @@ void kernel_main() {
     constexpr uint32_t src_base = get_arg(args::src_addr);
     constexpr uint32_t dst_base = get_arg(args::dst_addr);
 
-    reset_cmdbuf_0();
+    reset_cmdbuf<CMDBUF_0>();
 
     /* Address generator setup */
-    reset_addrgen_0();
+    reset_addrgen<ADDRGEN_0>();
     // Src: strided inner loop
-    setup_src_base_start_addrgen_0(src_base);
-    setup_src_inner_loop_addrgen_0(src_stride, (uint64_t)num_elements * src_stride);
+    setup_src_base_start_addrgen<ADDRGEN_0>(src_base);
+    setup_src_inner_loop_addrgen<ADDRGEN_0>({.stride = src_stride, .end = (uint64_t)num_elements * src_stride});
     // Dst: linear inner loop
-    setup_dest_base_start_addrgen_0(dst_base);
-    setup_dest_inner_loop_addrgen_0(elem_size, (uint64_t)num_elements * elem_size + 1);
+    setup_dest_base_start_addrgen<ADDRGEN_0>(dst_base);
+    setup_dest_inner_loop_addrgen<ADDRGEN_0>({.stride = elem_size, .end = (uint64_t)num_elements * elem_size + 1});
 
     /* CMD Misc register, only difference to NOC*/
-    idma_setup_as_copy_cmdbuf_0(false);
+    idma_setup_as_copy_cmdbuf<CMDBUF_0>(false);
     /* Vcs = IDMA channel*/
-    setup_vcs_cmdbuf_0(NocVcs::READ);
+    setup_vcs_cmdbuf<CMDBUF_0>(NocVcs::READ);
     /* Trids work the same way as for NOC*/
-    setup_trids_cmdbuf_0(0);
+    setup_trids_cmdbuf<CMDBUF_0>(0);
     /* Set transfer length */
-    set_len_cmdbuf_0(elem_size);
+    set_len_cmdbuf<CMDBUF_0>(elem_size);
 
     // TODO: wrap with DeviceTimestampedData profiling once Quasar perf counters are supported
     for (uint32_t i = 0; i < num_elements; ++i) {
-        push_both_addrgen_0();
-        issue_cmdbuf_0();
+        push_both_addrgen<ADDRGEN_0>();
+        issue_cmdbuf<CMDBUF_0>();
     }
 
     /* wait on IDMA to finish */
-    while (!idma_acked_cmdbuf_0()) {
+    while (!idma_acked_cmdbuf<CMDBUF_0>()) {
     }
 
     DEVICE_PRINT("IDMA 1D strided done: {} elements, src_stride: {} \n", num_elements, src_stride);
