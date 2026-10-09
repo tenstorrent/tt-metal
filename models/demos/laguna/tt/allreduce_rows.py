@@ -56,11 +56,13 @@ def pack_row0(x):
 
 
 def sum_rows_add(g, residual, memory_config=None):
-    """g: [1, D, 1, H] bf16 row-major (the gathered packed rows); residual: [.., 32(padded), H] bf16 TILE.
-    Returns residual's shape/layout in memory_config (default residual's): row 0 = residual row 0 + sum of the D
-    rows (fp32 adds, bf16 result), rows 1..31 zero."""
-    device = g.device()
-    D, H = g.shape[1], g.shape[-1]
+    """g: [1, D, 1, H] bf16 row-major (the gathered packed rows) or a list of D [1, 1, 1, H] row-major tensors (the
+    all_broadcast outputs); residual: [.., 32(padded), H] bf16 TILE. Returns residual's shape/layout in memory_config
+    (default residual's): row 0 = residual row 0 + sum of the D rows (fp32 adds, bf16 result), rows 1..31 zero."""
+    split = isinstance(g, (list, tuple))
+    rows = list(g) if split else [g]
+    device = rows[0].device()
+    D, H = (len(rows) if split else g.shape[1]), rows[0].shape[-1]
     per, cores, gs, grid = _grid(device, H)
     mem = memory_config or residual.memory_config()
     out = ttnn.allocate_tensor_on_device(residual.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
@@ -68,10 +70,11 @@ def sum_rows_add(g, residual, memory_config=None):
         kernel_source=str(_KDIR / "ar_sum_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[per, gs.x, D]
-        + list(ttnn.TensorAccessorArgs(g).get_compile_time_args())
+        compile_time_args=[per, gs.x, D, int(split)]
+        + list(ttnn.TensorAccessorArgs(rows[0]).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(residual).get_compile_time_args()),
-        common_runtime_args=[g.buffer_address(), residual.buffer_address()],
+        common_runtime_args=[rows[0].buffer_address(), residual.buffer_address()]
+        + ([t.buffer_address() for t in rows] if split else []),
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -98,6 +101,6 @@ def sum_rows_add(g, residual, memory_config=None):
         _cb(grid, 17, ttnn.bfloat16, 2048, per),
     ]
     ttnn.generic_op(
-        [g, residual, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        rows + [residual, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     )
     return out

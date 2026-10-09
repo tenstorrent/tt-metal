@@ -291,6 +291,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._ag_kw = {"num_buffers_per_channel": nb} if nb > 0 else {}
         # batch-1 decode: all-reduce only row 0 of the partials, fused with the residual add (allreduce_rows.py)
         self._ar_rows = _parse_binary_env("TT_LAGUNA_AR_ROWS", True)
+        self._ar_broadcast = _parse_binary_env("TT_LAGUNA_AR_BROADCAST", True)  # all_broadcast, no concat (see above)
         # batch-1 decode attention prologue as one op (attn_prologue1.py); TT_LAGUNA_AP1=0 restores the op chain
         self._ap1 = _parse_binary_env("TT_LAGUNA_AP1", True)
         self._ap1_scaler = None
@@ -500,6 +501,20 @@ class MultichipDecoder(OptimizedDecoder):
                       f"mem={t.memory_config()}", flush=True)
             print(f"[ar_rows] out mem={memory_config}", flush=True)
         row = pack_row0(partial)
+        if self._ar_broadcast:
+            # all_gather of the row is AllBroadcast + Concat; the sum reads the D broadcast rows directly instead
+            rows = ttnn.all_broadcast(
+                row,
+                cluster_axis=self.tp_axis,
+                topology=self.ccl_topology,
+                num_links=self.num_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(row)
+            out = sum_rows_add(rows, residual, memory_config)
+            for t in rows:
+                ttnn.deallocate(t)
+            return out
         gathered = ttnn.all_gather(
             row,
             dim=1,
