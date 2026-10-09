@@ -167,7 +167,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
  *
  * Operand A and B face geometry (face_r_dim, num_faces) is derived from circular-buffer unpack
  * metadata (see set_unpack_face_geometry). In debug builds, validates that both unpackers are
- * configured consistently before programming the init sequence.
+ * configured consistently after programming the init sequence.
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
@@ -187,16 +187,6 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandB_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        num_faces,
-        get_operand_num_faces(operandB_id)));
-
     _llk_unpack_tilizeA_B_block_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
@@ -205,6 +195,16 @@ inline void llk_unpack_tilizeA_B_init(
         unpB_face_r_dim,
         unpA_face_r_dim
     );
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_face_r_dim,
+        get_operand_num_faces(operandB_id)));
 }
 
 /**
@@ -252,7 +252,8 @@ inline void llk_unpack_tilizeA_B(
         unpack_dst_format[operandB_id],
         face_r_dim,
         get_operand_face_r_dim(operandB_id),
-        num_faces,
+        // The block init keeps operand A's rows per face in the tile descriptor Z dim.
+        face_r_dim,
         get_operand_num_faces(operandB_id)));
 
     WAYPOINT("UPTW");
@@ -302,7 +303,7 @@ inline void llk_unpack_tilizeA_B_block(
         unpack_dst_format[operandB_id],
         face_r_dim,
         get_operand_face_r_dim(operandB_id),
-        num_faces,
+        face_r_dim,
         get_operand_num_faces(operandB_id)));
 
     WAYPOINT("UPTW");
