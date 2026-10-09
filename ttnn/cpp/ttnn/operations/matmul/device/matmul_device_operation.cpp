@@ -2836,7 +2836,11 @@ MatmulDeviceOperation::create_op_performance_model(
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
-    int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
+    // A column window multiplies only B's K columns of A.
+    const int64_t K = operation_attributes.in0_column_offset.has_value()
+                          ? input_tensor_b.logical_shape()[operation_attributes.transpose_b ? -1 : -2]
+                          : in_a_shape[-1];
+    int64_t num_mul_adds_per_elem = K * 2;  // 1 multiply and 1 add per element
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 

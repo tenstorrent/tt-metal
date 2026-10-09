@@ -48,8 +48,9 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 Bits 0, 1, 2, 4, and 5 are supported; unselected outputs use FLOAT32.
                 Defaults to 0.
             gate_scale (float): Multiplies ``g`` before its within-chunk cumulative sum, so a
-                caller can fold a constant gate scale into preparation. Bit-identical to scaling
-                ``g`` on the host for a power of two; within FPU rounding otherwise. Defaults to 1.0.
+                caller can fold a constant gate scale into preparation. The device product is exact for
+                any BF16-representable scale, so it is bit-identical to host-scaled ``g`` whenever that
+                host product is itself exact in BF16. Defaults to 1.0.
             beta_logits_column_offset (int, optional): When given, ``beta`` is a token-major BF16 tensor
                 ``[1, T, columns]`` holding pre-sigmoid logits at these tile-aligned columns, such as the fused
                 input projection; preparation reads them in place and applies the sigmoid in FP32.

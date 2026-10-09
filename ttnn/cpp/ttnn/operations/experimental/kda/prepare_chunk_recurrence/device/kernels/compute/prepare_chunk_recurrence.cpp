@@ -8,6 +8,7 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=exp(G_last).
+// dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
 #include <cstdint>

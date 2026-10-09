@@ -887,7 +887,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
-            in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Supported for ``MatmulMultiCoreReuseMultiCastProgramConfig`` without ``transpose_a``. Defaults to `None`.
+            in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig``, an interleaved (DRAM or L1) input_tensor_a and no ``transpose_a``. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

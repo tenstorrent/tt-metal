@@ -89,6 +89,10 @@ class ttKDA:
     local rows. Construct another instance for a different physical length;
     weights may be shared. Runtime ``actual_start`` changes chronology within
     the constructed graph without changing grouping or reading device values.
+
+    On geometries whose chunk terms and decay gate fit their L1 budgets (see config.py), those tensors live in L1
+    while the recurrence runs. Open the device with an L1_SMALL region, as the model's prefill tests do, so the CCL
+    semaphores allocated on the first call do not fragment L1 between warm-up and trace capture.
     """
 
     def __init__(
@@ -495,8 +499,8 @@ class ttKDA:
             selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
             actual_end=actual_end,
+            release_gate=True,
         )
-        ttnn.deallocate(gate)
         output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

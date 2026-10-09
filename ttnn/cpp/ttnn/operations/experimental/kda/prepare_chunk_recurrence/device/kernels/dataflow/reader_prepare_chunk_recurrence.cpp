@@ -104,9 +104,9 @@ inline void fill_constant_tiles(
 }
 
 // The gate's prefix-sum (inclusive lower-triangular) and sum-broadcast (all-ones) matrices carry the gate scale,
-// so the cumulative sum applies it without a separate pass over the gate (exactly when the FPU holds the scale
-// exactly, as for a power of two). One tile each, which is every chunk matrix while Ct == 1. Like
-// fill_constant_tiles, seed one face row and replicate it with local NoC reads.
+// so the cumulative sum applies it without a separate pass over the gate (exactly for any BF16-representable
+// scale, since the HiFi4 product of BF16 g and the scale is exact in FP32). One tile each, which is every chunk matrix
+// while Ct == 1. Like fill_constant_tiles, seed one face row and replicate it with local NoC reads.
 template <uint32_t gate_scale_bits>
 inline void fill_gate_tiles(DataflowBuffer& gate_tril, DataflowBuffer& gate_ones) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
