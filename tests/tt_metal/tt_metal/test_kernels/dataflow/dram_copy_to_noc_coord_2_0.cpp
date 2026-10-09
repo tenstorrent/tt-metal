@@ -90,9 +90,8 @@ void kernel_main() {
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
 #elif defined(FDS_SIGNALLING)
-    // Quasar dispatch engines complete a launch on the FDS done wire and the go message carries no
-    // dispatcher coordinate to post to. No early notify here: the watcher error aborts the host's wait, and
-    // a done queued on the wire by this kernel would be left over for the next device open.
+    // Under FDS signalling the kernel sends no early done. The watcher error ends the host's wait, and the
+    // next device open resets the dispatch engines.
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
     notify_dispatch_core_done(dispatch_addr, noc_index);
@@ -153,6 +152,7 @@ void kernel_main() {
 
     UnicastEndpoint dst_unicast_endpoint;
     if (use_inline_dw_write && use_dram_bank_dst) {
+        // Just write something to trigger the watcher assertion. Result data doesn't matter.
         AllocatorBank<AllocatorBankType::DRAM> dram_bank;
         noc.inline_dw_write(dram_bank, local_buffer[0], {.bank_id = 0, .addr = buffer_dst_addr});
     } else if (use_inline_dw_write) {

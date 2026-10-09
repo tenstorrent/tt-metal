@@ -115,8 +115,8 @@ void RunTestOnCore(
     if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
-    // Under the Quasar address translation tables a bad coordinate never reaches the sanitizer: the
-    // address backend traps on it first. So the test about the coordinate itself is skipped, the
+    // For Quasar when using ATT a bad coordinate never reaches the sanitizer: the address
+    // backend traps on it first. So the test about the coordinate itself is skipped, the
     // inline-write-to-DRAM test addresses DRAM bank 0 instead of the tile coordinate, and the stateful
     // and inline tests below target the buffer's real core with a bad offset instead.
     const bool att = is_quasar && tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().has_value();
@@ -392,7 +392,7 @@ void RunTestOnCore(
             break;
         case SanitizeNOCInlineWriteDram:
             use_inline_dw_write = true;
-            // Under ATT the destination is addressed as DRAM bank 0 (see the kernel).
+            // Under ATT the destination is addressed as DRAM bank 0.
             use_dram_bank_dst = att;
             break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
@@ -599,7 +599,6 @@ void RunTestOnCore(
         case SanitizeNOCWriteWithStateBadCoord:
         case SanitizeNOCWriteWithStateAnyLenBadCoord:
             if (att) {
-                // The ATT variant writes offset 0 of the buffer's core: the mailboxes.
                 expected = fmt::format(
                     "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                     "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
@@ -712,7 +711,6 @@ void RunTestOnCore(
                 input_buffer_addr);
         } break;
         case SanitizeNOCInlineWriteDram: {
-            // Under ATT the operand names DRAM bank 0 and the watcher reports the bank with the tile.
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {}{} DRAM[addr=0x{:08x}] (inline dw writes do "
@@ -789,7 +787,6 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteFromState:
         case SanitizeNOCInlineWriteWithState:
             if (att) {
-                // The ATT variant names the buffer's core with an offset one past its L1.
                 expected = fmt::format(
                     "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
                     "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
