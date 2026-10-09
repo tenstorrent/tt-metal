@@ -19,10 +19,13 @@ namespace factory_detail {
 using tt::tt_metal::CoreCoord;
 using Defines = std::map<std::string, std::string>;
 
-constexpr uint32_t H_PIECES = 32, XRD_BATCH = 2, FWD = 2, DW_BATCH = 2;
+constexpr uint32_t XRD_BATCH = 2, FWD = 2, DW_BATCH = 2;
 // semaphore ids (16 created in order on every role core)
 constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFREE = 10, HFREE = 11, HSFREE = 12,
                    WORD = 13, GATH1 = 14, GATH2 = 15;
+// h buffer 3's gather semaphore on the down chain heads (4 h buffers; ids 0..3 are the weight readers' credits, unused
+// on down cores)
+constexpr uint32_t GATH3 = 3;
 constexpr const char* KDIR = "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/";
 
 // A runtime-arg list whose buffer-address words are recorded for the cache-hit patch.
@@ -131,9 +134,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
     }
+    if (p.hbuf == 4) {  // the 4th h buffer's gather semaphore on the down chain heads
+        dyn_def["SE_GATH3"] = std::to_string(GATH3);
+    }
     // perf probe (read at program build, not hashed): MIMO_FL_X_RESIDENT=1 - x never moves. The relay kernels
     // (read / tilize / multicast / helpers) return at once and the gate/up receivers treat a landing slot's x as
     // present as soon as the slot is free: the compute runs on whatever the landing ring holds (garbage outputs).
+    // h pieces per sub-block down the chains (perf probe MIMO_FL_HPIECES; must divide the h tiles)
+    const uint32_t H_PIECES = std::getenv("MIMO_FL_HPIECES") ? std::atoi(std::getenv("MIMO_FL_HPIECES")) : 32;
+    if (const char* ld = std::getenv("MIMO_FL_LINK_DEPTH")) {  // (perf probe: h pieces in flight per chain link)
+        dyn_def["SE_LINK_DEPTH"] = ld;
+    }
     if (std::getenv("MIMO_FL_ZONES")) {  // device-profiler zones in the kernels that have them
         dyn_def["SE_ZONES"] = "1";
     }
@@ -461,7 +472,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}}));
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
-        const bool gu_full_sync = p.gu_fp32 && p.gu_rp && std::getenv("MIMO_FL_GU_FULL_SYNC");
+        const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
         const bool gu_rp = p.gu_rp && !gu_full_sync;
         Defines cdef = with(
             dyn_def,
@@ -622,7 +633,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
     arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, x_fmt, p.x_tile);
-    static_cb(3, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+    if (p.hl_in_arena) {  // bf16 x / h: gate/up h_local in the arena (out of the program-wide static CB region)
+        arena_cb(3, p.hl_off, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+    } else {
+        static_cb(3, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+    }
     static_cb(16, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     if (p.gu_l1acc) {
         arena_cb(5, p.p_off, MTG * 2 * NP * 2048, p.gu, tt::DataFormat::Float16_b, 2048);

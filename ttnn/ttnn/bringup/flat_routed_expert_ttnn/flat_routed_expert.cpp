@@ -16,11 +16,20 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& c) {
-    using Key = std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t>;
+    using Key = std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool>;
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
-        device, c.hidden, c.intermediate, c.experts_per_chip, c.num_global_experts, c.max_tokens, c.weights_bf8, c.pin};
+        device,
+        c.hidden,
+        c.intermediate,
+        c.experts_per_chip,
+        c.num_global_experts,
+        c.max_tokens,
+        c.weights_bf8,
+        c.pin,
+        c.x_bf16,
+        c.h_bf16};
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {
@@ -78,7 +87,9 @@ ttnn::Tensor flat_routed_expert(
     uint32_t x_pages_per_row,
     bool y_row_major,
     bool down_fp32,
-    bool pack_stochastic_rounding) {
+    bool pack_stochastic_rounding,
+    bool x_bf16,
+    bool h_bf16) {
     using namespace tt::tt_metal;
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1] * x_pages_per_row,
@@ -91,7 +102,9 @@ ttnn::Tensor flat_routed_expert(
         .pin = pin,
         .y_row_major = y_row_major,
         .down_fp32 = down_fp32,
-        .pack_stochastic_rounding = pack_stochastic_rounding};
+        .pack_stochastic_rounding = pack_stochastic_rounding,
+        .x_bf16 = x_bf16,
+        .h_bf16 = h_bf16};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
