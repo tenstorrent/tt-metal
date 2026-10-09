@@ -2193,19 +2193,19 @@ class GATED_REDUCE_PARAMS(TemplateParameter):
 
 @dataclass
 class GATED_REDUCE_SCALARS(RuntimeParameter):
-    scale_bits: int
-    out_scale_bits: int
-    limit_bits: int
-    alpha_bits: int
+    gated_scale_bits: int
+    gated_out_scale_bits: int
+    gated_limit_bits: int
+    gated_alpha_bits: int
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
-            f"constexpr std::uint32_t GATED_{name.upper()} = {value}u;"
+            f"constexpr std::uint32_t {name.upper()} = {value}u;"
             for name, value in vars(self).items()
         )
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return (
-            "\n".join(f"std::uint32_t GATED_{name.upper()};" for name in vars(self)),
+            "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
             "IIII",
         )
