@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T08:10:21.596832+00:00",
+  "generated_at": "2026-10-09T08:32:46.910198+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -54,8 +54,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 80408,
-      "sha256": "1cfc163164d07ce5ad09dfb04bf1d9a554049f70831ce87c61825a5b43166f91"
+      "bytes": 82607,
+      "sha256": "033c84e3c9cbe4a69bc8e003d5efa8ab69492738569c671f7612435ad638e0eb"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 26209,
-      "sha256": "b9f76227420d57a7b4af5f51e69aabacc9749f4302be631cce9d291f79cf4c60"
+      "bytes": 26892,
+      "sha256": "af57cbbf14ab54ecff9d50efddf1184351466cc3bf416bec09b34cf34d63db31"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2425,8 +2425,18 @@
     },
     {
       "path": "galaxy-evidence/image-build-v6/README.md",
-      "bytes": 1918,
-      "sha256": "295a6c5388ee718cb26b7e1b319157b5c439f3716fb1d2c7f3f204a1b9558b12"
+      "bytes": 2969,
+      "sha256": "da761f982c5f1cf09da24d6a593c294787f94e6ad3f5afcd38f3a79e0b15f668"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/build-metadata.json",
+      "bytes": 590,
+      "sha256": "d9178cebeb0b8c5989d7eed7ee112b0f882e8f710fd545ef6dd4cef966c3c330"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/build.log.gz",
+      "bytes": 46015,
+      "sha256": "313375753bcbaa99e224ae511273a24cc7f516226a5e82805fd557e4d1f8c1a4"
     },
     {
       "path": "galaxy-evidence/image-build-v6/context-manifest.json",
@@ -2439,14 +2449,59 @@
       "sha256": "412b88270aa5e36c9a7ff03e1bc0ca8fc968d07a5ab5c1073f0dc15531ba87c6"
     },
     {
+      "path": "galaxy-evidence/image-build-v6/final-state.json",
+      "bytes": 1485,
+      "sha256": "1855d0488c2456eeb7ec8663927806a7ce924aa231635e834a5d1ee5af06d2c1"
+    },
+    {
       "path": "galaxy-evidence/image-build-v6/launch.json",
       "bytes": 636,
       "sha256": "7b6db66cabd142846ffd4cec7bcc0919de4a35165de5e03de993d3e71dc4dae4"
     },
     {
+      "path": "galaxy-evidence/image-build-v6/oci-audit.json",
+      "bytes": 4928,
+      "sha256": "1526cc5e502a509fa10ff1101d0c9ac3ecaa98404365f0772e0a3c8b75fab8d8"
+    },
+    {
       "path": "galaxy-evidence/image-build-v6/state.json",
       "bytes": 552,
       "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/README.md",
+      "bytes": 2479,
+      "sha256": "30b502adb4f070513bb3f2e4023e6729eacc1c24e8084a616911f302193f4d0f"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/controller.py.txt",
+      "bytes": 6303,
+      "sha256": "ca1cdce32478a6b3b5cd9c77d107b1239a94c5f6407448da975f8417b6e69e34"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/launch.json",
+      "bytes": 826,
+      "sha256": "231396a63f111be51512f559c7ae2db85252ee39664b38e032aa4dfc9a99c17e"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/probe.py.txt",
+      "bytes": 5306,
+      "sha256": "d69d4e685646fd5ae45ac4c5b1c118dcd891bf1170081551c41c292781617c0c"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "9f9c5cfc57758c79566c0dc25d27a6a747addb02fa78d08ad8cc5315531b6c4a"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/source-manifest.json",
+      "bytes": 187,
+      "sha256": "e5a8c928c97df5826f4901e9e8e72bb676987951f36611601cd07226946b5c07"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-probe-v1/status-at-launch.json",
+      "bytes": 605,
+      "sha256": "b44d0f587efc63b38fee158b3c5e3c8a13534f3a3e6197a6de03c6f9509d864b"
     },
     {
       "path": "galaxy-evidence/kernel-diagnostics-v1/README.md",

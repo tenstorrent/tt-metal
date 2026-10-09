@@ -1,0 +1,35 @@
+{
+  "state": "built_unqualified",
+  "started_at": 1791532756.4674478,
+  "builder": "qwen38-release-builder-20261009-v6",
+  "devices_exposed": false,
+  "root": "/home/ttuser/qwen38-release-build-20261009-v6",
+  "output": "/dev/shm/qwen38-release-image-20261009-v6",
+  "survives_disconnect": true,
+  "survives_reboot": false,
+  "memory_limit_gib": 192,
+  "cpus": 24,
+  "buildkit_image": "moby/buildkit@sha256:f9fad9251904053271e79f96b918e67f0750f34cd621f439b0c341b66ca31359",
+  "probe_sha256": "358b3fa15254b385918153e4472e86465f2b51e948d1c3d41ffcb9f78f9bd205",
+  "metadata": {
+    "containerimage.config.digest": "sha256:87e5c8cf71db455e1d19082a589663d18113ee3c5805d7e0cf346ac33286bb18",
+    "containerimage.descriptor": {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:c8ed7a5a17b4b400c84bbb82a52bd125a56b4daf5fbb150b699af62ffee169b1",
+      "size": 9046,
+      "annotations": {
+        "org.opencontainers.image.created": "2026-10-09T08:14:12Z"
+      },
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    "containerimage.digest": "sha256:c8ed7a5a17b4b400c84bbb82a52bd125a56b4daf5fbb150b699af62ffee169b1"
+  },
+  "image_bytes": 6010795008,
+  "finished_at": 1791533681.381596,
+  "archive_sha256": "dd3bd0e91716870d13bd0ad2d67baf35664272cf946132adec77760ccf71ec25",
+  "durable_archive": "/home/ttuser/qwen38-release-build-20261009-v6/artifact/qwen38-image.oci.tar",
+  "artifact_survives_reboot": true
+}

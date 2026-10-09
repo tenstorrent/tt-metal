@@ -31,6 +31,24 @@ receipt-newline edit produced a remote Python syntax error before any remote
 mutation; the payload was corrected and compile-checked before the successful
 launch. Only one v6 build service was launched.
 
-No completed image digest, registry publication, head GPQA pass, or container
-hardware qualification is claimed. The build survives disconnect; only a
-successfully preserved final archive survives reboot.
+## Completion, 08:14:41 UTC
+
+The build completed in 15m25s, passed source/import checks in both image stages,
+and preserved the 6,010,795,008-byte archive on host disk. A later independent
+read rechecked the complete archive checksum and the embedded manifest/config
+digests and source labels. The service is inactive with PID 0; this is a completed
+build, not a lost connection.
+
+- OCI manifest: `sha256:c8ed7a5a17b4b400c84bbb82a52bd125a56b4daf5fbb150b699af62ffee169b1`.
+- Image configuration: `sha256:87e5c8cf71db455e1d19082a589663d18113ee3c5805d7e0cf346ac33286bb18`.
+- Archive SHA-256: `dd3bd0e91716870d13bd0ad2d67baf35664272cf946132adec77760ccf71ec25`.
+
+[Final state](final-state.json), [build metadata](build-metadata.json),
+[independent archive audit](oci-audit.json), and `build.log.gz` retain the proof.
+The earlier `state.json` is deliberately retained as a launch snapshot. About
+20.5 GiB remained on the build host after preservation; no unrelated images or
+data were removed. The durable archive survives reboot.
+
+This remains unqualified: full head GPQA had 166 correct out of 194 completed
+at 08:28 UTC, so even four additional correct answers cannot meet 177/198.
+Registry publication and container hardware qualification have not occurred.

@@ -1,0 +1,123 @@
+import fcntl
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+ART = Path("/home/ttuser/qwen38-artifacts-20261007")
+ROOT = ART / "image-startup-probe-v1"
+SOURCE = ART / "image-startup-probe-source-v1"
+UNIT = "qwen38-post-head-cpu-v1-20261009.service"
+INVOCATION = "dc7524a132964cc0a36cdeecfe8cd82c"
+IMAGE = "sha256:23f5f92af192e23cde494bcdac1f2efddc5c3b301345af3997ca3f79036c6af1"
+NAME = "qwen38-image-startup-probe-v1"
+ROOT.mkdir()
+state = dict(state="waiting", predecessor_unit=UNIT, predecessor_invocation=INVOCATION,
+             hardware_opened=False, survives_disconnect=True, resumes_after_reboot=False,
+             image_config_digest=IMAGE, started_at=time.time())
+
+def save():
+    state["updated_at"] = time.time()
+    p = ROOT / "status.tmp"
+    p.write_text(json.dumps(state, indent=2) + "\n")
+    p.replace(ROOT / "status.json")
+
+save()
+lock = None
+try:
+    deadline = time.monotonic() + 22 * 3600
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("CPU predecessor wait exceeded bound")
+        try:
+            output = subprocess.check_output(
+                ["systemctl", "--user", "show", UNIT, "-p", "InvocationID", "-p", "MainPID",
+                 "-p", "ActiveState", "-p", "LoadState", "-p", "Result"], text=True, timeout=15)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+            state["observation_error"] = type(error).__name__
+            save()
+            time.sleep(30)
+            continue
+        props = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        state["predecessor"] = props
+        save()
+        if props.get("InvocationID") and props["InvocationID"] != INVOCATION:
+            raise ValueError("CPU predecessor invocation was replaced")
+        if (props.get("LoadState") in ("loaded", "not-found") and props.get("MainPID") == "0"
+                and props.get("ActiveState") in ("inactive", "failed")):
+            if props.get("LoadState") == "loaded" and props.get("Result") != "success":
+                raise ValueError("CPU predecessor failed")
+            receipt = json.loads((ART / "post-head-cpu-v1/status.json").read_text())
+            stages = receipt.get("stages", [])
+            if receipt.get("state") != "completed" or len(stages) != 2 or any(
+                    row.get("state") not in ("completed", "failed") for row in stages):
+                raise ValueError("CPU predecessor lacks terminal stage evidence")
+            image = json.loads((ART / "release-image-v1/status.json").read_text())
+            if image.get("state") != "runtime_imports_passed_unqualified" or image.get("config_digest") != IMAGE:
+                raise ValueError("Original image runtime checks have not passed")
+            break
+        time.sleep(30)
+    manifest = json.loads((SOURCE / "source-manifest.json").read_text())
+    for name, digest in manifest.items():
+        if hashlib.sha256((SOURCE / name).read_bytes()).hexdigest() != digest:
+            raise ValueError("Frozen startup probe changed")
+    state["state"] = "waiting_for_hardware_lock"
+    save()
+    # No devices are exposed. This lock merely prevents CPU import work from
+    # overlapping any of the queued hardware measurements.
+    lock = open("/tmp/tt-device.lock", "a")
+    if lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Device coordination lock wait exceeded bound")
+                time.sleep(10)
+        inspected = json.loads(subprocess.check_output(["docker", "image", "inspect", IMAGE], text=True, timeout=30))[0]
+        if inspected["Id"] != IMAGE:
+            raise ValueError("Image configuration identity changed")
+        command = ["docker", "run", "--rm", "--name", NAME,
+                   "--label", "qwen38.task=image-startup-probe-v1", "--network=none", "--read-only",
+                   "--memory=4g", "--memory-swap=4g", "--cpus=4", "--pids-limit=256",
+                   "--tmpfs", "/tmp:rw,size=512m",
+                   "--tmpfs", "/home/container_app_user/cache_root:rw,uid=1000,gid=1000,size=512m",
+                   "--mount", f"type=bind,src={SOURCE / 'probe_qwen38_startup.py'},dst=/startup-probe.py,readonly",
+                   "--mount", f"type=bind,src={ART / 'checkpoint-pinned-1d4bf0f2'},dst=/mnt/hf-cache,readonly",
+                   "--env", "PYTHONDONTWRITEBYTECODE=1", "--entrypoint",
+                   "/home/container_app_user/tt-metal/python_env/bin/python", IMAGE, "/startup-probe.py"]
+        state.update(state="probing", command=command)
+        save()
+        result = subprocess.run(command, text=True, capture_output=True, timeout=180, check=False)
+        (ROOT / "stdout.log").write_text(result.stdout)
+        (ROOT / "stderr.log").write_text(result.stderr)
+        if result.returncode:
+            raise RuntimeError(f"Startup probe exited {result.returncode}")
+        decoder = json.JSONDecoder()
+        report = None
+        for index, char in enumerate(result.stdout):
+            if char == "{":
+                try:
+                    candidate, _ = decoder.raw_decode(result.stdout[index:])
+                except ValueError:
+                    continue
+                if isinstance(candidate, dict) and candidate.get("state") == "startup_handoff_passed_unqualified":
+                    report = candidate
+        if report is None:
+            raise ValueError("Startup handoff receipt missing")
+        (ROOT / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        state.update(state="completed", passed=True, finished_at=time.time())
+except BaseException as error:
+    state.update(state="failed", error=type(error).__name__, detail=str(error)[:2000], finished_at=time.time())
+    raise
+finally:
+    try:
+        owned = subprocess.check_output(["docker", "ps", "-aq", "--filter", "label=qwen38.task=image-startup-probe-v1"], text=True, timeout=30).split()
+        if owned:
+            subprocess.run(["docker", "rm", "-f", *owned], timeout=60, check=True)
+    finally:
+        if lock is not None:
+            lock.close()
+        save()

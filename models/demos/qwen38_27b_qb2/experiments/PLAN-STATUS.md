@@ -1,5 +1,15 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 08:31 UTC update: the higher-precision head cannot close the GPQA gate.
+It has 166 correct out of 194 completed, zero cutoffs and four questions left,
+so the maximum possible final score is 170/198. The run remains active and the
+queued reference/layer comparisons remain necessary. Its separate image built
+in 15m25s and was preserved on host disk with independently verified checksums;
+it is still experimental. A real TTIS setup check is now persistently queued
+behind CPU work and the device lock, with 29 local packaging tests passing.
+[Image completion](../galaxy-evidence/image-build-v6/README.md),
+[startup check](../galaxy-evidence/image-startup-probe-v1/README.md).
+
 Oct 9 08:09 UTC update: the higher-precision-head full GPQA is running with
 116/198 completed, 110 correct and zero truncations. This partial result is
 not a final score or qualification. All six serving API checks passed,

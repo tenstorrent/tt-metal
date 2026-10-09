@@ -1,0 +1,18 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-post-head-cpu-v1-20261009.service",
+  "predecessor_invocation": "dc7524a132964cc0a36cdeecfe8cd82c",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "image_config_digest": "sha256:23f5f92af192e23cde494bcdac1f2efddc5c3b301345af3997ca3f79036c6af1",
+  "started_at": 1791534539.7495854,
+  "updated_at": 1791534599.7969432,
+  "predecessor": {
+    "MainPID": "1209320",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "dc7524a132964cc0a36cdeecfe8cd82c"
+  }
+}

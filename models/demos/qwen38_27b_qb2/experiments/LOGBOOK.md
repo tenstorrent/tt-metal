@@ -1043,3 +1043,34 @@ No session connection is needed for that queue to continue.
 - The completion audit is still waiting for the same invocation to finish.
   Tau3 has no newer result: 3/12, including six timeout/step-limit outcomes.
   The last completed native GPQA remains 170/198 with one incorrect cutoff.
+
+## Oct 9, 08:12-08:31 UTC: head gate missed; image preserved and startup check queued
+
+- Revalidated the exact head service and all queued followers as live. GPQA
+  advanced from 137/148 correct to 166/194, with no truncations. Four questions
+  remain, so the higher-precision head alone cannot reach 177/198. This does not
+  establish the remaining numerical cause; the existing CPU/HF layer comparison
+  remains the next diagnostic, and the full run is allowed to finish.
+- The v6 build completed at 08:14:41 UTC in 15m25s. Both image stages passed
+  source/import verification. The controller preserved the archive on local disk
+  before exiting; independently reread its full 6,010,795,008 bytes and verified
+  checksum, embedded manifest/config digests and exact source labels. Recorded
+  the OCI digest and compressed build log. The image remains unqualified.
+- Audited TTIS setup beyond imports and `--help`. Added a separate no-device
+  startup probe that runs real wrapper setup and intercepts its final vLLM call.
+  It compares the full declared argument/environment contract and the checkpoint
+  symlink. Ten new regression tests plus 19 packaging tests pass; Ruff and diff
+  checks pass. Pushed TTIS `54a5511fdcaed2dddc215c20f4ea95dad33dbdb6`.
+- The first local test attempt referenced a removed old virtualenv and did not
+  run; the existing Qwen tools environment ran all 29 tests successfully. Source
+  staging and evidence collection initially hit sandbox SSH denial, then passed
+  with approved retries. The startup job launched once, with frozen source and
+  exact predecessor invocation. PID 1383768 was observed live, waiting.
+- The new job checks the already queued native v5 image after CPU diagnostics,
+  acquires the same device lock to avoid timing interference, and has no TT
+  device/network exposure. It does not redirect frozen jobs, substitute the v6
+  image or imply container model/accuracy/Helm qualification. No host data or
+  unrelated image was deleted; .34 retained about 20.5 GiB free after preservation.
+
+[Completed image evidence](../galaxy-evidence/image-build-v6/README.md),
+[persistent startup probe](../galaxy-evidence/image-startup-probe-v1/README.md).

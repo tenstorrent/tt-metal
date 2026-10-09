@@ -1,0 +1,21 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-image-startup-probe-v1-20261009",
+    "--property=RuntimeMaxSec=23h",
+    "--property=TimeoutStopSec=90",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=5G",
+    "--property=CPUQuota=400%",
+    "--property=TasksMax=320",
+    "--property=UMask=0077",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/image-startup-probe-source-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/image-startup-probe-source-v1/run.log",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=PYTHONDONTWRITEBYTECODE=1",
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-artifacts-20261007/image-startup-probe-source-v1/controller.py"
+  ],
+  "ttis_sha": "54a5511fdcaed2dddc215c20f4ea95dad33dbdb6"
+}
