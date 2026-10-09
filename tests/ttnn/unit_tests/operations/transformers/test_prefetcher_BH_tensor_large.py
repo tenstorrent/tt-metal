@@ -729,6 +729,57 @@ def test_tensor_prefetcher_wait_for_cq_rejects_unknown_queue(device, expect_erro
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 2)
 
 
+def test_tensor_prefetcher_signal_wait_holds_request(device):
+    """A request queued behind a wait on an op signal reads DRAM only once the signal arrives. The weight
+    is rewritten on the command queue after the request is queued -- and after a pause in which an
+    unheld request would have read it -- and the signal follows the write on that queue, so the matmul
+    must see the rewritten values."""
+    case = _TraceCase(device, num_weight_values=2, seed_tag=b"signal_wait_holds")
+    signal_id = 2
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id)
+        case.queue()
+        time.sleep(0.05)
+        ttnn.copy_host_to_device_tensor(case.host_weights[1], case.weight, cq_id=0)
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id)
+        tt_out = case.linear()
+        ttnn.synchronize_device(device)
+        out_torch = ttnn.to_torch(tt_out)
+
+    passing, msg = case.check(out_torch, 1)
+    assert passing, f"the request read the weight before the signal released it: {msg}"
+
+
+def test_tensor_prefetcher_signal_raised_before_wait_is_kept(device):
+    """Signals raised before their waits are queued are kept, one per wait: both waits pass, and a
+    signal on another id releases neither."""
+    case = _TraceCase(device, seed_tag=b"signal_before_wait")
+    signal_id = 5
+
+    with tensor_prefetcher_session(device):
+        for _ in range(2):
+            ttnn.experimental.signal_tensor_prefetcher(device, signal_id, core=ttnn.CoreCoord(1, 1))
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id + 1)
+        ttnn.synchronize_device(device)
+        for run in range(2):
+            ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id)
+            tt_out = case.prefetch_and_linear()
+            passing, msg = case.check(ttnn.to_torch(tt_out), 0)
+            assert passing, f"run {run} after an early signal: {msg}"
+        # Release the wait the stray signal on signal_id + 1 was meant for, so it pairs off.
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id + 1)
+
+
+def test_tensor_prefetcher_signal_rejects_unknown_signal(device, expect_error):
+    """Signal ids run [0, 8)."""
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "is out of range"):
+            ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, 8)
+        with expect_error(RuntimeError, "is out of range"):
+            ttnn.experimental.signal_tensor_prefetcher(device, 8)
+
+
 def _streaming_gather_in0_setup(
     device,
     name,
@@ -1867,11 +1918,12 @@ def _check_sparse_output(setup, tt_out, active, label, compact=False):
 
 
 def _sparse_matmul_over_pipes(setup, pipes, sparsity, **kwargs):
-    """``ttnn.sparse_matmul`` over the Tensor prefetcher's pipes, which queues its own prefetch request."""
-    return ttnn.sparse_matmul(
+    """``ttnn.sparse_matmul`` over the Tensor prefetcher's pipes, which queues its own prefetch request.
+    A ``signal_id`` keyword orders the prefetcher's mask read behind an op signal (prefetch_and_sparse_matmul)."""
+    return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_sparse_matmul(
         setup["tt_act"],
         setup["tt_weight"],
-        sparsity=sparsity,
+        sparsity,
         prefetcher_pipes=pipes,
         program_config=setup["program_config"],
         is_input_a_sparse=setup["is_input_a_sparse"],
@@ -1963,6 +2015,48 @@ def test_tensor_prefetcher_sparse_matmul_pipes_trace(device):
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device)
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
             _check_sparse_output(setup, tt_out, active, f"sparse_pipes_trace {label}")
+
+        ttnn.release_trace(device, trace_id)
+
+
+# Device time ahead of the in-trace mask write: about 3.7 ms at Blackhole's 1.35 GHz AICLK. A prefetcher
+# that passed its wait at once would read the mask inside this window, before the write.
+_MASK_WRITE_DELAY_CYCLES = 5_000_000
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
+def test_tensor_prefetcher_sparse_matmul_pipes_trace_mask_written_in_trace(device):
+    """The MoE router case: an op inside the trace writes the mask the prefetcher reads. With
+    ``signal_id``, every replay raises the signal after that write and the captured wait holds the
+    request for that replay's signal, so the prefetcher never reads the previous replay's mask -- even
+    with the write held back behind a device delay. The selections keep the expert count, so a stale
+    mask shows up as wrong experts rather than a hang."""
+    setup = _sparse_pipe_setup(device, "recv_contig_contiguous")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    selections = [(0, 1, 6), (2, 3, 4), (1, 5, 7), (0, 1, 6)]
+    signal_id = 1
+
+    def routed_sparse_matmul(mask_source, sparsity):
+        rows, cols = device.shape[0], device.shape[1]
+        ttnn.apply_device_delay(device, [[_MASK_WRITE_DELAY_CYCLES] * cols for _ in range(rows)])
+        ttnn.copy(mask_source, sparsity)
+        return _sparse_matmul_over_pipes(setup, pipes, sparsity, signal_id=signal_id)
+
+    with tensor_prefetcher_session(device):
+        mask_source = _to_device_mask(device, _sparse_mask(setup["E"], selections[0]))
+        sparsity = _to_device_mask(device, _sparse_mask(setup["E"], ()))
+        tt_out = routed_sparse_matmul(mask_source, sparsity)
+        _check_sparse_output(setup, tt_out, selections[0], "sparse_pipes_trace_in_trace warmup")
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out = routed_sparse_matmul(mask_source, sparsity)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        for replay, active in enumerate(selections):
+            host_mask = ttnn.from_torch(_sparse_mask(setup["E"], active), dtype=ttnn.bfloat16)
+            ttnn.copy_host_to_device_tensor(host_mask, mask_source)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            _check_sparse_output(setup, tt_out, active, f"sparse_pipes_trace_in_trace replay={replay}")
 
         ttnn.release_trace(device, trace_id)
 
