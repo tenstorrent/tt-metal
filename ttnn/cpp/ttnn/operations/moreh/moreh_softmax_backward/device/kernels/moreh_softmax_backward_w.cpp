@@ -5,7 +5,9 @@
 #include <cstdint>
 
 // The reduce scalers are 1.0: on Blackhole SUM and AVG run at the fewest fidelity phases that keep the bits
+#if !defined(RC_ALT_OFF1) && !defined(RC_ALT_OFF2)
 #define REDUCE_POW2_SCALER
+#endif
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
