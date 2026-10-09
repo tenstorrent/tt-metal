@@ -145,29 +145,30 @@ def test_flat_expert_indexed_determinism(device, case, y_rm):
 
 
 # Device ns per (case, mode), median of 3, BH p150 (QuietBox chip), counts _counts(E, m, 1). Recalibrate from the
-# "RT-CAL" lines (2026-09-29). Indexed costs nothing over the flat buffer; 1 KB x pages (P = H / 512) cost K2 / TP4
-# +32-38% (1 KB NoC reads), 2 KB pages (P = H / 1024) are free.
+# "RT-CAL" lines (2026-10-09: write VCs per traffic class, early down done, PR #59149 pack untilize). Indexed costs
+# nothing over the flat buffer; 1 KB x pages (P = H / 512) cost K2 / TP4 +32-38% (1 KB NoC reads), 2 KB pages
+# (P = H / 1024) are free.
 _PERF_EXPECTED_NS = {
-    ("mimo", "flat"): 1_933_323,
-    ("mimo", "indexed"): 1_942_624,
-    ("mimo", "indexed_rm"): 1_971_038,
-    ("mimo", "indexed_p4"): 1_972_610,
-    ("mimo", "indexed_p8"): 1_944_741,
-    ("k2", "flat"): 1_581_504,
-    ("k2", "indexed"): 1_581_722,
-    ("k2", "indexed_rm"): 1_599_456,
-    ("k2", "indexed_p7"): 1_580_836,
-    ("k2", "indexed_p14"): 2_086_615,
-    ("tp4", "flat"): 923_968,
-    ("tp4", "indexed"): 927_059,
-    ("tp4", "indexed_rm"): 978_608,
-    ("tp4", "indexed_p7"): 926_166,
-    ("tp4", "indexed_p14"): 1_275_363,
-    ("tp2", "flat"): 1_390_231,
-    ("tp2", "indexed"): 1_392_361,
-    ("tp2", "indexed_rm"): 1_398_004,
-    ("tp2", "indexed_p7"): 1_392_007,
-    ("tp2", "indexed_p14"): 1_390_647,
+    ("mimo", "flat"): 1_773_289,
+    ("mimo", "indexed"): 1_772_629,
+    ("mimo", "indexed_rm"): 1_862_795,
+    ("mimo", "indexed_p4"): 1_792_112,
+    ("mimo", "indexed_p8"): 1_779_985,
+    ("k2", "flat"): 1_516_881,
+    ("k2", "indexed"): 1_515_910,
+    ("k2", "indexed_rm"): 1_526_615,
+    ("k2", "indexed_p7"): 1_518_125,
+    ("k2", "indexed_p14"): 2_055_204,
+    ("tp4", "flat"): 922_967,
+    ("tp4", "indexed"): 922_820,
+    ("tp4", "indexed_rm"): 925_450,
+    ("tp4", "indexed_p7"): 922_744,
+    ("tp4", "indexed_p14"): 1_253_915,
+    ("tp2", "flat"): 1_392_508,
+    ("tp2", "indexed"): 1_392_796,
+    ("tp2", "indexed_rm"): 1_390_910,
+    ("tp2", "indexed_p7"): 1_392_149,
+    ("tp2", "indexed_p14"): 1_389_716,
 }
 _PERF_MARGIN = 0.03
 

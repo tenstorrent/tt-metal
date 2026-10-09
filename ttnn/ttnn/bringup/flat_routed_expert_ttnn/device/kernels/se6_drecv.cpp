@@ -35,6 +35,13 @@
 #endif
 #endif
 
+// The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
+#ifdef SE_H_VC
+constexpr uint8_t h_vc = SE_H_VC;
+#else
+constexpr uint8_t h_vc = 0;
+#endif
+
 void kernel_main() {
     constexpr uint32_t h_all_cb = get_compile_time_arg_val(0);
     constexpr uint32_t h_all_tiles = get_compile_time_arg_val(1);
@@ -127,14 +134,15 @@ void kernel_main() {
     auto write_trid = [](uint32_t src, uint64_t dst, uint32_t bytes, uint32_t trid) {
         for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
             const uint32_t n = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
-            noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid);
+            noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid, write_cmd_buf, noc_index, h_vc);
         }
     };
 
     uint32_t h_pub = 0, h_cons = 0, h_iss = 0, h_fwd = 0, h_rep = 0, h_done = 0;
-    uint32_t out_done = 0, go_sent = 0;
+    uint32_t out_done = 0, go_sent = 0, done_sent = 0;
     bool y_pending = false;
-    while (out_done < num_v || (sxy_e && h_fwd < num_v * h_pieces) || (is_coord && go_sent + 1 < num_v)) {
+    while (out_done < num_v || done_sent < num_v || (sxy_e && h_fwd < num_v * h_pieces) ||
+           (is_coord && go_sent + 1 < num_v)) {
         invalidate_l1_cache();
         if (head) {  // h(v) is complete once all slices of it are in its buffer
             while (h_done < num_v && *gath[h_done % hbuf] >= n_slices * (h_done / hbuf + 1)) {
@@ -166,6 +174,14 @@ void kernel_main() {
             }
             h_rep = freed;
         }
+        // down(v) is done for the coordinator (which releases the gate/up cores' next h, HBUF deep) once this core's
+        // compute has popped h(v) and h(v) has gone on down the chain: its h buffer is free. Its y writes need not
+        // have landed (each core's final write barrier covers them); waiting for them put the y write latency on
+        // the critical path of every sub-block (the 128 -> 160 tokens-per-expert cliff).
+        if (freed > done_sent) {
+            noc_semaphore_inc(done_noc, freed - done_sent);
+            done_sent = freed;
+        }
 #if defined(SE_DYN) && defined(SE_SMALL_T)
         const bool x_ready = !xs || cb_pages_available_at_front(tt::CBIndex::c_17, mt * pcx);
         const uint32_t src_x = xs ? get_read_ptr(tt::CBIndex::c_17) : 0;
@@ -175,7 +191,6 @@ void kernel_main() {
 #ifdef SE_Y_RM
         yw.issue(dyn);
         if (yw.retire(dyn)) {
-            noc_semaphore_inc(done_noc, 1);
             ++out_done;
         }
 #else
@@ -216,7 +231,6 @@ void kernel_main() {
                 cb_pop_front(tt::CBIndex::c_17, mt * pcx);
             }
 #endif
-            noc_semaphore_inc(done_noc, 1);
             ++out_done;
 #ifdef SE_DYN
             if (++y_s == dyn.subs[y_a]) {
