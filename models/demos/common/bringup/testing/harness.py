@@ -137,6 +137,10 @@ def device_params(s) -> dict:
     p = dict(s.get("box.device_params", {}))
     if "fabric_config" in p:
         p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    if "fabric_payload_bytes" in p:  # global fabric packet payload (router default 4352 B; Blackhole max 15232 B)
+        rc = ttnn._ttnn.fabric.FabricRouterConfig()
+        rc.max_packet_payload_size_bytes = int(os.environ.get("BRINGUP_FABRIC_PAYLOAD", p.pop("fabric_payload_bytes")))
+        p["fabric_router_config"] = rc
     return p
 
 
