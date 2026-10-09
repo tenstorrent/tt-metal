@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Scratch A/B for #58828 (#58786), not for merge: the fused MoE's plain SRAM path (enable_sram_bspm off, the decode
-# default) with the PR's banked caller against main's one-bank caller, plus an A/A copy of the banked caller, alternating
+# default) with the PR's gated caller (banked from 3 SRAM experts per section) against main's one-bank caller, plus an A/A
+# copy of the gated caller, alternating
 # in one job on one build at one path; each arm has its own kernel cache. Device kernel time per device from tracy.
 set -uo pipefail
 cd /work
