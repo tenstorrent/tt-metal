@@ -185,6 +185,7 @@ commit = {
     "v11": "2cf9cbc",
     "v12": "dbc5f7a",
     "v13": "4d3c6ac",
+    "v14": "9b13f5f",
 }
 rules = rules_cv()
 CVPRED = {
@@ -198,6 +199,7 @@ CVPRED = {
     "v11": np.load("pred_cv_v11.npy"),
     "v12": np.load("pred_cv_v12.npy"),
     "v13": np.load("pred_cv_v13.npy"),
+    "v14": np.load("pred_cv_v14.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -262,7 +264,7 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
-FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13")}
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13", "v14")}
 FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
 
 
@@ -475,17 +477,35 @@ RUNS = [
         "miss/v12d4.done",
     ),
     (
-        "v13",
+        "v14",
         "fresh/fresh6_timed.csv",
         "fresh98001",
         "Fresh random set, draw 6 (seeds 98001-7)",
-        "Out-of-sample: generated and picked after v13 was frozen (MultiCore candidate included).",
+        "Out-of-sample: generated and picked after v14 was frozen (MultiCore candidate and precision rule included).",
         None,
         "fresh/chain_v13.done",
     ),
     (
         "v13",
         "miss/bh_unseen_v13_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v13",
+        "fresh/freshbh4_timed.csv",
+        "freshbh99001",
+        "BH fresh random set 4 (seeds 99001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v13 BH constants (MultiCore candidate included).",
+        None,
+        "fresh/freshbh4.done",
+    ),
+    (
+        "v14",
+        "miss/bh_unseen_v14_timed.csv",
         "bh-unseen",
         "BH designed problems never used in training (1021)",
         BHU,
@@ -531,6 +551,7 @@ for vid, meta in V.items():
         "v11": "abl/v11.json",
         "v12": "abl/v12.json",
         "v13": "abl/v13.json",
+        "v14": "abl/v14.json",
     }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
@@ -551,7 +572,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v13"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v14"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [

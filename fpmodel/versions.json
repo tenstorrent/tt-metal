@@ -119,5 +119,16 @@
    "training adds the full sweep of 110 sharded-input problems",
    "pick offers the non-reusing MultiCore factory, which the enumerator never proposes"
   ]
+ },
+ "v14": {
+  "title": "v14: output dtype + precision rule",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 9b13f5f (frozen as frozen_v14_*.json)",
+  "pick": "as v13, plus the precision validity rule",
+  "mechanisms": [
+   "v13",
+   "output dtype defaults to in0's when the op names none (as ttnn does): fixes write and spill bytes for bfp8/fp32 inputs",
+   "validity rule: bfp8/bfp4 partials without fp32 or L1 accumulation keep <= 32 spill round trips (pcc failures: 1/128 below, 31/32 above 64)"
+  ]
  }
 }
