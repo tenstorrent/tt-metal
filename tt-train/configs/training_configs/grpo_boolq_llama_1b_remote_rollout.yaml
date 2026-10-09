@@ -1,6 +1,6 @@
 # Two-rank Llama-3.2-1B GRPO with remote rollouts: 2 TTML training chips
 # (rank 0) + 2 TTT rollout chips (rank 1), 4 chips total on one host.
-# Launch with grpo_remote_rollout/boolq/runner.sh.
+# Launch with grpo/boolq/run_remote_rollout.sh.
 
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
