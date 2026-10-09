@@ -190,16 +190,8 @@ int main() {
 
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
-
-            // Notify dispatcher core that it has completed
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
-                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-            }
+            // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
+            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
         }
     }
 

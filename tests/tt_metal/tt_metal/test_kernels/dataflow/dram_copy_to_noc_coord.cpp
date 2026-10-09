@@ -7,6 +7,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/watcher_test_helpers.h"
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
@@ -48,8 +49,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     go_message_in->signal = RUN_MSG_DONE;
 #else
-    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
+    signal_completion_before_hang();
 #endif
 
     if (l1_overflow_addr) {

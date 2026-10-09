@@ -1483,12 +1483,6 @@ std::vector<CoreCoord> MeshDeviceImpl::get_ethernet_sockets(ChipId /*connected_c
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
-uint32_t MeshDeviceImpl::num_virtual_eth_cores(SubDeviceId sub_device_id) const {
-    // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
-    TT_FATAL(*sub_device_id == 0, "Cannot query virtual ethernet cores per sub-device when using MeshDevice");
-    return num_virtual_eth_cores_;
-}
-
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDeviceImpl::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     validate_sub_device_manager_tracker();
@@ -1726,9 +1720,6 @@ bool MeshDeviceImpl::initialize_impl(
     // SubDeviceManagerTracker needs a MeshDevice pointer.
     sub_device_manager_tracker_ =
         std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
-    // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
-    // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ = metal_context().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -1918,18 +1909,6 @@ HalMemType MeshDeviceImpl::get_mem_type_of_core(CoreCoord virtual_core) const {
 bool MeshDeviceImpl::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
-}
-uint8_t MeshDeviceImpl::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    validate_sub_device_manager_tracker();
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
-}
-uint8_t MeshDeviceImpl::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
-    validate_sub_device_manager_tracker();
-    if (unicast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
-            sub_device_id);
-    }
-    return 0;
 }
 SubDeviceManagerId MeshDeviceImpl::get_active_sub_device_manager_id() const {
     validate_sub_device_manager_tracker();
