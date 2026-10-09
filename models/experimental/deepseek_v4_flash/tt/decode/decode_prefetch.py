@@ -300,17 +300,18 @@ def make_decode_prefetch_buffers(
     return {name: global_cb for name in DECODE_GCB_GROUP}
 
 
-def check_decode_layout(name: str, K: int, N: int, batch: Optional[int] = None) -> dict:
-    """``DECODE_LAYOUTS[name]``, having checked it against the ``K``/``N`` (and, for a batched
+def check_decode_layout(name: str, K: int, N: int, batch: Optional[int] = None, layouts: dict = DECODE_LAYOUTS) -> dict:
+    """``layouts[name]``, having checked it against the ``K``/``N`` (and, for a batched
     weight, ``batch``) the config wants.
 
     The layouts are constants (the shared GCB is sized from them before any weight is built),
     so a config they do not describe has to be caught here: left alone it would reach the
     device as a silently mis-sharded weight rather than an error. ``batch`` is the number of
     ``o_groups`` folded into :class:`~..layers.BatchedLinearDecode`'s ``[Bc*K, Nc]`` per-core
-    block, and is ``None`` for an unbatched weight.
+    block, and is ``None`` for an unbatched weight. ``layouts`` is :data:`DECODE_LAYOUTS` unless
+    a block for another checkpoint brings its own table.
     """
-    layout = DECODE_LAYOUTS[name]
+    layout = layouts[name]
     if (layout["K"], layout["N"]) != (K, N):
         raise ValueError(
             f"the {name} layout is fixed at K={layout['K']}, N={layout['N']} but this config wants K={K}, N={N}"

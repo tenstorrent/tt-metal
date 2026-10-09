@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <array>
+#include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -28,10 +29,13 @@ struct FusedSingleUserInputs {
     const Tensor& post_bias;       // [1,1,1,H].
     const Tensor& comb_bias;       // [1,1,H,H].
     const Tensor& hidden_streams;  // [1,1,H,D], WIDTH_SHARDED on cores 0..7.
+    // [1,1,1,H] TILE collapse weights; replaces the pre computed from fused_w when present.
+    std::optional<Tensor> pre_mix;
 };
 
-// Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}.
-using FusedSingleUserSpecReturn = std::array<tt::tt_metal::TensorSpec, 3>;
-using FusedSingleUserTensorReturn = std::array<Tensor, 3>;
+// Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}, plus pre [1,1,1,H] when pre_mix is
+// given.
+using FusedSingleUserSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
+using FusedSingleUserTensorReturn = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection

@@ -22,12 +22,12 @@ namespace {
 constexpr std::string_view kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels";
 
-// DRAM weight layout: 64 shards, one per original 8x8 core. H = 64 * 64 columns.
-constexpr uint32_t kNumWeightShards = 64;
+// DRAM weight layout: one shard per core of the serial grid, which is kGridY rows tall and
+// num_weight_shards / kGridY columns wide (8x8 at H == 4096, 10x8 at H == 5120).
 constexpr uint32_t kGridY = 8;
 
 // Each weight shard owns kOutTilesPerCore tiles (64 columns) of the H-dim output row, so a
-// down shard is [I, 64] and H must be kNumWeightShards * 64.
+// down shard is [I, 64] and there are H / 64 shards.
 constexpr uint32_t kOutTilesPerCore = 2;
 
 // 6-expert path: 16 cores per expert on a 12x8 = 96-core grid (2 columns x 8 rows per expert).
@@ -39,7 +39,9 @@ constexpr uint32_t kCoresPerExpertParallel = 16;
 // 32-column I-tile (a [gate_32 | up_32] DRAM shard). At I == 2048 that is 64 shards; TP slices I
 // (e.g. 512 -> 16 shards) so the 16 cores of a group still each own at least one shard rather
 // than four cores covering the whole I dim and the rest sitting idle.
-uint32_t swiglu_tiles_per_shard_for(uint32_t i_tiles) { return std::max<uint32_t>(1u, i_tiles / kNumWeightShards); }
+uint32_t swiglu_tiles_per_shard_for(uint32_t i_tiles, uint32_t num_weight_shards) {
+    return std::max<uint32_t>(1u, i_tiles / num_weight_shards);
+}
 
 uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 }  // namespace
@@ -117,26 +119,37 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_weights = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
     const uint32_t num_active = operation_attributes.num_experts;
+    const uint32_t num_weight_shards =
+        static_cast<uint32_t>(input_tensor.logical_shape()[-1]) / (kOutTilesPerCore * tt::constants::TILE_WIDTH);
     constexpr uint32_t kParallelGridX = kParallelExperts * 2u;
-    constexpr uint32_t kSerialGridX = 8u;
+    const uint32_t serial_grid_x = num_weight_shards / kGridY;
     const bool want_parallel = num_active == kParallelExperts;
     const bool have_parallel_grid = grid.x >= kParallelGridX && grid.y >= kGridY;
     if (want_parallel && !have_parallel_grid) {
         log_warning(
             tt::LogOp,
-            "fused_experts: 6-expert path needs at least {}x{} compute grid, got {}x{}; falling back to 8x8",
+            "fused_experts: 6-expert path needs at least {}x{} compute grid, got {}x{}; falling back to {}x{}",
             kParallelGridX,
             kGridY,
             grid.x,
-            grid.y);
+            grid.y,
+            serial_grid_x,
+            kGridY);
     }
     const bool parallel_experts = want_parallel && have_parallel_grid;
-    const uint32_t GRID_X = parallel_experts ? kParallelGridX : kSerialGridX;
+    const uint32_t GRID_X = parallel_experts ? kParallelGridX : serial_grid_x;
     const uint32_t GRID_Y = kGridY;
-    const uint32_t cores_per_expert = parallel_experts ? kCoresPerExpertParallel : kNumWeightShards;
+    const uint32_t cores_per_expert = parallel_experts ? kCoresPerExpertParallel : num_weight_shards;
     const uint32_t num_expert_groups = parallel_experts ? kParallelExperts : 1u;
-    // Down/H shards per core: H is always 64-way sharded (4096 cols), so 16 cores cover 4 shards each.
-    const uint32_t shards_per_core = kNumWeightShards / cores_per_expert;
+    // Down/H shards per core: H is 64-column sharded, so 16 cores cover 4 shards each at H == 4096
+    // and 5 at H == 5120.
+    TT_FATAL(
+        num_weight_shards % cores_per_expert == 0,
+        "fused_experts: the {} H shards ({} columns each) must divide over the {} cores of an expert",
+        num_weight_shards,
+        kOutTilesPerCore * tt::constants::TILE_WIDTH,
+        cores_per_expert);
+    const uint32_t shards_per_core = num_weight_shards / cores_per_expert;
     TT_FATAL(
         grid.x >= GRID_X && grid.y >= GRID_Y,
         "fused_experts: expected at least {}x{} compute grid, got {}x{}",
@@ -208,7 +221,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const TileDescriptor input_tile_desc(input_tile);
     const uint32_t weight_tile_bytes = static_cast<uint32_t>(gate_up0_buffer->page_size());
     // Number of SwiGLU cores and each one's share of the I dim (see swiglu_tiles_per_shard_for).
-    const uint32_t swiglu_tiles_per_core = swiglu_tiles_per_shard_for(i_tiles);
+    const uint32_t swiglu_tiles_per_core = swiglu_tiles_per_shard_for(i_tiles, num_weight_shards);
     const uint32_t num_producers = parallel_experts ? cores_per_expert : (i_tiles / swiglu_tiles_per_core);
     // Gate_up/I shards per core: I is 64-way only at the full 2048 width. TP slices it (e.g. I=512
     // -> 16 tiles), so 16 cores cover one I-tile each rather than four.

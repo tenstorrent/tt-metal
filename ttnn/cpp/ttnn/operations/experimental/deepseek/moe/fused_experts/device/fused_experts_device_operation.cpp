@@ -284,15 +284,27 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         attributes.experts_block_size,
         attributes.num_experts);
 
+    // One DRAM weight shard per core of the serial grid (8 rows of H/512 columns: 8x8 at H == 4096);
+    // compute uses 96 cores when num_experts == 6. Each shard owns 64 columns of the H output row.
+    constexpr uint32_t TILE_DIM = 32;
+    constexpr uint32_t kDownShardCols = 2u * TILE_DIM;
+    constexpr uint32_t kGridRows = 8;
+    const uint32_t hidden = static_cast<uint32_t>(x.logical_shape()[-1]);
+    TT_FATAL(
+        hidden % (kDownShardCols * kGridRows) == 0,
+        "fused_experts: hidden dim ({}) must fill whole {}-row grid columns of {}-column shards",
+        hidden,
+        kGridRows,
+        kDownShardCols);
+    const uint32_t num_weight_shards = hidden / kDownShardCols;
+
     // gate_up weights must be DRAM ND-sharded so that each shard is exactly one I-tile of gate
     // plus its paired up tile (read in a single NoC read). The SwiGLU I dim is one 32-column
     // tile per shard, so a shard holds [gate_32 | up_32] and the weight is permuted on the
     // host into matching per-shard [gate | up] blocks. At I == 2048 that is 64 shards; TP's
     // smaller local I yields fewer shards, which the 16-core groups still cover 1-for-1.
-    constexpr uint32_t kNumCores = 64;  // DRAM weight shards (8x8); compute uses 96 cores when num_experts == 6
-    constexpr uint32_t TILE_DIM = 32;
     const uint32_t i_tiles = attributes.intermediate_size / TILE_DIM;
-    const uint32_t swiglu_tiles_per_core = std::max<uint32_t>(1u, i_tiles / kNumCores);
+    const uint32_t swiglu_tiles_per_core = std::max<uint32_t>(1u, i_tiles / num_weight_shards);
     const uint32_t kColsPerCore = 2u * TILE_DIM * swiglu_tiles_per_core;
     // Phase 1 holds gate and up for this core's slice in DST at once, which fits 4 fp32 tiles.
     TT_FATAL(
@@ -324,16 +336,10 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             shard_shape[-2]);
     }
 
-    // down weights must be DRAM ND-sharded so each shard is exactly one core's [I, H/64]
-    // column slice (read in a single NoC read). Each shard spans the full I (contraction) dim
-    // and one core's 64-column H output slice; H/64 shards cover the output H dim.
-    const uint32_t hidden = static_cast<uint32_t>(x.logical_shape()[-1]);
-    TT_FATAL(
-        hidden % kNumCores == 0,
-        "fused_experts: hidden dim ({}) must be divisible by the {}-core grid",
-        hidden,
-        kNumCores);
-    const uint32_t down_shard_cols = hidden / kNumCores;
+    // down weights must be DRAM ND-sharded so each shard is exactly one core's [I, 64] column
+    // slice (read in a single NoC read). Each shard spans the full I (contraction) dim and one
+    // core's 64-column H output slice; H/64 shards cover the output H dim.
+    const uint32_t down_shard_cols = kDownShardCols;
     for (uint32_t e = 0; e < num_weights; ++e) {
         const auto& w = tensor_args.down_weights[e];
         TT_FATAL(
@@ -357,7 +363,7 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             hidden);
         TT_FATAL(
             static_cast<uint32_t>(shard_shape[-1]) == down_shard_cols,
-            "fused_experts: down_weights[{}] shard last dim ({}) must be {} (one core's H/64 slice)",
+            "fused_experts: down_weights[{}] shard last dim ({}) must be {} (one core's 64-column H slice)",
             e,
             shard_shape[-1],
             down_shard_cols);

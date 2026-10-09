@@ -103,6 +103,22 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
     validate_width_shard(fused_w, 1, static_cast<uint32_t>(fused_w.padded_shape()[-1]), "fused_w");
     validate_width_shard(hidden_streams, kCollapseCores, d, "hidden_streams");
 
+    if (tensor_args.pre_mix.has_value()) {
+        const auto& pre_mix = *tensor_args.pre_mix;
+        TT_FATAL(pre_mix.storage_type() == StorageType::DEVICE, "pre_mix must be on device");
+        TT_FATAL(pre_mix.dtype() == DataType::BFLOAT16, "pre_mix must be BFLOAT16");
+        // The collapse cores copy its single tile straight into the matmul's in0 buffer.
+        TT_FATAL(
+            pre_mix.layout() == Layout::TILE &&
+                pre_mix.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                pre_mix.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "pre_mix must use 32x32 TILE layout");
+        TT_FATAL(
+            pre_mix.logical_shape() == ttnn::Shape({1, 1, 1, hc}),
+            "pre_mix must be [1,1,1,H], got {}",
+            pre_mix.logical_shape());
+    }
+
     const auto device_grid = fused_w.device()->compute_with_storage_grid_size();
     TT_FATAL(
         device_grid.x >= kTotalCores, "single-user hyperconnection requires {} cores in the first row", kTotalCores);
@@ -128,30 +144,35 @@ FusedSingleUserDeviceOperation::spec_return_value_t FusedSingleUserDeviceOperati
     };
     const auto& hidden_shape = tensor_args.hidden_streams.logical_shape();
     const uint32_t d = static_cast<uint32_t>(hidden_shape[3]);
-    return {
+    spec_return_value_t specs = {
         tt::tt_metal::TensorSpec(
             ttnn::Shape({1, 1, attributes.num_streams, 1}), make_layout(attributes.post_comb_output_mem_config)),
         tt::tt_metal::TensorSpec(
             ttnn::Shape({1, 1, attributes.num_streams, attributes.num_streams}),
             make_layout(attributes.post_comb_output_mem_config)),
         tt::tt_metal::TensorSpec(ttnn::Shape({1, 1, 1, d}), make_layout(attributes.collapsed_output_mem_config))};
+    if (tensor_args.pre_mix.has_value()) {
+        specs.emplace_back(
+            ttnn::Shape({1, 1, 1, attributes.num_streams}), make_layout(attributes.post_comb_output_mem_config));
+    }
+    return specs;
 }
 
 FusedSingleUserDeviceOperation::tensor_return_value_t FusedSingleUserDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto specs = compute_output_specs(attributes, tensor_args);
     auto* device = tensor_args.fused_w.device();
-    return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attributes, tensor_args)) {
+        outputs.push_back(create_device_tensor(spec, device));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> fused_hyperconnection_single_user(
+std::vector<Tensor> fused_hyperconnection_single_user(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
@@ -163,7 +184,8 @@ std::array<Tensor, 3> fused_hyperconnection_single_user(
     float post_scale,
     float comb_scale,
     float eps,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& pre_mix) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const MemoryConfig collapsed_output_mem_config = memory_config.value_or(hidden_streams.memory_config());
@@ -183,6 +205,7 @@ std::array<Tensor, 3> fused_hyperconnection_single_user(
         .post_bias = post_bias,
         .comb_bias = comb_bias,
         .hidden_streams = hidden_streams,
+        .pre_mix = pre_mix,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

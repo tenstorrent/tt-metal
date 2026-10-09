@@ -1,0 +1,33 @@
+---
+description: Call constructors and library functions directly; no thin wrapper/alias helpers
+alwaysApply: true
+---
+
+# No thin wrapper functions
+
+Don't add helpers whose only job is to forward arguments to an existing class or
+function with a few of them pre-filled or renamed (e.g. a `_linear(...)` that just
+builds a `LinearDecode`). Call the real constructor/function at each site, even if
+the calls look repetitive. The reader should see the actual API being used.
+
+```python
+# ❌ BAD
+def _linear(weights, name, device, cache, dtype, rectangle_b_grid=False):
+    return LinearDecode(weights[f"{name}.weight"], device, cache.file(name), dtype=dtype,
+                        **DECODE_LAYOUTS[name], rectangle_b_grid=rectangle_b_grid, use_rm_hs=True)
+
+self.comp_kv_proj = _linear(weights, "compressor.wkv", device, cache, ttnn.bfloat16)
+
+# ✅ GOOD
+self.comp_kv_proj = LinearDecode(
+    weights["compressor.wkv.weight"],
+    device,
+    cache.file("compressor.wkv"),
+    dtype=ttnn.bfloat16,
+    **DECODE_LAYOUTS["compressor.wkv"],
+    use_rm_hs=True,
+)
+```
+
+A helper is fine when it adds real logic (math, branching, a non-trivial
+transformation), not just argument plumbing.
