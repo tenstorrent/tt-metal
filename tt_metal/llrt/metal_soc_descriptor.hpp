@@ -23,6 +23,10 @@ class TTDevice;
 // (CMFW older than 19.12) or there is no device to ask.
 std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device);
 
+namespace YAML {
+class Node;
+}
+
 //! SocDescriptor contains information regarding the SOC configuration targeted.
 /*!
     Should only contain relevant configuration for SOC
@@ -70,7 +74,8 @@ public:
     // usable set is defined in one place. On Blackhole it excludes each DRAM view's NOC0 worker
     // endpoint, which is owned by the syseng firmware (CMFW DRAM telemetry, SYS-1419) and runs no
     // DRISC firmware. Hardware without that restriction returns all DRAM cores -- callers never need
-    // to special-case it.
+    // to special-case it. A DRAM-harvested Blackhole takes its views from harvested_dram_views, whose
+    // NOC0 endpoint is not always CMFW's, so Metal keeps DRAM programmable cores off there.
     // A LOGICAL request returns Metal logical DRAM coords ({dram_view, dram_bank_endpoint_coords
     // index}, the space get_physical_dram_core_from_logical and CreateKernel(DramConfig) use), not
     // UMD's {channel, raw subchannel}.
@@ -122,6 +127,17 @@ private:
 
     void load_dram_metadata_from_device_descriptor(
         const std::optional<uint32_t>& mrisc_noc2axi_ports, std::optional<uint64_t> dram_view_size_limit);
+    // Appends a DRAM view on `channel` (device-descriptor numbering, with harvested-channel gaps)
+    // whose endpoints and address offset come from `dram_view`, a dram_views or
+    // harvested_dram_views entry.
+    void add_dram_view(
+        size_t channel, const YAML::Node& dram_view, const char* eth_endpoint_key, const char* worker_endpoint_key);
+    // Unharvested DRAM channels (device-descriptor numbering) sorted by the translated coord of
+    // their subchannel 0: by x, then y. Empty when NOC translation is off or a channel's
+    // subchannels are not one translated column with subchannel s at s rows below subchannel 0,
+    // since then a view placed by translated position would not reach the same cores whichever
+    // channel is harvested.
+    std::vector<size_t> get_unharvested_dram_channels_in_translated_order() const;
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
 };
