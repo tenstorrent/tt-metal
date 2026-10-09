@@ -4,6 +4,7 @@
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
     sdpa/test_ring_joint_ksplit.cpp
+    sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
     test_quasar_matmul_unified_subblock.cpp
     test_to_and_from_json.cpp
@@ -49,6 +50,15 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
     test_unary_program_hash.cpp
+)
+
+set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
+    test_mcast_descriptor.cpp
+    test_mcast_host_api.cpp
+    test_mcast_program.cpp
+    test_mcast_program_spec.cpp
+    test_mcast_validation_lifecycle.cpp
+    test_mcast_wire_topology.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
