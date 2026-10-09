@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import struct
 from dataclasses import dataclass
 from typing import List
 
@@ -50,6 +49,7 @@ from helpers.stimuli_generator import (
     compute_safe_input_magnitude_range,
     format_elem_max,
     generate_stimuli,
+    overlay_values,
 )
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -74,7 +74,7 @@ from helpers.tile_constants import (
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
 )
-from helpers.utils import passed_test
+from helpers.utils import fp32_to_bits, passed_test
 
 
 @pytest.fixture(autouse=True)
@@ -521,16 +521,6 @@ UNARY_MAX_MIN_INT32_SPAN = 5000
 UNARY_MAX_MIN_FLOAT_SPAN = 4.0
 
 
-def _overlay_edges(values: torch.Tensor, edges: list) -> torch.Tensor:
-    """Overlay *edges* at a stride coprime with the 16-wide face row, so they spread over lanes."""
-    flat = values.flatten().clone()
-    stride = 37
-    for i, edge in enumerate(edges):
-        idx = (i * stride) % flat.numel()
-        flat[idx] = edge
-    return flat.reshape(values.shape)
-
-
 def prepare_unary_max_min_inputs(
     src_A: torch.Tensor,
     mathop: MathOperation,
@@ -554,18 +544,14 @@ def prepare_unary_max_min_inputs(
         if not sign_magnitude:
             edges.append(_INT32_MIN)
         edges = [e for e in edges if lowest <= e <= _INT32_SMAG_MAX]
-        return _overlay_edges(values, edges).to(torch_format)
+        return overlay_values(values, edges).to(torch_format)
 
     s = float(scalar)
     span = UNARY_MAX_MIN_FLOAT_SPAN
     assert span > abs(s), f"float stimulus span {span} must exceed |scalar| {abs(s)}"
     values = -span + 2.0 * span * src_A.to(torch.float32)
     edges = [0.0, -0.0, s, -s, s - 0.25, s + 0.25, 1.0, -1.0, span, -span]
-    return _overlay_edges(values, edges).to(torch_format)
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
+    return overlay_values(values, edges).to(torch_format)
 
 
 def prepare_unary_inputs(
@@ -1255,7 +1241,7 @@ def test_eltwise_unary_sfpu_quasar(
                     SFPU_UNARY_MAX_MIN_SCALAR(
                         int(max_min_scalar)
                         if mathop in UNARY_MAX_MIN_INT32_OPS
-                        else _fp32_bits(float(max_min_scalar))
+                        else fp32_to_bits(float(max_min_scalar))
                     )
                 ]
                 if is_max_min and max_min_scalar is not None
