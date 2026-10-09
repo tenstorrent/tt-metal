@@ -28,25 +28,10 @@ extern "C" __attribute__((noinline, used)) void acquire_release_physical()
 // CHECK-NEXT: ttatrelm 4
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void acquire_release_aliases()
-{
-    sync::mutex::acquire<sync::Mutex::RegisterRmw>();
-    sync::mutex::acquire<sync::Mutex::Unpacker0>();
-    sync::mutex::acquire<sync::Mutex::Unpacker1>();
-    sync::mutex::release<sync::Mutex::Sfpu>();
-}
-
-// CHECK-LABEL: <acquire_release_aliases>:
-// CHECK-NEXT: ttatgetm 0
-// CHECK-NEXT: ttatgetm 2
-// CHECK-NEXT: ttatgetm 3
-// CHECK-NEXT: ttatrelm 4
-// CHECK-NEXT: ret
-
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
-    TTI_INSN(sync::mutex::acquire_operation<sync::Mutex::Packer0>());
-    TTI_INSN(sync::mutex::release_operation<sync::Mutex::Math>());
+    TTI_INSN(sync::mutex::acquire_operation<sync::Mutex::M4>());
+    TTI_INSN(sync::mutex::release_operation<sync::Mutex::M0>());
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
