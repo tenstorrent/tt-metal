@@ -42,8 +42,8 @@ inline void generalized_moe_gate_transpose_dest_single_face_configure_addrmod()
         .set(ADDR_MOD_3);
 }
 
-template <bool is_32bit>
-inline void generalized_moe_gate_transpose_dest_single_face_step0_record()
+template <std::uint32_t num_tiles = 1, bool is_32bit>
+inline void generalized_moe_gate_transpose_dest_single_face_step0_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
@@ -69,10 +69,16 @@ inline void generalized_moe_gate_transpose_dest_single_face_step0_record()
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
 
+    std::uint32_t d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
+    std::uint32_t b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
+
+    ckernel_template tmp(num_tiles, 1, d2b_instr, TT_OP_TRNSPSRCB);
+    tmp.set_end_op(b2d_instr);
+    tmp.program();
 }
 
-template <bool is_32bit>
-inline void generalized_moe_gate_transpose_dest_single_face_step1_record()
+template <std::uint32_t num_tiles = 1, bool is_32bit>
+inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
@@ -94,6 +100,10 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_record()
     TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
 }
 
 // step1_hi: clone of step1 with two knobs:
@@ -101,8 +111,8 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_record()
 //   b2d_base = MOVB2D output DEST row base (where to write the resulting run; step1 uses 0).
 // The output base lets the LOW half write its run to rows 8-15 (b2d_base=8) so it does NOT clobber
 // the post-step0 groups 4-7 sitting at rows 4-7 — which the HIGH half (d2b_dst=4) then reads.
-template <bool is_32bit, std::uint32_t d2b_dst, std::uint32_t b2d_base>
-inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_record()
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t d2b_dst, std::uint32_t b2d_base>
+inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 11);
@@ -119,14 +129,18 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_record()
     TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
     TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
     TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
 }
 
 // Plain (non-transposed) FPU copy of 4 DEST rows [src..src+3] -> [dst..dst+3], across the 3 data
 // regions (scores/indices/bias, via num_tiles + the ADDR_MOD_2 base advance). Used to stash/restore
 // data in rows 8-15 — which the SFPU merge cannot address (SFPU offsets >=8 wrap) but the FPU can —
 // during the ungrouped two-half assembly. src/dst must be 4-row aligned (0,4,8,12).
-template <bool is_32bit, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16>
-inline void generalized_moe_gate_copy4rows_record()
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16>
+inline void generalized_moe_gate_copy4rows_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported");
     // srcb selects the 4-row SrcB scratch window (16/20/24/28). Back-to-back copy4rows calls use
@@ -137,6 +151,9 @@ inline void generalized_moe_gate_copy4rows_record()
     TTI_MOVB2D(0, srcb + 1, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
     TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
     TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3); // ADDR_MOD_2 advances base by 64
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
 }
 
 template <std::uint32_t num_tiles = 1, bool is_32bit>
@@ -169,7 +186,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_common_ini
 template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_()
 {
-    generalized_moe_gate_transpose_dest_single_face_step0_record<is_32bit>();
+    generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
     // Transpose-dest is a data-movement op -> PRESERVE. Route through the tracker (not a raw write) so a
     // later matmul/eltwise-binary re-establishes DEFAULT instead of skipping and inheriting this keep flag.
     math::_configure_preserve_zero_flag_state_();
@@ -179,7 +196,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init
 template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_()
 {
-    generalized_moe_gate_transpose_dest_single_face_step1_record<is_32bit>();
+    generalized_moe_gate_transpose_dest_single_face_step1_configure_mop<3, is_32bit>();
 }
 
 // Initialize for single face transpose
@@ -197,7 +214,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init
 template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false, std::uint32_t srcb = 16>
 inline void _llk_math_generalized_moe_gate_copy4rows_init_()
 {
-    generalized_moe_gate_copy4rows_record<is_32bit, src, dst, srcb>();
+    generalized_moe_gate_copy4rows_configure_mop<3, is_32bit, src, dst, srcb>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
@@ -206,17 +223,14 @@ inline void _llk_math_generalized_moe_gate_copy4rows_()
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
     math::reset_counters(p_setrwc::SET_ABD_F);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
-    for (std::uint32_t tile = 0; tile < gmg_step_tiles; ++tile)
-    {
-        lltt::replay(math::replay_buf_offset, 5);
-    }
+    ckernel_template::run();
 }
 
 // step1_hi init/runner — tunable knobs (d2b_dst, b2d_base) for the high-group experiment.
 template <std::uint32_t d2b_dst = 0, std::uint32_t b2d_base = 24, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_()
 {
-    generalized_moe_gate_transpose_dest_single_face_step1_hi_record<is_32bit, d2b_dst, b2d_base>();
+    generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop<3, is_32bit, d2b_dst, b2d_base>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
@@ -225,10 +239,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_(
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
     math::reset_counters(p_setrwc::SET_ABD_F);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
-    for (std::uint32_t tile = 0; tile < gmg_step_tiles; ++tile)
-    {
-        lltt::replay(math::replay_buf_offset, 11);
-    }
+    ckernel_template::run();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
@@ -240,12 +251,8 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_()
     // Wait for SFPU and SrcB to be available
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
-    for (std::uint32_t tile = 0; tile < gmg_step0_tiles; ++tile)
-    {
-        lltt::replay(math::replay_buf_offset, 8);
-        TTI_TRNSPSRCB;
-        lltt::replay(math::replay_buf_offset + 8, 8);
-    }
+    // Run the 16-bit single-face transpose MOP
+    ckernel_template::run();
 }
 
 // Perform in-place transpose on face 0 (rows 0-15) of a single tile in DEST
@@ -261,14 +268,12 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_()
     // Wait for SFPU and SrcB to be available
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
-    for (std::uint32_t tile = 0; tile < gmg_step_tiles; ++tile)
-    {
-        lltt::replay(math::replay_buf_offset, 11);
-    }
+    // Run the 16-bit single-face transpose MOP
+    ckernel_template::run();
 }
 
-// Direct forms of steps 0 and 1, step1_hi and copy4rows: each region's words are issued as they are, with no record and
-// no replay; the same FPU stream as the init and runner pair.
+// Direct forms of steps 0 and 1, step1_hi and copy4rows: each DEST region's words issued as they are, with no MOP, record
+// or replay; the same FPU stream as the init and runner pair.
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_()
 {
