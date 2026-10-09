@@ -385,6 +385,25 @@ at 5 s (mean [worst] block-output rel-L2 over the six captures: `w8` 1.35 % [2.2
 `w8a8_lofi` un-fused 1.70 % [2.57]; the fused `to_out` at LoFi 3.05 % [5.07] with block 0 at 5 %), with block 25
 near 0.9 % and block 49 near 2.5 %.
 
+The same at a second prompt ("A serene mountain landscape with flowing water", seed 0), the prompt used for the
+clips from here on:
+
+| config | denoise 8 forwards | steady ms/forward | vs default | forward 0 velocity rel-L2 / SQNR | video PSNR | audio PSNR |
+|---|---|---|---|---|---|---|
+| default (bf16, HiFi2) | 36.51 s | 4531 | – | – | – | – |
+| `w8a8` (HiFi2) | 33.82 s | 4198 | −7.4 % | 2.48 % / 32.1 dB | 22.3 dB | 21.7 dB |
+| **`FAST_H3_FP8=1`** | **32.81 s** | **4072** | **−10.1 %** | 4.60 % / 26.7 dB | 20.8 dB | 23.9 dB |
+| `FAST_H3_FP8=1` + `FAST_H3_FP8_BLOCKS=2-46` | 33.14 s | 4115 | −9.2 % | 2.50 % / 32.0 dB | 21.7 dB | 24.3 dB |
+
+The timings repeat the first prompt's to within 0.3 %; this prompt's first-forward error is about half of the first
+prompt's at every preset, and the boundary-block policy brings the LoFi knob's error down to the HiFi2 preset's.
+Frames at 3 s and 12 s show the same valley, river and camera move with small differences in rock and tree detail.
+
+A 5 s check of the single-linear subsets on this prompt (default 933 ms per forward): `FAST_H3_FP8_LINEARS=ff2`
+with `FAST_H3_FP8=1` runs at 929 ms (−0.5 %, first-forward 2.0 %) and `FAST_H3_FP8_LINEARS=ff1` at 912 ms (−2.2 %,
+1.8 %), each at its requested fidelity with the other feed-forward linear at the model default (`ff1` writes bf16 for
+an excluded `ff2`), so most of the feed-forward's gain is `ff1`'s input cast and LoFi.
+
 ### 8.8 Per-op device time of one block (Tracy device profiler)
 
 Block 25 was run in isolation on its captured input (one warm iteration, then three timed ones between signposts),
