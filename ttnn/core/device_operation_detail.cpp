@@ -156,6 +156,13 @@ compute_output_placements_and_shape(
     return {std::move(result_placements), tt::tt_metal::distributed::MeshShape(std::move(result_strides))};
 }
 
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<MeshCoordinate> mesh_coords) {
+    auto [placements, shape] = compute_output_placements_and_shape(operands);
+    return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
+}
+
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
 static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
     MeshCoordinateRangeSet a_set;

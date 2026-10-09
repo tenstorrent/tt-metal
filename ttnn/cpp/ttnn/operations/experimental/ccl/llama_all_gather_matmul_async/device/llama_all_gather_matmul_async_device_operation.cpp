@@ -134,10 +134,9 @@ std::vector<tt::tt_metal::TensorTopology> LlamaAllGatherMatmulAsyncDeviceOperati
             .value_or(tensor_args.input0.tensor_topology());
     const std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(aggregated_topology), std::cref(tensor_args.input1.tensor_topology())};
-    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
-    TensorTopology matmul_topology(
-        std::move(shape), std::move(placements), tensor_args.input0.tensor_topology().mesh_coords());
-    return {std::move(matmul_topology), aggregated_topology};
+    return {
+        ttnn::device_operation::detail::union_topology(operands, tensor_args.input0.tensor_topology().mesh_coords()),
+        aggregated_topology};
 }
 
 ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(

@@ -151,9 +151,8 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::co
         operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
         operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
     }
-    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
-    const TensorTopology matmul_topology(
-        std::move(shape), std::move(placements), tensor_args.input_tensor.tensor_topology().mesh_coords());
+    const TensorTopology matmul_topology = ttnn::device_operation::detail::union_topology(
+        operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
 
     const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
     std::vector<TensorTopology> topologies;

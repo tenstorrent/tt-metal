@@ -375,8 +375,7 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     if (tensor_args.mm_optional_input_tensor.has_value()) {
         operands.emplace_back(tensor_args.mm_optional_input_tensor->tensor_topology());
     }
-    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
-    TensorTopology mm_topology(std::move(shape), std::move(placements), input_topology.mesh_coords());
+    TensorTopology mm_topology = ttnn::device_operation::detail::union_topology(operands, input_topology.mesh_coords());
 
     TensorTopology rs_output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
                                             ttnn::operations::ccl::common::reduce_scatter_output_topology(
@@ -389,14 +388,11 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
                                             attributes.cluster_axis)
                                             .value_or(mm_topology);
     if (tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value()) {
-        std::vector<std::reference_wrapper<const TensorTopology>> final_operands{
-            std::cref(rs_output_topology),
-            std::cref(tensor_args.addcmul_input_tensor1->tensor_topology()),
-            std::cref(tensor_args.addcmul_input_tensor2->tensor_topology())};
-        auto [final_placements, final_shape] =
-            ttnn::device_operation::detail::compute_output_placements_and_shape(final_operands);
-        rs_output_topology =
-            TensorTopology(std::move(final_shape), std::move(final_placements), rs_output_topology.mesh_coords());
+        rs_output_topology = ttnn::device_operation::detail::union_topology(
+            {std::cref(rs_output_topology),
+             std::cref(tensor_args.addcmul_input_tensor1->tensor_topology()),
+             std::cref(tensor_args.addcmul_input_tensor2->tensor_topology())},
+            rs_output_topology.mesh_coords());
     }
     return {mm_topology, mm_topology, std::move(rs_output_topology)};
 }

@@ -58,6 +58,17 @@ compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
+ * The label of an output that is a function of several labelled operands -- a fused matmul of a collective's result
+ * by a weight, an elementwise op on a reduce_scatter result -- as a TensorTopology over `mesh_coords`: the union
+ * above, with `operands.front()` the label the operation computed itself (the collective's result, or the matmul
+ * label a fused reduce_scatter consumes) and the rest the other operands' labels. This is what every fused
+ * experimental CCL hook spells, so a rule for how such unions behave has one home.
+ */
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords);
+
+/**
  * Non-template implementation of tensor coordinate extraction.
  *
  * Extracts and validates mesh coordinates from a pre-extracted list of input tensors.

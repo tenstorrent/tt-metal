@@ -129,10 +129,10 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMatmulAsyncDeviceOperation::c
     if (tensor_args.bias.has_value()) {
         operands.emplace_back(tensor_args.bias->tensor_topology());
     }
-    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
-    TensorTopology matmul_topology(
-        std::move(shape), std::move(placements), tensor_args.input_tensor.tensor_topology().mesh_coords());
-    return {gathered.front(), std::move(matmul_topology)};
+    return {
+        gathered.front(),
+        ttnn::device_operation::detail::union_topology(
+            operands, tensor_args.input_tensor.tensor_topology().mesh_coords())};
 }
 
 ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
