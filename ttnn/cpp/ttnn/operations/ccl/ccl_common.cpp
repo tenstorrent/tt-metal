@@ -17,6 +17,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -148,7 +149,7 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
         const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
                                      : mesh_view.get_fabric_node_ids_on_row(row_or_col);
         for (size_t i = 1; i < nodes.size(); i++) {
-            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(mesh_device, nodes[i - 1], nodes[i]);
             if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
                 return false;
             }

@@ -38,9 +38,9 @@ import signal
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
-# ttsim runs in-process (no ExalensServer). Its init must complete before the
+# ttsim runs in-process (no SimulationServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
 # check_context()) at module-load time.
 # TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
@@ -61,21 +61,39 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
+# tt_llk_perf lives in tools/python, outside the test tree, so it goes on sys.path before the helpers import it.
+# LLK_HOME wins when set, matching init_llk_home() further down.
+_TT_LLK_TOOLS_PYTHON = str(
+    Path(os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3])
+    / "tools"
+    / "python"
+)
+if _TT_LLK_TOOLS_PYTHON not in sys.path:
+    sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
+
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
-from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
+from helpers.simulation_server import SimulationServer, pid_alive
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
 
-_exalens_server: Optional[ExalensServer] = None
+_sim_server: Optional[SimulationServer] = None
+# xdist worker: PID of the controller's simulation host.
+_sim_host_pid: Optional[int] = None
+# xdist worker: set in pytest_configure, raised from pytest_runtest_setup.
+# pytest.exit during configure looks like a worker crash, and xdist respawns
+# the worker until --max-worker-restart.
+_worker_fatal: Optional[str] = None
+_SIM_SERVER_DIR_KEY = "llk_sim_server_dir"
+_SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
@@ -94,12 +112,13 @@ def override_gprs_used_by_tensix_dump():
 
 
 @atexit.register
-def _stop_exalens_server():
-    """atexit handler to ensure the tt-exalens server is stopped on process exit."""
-    global _exalens_server
-    if _exalens_server is not None:
-        _exalens_server.stop()
-        _exalens_server = None
+def _stop_sim_server():
+    """atexit handler to ensure the simulation host is stopped on process exit."""
+    global _sim_server
+    if _sim_server is not None:
+        tt_exalens_init.cleanup_global_context()
+        _sim_server.stop()
+        _sim_server = None
 
 
 def _fatal_signal_handler(signum, frame):
@@ -113,7 +132,7 @@ def _fatal_signal_handler(signum, frame):
     raise KeyboardInterrupt
 
 
-# Ensure the tt-exalens server is stopped on SIGTERM/SIGQUIT so the emulator
+# Ensure the simulation host is stopped on SIGTERM/SIGQUIT so the emulator
 # session is released. Without this, `kill` or Ctrl+\ would terminate the
 # process immediately, leaving the emulator slot orphaned.
 signal.signal(signal.SIGTERM, _fatal_signal_handler)
@@ -196,15 +215,16 @@ def pytest_addoption(parser):
         "--port",
         action="store",
         type=int,
-        default=5555,
-        help="Integer number of the server port.",
+        default=None,
+        help="Deprecated and ignored: the RTL simulator is shared through a UMD "
+        "simulation server, which needs no port. Will be removed.",
     )
     parser.addoption(
         "--reset-simulator-per-test",
         action="store_true",
         default=False,
-        help="Restart the tt-exalens server after each test. "
-        "Only effective with --run-simulator.",
+        help="Restart the simulation host after each test. "
+        "Only effective with --run-simulator, and not with xdist (-n).",
     )
 
     parser.addoption(
@@ -506,6 +526,12 @@ def pytest_configure(config):
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        if config.getoption("--port") is not None:
+            logger.warning(
+                "--port is deprecated and ignored: the RTL simulator is now shared "
+                "through a UMD simulation server, which needs no port. Drop it from "
+                "your command line; it will be removed."
+            )
         utils_module.prepare_ulp_measure_file()
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
@@ -533,7 +559,7 @@ def pytest_configure(config):
 
             if _SIMULATOR_PATH.endswith(".so"):
                 # ttsim: already initialized at module import above; runs in-process, no server.
-                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+                # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
@@ -543,14 +569,27 @@ def pytest_configure(config):
                     )
                 TestConfig.resolve_worker_tensix_location()
             elif not hasattr(config, "workerinput"):
-                # RTL simulator: only the controller process manages the server; xdist workers
-                # just connect to the already-running instance. TENSIX_LOCATION is bound
-                # after init_ttexalens_remote in pytest_runtest_setup, once the server is up.
-                global _exalens_server
-                _exalens_server = ExalensServer(
-                    simulator_path=_SIMULATOR_PATH,
-                    port=TestConfig.TEST_TARGET.simulator_port,
-                )
+                # RTL simulator: the controller runs the host, test processes attach as clients.
+                if (
+                    TestConfig.TEST_TARGET.reset_simulator_per_test
+                    and config.getoption("numprocesses", None)
+                ):
+                    pytest.exit(
+                        "ERROR: --reset-simulator-per-test restarts the simulation every "
+                        "xdist worker shares. Re-run without -n.",
+                        returncode=1,
+                    )
+                global _sim_server
+                _sim_server = SimulationServer(simulator_path=_SIMULATOR_PATH)
+            else:
+                # xdist worker: attach to the host the controller started.
+                global _sim_host_pid, _worker_fatal
+                server_directory = config.workerinput.get(_SIM_SERVER_DIR_KEY)
+                if server_directory is None:
+                    _worker_fatal = "ERROR: the controller started no simulation server to attach to."
+                else:
+                    _sim_host_pid = config.workerinput[_SIM_HOST_PID_KEY]
+                    _attach_to_sim_server(server_directory)
         else:
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
@@ -924,39 +963,76 @@ def pytest_runtest_teardown(item, nextitem):
         return
 
     global _reset_simulator_pending
-    if _exalens_server is not None:
+    if _sim_server is not None:
         _reset_simulator_pending = True
 
 
-def pytest_runtest_setup(item):
-    """Start the server on the first test, or restart between tests if requested."""
-    global _exalens_server, _reset_simulator_pending
+def _attach_to_sim_server(server_directory: str) -> None:
+    tt_exalens_init.init_ttexalens(simulation_directory=server_directory)
+    TestConfig.resolve_worker_tensix_location()
 
-    if _exalens_server is None:
+
+def _fail_xdist_worker(item, msg: str) -> NoReturn:
+    """Fail this item and stop the xdist session.
+
+    pytest.exit from a worker leaves the current item pending and reports
+    workerfinished with no shouldstop. pytest-xdist 3.8.0 then raises
+    INTERNALERROR (``assert not crashitem``) and the message never surfaces.
+    """
+    item.session.shouldstop = msg
+    pytest.fail(msg, pytrace=False)
+
+
+def pytest_runtest_setup(item):
+    """Start the host on the first test, or restart between tests if requested.
+
+    On an xdist worker, also stop the session when the controller's simulation
+    host was never started or has died.
+    """
+    global _reset_simulator_pending
+
+    if _worker_fatal is not None:
+        _fail_xdist_worker(item, _worker_fatal)
+
+    if _sim_host_pid is not None and not pid_alive(_sim_host_pid):
+        _fail_xdist_worker(
+            item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
+        )
+
+    if _sim_server is None:
         return
 
-    if not _exalens_server.running and not _exalens_server.ever_started:
-        _exalens_server.start()
-        tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port
-        )
-        TestConfig.resolve_worker_tensix_location()
-    elif not _exalens_server.running:
-        logger.error("tt-exalens server is no longer running unexpectedly.")
+    if not _sim_server.running and not _sim_server.ever_started:
+        _sim_server.start()
+        _attach_to_sim_server(_sim_server.server_directory)
+    elif not _sim_server.running:
+        logger.error("Simulation host is no longer running unexpectedly.")
         pytest.exit(returncode=1)
     elif _reset_simulator_pending:
         _reset_simulator_pending = False
         tt_exalens_init.cleanup_global_context()
-        _exalens_server.restart()
-        tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port
-        )
-        TestConfig.resolve_worker_tensix_location()
+        _sim_server.restart()
+        _attach_to_sim_server(_sim_server.server_directory)
 
 
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    # Under xdist no test runs on the controller; start the host before xdist's (trylast)
+    # pytest_sessionstart spawns the workers.
+    if (
+        _sim_server is not None
+        and not _sim_server.ever_started
+        and session.config.pluginmanager.has_plugin("dsession")
+    ):
+        _sim_server.start()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    if _sim_server is not None and _sim_server.running:
+        node.workerinput[_SIM_SERVER_DIR_KEY] = _sim_server.server_directory
+        node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1092,6 +1168,8 @@ def _ulp_emit_line(session, message):
 
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
+        if _sim_host_pid is not None:
+            tt_exalens_init.cleanup_global_context()
         # Each worker measured its own share; the controller merges them in
         # pytest_testnodedown and writes the table once.
         from . import ulp_sweep
@@ -1114,7 +1192,7 @@ def pytest_sessionfinish(session):
         if TestConfig.WITH_COVERAGE:
             process_coverage_run_artefacts()
 
-    _stop_exalens_server()
+    _stop_sim_server()
 
 
 # Skip decorators for specific architectures

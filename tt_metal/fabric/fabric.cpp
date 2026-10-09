@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -63,17 +65,6 @@ size_t get_tt_fabric_packet_header_size_bytes() {
 size_t get_tt_fabric_max_payload_size_bytes() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
-}
-
-FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-}
-
-std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
-    FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, routing_direction);
 }
 
 std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
@@ -298,8 +289,7 @@ bool are_intra_mesh_neighbors(
     if (node_a.mesh_id != node_b.mesh_id) {
         return false;
     }
-    const auto& control_plane =
-        tt::tt_metal::MetalContext::instance(mesh_device.impl().get_context_id()).get_control_plane();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     const auto& directions = FabricContext::routing_directions;
     return std::any_of(directions.begin(), directions.end(), [&](const auto direction) {
         return is_neighbor_in_direction(control_plane, node_a, node_b, direction);
@@ -307,8 +297,10 @@ bool are_intra_mesh_neighbors(
 }
 
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     std::vector<eth_chan_directions> directions;
     directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
@@ -518,8 +510,12 @@ std::vector<uint32_t> get_forwarding_link_indices(
 }
 
 tt::tt_metal::CoreCoord get_forwarding_eth_core(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx) {
+    auto& metal_env = mesh_device.impl().metal_env();
+    const auto& control_plane = metal_env.get_control_plane();
     const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     TT_FATAL(
         forwarding_direction.has_value(),
@@ -537,7 +533,7 @@ tt::tt_metal::CoreCoord get_forwarding_eth_core(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = metal_env.get_cluster();
     const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
     return cluster.get_logical_ethernet_core_from_virtual(
         physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
@@ -591,16 +587,12 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
-size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_num_usable_routing_planes(fabric_node_id, routing_direction);
-}
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col) {
     TT_FATAL(cluster_axis < 2, "Invalid cluster axis {}. Must be 0 or 1", cluster_axis);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     const auto& mesh_view = mesh_device.get_view();
 
     // Axis 0 runs down a column, axis 1 along a row.
@@ -608,7 +600,7 @@ size_t get_number_of_available_routing_planes(
                                          : mesh_view.get_fabric_node_ids_on_row(row_or_col);
 
     auto usable_planes = [&](const FabricNodeId& src, const FabricNodeId& dst) -> size_t {
-        const auto directions = get_neighbor_eth_directions(src, dst);
+        const auto directions = get_neighbor_eth_directions(mesh_device, src, dst);
         if (directions.empty()) {
             return 0;  // the two chips are not wired together
         }
