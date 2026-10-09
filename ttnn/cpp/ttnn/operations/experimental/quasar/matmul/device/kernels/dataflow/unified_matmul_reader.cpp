@@ -90,8 +90,9 @@ TT_KERNEL void reader(
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
 
-    // Multicast handshake per slice: a receiver clears its data_ready flag and, once its DFB has room, counts
-    // itself into the sender's receivers_ready; the sender then multicasts the slice and its own VALID flag.
+    // Multicast handshake per slice: a receiver clears its data_ready flag and, once its DFB has room, counts itself
+    // into the sender's receivers_ready; the sender then multicasts the slice and its VALID flag along its row or
+    // column, skipping itself. No flush: the sender refills an entry only after every receiver has seen its flag.
     Semaphore A_receivers_ready(sem::A_receivers_ready);
     Semaphore A_data_ready(sem::A_data_ready);
     Semaphore B_receivers_ready(sem::B_receivers_ready);
