@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Determinism check for the data-parallel TttGenerationWorker.
+"""Determinism check for the data-parallel TTTRolloutSampler.
 
 One GSM8K question, replicated 16x, generated greedily (temperature 0) on a [1, 2]
 mesh (8 completions per submesh). All 16 completions must be identical -- otherwise the
@@ -63,7 +63,7 @@ def test_16_greedy_completions_are_identical():
             return_dict=False,
         )
 
-        completions = completer.generate(
+        completions = completer.generate_tokens(
             [prompt_ids] * NUM_COMPLETIONS,
             max_new_tokens=MAX_NEW_TOKENS,
         )
