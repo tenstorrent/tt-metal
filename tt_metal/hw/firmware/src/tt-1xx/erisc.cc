@@ -144,27 +144,9 @@ void __attribute__((noinline)) Application(void) {
             }
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
-
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                internal_::notify_dispatch_core_done(dispatch_addr);
-                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
-                // messages in the ring buffer
-            }
-
-        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-            // Reset the launch message buffer read ptr
-            mailboxes->launch_msg_rd_ptr = 0;
-            if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                DeviceIncrementTraceCount();
-                DeviceTraceOnlyProfilerInit();
-            }
-            uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-            internal_::notify_dispatch_core_done(dispatch_addr);
+            // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance, and the
+            // dispatcher-driven resets (RUN_MSG_RESET_READ_PTR / RUN_MSG_REPLAY_TRACE) no longer apply here.
+            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
         } else {
             internal_::risc_context_switch();
         }

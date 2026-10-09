@@ -624,7 +624,7 @@ def test_qwen36_softplus_add(device, b_rows):
 
 # seventh review: Gemma-4 31B's prefill MLP residual add (gemma4_31b_qb2/tt/decoder.py:657-662), bf16 in DRAM, MUL_UNARY_SFPU by
 # the layer scalar after; prefill_input_width 5376 up to 128 rows and 1344 above, chunks of 1024 (sliding) and 6656 (global)
-GEMMA_PREFILL = {"s128": (128, 5376), "s1024": (1024, 1344), "s6656": (6656, 1344)}
+GEMMA_PREFILL = {"s128": (128, 5376), "s256": (256, 1344), "s512": (512, 1344), "s768": (768, 1344), "s832": (832, 1344), "s1024": (1024, 1344), "s6656": (6656, 1344)}
 
 
 @pytest.mark.parametrize("cfg", list(GEMMA_PREFILL))

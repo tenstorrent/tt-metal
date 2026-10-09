@@ -1419,9 +1419,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
     // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && has_post_activations && num_tiles_per_cycle > 1 &&
-        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast && !eb_r3_env("EB_R3_MAIN_REINIT")) {
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+        num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+        !eb_r3_env("EB_R3_MAIN_REINIT")) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
+    }
+    // Interleaved ops keep it on cores with at most one DEST section of tiles, where the re-init is not hidden behind
+    // their reader and writer; the tile count is a runtime argument, as the program is shared across tensor volumes.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+        !has_operand_activations && num_tiles_per_cycle == 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast && !eb_r3_env("EB_R3_MAIN_REINIT") &&
+        !eb_r3_env("EB_R3_NO_ILV_KEEP")) {
+        compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT_UP_TO"] = "8";
     }
     if (eb_r3_env("EB_R3_MAIN_REINIT")) {
         compute_kernel_defines["EB_R3_MAIN_REINIT"] = "1";
