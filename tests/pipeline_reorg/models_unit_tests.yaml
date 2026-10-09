@@ -1213,7 +1213,7 @@
     pytest --timeout 10800 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
   skus:
-    wh_n150:
+    wh_llmbox:
       timeout: 240
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
