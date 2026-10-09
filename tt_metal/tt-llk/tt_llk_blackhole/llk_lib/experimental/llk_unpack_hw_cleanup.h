@@ -30,10 +30,10 @@ inline void _llk_unpack_hw_cleanup_configure_current_bank_()
 }
 
 /**
- * @brief Quiesces all TRISCs and restores unpack cfg banks to canonical Float16_b 32x32 geometry.
+ * @brief Quiesces all TRISCs and restores unpack cfg bank 0 to canonical Float16_b 32x32 geometry.
  * @tparam is_fp32_dest_acc_en Kernel DST_ACCUM_MODE (re-asserted, not changed).
- * @note On return both cfg banks use Float16_b 32x32 tiles with four faces (2048 bytes), and
- *       bank 0 is selected.
+ * @note On return cfg bank 0 uses Float16_b 32x32 tiles with four faces (2048 bytes) and is
+ *       selected.
  * @note On return MOP CFG is NOP-poisoned to a 1x1 double-loop template.
  */
 template <bool is_fp32_dest_acc_en>
@@ -43,11 +43,6 @@ inline void _llk_unpack_hw_cleanup_canonical_()
 
     hw_cleanup::select_cfg_state(0);
     _llk_unpack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
-
-    hw_cleanup::select_cfg_state(1);
-    _llk_unpack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
-
-    hw_cleanup::select_cfg_state(0);
 
     // 1x1 NOP double-loop so accidental MOP runs (template or unpack-template) are inert.
     ckernel_template(1, 1).program();

@@ -8,8 +8,8 @@ llk_{unpack,math,pack}_hw_cleanup.h + shared llk_hw_cleanup.h).
 
 hw_cleanup is a TEARDOWN family with NO numeric output of its own. It drains the
 three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes, and reprograms
-both cfg banks to a canonical Float16_b 32x32 / four-face / 2048B geometry,
-leaving cfg bank 0 selected (see the header docstrings).
+cfg bank 0 to a canonical Float16_b 32x32 / four-face / 2048B geometry and
+leaves it selected (see the header docstrings).
 
 The C++ source copies two tiles with the per-thread cleanup canonicals (the same
 entry points compute_kernel_hw_cleanup() dispatches) between them. Each thread

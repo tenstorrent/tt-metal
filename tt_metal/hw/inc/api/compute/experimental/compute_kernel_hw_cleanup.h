@@ -40,8 +40,8 @@
  * can drain to zero, and cfg_state_id matches hardware.
  *
  * Rendezvouses T0/T1/T2 through hardware mailboxes (all three drain before any
- * configures, none returns before all three have configured) and programs both
- * cfg banks identically to:
+ * configures, none returns before all three have configured) and programs cfg
+ * bank 0, the bank compute_kernel_hw_startup programs, to:
  *   - source and pack formats: Float16_b;
  *   - tile geometry: one 32x32 tile;
  *   - faces: four 16x16 faces;
