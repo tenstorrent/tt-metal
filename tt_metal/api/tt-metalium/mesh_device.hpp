@@ -341,7 +341,7 @@ public:
 
     // Device queries. In the three calls below, `InfoType` is a property tag from <tt-metalium/info.hpp>
     // (e.g. info::l1_alignment) and `InfoType::return_type` is the type of its value. Only the properties listed after
-    // the class are supported; asking for any other tag fails to link.
+    // the class are supported; asking for any other tag fails to compile.
 
     /**
      * @brief Queries a property of the device at a single mesh coordinate.
@@ -355,8 +355,9 @@ public:
      * @throws std::runtime_error If `coord` is out of bounds of this mesh, or the device is remote (owned by another
      * host).
      */
+    // Reject unsupported tags at compile time; supported tags have explicit specializations below.
     template <class InfoType>
-    typename InfoType::return_type get_info(const MeshCoordinate& coord) const;
+    typename InfoType::return_type get_info(const MeshCoordinate& coord) const = delete;
 
     /**
      * @brief Queries a property of this mesh as a whole.
@@ -411,7 +412,7 @@ private:
 };
 
 // Properties supported by MeshDevice::get_info (see <tt-metalium/info.hpp> for what each one means). Each is defined
-// in mesh_device.cpp; asking for any other tag fails to link.
+// in mesh_device.cpp; asking for any other tag fails to compile.
 template <>
 std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const;
 template <>
