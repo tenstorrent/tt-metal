@@ -33,6 +33,7 @@ TERMS = {
     "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
     "mcrate": "multicast data moves at its own rate, falling with the receiver count (measured: one-to-all microbenchmark)",
     "corecc": "a core's DRAM read rate when other cores read DRAM concurrently (measured: 4-core interleaved reads)",
+    "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction: 0.72-0.75, stable across folds and chips)",
     "dramw": "DRAM writes get their own (fitted) chip efficiency: bursty block-end writes sharing DRAM with other cores' reads (isolated 64-core writes reach 0.47)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
@@ -46,7 +47,7 @@ EXPERIMENTAL = {
     "mcovl": "the async multicast write overlaps the sender's next fetch; only the handshake is serial with it",
     "mcout": "MultiCore: a fixed cost per output tile (dest acquire, pack, one-tile write and its barrier)",
     "blkfix": "a fixed cost per output block: buffer handshakes, compute reconfiguration and output setup each block pays",
-    "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
+    "burstdram": "DRAM reads also congest with the bytes each reader has in flight per barrier (super-linear per-step cost)",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
@@ -100,6 +101,7 @@ CONSTANTS = {
     "mc_out": (500.0, "cycles per MultiCore output tile: acquire, pack, write + barrier", "mcout"),
     "blk_fixed": (1000.0, "cycles per output block: CB handshakes, compute reconfig, output block setup", "blkfix"),
     "dram_w_eff": (0.6, "achievable fraction of spec DRAM bandwidth for writes", "dramw"),
+    "burst_dram_KB": (500.0, "KB per reader per barrier at which its DRAM read rate halves", "burstdram"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -277,7 +279,8 @@ def predict(g, p, parts=False):
         if on("corecc"):  # concurrent DRAM readers each get the loaded per-core rate
             noc_rd = np.where(r > 1, s["noc_Bpc"] * p["noc_eff_cc"], noc)
         if on("sat"):
-            dr = np.maximum(p["lat_dram"] + nbytes / noc_rd, nbytes * r / (dram * eff))
+            cgd = 1 + nbytes / (p["burst_dram_KB"] * 1e3) if on("burstdram") else 1.0
+            dr = np.maximum(p["lat_dram"] + nbytes * cgd / noc_rd, nbytes * r * cgd / (dram * eff))
             l1 = np.maximum(p["lat_l1"] + nbytes / noc, nbytes * r * cg / l1bw)
         else:
             dr = p["lat_dram"] + nbytes / np.minimum(noc, dram * eff / r)
