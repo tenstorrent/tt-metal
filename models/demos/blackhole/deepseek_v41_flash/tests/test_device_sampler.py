@@ -186,3 +186,184 @@ def test_device_sampler(mesh_device):
         f"SAMPLER_COST T={T} (B={B}) J={smp.J} levels={smp.levels}: greedy argmax {timeit(tg):.3f} ms, candidate top-64 + partition {timeit(tc):.3f} ms, in-trace sampler {timeit(tid):.3f} ms",
         flush=True,
     )
+
+
+def exact_cdf_parts(l, T, tk, tp):
+    """Exact sampler (float64) of one logits row: top-k then top-p over the tempered distribution, ties at a boundary kept (the in-trace sampler keeps every token above a value threshold). Returns the
+    normalised kept distribution q [V] in vocabulary order; the exact draw at u is the first token whose cumulative q exceeds u.
+    """
+    s = (l.double() - l.double().max()) / T
+    srt, _ = torch.sort(s, descending=True)
+    keep = torch.ones_like(s, dtype=torch.bool)
+    if tk > 0 and tk < s.numel():
+        keep &= s >= srt[tk - 1]
+    e = torch.exp(s) * keep
+    if tp < 1.0:
+        w = torch.exp(srt) * (srt >= (srt[tk - 1] if 0 < tk < s.numel() else srt[-1]))
+        cum = w.cumsum(0)
+        j = int(torch.searchsorted(cum, tp * w.sum(), right=False))
+        keep &= s >= srt[min(j, s.numel() - 1)]
+        e = torch.exp(s) * keep
+    return e / e.sum()
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {"l1_small_size": 16384, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 64 << 20},
+            id="ring",
+        )
+    ],
+    indirect=True,
+)
+@torch.no_grad()
+def test_device_sampler_distribution_vs_exact_sampler(mesh_device):
+    """Distribution check of the production sampler (J=16, 3 levels: the settings of the decode / verify traces) against the exact float64 sampler, on flat, near-flat, constant, ordinary and peaked rows
+    and on real logits rows: every row of every replay draws with its own stratified uniform u_i = (i + 0.5) / N; the token must satisfy cdf_before(tok) - tol <= u_i <= cdf_after(tok) + tol of the EXACT
+    kept distribution (tol (0.002) absorbs the finite resolution of the threshold search: tokens within range / J**levels of a top-k / top-p boundary), i.e. the empirical law equals the exact law to within
+    tol in Kolmogorov distance. Constant rows (every logit tied): ties are kept, so the law is uniform over the vocabulary.
+    """
+    import os
+
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    T = 8
+    B = rows * T
+    mc, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    smp = DSV41DeviceSampler(md, mc, ccl, T, J=16, levels=3, levels_k=int(os.environ.get("SAMP_LEVELS_K", "4")))
+    prm = smp.alloc_params()
+    g = torch.Generator().manual_seed(4)
+    V = VOCAB
+    rows_l = {
+        "flat randn*0.05": torch.randn(V, generator=g) * 0.05,
+        "flat randn*0.3": torch.randn(V, generator=g) * 0.3,
+        "constant": torch.full((V,), 1.5),
+        "randn*3": torch.randn(V, generator=g) * 3.0,
+        "peaked randn*8": torch.randn(V, generator=g) * 8.0,
+    }
+    if os.path.exists(LOGITS):
+        L = torch.load(LOGITS).reshape(-1, V).float()
+        for i, j in enumerate(torch.randperm(L.shape[0], generator=g)[:3].tolist()):
+            rows_l[f"real logits row {i}"] = L[j]
+    cfgs = [(1.0, 0, 1.0), (1.0, 0, 0.95), (0.6, 20, 0.95), (1.0, 50, 1.0), (1.3, 0, 0.9)]
+    N = int(os.environ.get("SAMP_DIST_N", "1024"))
+    assert N % B == 0
+    tol = float(os.environ.get("SAMP_DIST_TOL", "0.002"))
+    worst = 0.0
+    for name, lrow in rows_l.items():
+        logits = ttnn.from_torch(
+            lrow.reshape(1, 1, 1, V).expand(1, 1, B, V).contiguous(),
+            device=md,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(2, 3), mesh_shape=(rows, cols)),
+        )
+        smp.set_params(torch.ones(B), torch.zeros(B), torch.ones(B), torch.rand(B), torch.zeros(B))
+        out = smp.forward(logits, prm)
+        ttnn.synchronize_device(md)
+        tid = ttnn.begin_trace_capture(md, cq_id=0)
+        out = smp.forward(logits, prm)
+        ttnn.end_trace_capture(md, tid, cq_id=0)
+        for T_, tk, tp in cfgs:
+            q = exact_cdf_parts(lrow, T_, tk, tp)
+            cdf = q.cumsum(0)
+            bad = 0
+            dev = 0.0
+            for rep in range(N // B):
+                u = (torch.arange(B) + rep * B + 0.5) / N
+                smp.set_params(
+                    torch.full((B,), 1.0 / T_), torch.full((B,), float(tk)), torch.full((B,), tp), u, torch.zeros(B)
+                )
+                ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+                got = torch.cat(
+                    [ttnn.to_torch(ttnn.get_device_tensors(out)[r * cols]).reshape(-1) for r in range(rows)]
+                ).long()
+                after = cdf[got]
+                before = after - q[got]
+                d = torch.maximum(before - u.double(), u.double() - after).clamp(
+                    min=0
+                )  # distance of u from the token's CDF interval
+                dev = max(dev, float(d.max()))
+                bad += int((d > tol).sum())
+            print(
+                f"SAMPLER_DIST row '{name}' T={T_} top_k={tk} top_p={tp}: {N} draws, max CDF-interval deviation {dev:.4f}, draws beyond tol {bad}",
+                flush=True,
+            )
+            worst = max(worst, dev)
+            assert bad == 0, (name, T_, tk, tp, dev)
+        ttnn.release_trace(md, tid)
+        ttnn.deallocate(logits)
+    print(f"SAMPLER_DIST worst deviation {worst:.4f} (tol {tol})", flush=True)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {"l1_small_size": 16384, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 256 << 20},
+            id="ring",
+        )
+    ],
+    indirect=True,
+)
+@torch.no_grad()
+def test_device_sampler_cost(mesh_device):
+    """Replay cost (ms per step, the trace alone) of the greedy sampler of the head (``sample_global``) and of the in-trace sampler cut after each stage, at T users per mesh row (SAMP_T, default 8 =
+    batch 32; 32 = the verify rows of batch 32 at k = 3)."""
+    import os
+    import time
+
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    T = int(os.environ.get("SAMP_T", "8"))
+    B = rows * T
+    mc, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    J, L, LK = (
+        int(os.environ.get("SAMP_J", "16")),
+        int(os.environ.get("SAMP_L", "3")),
+        int(os.environ.get("SAMP_LK", "4")),
+    )
+    smp = DSV41DeviceSampler(md, mc, ccl, T, J=J, levels=L, levels_k=LK)
+    prm = smp.alloc_params()
+    head = DSV41DeviceHead.__new__(DSV41DeviceHead)
+    head.md, head.cols = md, cols
+    g = torch.Generator().manual_seed(1)
+    logits = ttnn.from_torch(
+        (torch.randn(1, 1, B, VOCAB, generator=g) * 3).float(),
+        device=md,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(2, 3), mesh_shape=(rows, cols)),
+    )
+    smp.set_params(
+        torch.full((B,), 1 / 0.6), torch.full((B,), 20.0), torch.full((B,), 0.95), torch.rand(B), torch.zeros(B)
+    )
+
+    def timed(fn, n=30):
+        fn()  # compile
+        ttnn.synchronize_device(md)
+        tid = ttnn.begin_trace_capture(md, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(md, tid, cq_id=0)
+        ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        dt = (time.perf_counter() - t0) / n
+        ttnn.release_trace(md, tid)
+        return dt * 1e3
+
+    res = {"greedy sample_global": timed(lambda: head.sample_global(logits, mc, ccl))}
+    for stop in ("greedy_part", "scale_exp", "search_k", "search_p", "prefix", None):
+        smp.stop = stop
+        res[f"sampler up to {stop or 'end'}"] = timed(lambda: smp.forward(logits, prm))
+    print(
+        f"SAMPLER_COST T={T} J={J} levels={L} levels_k={LK}: " + ", ".join(f"{k}: {v:.3f} ms" for k, v in res.items()),
+        flush=True,
+    )

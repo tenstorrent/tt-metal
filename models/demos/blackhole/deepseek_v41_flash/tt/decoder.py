@@ -270,17 +270,21 @@ class DSV41Decoder:
             )
             self.last_logits_t = logits
         if self.device_loop:
-            if (
-                getattr(self, "samp", None) is not None
-            ):  # temperature / top-k / top-p draw inside the trace (tt/device_sampler.py); greedy rows = exact argmax
-                nxt = self.samp.forward(logits, self.samp.params)
-            else:
-                nxt = self.head.sample_global(logits, self.mesh_config, self.ccl)
+            nxt = self.head.sample_global(
+                logits, self.mesh_config, self.ccl
+            )  # greedy; a step with sampled rows replays ``forward_sampler`` after this trace
             ttnn.copy(nxt, self.tok_dev)  # feed the sampled token to the next replay ...
             ttnn.copy(ttnn.add(self.pos_dev, 1), self.pos_dev)  # ... and advance the position
         elif self.mesh_config is not None:
             self.sampled = self.head.sample(logits, self.mesh_config, self.ccl)
         return logits
+
+    def forward_sampler(self, logits):
+        """The sampler trace of a step with sampled rows (``samp`` = tt/device_sampler.DSV41DeviceSampler, parameters uploaded by the caller): temperature / top-k / top-p draw over the step's logits
+        (the output of ``forward``, kept alive by the caller) INSTEAD of the greedy token the step trace wrote: the sampled token replaces it in the device loop's token buffer. Steps without a
+        sampled row never replay it, so greedy decoding pays nothing for the sampler (the sampler costs ~3-9 ms per step: its own trace, not part of the step trace).
+        """
+        ttnn.copy(self.samp.forward(logits, self.samp.params), self.tok_dev)
 
     def snapshot_states(self):
         """Step-carried device state (compressor 'previous token' buffers): lets a warm-up / compile pass run without

@@ -261,6 +261,7 @@ class Model:
         self.engram_kin = {l: e.kin for l, e in dev_engram.items()}
         self.rows_cat = None
         self.trace_id = None
+        self.samp_trace = None  # trace of the sampler (replayed after the step trace by a step with sampled rows)
         self.admitted = False
         self.pool_pages_free = None
         if self.uni and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
@@ -736,6 +737,9 @@ class Model:
         ttnn.synchronize_device(self.md)
         self.dec.restore_states(snaps)
         del snaps
+        if self.samp is not None:  # compile pass of the sampler (it writes the token buffer: set again below)
+            self.dec.forward_sampler(self.last_logits)
+            ttnn.synchronize_device(self.md)
         self._set_loop_state(zeros, torch.as_tensor(lens).long())
         self._warm = True
 
@@ -1449,8 +1453,10 @@ class Model:
         return torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
 
     def _make_sampler(self, users_per_row):
-        """In-trace sampler (DSV41_INTRACE_SAMPLE=1): the decode trace draws the next token itself (tt/device_sampler.py); params uploaded by ``decode_forward(samp=...)``."""
-        if os.environ.get("DSV41_INTRACE_SAMPLE", "0") != "1":
+        """The in-trace sampler (tt/device_sampler.py, default; DSV41_INTRACE_SAMPLE=0 builds none): temperature / top-k / top-p draw of the next token over the step's logits, in its OWN trace that a decode
+        step replays after the step trace only when a row is sampled (``decode_forward(samp=...)``: the per-row parameters, uploaded before the replay); greedy steps never touch it.
+        """
+        if os.environ.get("DSV41_INTRACE_SAMPLE", "1") != "1":
             return None
         from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
 
@@ -1461,6 +1467,7 @@ class Model:
             users_per_row,
             J=int(os.environ.get("DSV41_SAMP_J", "16")),
             levels=int(os.environ.get("DSV41_SAMP_LEVELS", "3")),
+            levels_k=int(os.environ.get("DSV41_SAMP_LEVELS_K", "4")),
         )
         smp.alloc_params()
         return smp
@@ -1487,13 +1494,18 @@ class Model:
             self.dec.set_invT(invT)
         if samp is not None and self.samp is not None:
             self.samp.set_params(*samp)
+        sampled = samp is not None and self.samp is not None
         if enable_trace:
             from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
             check_trace_allocations(self.md, self.trace_id, f"decode B={self.B}")
             ttnn.execute_trace(self.md, self.trace_id, cq_id=0, blocking=False)
+            if sampled:  # the sampled tokens replace the greedy ones the step wrote (same buffer)
+                ttnn.execute_trace(self.md, self.samp_trace, cq_id=0, blocking=False)
         else:
             self.last_logits = self.dec.forward()
+            if sampled:
+                self.dec.forward_sampler(self.last_logits)
         out = self._read_tokens()  # blocking read: waits for the step
         t3 = time.perf_counter()
         self.timing["decode_host_prep"] = t1 - t0
@@ -1517,6 +1529,11 @@ class Model:
         ttnn.end_trace_capture(self.md, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.md)
         self.dec.restore_states(snaps)
+        if self.samp is not None:  # the sampler's own trace over the logits of the step trace
+            self.samp_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+            self.dec.forward_sampler(self.last_logits)
+            ttnn.end_trace_capture(self.md, self.samp_trace, cq_id=0)
+            ttnn.synchronize_device(self.md)
 
     def read_logits(self):
         """Host copy [B, vocab] fp32 of the logits of the last decode step (diagnostics; the loop itself only reads tokens)."""
@@ -1527,6 +1544,9 @@ class Model:
         if self.trace_id is not None:
             ttnn.release_trace(self.md, self.trace_id)
             self.trace_id = None
+        if getattr(self, "samp_trace", None) is not None:
+            ttnn.release_trace(self.md, self.samp_trace)
+            self.samp_trace = None
         for b in getattr(self, "buckets", {}).values():
             b.release_trace()
 
@@ -1757,6 +1777,7 @@ class Model:
         ):
             self.__dict__.pop(name, None)
         self.trace_id, self.admitted, self.pool_pages_free = None, False, None
+        self.samp_trace = None
         # EVERY persistent L1 allocation goes (the CCL semaphores too, they are re-created first by the rebuild like in a fresh process): the L1 allocator is
         # first-fit, so gaps left by buffers of the old batch size would shift the new persistent buffers below the static circular-buffer region of the
         # big programs ('Statically allocated circular buffers ... clash with L1 buffers')

@@ -132,10 +132,12 @@ class Generator:
         if sampling_params is not None:
             t = sampling_params.temperature
             t = t[0] if isinstance(t, (list, tuple)) else t
-            if t != 0 or getattr(self.m, "samp", None) is not None:
+            tk = sampling_params.top_k
+            tk = tk[0] if isinstance(tk, (list, tuple)) else tk
+            if t != 0 and tk != 1:  # a greedy step replays the step trace only (no sampler)
                 assert (
                     getattr(self.m, "samp", None) is not None
-                ), "DSV4.1 decode samples greedily on the device (temperature 0) unless built with DSV41_INTRACE_SAMPLE=1 (in-trace temperature / top-k / top-p)"
+                ), "temperature > 0 needs the in-trace sampler (DSV41_INTRACE_SAMPLE=1, the default)"
                 from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
 
                 if getattr(self, "_samp_gen", None) is None:
