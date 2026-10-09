@@ -19,7 +19,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
-#include <cmath>
 #include <optional>
 #include <bit>
 #include <cstdint>
@@ -369,13 +368,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             config.activation_defines.emplace(key, val);
         }
     }
-    // Power-of-two winv and cinv scalers keep the bits at fewer fidelity phases; a Float32 scaler_global (fp32 DEST)
-    // holds cinv's packed bf16 pair, which is not a power of two.
-    int exponent = 0;
-    const bool winv_pow2 = std::frexp(static_cast<float>(bfloat_winv), &exponent) == 0.5f;
-    const bool cinv_pow2 = std::frexp(static_cast<float>(bfloat_cinv), &exponent) == 0.5f;
-    config.pow2_reduce_scaler =
-        !use_welford && !is_post_all_gather && winv_pow2 && (!is_pre_all_gather || (cinv_pow2 && !fp32_dest_acc_en));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Program spec and run args

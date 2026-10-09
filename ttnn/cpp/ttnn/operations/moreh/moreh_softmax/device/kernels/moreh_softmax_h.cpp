@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The reduce scalers are 1.0: on Blackhole SUM and AVG run at the fewest fidelity phases that keep the bits
-#define REDUCE_POW2_SCALER
-// The column's tiles are resident: on Blackhole the reduce helper reduces each column with one block call
-#define REDUCE_COL_BLOCK
-
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"

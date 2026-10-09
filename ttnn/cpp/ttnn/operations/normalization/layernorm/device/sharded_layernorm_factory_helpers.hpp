@@ -315,8 +315,6 @@ struct SpecConfig {
 
     // Fused-activation preprocessor definitions for the compute kernel
     m2::KernelSpec::CompilerOptions::Defines activation_defines;
-
-    bool pow2_reduce_scaler = false;
 };
 
 //////////////////////////////////////////////////////////////////////////////
