@@ -1026,18 +1026,20 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     expect_host_tensors_eq(host_tensor, result);
 }
 
-// MAP_SHARED of an O_RDONLY descriptor clears VM_MAYWRITE, so the kernel will not let this mapping become
-// writable at all: mprotect(PROT_WRITE) on it fails with EACCES. That makes it the strict case -- read-only
-// pinning has to work on memory that genuinely cannot be widened, not merely on memory nobody widened yet.
+// MAP_SHARED is what the Python load_tensor() API creates (map_tensor_file in tensor_file_layout.cpp maps the file
+// PROT_READ | MAP_SHARED), so this is the case the feature exists for. MAP_SHARED of an O_RDONLY descriptor also
+// clears VM_MAYWRITE, so the kernel will not let this mapping become writable at all: mprotect(PROT_WRITE) on it
+// fails with EACCES. That makes it the strict case -- read-only pinning has to work on memory that genuinely cannot
+// be widened, not merely on memory nobody widened yet.
 TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_SHARED);
 }
 
-// MAP_PRIVATE is what the Python load_tensor() API actually creates (serialization.cpp maps the file
-// PROT_READ | MAP_PRIVATE), so this is the case the feature exists for. It is the weaker case for the pin -- a private
-// PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a read/write pin still
-// fails on it, since VM_WRITE is clear. Covering only MAP_SHARED above would leave the production mapping
-// mode unproven, and covering only this one would drop the strict case.
+// MAP_PRIVATE is what load_tensor() falls back to on a filesystem that refuses a shared mapping. It is the weaker case
+// for the pin -- a private PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a
+// read/write pin still fails on it, since VM_WRITE is clear. The kernel also handles the read-only pin differently: it
+// copies each page of a private file mapping into anonymous memory before pinning it, where a shared mapping's
+// page-cache pages are pinned in place. Covering only MAP_SHARED above would leave the fallback unproven.
 TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory) {
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_PRIVATE);
 }
