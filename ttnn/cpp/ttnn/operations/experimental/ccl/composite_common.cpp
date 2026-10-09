@@ -500,17 +500,19 @@ ttnn::Tensor composite_all_to_all(
         broadcasted_tensor = temp_tensor;
     }
 
-    // TensorTopology: nothing to relabel here. prim::all_broadcast over the whole mesh labels every copy Replicate
-    // on every axis (ccl_topology_utils); mesh_partition over the whole mesh labels each device's slice
-    // `{N}, [Shard{out_dim}]` over the tensor's coordinates (mesh_partition's own hook, PR P-mp); the concat below
-    // takes the union of those identical labels, and the layout / dtype / memory-config conversions after it carry
-    // their input's label. The result therefore reads `{N}, [Shard{out_dim}]`: out_dim scattered in device order,
-    // in_dim re-gathered, which is the honest all_to_all label.
     // Step 3: Concatenate along in_dim
     ttnn::Tensor output_tensor = ttnn::concat(broadcasted_tensors, in_dim, interim_memory_config);
     for (auto& tensor : broadcasted_tensors) {
         tensor.deallocate();
     }
+
+    // TensorTopology: no relabel site in this composite. prim::all_broadcast over the whole mesh labels every copy
+    // Replicate on every axis (ccl_topology_utils), so each slice carries whatever label mesh_partition gives it;
+    // the concat above takes the union of those identical labels and the layout / dtype / memory-config conversions
+    // below carry their input's label. The result is therefore labelled by mesh_partition alone: once its
+    // compute_output_topologies labels a whole-mesh slice `{N}, [Shard{out_dim}]`, the all_to_all result reads the
+    // same (out_dim scattered in device order, in_dim re-gathered); without that hook the slices keep
+    // all_broadcast's Replicate label, which over-claims (every device holds a distinct out_dim piece).
 
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
