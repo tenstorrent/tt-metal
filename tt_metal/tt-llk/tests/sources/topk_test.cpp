@@ -141,6 +141,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const int distance_between_corresponding_tiles      = (1 << current_iteration);
             const int number_of_tile_pairs_in_current_iteration = (NUM_VALUE_TILES_PER_ROW / (distance_between_corresponding_tiles * NUM_TILES_PER_STAGE));
 
+            // Iteration i+1 reads back the tiles that the packer wrote to L1 during iteration i. DEST
+            // synchronisation only orders MATH<->PACK, so wait for the packer to finish iteration i before
+            // unpacking anything from it. One token per iteration keeps the count at most 1, so neither the
+            // semaphore maximum nor SEMPOST's saturation at 15 can matter, at any width.
+            if (current_iteration > 0)
+            {
+                t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
+                t6_semaphore_get<>(semaphore::PACK_DONE);
+            }
+
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < number_of_tile_pairs_in_current_iteration;
                  ++current_tile_pair_idx) // Iterates over tiles in current topk pipeline operation.
             {
@@ -505,6 +515,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, ckernel::to_underlying(DataFormat::UInt16)};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, ckernel::to_underlying(DataFormat::UInt16)};
 
+    // PACK_DONE is a per-iteration barrier: posted once when every tile pair of a non-final iteration is back
+    // in L1, taken once by the unpacker before it starts the next iteration. Never more than one outstanding.
+    t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
+
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration) // Iterates over topk pipelines.
@@ -577,6 +591,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 } // Stage loop.
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
+            // Every pair of this iteration is packed; let the unpacker start the next one. Stall on PACK so
+            // the post is ordered after the last pack has finished writing L1 (see SEMPOST in the ISA).
+            if (!last_iteration)
+            {
+                t6_semaphore_post<p_stall::PACK>(semaphore::PACK_DONE);
             }
         } // Iteration loop.
     } // current_tile_row loop
