@@ -193,7 +193,8 @@ ttnn::Tensor dense_recipe(
             query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (out_head_dim / 32), 2048, kernel_memory_config),
         &key_range,
         &options,
-        routed);
+        routed,
+        numeric::recipe_kv_storage(input_tensor_v.dtype()));
     auto output = numeric::run_recipe(
         query,
         input_tensor_k,
@@ -640,6 +641,30 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     }
     if (precision) {
         TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
+        if (joint_tensor_q.logical_shape()[2] == 0 && joint_tensor_k.logical_shape()[2] == 0) {
+            // An empty joint segment (FLUX.2 single-stream blocks pass [B, H, 0, D] joint tensors) is a plain dense
+            // call; the joint output is empty, with legacy's spec (joint Q's shape and dtype, DRAM).
+            auto output = dense_recipe(
+                input_tensor_q,
+                input_tensor_k,
+                input_tensor_v,
+                std::nullopt,
+                scale,
+                std::nullopt,
+                program_config,
+                compute_kernel_config,
+                *precision,
+                {},
+                {},
+                routed);
+            auto joint_output = create_device_tensor(
+                tt::tt_metal::TensorSpec(
+                    joint_tensor_q.logical_shape(),
+                    tt::tt_metal::TensorLayout(
+                        joint_tensor_q.dtype(), tt::tt_metal::PageConfig(Layout::TILE), DRAM_MEMORY_CONFIG)),
+                joint_tensor_q.device());
+            return {output, joint_output};
+        }
         const auto recipe_program_config =
             routed ? routed_program_config(program_config) : std::optional(program_config);
         const auto policy = numeric::resolve_recipe_policy(
@@ -658,7 +683,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
             0,
             nullptr,
             nullptr,
-            routed);
+            routed,
+            numeric::recipe_kv_storage(input_tensor_v.dtype()));
         auto [output, joint_output] = numeric::run_joint_recipe(
             query,
             input_tensor_k,

@@ -72,6 +72,8 @@ uint32_t recipe_subblock_width(uint32_t tiles);
 // `scale` is the softmax scale the exp folds in (default 1/sqrt(head dim)). The ring and exp ring factories pass
 // theirs to the compute kernel themselves and only take the CB layout, defines and compute config from here.
 // `vd_tiles`: V / output head dim in tiles when it differs from the QK head dim `d_tiles` (MLA; 0: the same).
+// `v_storage`: V's storage when it differs from K's (the policy's); the unpacker expands either into the same BF16
+// source registers, so only CB 2's format changes.
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,
@@ -80,7 +82,11 @@ tt::tt_metal::ProgramDescriptor recipe_compute_program(
     uint32_t k_tiles,
     uint32_t d_tiles,
     std::optional<float> scale = std::nullopt,
-    uint32_t vd_tiles = 0);
+    uint32_t vd_tiles = 0,
+    std::optional<KVStorage> v_storage = std::nullopt);
+
+// K/V storage of a K/V tensor dtype (BF16, BFP8, BFP4; anything else is rejected by the recipe's validation).
+KVStorage recipe_kv_storage(DataType dtype);
 
 // Throws when the kernels are built without SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, set on the simulator): the
 // recipes' exps record SFPLOADMACRO programs and compute wrong results without them. resolve_recipe_policy and
