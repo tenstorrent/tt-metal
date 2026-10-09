@@ -1,11 +1,11 @@
 # Next controlled accuracy experiment
 
-The complete optimized 64K GPQA score is 163/198. Native recurrence at the same
-64K budget, accurate attention, checkpoint and sampler reached 170 correct out
-of 195 completed questions at 04:53 UTC on October 9, 2026, with no output
-cutoffs yet. Even perfect answers on the remaining three cannot reach the
-unchanged 177/198 gate. Keep the running test and all its results; do not change
-its budget, precision or denominator.
+The complete optimized 64K GPQA score is 163/198. The matched native-recurrence
+control finished at **170/198 (85.86%)** at 05:12:24 UTC on October 9, 2026.
+One response hit its output budget and scored zero; 27 naturally completed
+answers were wrong. Even correcting the single cutoff would reach only 171/198,
+below the unchanged 177/198 gate. A larger output budget alone cannot account
+for this run's remaining gap. All original results and the denominator remain.
 
 The next prepared configuration is
 [`precision_accurate_decode_bfp8_head.json`](../config/precision_accurate_decode_bfp8_head.json).
@@ -14,7 +14,9 @@ matmul, while keeping native recurrence and accurate decode attention. All 64
 decoder-layer precision policies, BFP8 KV, BF16 activations and FP32 recurrence
 remain identical to the running native control. The policy loader and explicit
 decoder-policy comparison passed locally. **No hardware run or score is claimed
-for this new configuration, and it is not yet queued.**
+for this new configuration.** It is now queued persistently in
+`qwen38-accuracy-head-v1-20261009.service`, after all current native-control
+Tau3, HTTP and delivery stages. [Launch and preflight receipts](../galaxy-evidence/accuracy-head-v1/README.md).
 
 This tests whether the selected BFP4/LoFi head contributes to the remaining
 accuracy loss. It does not establish that the head is responsible, and changing

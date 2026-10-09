@@ -28,6 +28,10 @@ def check_g0(directory, model):
 
 
 def run(args):
+    accuracy_only = getattr(args, "accuracy_only", False)
+    control_precision = getattr(args, "control_precision", "precision_accurate_decode.json")
+    if Path(control_precision).name != control_precision or not control_precision.endswith(".json"):
+        raise ValueError("Control precision must name a JSON file in the model config directory")
     args.results.mkdir()
     model = args.source / "models/demos/qwen38_27b_qb2"
     status_path = args.results / "queue.json"
@@ -38,7 +42,12 @@ def run(args):
         hardware_lock="/tmp/tt-device.lock",
         survives_disconnect=True,
         resumes_after_reboot=False,
-        scope="Matched candidate/native recurrence at 64K output budget; fixed precision; GPQA, Tau3 and physical Galaxy HTTP sweeps",
+        scope=(
+            "Full 64K-output GPQA accuracy control; no Tau3 or performance stages"
+            if accuracy_only
+            else "Matched candidate/native recurrence at 64K output budget; fixed precision; GPQA, Tau3 and physical Galaxy HTTP sweeps"
+        ),
+        control_precision=control_precision,
     )
     files = [p for p in args.source.rglob("*") if p.is_file() and p.suffix in (".py", ".cpp", ".hpp", ".json", ".sh")]
     hashes = {str(p.relative_to(args.source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
@@ -107,27 +116,28 @@ def run(args):
             check=True,
             timeout=600,
         )
-        tau_env = dict(env, TAU2_DATA_DIR=str(args.tau_root / "tau2/data"))
-        tau_env["LD_LIBRARY_PATH"] = (
-            str(args.tau_root / "portaudio/root/usr/lib/x86_64-linux-gnu") + ":" + env.get("LD_LIBRARY_PATH", "")
-        )
-        subprocess.run(
-            [
-                str(args.tau_root / "venv/bin/python"),
-                "-c",
-                "from tau2.run import run_domain; from models.demos.qwen38_27b_qb2.tests.tau_benchmark import validate_source, preflight; "
-                f"from pathlib import Path; validate_source(Path({str(args.tau_root / 'tau2')!r})); preflight(); print('TAU_SOURCE_AND_PREFLIGHT_PASS')",
-            ],
-            env=tau_env,
-            check=True,
-            timeout=120,
-        )
+        if not accuracy_only:
+            tau_env = dict(env, TAU2_DATA_DIR=str(args.tau_root / "tau2/data"))
+            tau_env["LD_LIBRARY_PATH"] = (
+                str(args.tau_root / "portaudio/root/usr/lib/x86_64-linux-gnu") + ":" + env.get("LD_LIBRARY_PATH", "")
+            )
+            subprocess.run(
+                [
+                    str(args.tau_root / "venv/bin/python"),
+                    "-c",
+                    "from tau2.run import run_domain; from models.demos.qwen38_27b_qb2.tests.tau_benchmark import validate_source, preflight; "
+                    f"from pathlib import Path; validate_source(Path({str(args.tau_root / 'tau2')!r})); preflight(); print('TAU_SOURCE_AND_PREFLIGHT_PASS')",
+                ],
+                env=tau_env,
+                check=True,
+                timeout=120,
+            )
         for relative, digest in hashes.items():
             if hashlib.sha256((args.source / relative).read_bytes()).hexdigest() != digest:
                 raise ValueError(f"Frozen queue source changed: {relative}")
         for label, policy, qualification in (
             ("candidate", "precision_single_step_shared_qk.json", args.candidate_g0),
-            ("native-control", "precision_accurate_decode.json", args.results / "native-g0/receipts"),
+            ("native-control", control_precision, args.results / "native-g0/receipts"),
         ):
             if args.native_control_only and label == "candidate":
                 continue
@@ -165,7 +175,6 @@ def run(args):
                 str(qualification / "full-model.json"),
                 str(args.source),
                 "--exit-after-eval",
-                "--sweep-before-exit",
                 "--port",
                 "8078",
                 "--gpqa-max-tokens",
@@ -176,7 +185,9 @@ def run(args):
                 "--evaluation-timeout",
                 "7200",
             ]
-            if label == "candidate" or args.native_control_only:
+            if not accuracy_only:
+                command.append("--sweep-before-exit")
+            if not accuracy_only and (label == "candidate" or args.native_control_only):
                 command.extend(
                     [
                         "--tau-source",
@@ -192,6 +203,10 @@ def run(args):
             status[label] = {key: deployment.get(key) for key in ("gpqa", "tau", "passed", "owned_processes_stopped")}
             save(status_path, status)
             # Accuracy failure is a result; it does not cancel the following control.
+        if accuracy_only:
+            tested = "native-control" if args.native_control_only else "candidate"
+            status.update(state="completed", passed=bool(status[tested]["passed"]), finished_at=time.time())
+            return
         delivery_model = args.delivery_source / "models/demos/qwen38_27b_qb2"
         delivery_env = environment(args.task, args.delivery_source, args.weights)
         delivery_env.update(
@@ -231,5 +246,9 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument(
         "--native-control-only", action="store_true", help="Resume unrun control stages in a fresh results directory"
+    )
+    parser.add_argument("--control-precision", default="precision_accurate_decode.json")
+    parser.add_argument(
+        "--accuracy-only", action="store_true", help="G0 and full GPQA, without Tau3 or performance stages"
     )
     run(parser.parse_args())

@@ -732,3 +732,35 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
   needs its own G0 and full GPQA. It is not yet queued, and neither running
   evaluation nor image source was changed. Throughput/storage tradeoff must be
   measured before release selection.
+
+## Oct 9, 05:09-05:30 UTC: complete control score, built artifact, queued head test
+
+- Image v5 completed in 15m50s with source/import checks passing in both image
+  stages. No hardware was exposed. The OCI archive is 6,010,501,632 bytes and
+  has manifest digest `sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579`.
+  A separate bounded persistent job copied it from RAM to host disk, fsynced it
+  and verified matching full-file checksums. It is unqualified and not in a
+  registry. The original head policy remains fixed in the built image.
+- Matched native control completed all 198 GPQA questions: 170 correct, one
+  incorrect 65,536-token output cutoff, 27 naturally completed wrong answers.
+  Measurement lasted 48m39s. All raw hashes/usage/finish reasons were audited;
+  none exhausted the 262,144-token context. Full score 85.86% remains below
+  177/198. Tau3 then started. No answer, threshold or denominator changed.
+- Added an accuracy-only controller mode and a persistent follower. The latter
+  waits on the exact service invocation and completed hardware/cleanup receipts;
+  stale files and observation timeouts never establish that the device is free.
+  Six tests exercise these boundaries and propagation of head precision through
+  a fresh G0 plus full GPQA. It keeps the original full experiment queue intact.
+- Head-control staging initially failed before CPU tests because native shared
+  libraries were missing from LD_LIBRARY_PATH. The failure is preserved; using
+  the existing task library directories fixed the preflight with no installation
+  changes. 381 tests and 40 subtests passed; the one optional tokenizer skip was
+  rerun separately against the pinned local tokenizer.
+- `qwen38-accuracy-head-v1-20261009.service` is live and waiting after the current
+  native/Tau3/HTTP/delivery queue. Source hashes, 18h total timeout, 12h wait,
+  256-GiB memory limit and owned-process cleanup are recorded. It survives SSH
+  disconnect, not host reboot. BFP8/HiFi2 head accuracy and cost remain unmeasured.
+
+[Native results](../galaxy-evidence/qualification-overnight-v2/README.md),
+[head queue](../galaxy-evidence/accuracy-head-v1/README.md),
+[image artifact](../galaxy-evidence/image-build-v5/README.md).

@@ -1,0 +1,2 @@
+input_tokens,concurrency,batch_per_replica,status,tokens_per_second_per_user,aggregate_decode_tokens_per_second,ttft_p50_s,aggregate_input_tokens_per_second,aggregate_e2e_tokens_per_second,ttft_p90_s,tpot_ms,reason
+131072,16,16,completed,8.878924026769296,142.06278442830873,518.7190806609578,4044.0207566150916,3.842236217646938,518.7409903178923,112.62625932884146,

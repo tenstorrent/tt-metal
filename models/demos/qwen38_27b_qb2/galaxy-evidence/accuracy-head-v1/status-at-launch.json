@@ -1,0 +1,19 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-overnight-v2-20261009.service",
+  "predecessor_invocation": "557dbf2612934e889a5652b82e5cfe21",
+  "source_manifest_sha256": "5cf660dff2005feae7b2af8c3340d9a97fd3c21e59531fe3849548da999afdb9",
+  "precision": "precision_accurate_decode_bfp8_head.json",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791523061.672249,
+  "updated_at": "2026-10-09T05:33:12Z",
+  "last_service": {
+    "MainPID": "917206",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "557dbf2612934e889a5652b82e5cfe21"
+  },
+  "observed_at": 1791523992.7157588
+}

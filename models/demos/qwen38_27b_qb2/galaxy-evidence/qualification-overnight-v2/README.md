@@ -2,14 +2,15 @@
 
 This is an experimental branch, not a qualified release. Full GPQA must reach
 177/198 for the unchanged 89.2% gate. No passing full reference evaluation is
-claimed for the optimized model. No Qwen release image or tested Helm deployment
-has been produced by this work yet.
+claimed for either model. An experimental image is built and preserved on host
+disk; container hardware qualification and a tested Helm deployment remain open.
 
 | Full GPQA | Correct | Truncated | Measured duration |
 |---|---:|---:|---:|
 | Historical native, 32K output | 171/198 (86.36%) | 5 | 27m58s |
 | Shared Q/K candidate, 32K output | 142/198 (71.72%) | 42 | 32m13s |
 | Shared Q/K candidate, 64K output | 163/198 (82.32%) | 15 | 57m35s |
+| Matched native control, 64K output | 170/198 (85.86%) | 1 | 48m39s |
 
 All use the complete pinned Diamond set, concurrency 128, temperature 1,
 top-p .95, top-k 20 and seed 42. The larger budget changes the experiment and
@@ -18,7 +19,7 @@ also differ in decode attention and other changes; their score delta alone
 does not identify recurrence as the cause. The new native control retains
 accurate attention and changes only the recurrence policy from the candidate.
 
-The 64K run averaged 19.15 decode tok/s/user and 1,081 aggregate output tok/s
+The optimized 64K run averaged 19.15 decode tok/s/user and 1,081 aggregate output tok/s
 over the measured benchmark. These include a varied reasoning workload and
 must not be substituted for steady-state, fixed-context kernel throughput.
 Private full responses remain on the allocated host; public receipts contain
@@ -28,6 +29,17 @@ The [saved-response audit](../gpqa-response-audit-v1/README.md) confirms that th
 fifteen cutoffs all hit exactly 65,536 generated tokens with no final answer,
 well below the 256K context capacity. All count as incorrect in 163/198.
 The natural-stop subset (163/183) is a diagnostic, not the full score.
+
+The [native response audit](gpqa-audit-64k.json) matches all 198 private raw
+responses to scored hashes, usage and finish reasons. One answer hit exactly
+65,536 output tokens; none hit the model-context bound. The other 197 stopped
+naturally, with 170 correct and 27 wrong. Removing truncation alone cannot
+close the seven-answer gap to 177/198. The native control averaged 15.03 decode
+tok/s/user, 473.42 aggregate output tok/s and 13.94 s TTFT for this variable
+reasoning workload. Do not treat this as a fixed-context performance comparison.
+Of the two matched 64K runs, 155 answers were correct in both, 15 only in the
+native control, eight only in the candidate, and 20 in neither. A single sampled
+run does not establish statistical significance or a numerical root cause.
 
 ## What stopped the first queue
 
@@ -86,8 +98,9 @@ replicas produced matching tokens; concurrent/isolated TPOT ratios range from
 63-token prompt with 128 output tokens and one user per replica, not a
 long-context serving-throughput qualification. The JUnit copy adds only its
 missing final newline. Full GPQA began through the standard eight-worker vLLM
-endpoint at approximately 04:22 UTC and is still running at this snapshot.
-This does not claim that GPQA or the later agentic/performance stages passed.
+endpoint at approximately 04:22 UTC and finished at 05:12:24 UTC with 170/198.
+The unchanged GPQA gate failed; the valid Tau3 pilot then started. Later
+agentic/performance stages have not yet been qualified.
 
 The queue owns `/tmp/tt-device.lock` through safe runners, has a twelve-hour
 hard limit, a 256-GiB host-memory limit and scoped process-group shutdown.
@@ -143,19 +156,21 @@ query. Neither failure affected the model endpoint. v5 uses BuildKit rootless
 spec conversion and an explicit rootless-cgroup runc wrapper inside the same
 bounded, mount-capable container. Its tiny image probe (root write, chown and
 UID-1000 access) passed before the full build reached native CMake configuration.
-It runs as `qwen38-release-build-v5-20261009.service` with a four-hour limit,
+It ran as `qwen38-release-build-v5-20261009.service` with a four-hour limit,
 24 CPUs and 192 GiB of container memory. No accelerators, host namespaces,
 Docker socket or checkpoint are mounted into the builder. Only the new source
 context and image-output directory are bound. Host kernel settings and existing
 images are unchanged. Build caches use a container-local tmpfs; OCI output is
-under `/dev/shm/qwen38-release-image-20261009-v5`, so it survives SSH disconnect
-but must be exported to durable storage before reboot.
+under `/dev/shm/qwen38-release-image-20261009-v5`. The completed archive was
+subsequently copied to host disk with an fsync and matching full-file SHA-256.
 
-The build is not yet an available image or release. Follow its actual service,
-`/home/ttuser/qwen38-release-build-20261009-v5/state.json` and `run.log`.
+The image build completed and its source/import verifiers passed. The
+[image receipts](../image-build-v5/README.md) record its actual OCI digest,
+archive checksum and durable host path. It is not yet registry-published,
+container-hardware-qualified or deployed through Helm. The unchanged native
+policy in that image scored 170/198 and is below the release gate.
 [Build and Helm instructions](https://github.com/tenstorrent/tt-inference-server/blob/e0e05bad5361d7c170068b3ad7b4df27de192250/scripts/release/QWEN38_GALAXY.md).
 
-The native control reached 170/195 completed at 04:53 UTC without cutoffs, so
-it cannot meet 177/198 even if the remaining three are correct. This remains a
-running partial result. A [higher-precision LM-head ablation](../../experiments/ACCURACY-ABLATIONS.md)
-is prepared but unrun; the current hardware queue and image policy are unchanged.
+A [higher-precision LM-head control](../accuracy-head-v1/README.md) is now
+queued after the full current queue. It has its own frozen source, new G0 and
+full GPQA; the current model endpoint and built image remain unchanged.

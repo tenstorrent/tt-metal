@@ -1,5 +1,19 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 05:22 UTC update: matched native 64K-output GPQA completed **170/198
+(85.86%)** in 48m39s, including one incorrect output-budget cutoff. The other
+27 failures stopped naturally; truncation alone cannot close the unchanged
+177/198 gate. Valid Tau3 is running, with HTTP/delivery work following.
+The BFP8/HiFi2 LM-head control is persistently queued after those stages,
+with its own G0 and unchanged full-GPQA protocol. Its CPU preflight passed;
+there is no hardware result for that policy yet.
+
+The experimental image is built, source/import-verified and preserved on host
+disk with matching checksums. OCI digest:
+`sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579`.
+Registry publication, container hardware/evaluation and SJC3 Helm qualification
+remain. Earlier running snapshots below are historical.
+
 Latest qualification supersedes older running snapshots below: optimized full
 GPQA is **142/198 (71.72%) at 32K output**, then **163/198 (82.32%) at 64K**.
 The unchanged 89.2% gate requires 177 correct. Truncations fell from 42 to 15;
