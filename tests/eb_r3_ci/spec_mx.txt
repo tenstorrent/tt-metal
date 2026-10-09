@@ -1,0 +1,2 @@
+# ci16mx: Qwen3-32B Galaxy decode residual add (bfp8_b + bf16 into bf16 or bfp8_b, 10 cores, 4 tiles per core), main against the unpack call alone
+EB_R3_NO_BLOCK=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_qwen32_glx"

@@ -364,7 +364,8 @@ def test_sdxl_refiner_geglu(device, dcache, cfg):
     ttnn.deallocate(c["mod"].forward(x))
 
 
-def test_mul_tg(device):
+@pytest.mark.parametrize("width", [960, 800])
+def test_mul_tg(device, width):
     # llama3_70b_galaxy decode (Llama 3.3-70B, Qwen3-32B on a Blackhole Galaxy), one chip's ff1ff3: bfp8 width shards of
     # [32, 32] on 30 cores of the model's sub-core grids from (1, 0), SiLU on a, bfp8 out (llama_mlp.py)
     grids = ttnn.CoreRangeSet(
@@ -381,7 +382,7 @@ def test_mul_tg(device):
     )
     torch.manual_seed(1)
     mk = lambda: ttnn.from_torch(
-        torch.rand(1, 1, 32, 960) * 2 - 1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+        torch.rand(1, 1, 32, width) * 2 - 1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
     )
     a, b = mk(), mk()
     for _ in range(4):
@@ -443,6 +444,17 @@ MUL_CFGS = [
     ("mul_bfp8_32x103424", [32, 103424], [32, 103424], "bfp8", "bf16", None, None, None),
     ("scale_128x3072", [1, 1, 128, 3072], 1.702, "bf16", None, None, None, None),
     ("scale_640x768", [1, 1, 640, 768], 1.702, "bf16", None, None, None, None),
+    # census of the multi-chip models: FPU multiplies outside the block section (block-float operand)
+    ("glx_prefill_mlp_128", [1, 1, 128, 3200], [1, 1, 128, 3200], "bfp8", "bfp8", "bfp8", "silu", None),  # llama_mlp.py:439
+    ("glx_prefill_mlp_2048", [1, 1, 2048, 3200], [1, 1, 2048, 3200], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("k3_mla_gate_640", [1, 1, 640, 2048], [1, 1, 640, 2048], "bfp8", "bf16", None, None, None),  # deepseek_v3_d_p mla.py:1507
+    ("kv_zero_bfp8", [8, 8, 128, 128], 0.0, "bfp8", None, None, None, None),  # QB2 generators' KV cache reset
+    # Qwen3-32B on a Blackhole Galaxy, the census's shapes (run 37924272725): llama_mlp.py:439 prefill, llama_attention.py:1270
+    ("glxq_mlp_s128", [1, 1, 128, 800], [1, 1, 128, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_mlp_s1024", [1, 1, 1024, 800], [1, 1, 1024, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_mlp_s4096", [1, 1, 4096, 800], [1, 1, 4096, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_attn_s128", [1, 8, 128, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s1024", [1, 8, 1024, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
 ]
 _DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, None: None}
 
@@ -522,6 +534,12 @@ def _qb2_mc(device, cfg):
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
         )
+    if cfg.startswith("qwen32_glx"):
+        # llama3_70b_galaxy qwen_model_config.py DECODE_RESIDUAL_MEMCFG: width shards of 32x128 on cores (1,0)-(2,4) (10 cores)
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+        )
     if cfg == "llama_qb2":
         # llama31_8b_qb2/tt/decoder.py _width_memcfg(1024, 8): 32x128 on the first 8 cores, row-wise
         grid = device.compute_with_storage_grid_size()
@@ -564,3 +582,34 @@ def test_qb2_add(device, cfg):
         ttnn.deallocate(ttnn.add(a, b, **kw))
     ttnn.deallocate(a)
     ttnn.deallocate(b)
+
+
+QWEN32_GLX = {"qwen32_glx": ttnn.bfloat16, "qwen32_glx_pf": ttnn.bfloat8_b, "qwen32_glx_bb": ttnn.bfloat8_b}
+
+
+@pytest.mark.parametrize("cfg", list(QWEN32_GLX))
+def test_qwen32_glx_add(device, cfg):
+    # llama3_70b_galaxy/tt/llama_decoder.py:181, 213, 232 (Qwen3-32B on a Blackhole Galaxy, one chip): bfp8_b ff_out or attn_out
+    # plus the bf16 residual into bf16 (dtype=res_dtype), or into bfp8_b on the prefetcher path (QWEN_BH_PREFETCHER=1, :206)
+    mc = _qb2_mc(device, cfg)
+    torch.manual_seed(1)
+    a = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    # qwen32_glx_bb: the prefetcher path's :181 and :232 (CI's ci-token-matching run), bfp8_b + bfp8_b into bfp8_b
+    b_dt = ttnn.bfloat8_b if cfg == "qwen32_glx_bb" else ttnn.bfloat16
+    b = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=b_dt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    for _ in range(8):
+        ttnn.deallocate(ttnn.add(a, b, memory_config=mc, dtype=QWEN32_GLX[cfg]))
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
+
+
+@pytest.mark.parametrize("b_rows", [1, 2])
+def test_qwen36_softplus_add(device, b_rows):
+    # blackhole/qwen36/tt/gdn/tp.py:29 _softplus_add (decode, B=1: no broadcast; B=2: the same per row): a slice of qkvzab in L1
+    # plus dt_bias in DRAM, SOFTPLUS(1.0, 20.0) after
+    torch.manual_seed(1)
+    a = ttnn.from_torch(torch.rand(1, b_rows, 12) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    b = ttnn.from_torch(torch.rand(1, b_rows, 12) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for _ in range(8):
+        ttnn.deallocate(ttnn.add(a, b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]))
+
