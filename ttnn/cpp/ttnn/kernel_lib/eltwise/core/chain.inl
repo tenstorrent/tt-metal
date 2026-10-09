@@ -2806,7 +2806,8 @@ ALWI void elem_apply_pack(
     if constexpr (!eltwise_chain_skip_compute_v) {
 #if defined(ARCH_BLACKHOLE) && defined(CKL_ELTWISE_CHAIN_PACK_BLOCK)
         if constexpr (
-            BlockLaneWidth == 1 && ElemT::Addressing == TileAddressing::Direct && !ElemT::uses_l1_accumulation) {
+            BlockLaneWidth == 1 && ElemT::Addressing == TileAddressing::Direct && !ElemT::uses_l1_accumulation &&
+            (CKL_ELTWISE_CHAIN_PACK_BLOCK_IF)) {
             pack_block_mop(to_u32(ElemT::pack_dst_slot), ElemT::dfb, inner_count);
         } else
 #endif
