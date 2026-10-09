@@ -286,13 +286,15 @@ struct Routing2DCodec {
     }
 
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
-    // route buffer. E/W-facing routers consume X only; N/S/Z-facing routers consume Y whenever the
-    // whole Y byte is nonzero, and X otherwise. Intermesh landings rebuild the map and restart the Y
-    // leg, so they must call decode_action_y_first rather than keying on facing.
-    template <eth_chan_directions MY_DIR>
+    // route buffer. E/W-facing routers consume X only; N/S-facing routers consume Y whenever the
+    // whole Y byte is nonzero, and X otherwise. A Z-facing router decodes like the cardinal routers
+    // on the express axis: X only when Z_DECODES_X_ONLY (chords along E/W), Y-first otherwise.
+    template <eth_chan_directions MY_DIR, bool Z_DECODES_X_ONLY>
     static std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
-        if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
+        if constexpr (
+            MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST ||
+            (MY_DIR == eth_chan_directions::Z && Z_DECODES_X_ONLY)) {
             return route_buffer[y_size + local_x];
         } else {
             return decode_action_y_first(route_buffer, local_y, local_x, y_size);
@@ -370,6 +372,40 @@ static_assert(
                 (Routing2DCodec::mcast_tree_edge_count(4) + Routing2DCodec::mcast_tree_edge_count(64)) ==
             Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
     "The 4x64 maximum must fill both fixed route-table regions exactly");
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+// Compile-time express-routing configuration. FabricContext injects FABRIC_EXPRESS_AXIS (0 = N/S,
+// 1 = E/W) when any locally bound mesh declares express links; absent means no express routing.
+// Device-only: host code must query the ControlPlane, never this struct.
+struct FabricExpressConfig {
+#ifdef FABRIC_EXPRESS_AXIS
+    static constexpr bool ENABLED = true;
+    static constexpr std::uint32_t AXIS = FABRIC_EXPRESS_AXIS;
+#else
+    static constexpr bool ENABLED = false;
+    static constexpr std::uint32_t AXIS = 0;  // meaningless when !ENABLED
+#endif
+    static_assert(AXIS <= 1, "FABRIC_EXPRESS_AXIS must be 0 (N/S) or 1 (E/W)");
+
+    // A chord arrives moving along the express axis, so a Z-facing router decodes like the cardinal
+    // routers on that axis. Passed to Routing2DCodec::decode_action as its template argument.
+    static constexpr bool z_decodes_x_only() { return ENABLED && AXIS == 1; }
+
+    // The one-hot action bits that travel on the given axis; Z joins the express axis.
+    static constexpr std::uint8_t axis_actions(bool y_axis) {
+        std::uint8_t actions = Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST;
+        std::uint32_t axis = 1;
+        if (y_axis) {
+            actions = Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_SOUTH;
+            axis = 0;
+        }
+        if (ENABLED && AXIS == axis) {
+            actions |= Routing2DCodec::ACTION_Z;
+        }
+        return actions;
+    }
+};
+#endif
 
 // ============================================================================
 // 2D action-map multicast encode
