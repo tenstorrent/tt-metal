@@ -1631,6 +1631,14 @@ class Model:
         ttnn.synchronize_device(self.md)
         return self.head.read_logits_row(dec.last_logits_t, row // U_, row % U_)
 
+    def read_logits_rows(self, Ub, rows):
+        """Exact full logits rows of bucket rows ``rows`` of the last decode step, one batched read (the exact-sampling fallback)."""
+        full = Ub is None or Ub == self.U
+        dec = self.dec if full else self.buckets[Ub].dec
+        U_ = self.U if full else Ub
+        ttnn.synchronize_device(self.md)
+        return self.head.read_logits_rows(dec.last_logits_t, [(r // U_, r % U_) for r in rows])
+
     def read_logits_bucket(self, Ub):
         return self.read_logits() if Ub == self.U else self.buckets[Ub].read_logits()
 

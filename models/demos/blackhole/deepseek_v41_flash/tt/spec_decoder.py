@@ -179,6 +179,102 @@ class SpecDecoder(SpecVerifier):
         logits = ttnn.concat([self.head.forward(xs[c], pres[c]) for c in range(len(xs))], dim=2)
         return logits, taps, xs
 
+    # ---- sampled verify (adapter, tt/generator_vllm): the round split in two traces around a HOST sampling step -------------------------------------------------------------------
+    # Lossless speculative SAMPLING for point-mass drafts: the target's own sample s_j at every block position is drawn on the host (exact temperature / top-k / top-p sampler over the device's
+    # top-k candidates + partition function), the device accept rule is unchanged (draft d_{j+1} accepted iff it EQUALS s_j: probability p_target(d_{j+1}), and the committed tokens are always the
+    # target's own samples). ``forward_verify`` (trace A) = everything up to the head + candidates, ``forward_tail`` (trace B) = accept / commit / draft with ``a`` = the host-chosen ids.
+    def alloc_sampled(self, cand_k):
+        """Persistent buffers of the split round, allocated BEFORE any trace capture: invT [1,1,rows*T,1] (1 / temperature of every block row), the host-chosen ids ``a_in`` (uint32 [rows*T,1]) and the
+        hand-off ``hidden`` taps [1,1,rows*T,15360] bf16 from trace A to trace B."""
+        rows, cols = tuple(self.md.shape)
+        T = self.U * self.n
+        self.cand_k = int(cand_k)
+        self.alloc_invT(T)
+        mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
+        self.a_in = ttnn.from_torch(
+            torch.zeros(rows * T, 1, dtype=torch.int32),
+            device=self.md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mp,
+        )
+        self.hidden_buf = ttnn.from_torch(
+            torch.zeros(1, 1, rows * T, 15360),
+            device=self.md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(2, None), mesh_shape=(rows, cols)),
+        )
+
+    def set_a_in(self, ids):
+        """ids [rows * T] torch (host-chosen token of every block row, mesh-row-major = user-major order)."""
+        rows, cols = tuple(self.md.shape)
+        host = ttnn.from_torch(
+            ids.reshape(-1, 1).to(torch.int32).contiguous(),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols)),
+        )
+        ttnn.copy_host_to_device_tensor(host, self.a_in)
+
+    def forward_verify(self):
+        """Trace A of the split round: verify block -> logits -> greedy argmax + sampling candidates (top-k per vocab column + partition sums, ``invT``) + hidden taps into ``hidden_buf``."""
+        logits, taps, x, xs, tokens = self._verify_body()
+        a = self.head.sample_global(logits, self.mesh_config, self.ccl)
+        self.a_greedy = a
+        self.cand, self.cand_s = self.head.topk_candidates(logits, self.mesh_config, self.ccl, self.cand_k, self.invT)
+        ttnn.copy(self._hidden(taps, x, xs), self.hidden_buf)
+        self.logits = logits
+        return a
+
+    def forward_tail(self):
+        """Trace B of the split round: accept (rule of ``forward``) over the host-chosen ids ``a_in``, commit, drafter. Same ``pack`` as ``forward``."""
+        T = self.U * self.n
+        tokens = ttnn.typecast(ttnn.slice(self.ctrl, [0, 0], [T, 1]), ttnn.uint32)
+        self.pos = ttnn.reshape(ttnn.slice(self.ctrl, [0, 1], [T, 2]), [T])
+        return self._accept_commit_draft(self.a_in, tokens, self.hidden_buf, None)
+
+    def _hidden(self, taps, x, xs):
+        return ttnn.typecast(
+            ttnn.concat(
+                taps or [(self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2))] * 3, dim=3
+            ),
+            ttnn.bfloat16,
+        )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
+
+    def _verify_body(self):
+        U, n = self.U, self.n
+        T = U * n
+        tokens = ttnn.typecast(ttnn.slice(self.ctrl, [0, 0], [T, 1]), ttnn.uint32)
+        self.pos = ttnn.reshape(ttnn.slice(self.ctrl, [0, 1], [T, 2]), [T])
+        self._engram_rows(T)
+        states = {k: ss.build(self.pos) for k, ss in self.step_states.items()}
+        taps = []
+        sizes = self._chunk_sizes(T)
+        if sizes is not None:
+            self._states = states
+            logits, taps, xs = self._forward_chunked(T, tokens, sizes)
+            x = None
+        else:
+            xs = None
+            x, pre = self.embedding.forward(tokens)
+            dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            for lid, layer, st in self.layers:
+                if lid in self.engram:
+                    x = self._engram_fwd(lid, x)
+                    if dbg:
+                        self._dbg(f"engram {lid}", x)
+                if lid in TAP_LAYERS:
+                    taps.append(self._tap(x))
+                x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
+                if dbg:
+                    self._dbg(f"layer {lid}", x)
+            self._dbg_done = True
+            logits = self.head.forward(x, pre)
+        return logits, taps, x, xs, tokens
+
     def forward(self):
         U, n = self.U, self.n
         T = U * n
@@ -213,6 +309,13 @@ class SpecDecoder(SpecVerifier):
         self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]
         if self.stop_after == "verify":  # timing breakdown only
             return a
+        return self._accept_commit_draft(
+            a, tokens, None, logits, taps=taps, x=x, xs=(xs if sizes is not None else None)
+        )
+
+    def _accept_commit_draft(self, a, tokens, hidden, logits, taps=None, x=None, xs=None):
+        U, n = self.U, self.n
+        T = U * n
         # ---- accept ----
         rm = ttnn.ROW_MAJOR_LAYOUT
         f32 = lambda t, shape: ttnn.to_layout(ttnn.typecast(ttnn.reshape(t, shape), ttnn.float32), ttnn.TILE_LAYOUT)
@@ -245,18 +348,17 @@ class SpecDecoder(SpecVerifier):
         # ---- commit compressor state, write main_kv of the n rows, draft ----
         oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
         self.commit(oh3)
-        hidden = ttnn.typecast(
-            ttnn.concat(
-                taps or [(self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2))] * 3, dim=3
-            ),
-            ttnn.bfloat16,
-        )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
+        if hidden is None:
+            hidden = self._hidden(taps, x, xs)
         dr = self.drafter
         dr.write_main_full(hidden, self.pos)
-        if not self.draft_on:  # k = 0 'plain' round without drafting (adaptive scheduler's no-spec mode): rings stay current, pack = [a (T), m (U)]
+        if (
+            not self.draft_on
+        ):  # k = 0 'plain' round without drafting (adaptive scheduler's no-spec mode): rings stay current, pack = [a (T), m (U)]
             m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)
             self.pack = ttnn.concat([ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U])], dim=1)
-            self.logits = logits
+            if logits is not None:
+                self.logits = logits
             return self.pack
         t_u32 = ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32)  # [U,1]
         f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
@@ -268,7 +370,8 @@ class SpecDecoder(SpecVerifier):
         if cq is not None:  # + confidence head: 65535 * sigmoid(logit) of the 5 drafts per user (drafts' row order)
             parts.append(cq)
         self.pack = ttnn.concat(parts, dim=1)
-        self.logits = logits
+        if logits is not None:
+            self.logits = logits
         return self.pack
 
     def commit(self, onehot=None):

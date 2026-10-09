@@ -93,7 +93,17 @@ class DeepseekV41ForCausalLM:
         "supports_sample_on_device": True,
         # temperature / top-k / top-p sampling is done here (candidates of the device top-k + a host draw): no ``max_device_top_k`` restriction in a plain launch. A speculative launch keeps
         # max_device_top_k = 1 (sampled requests then use the plugin's host sampler on full logits: slow) until the sampled verify path exists.
-        **({} if not any(a.startswith("--speculative") for a in sys.argv) else {"max_device_top_k": 1}),
+        # A speculative launch declares ``supports_sampled_verify`` (the plugin then offers drafts to sampled requests too and passes their sampling params on verify calls: lossless speculative
+        # sampling in ``_spec_verify``) when DSV41_VLLM_SPEC_SAMPLED=1 (default 1; 0 = the greedy-only verify (``max_device_top_k = 1``: sampled requests use the plugin's host sampler)).
+        **(
+            {}
+            if not any(a.startswith("--speculative") for a in sys.argv)
+            else (
+                {"supports_sampled_verify": True}
+                if os.environ.get("DSV41_VLLM_SPEC_SAMPLED", "1") == "1"
+                else {"max_device_top_k": 1}
+            )
+        ),
         "supports_device_penalties": False,
         # speculative decoding through the plugin's model-owned drafter contract (``speculative_config`` method custom_class): see ``spec_plan`` and the SPECULATIVE DECODING section
         "supports_spec_decode": True,
@@ -141,10 +151,17 @@ class DeepseekV41ForCausalLM:
                 f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored by the vLLM interface (decode mode: {'spec k=%d' % spec_k if spec_k else 'plain'})"
             )
         os.environ["DSV41_SPEC"] = str(spec_k)
-        if not spec_k:
+        if spec_k:
             os.environ.setdefault(
-                "DSV41_DEV_CAND_K", "64"
-            )  # device top-k candidates of the decode traces (temperature / top-p sampling)
+                "DSV41_IDX_SWITCH", "131072"
+            )  # the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1)
+        os.environ.setdefault(
+            "DSV41_DEV_CAND_K", "64"
+        )  # device top-k candidates of the decode traces (temperature / top-p sampling; in a speculative launch: the ordinary draftless steps)
+        if spec_k and os.environ.get("DSV41_VLLM_SPEC_SAMPLED", "1") == "1":
+            os.environ.setdefault(
+                "DSV41_SPEC_CAND_K", "64"
+            )  # device top-k candidates of the sampled verify round (SpecRunner.sampled)
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
         os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
         max_seq_len = cls.bounded_max_seq_len(max_seq_len, B)
@@ -460,7 +477,8 @@ class DeepseekV41ForCausalLM:
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """Plugin admission of ``speculative_config`` (docs/SPEC_DECODE_CONTRACT.md section 2). One verify round runs T = U (1 + k) token rows per mesh row (U = users per mesh row = ceil(B / 4)),
         and the mHC / router kernels support at most 32: U = 8 (B = 32) -> k <= 3, U <= 4 -> k <= 5 (the drafter proposes 5 tokens). B >= 64 is refused (the demo's default is plain there too). The
-        spec runners' DRAM cost bounds the context (tt/spec_policy.SPEC_MAX_CTX)."""
+        spec runners' DRAM cost bounds the context (tt/spec_policy.SPEC_MAX_CTX). Speculative decoding is meant for ISL up to 32k (plus generation): a build with a longer max_model_len is refused, serve it plain.
+        """
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
         from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
@@ -475,9 +493,10 @@ class DeepseekV41ForCausalLM:
             )
         ctx = getattr(getattr(vllm_config, "model_config", None), "max_model_len", None)
         lim = spec_policy.SPEC_MAX_CTX.get(U, spec_policy.SPEC_MAX_CTX[8])
-        if ctx is not None and int(ctx) > lim:
+        if ctx is not None and int(ctx) > lim and os.environ.get("DSV41_VLLM_SPEC_GUARD", "1") != "0":
             return SpecReject(
-                f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim})", ks
+                f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim}). Speculative decoding applies up to 32k ISL (plus generation); beyond that serve with plain decode (no speculative_config)",
+                ks,
             )
         if int(requested_k) < 1:
             return SpecReject("num_speculative_tokens must be >= 1", ks)
@@ -488,7 +507,7 @@ class DeepseekV41ForCausalLM:
             extra_bytes_per_token=0,
             accept_modes=("argmax_ids",),
             drafter_state="internal",
-            supports_narrow_decode=False,
+            supports_narrow_decode=True,
         )
 
     # Longest context the model is built for per padded batch size (the KV pool + index-key slabs + prefill tables must fit DRAM). Measured (40 layers, fp8 pool): B=128 at 65536 runs out of DRAM while building
@@ -531,6 +550,9 @@ class DeepseekV41ForCausalLM:
             )  # next proposal per physical slot (the last round / the seeding)
             self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
             self.spec_has = torch.zeros(self.B, dtype=torch.bool)
+            # speculation applies to requests with ISL <= DSV41_VLLM_SPEC_ISL_MAX (default 32k): longer requests of the same server run plain (draftless rounds / ordinary decode steps)
+            self.spec_ok = torch.ones(self.B, dtype=torch.bool)
+            self.spec_isl_max = int(os.environ.get("DSV41_VLLM_SPEC_ISL_MAX", "32768"))
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
         self.sample_stats = {"rows": 0, "fallback": 0}
         self.gens = {}  # seeded per-request generators by model user
@@ -634,7 +656,9 @@ class DeepseekV41ForCausalLM:
                 raise ValueError(
                     "logprobs are not supported by the DSV4.1 adapter (no on-device logprobs); request without logprobs"
                 )
-            if not VS.sampling_wants_greedy(sampling_params) and (not self.interleave or self.spec is not None):
+            if not VS.sampling_wants_greedy(sampling_params) and (
+                not self.interleave or (self.spec is not None and not self.spec.sampled)
+            ):
                 raise ValueError(
                     "temperature > 0 with device sampling needs the interleaved prefill and a plain (non-speculative) launch (max_device_top_k=1 selects host sampling otherwise)"
                 )
@@ -799,7 +823,13 @@ class DeepseekV41ForCausalLM:
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
             if self.spec is not None:
-                self.spec_has[p] = False  # the drafter is seeded at the first verify round of this request
+                self.spec_has[
+                    p
+                ] = False  # the drafter is seeded when the plugin asks for the first drafts of this request (propose_draft_tokens)
+                if starts[i] == 0:
+                    self.spec_ok[p] = True
+                if ends[i] > self.spec_isl_max:
+                    self.spec_ok[p] = False  # ISL beyond the speculative range: this request decodes plain
         self.timing["prefill"] = time.perf_counter() - t0
         self._calls["prefill"] += 1
         logger.info(f"DSV4.1 prefill (interleave) done in {self.timing['prefill']:.2f} s (model: {self.m.timing})")
@@ -815,7 +845,19 @@ class DeepseekV41ForCausalLM:
         return torch.stack([res[p][1] for p in phys]).float().reshape(N, 1, -1)
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
-    def decode_forward(
+    def decode_forward(self, tokens, start_pos, *args, **kwargs):
+        out = self._decode_forward_impl(tokens, start_pos, *args, **kwargs)
+        if self.spec is not None and kwargs.get("spec_mode") is None and kwargs.get("num_valid_drafts") is None:
+            # a draftless ordinary step advanced the model but not the drafter: the stepped rows are reseeded when the plugin asks for their next drafts (propose_draft_tokens)
+            for i in range(int(tokens.shape[0])):
+                if int(start_pos[i]) < 0:
+                    continue
+                p = self.slots.physical(i)
+                self.spec_has[p] = False
+                self.spec_last[p] = int(out[i, 0]) if out.dim() == 2 and out.dtype in (torch.int32, torch.int64) else -1
+        return out
+
+    def _decode_forward_impl(
         self,
         tokens,
         start_pos,
@@ -836,11 +878,10 @@ class DeepseekV41ForCausalLM:
                 raise ValueError(
                     "a speculative verify call arrived but the server runs plain decode (no speculative_config)"
                 )
-            return self._spec_verify(tokens, start_pos, slot_remap=slot_remap, **kwargs)
-        if self.spec is not None:
-            raise RuntimeError(
-                "ordinary [B, 1] decode call in a speculative launch: the adapter declares no narrow decode, every decode step must be a verify"
+            return self._spec_verify(
+                tokens, start_pos, slot_remap=slot_remap, sampling_params=sampling_params, **kwargs
             )
+        # an ordinary [B, 1] decode step in a speculative launch (the plugin's narrow decode: no row carries a draft): the plain decode path below, through the plain decode traces
         if slot_remap is not None:
             self.slots.apply_remap(slot_remap)
         W = int(tokens.shape[0])
@@ -933,22 +974,19 @@ class DeepseekV41ForCausalLM:
             ):  # sampled rows: exact temperature / top-k / top-p draw over the device's candidates + partition function (full-row fallback for flat rows)
                 t_s = time.perf_counter()
                 cv, ci, cs = self.m.read_candidates(Ub if phys is not None else None)
-                nfb = 0
+                reqs = []
                 for i, idx, p in srows:
                     u = float(torch.rand(1, generator=self._gen_for(p), dtype=torch.float64))
-                    tk_, fb = VS.sample_exact(
-                        cv[idx],
-                        ci[idx],
-                        cs[idx],
-                        self.m.cand_k,
-                        samp[0][i],
-                        samp[1][i],
-                        samp[2][i],
-                        u,
-                        lambda idx=idx: self.m.read_logits_row(Ub if phys is not None else None, idx),
-                    )
+                    reqs.append((cv[idx], ci[idx], cs[idx], samp[0][i], samp[1][i], samp[2][i], u, idx))
+                toks_s, nfb = VS.sample_many(
+                    reqs,
+                    self.m.cand_k,
+                    lambda idxs: self.m.read_logits_rows(Ub if phys is not None else None, idxs),
+                )
+                for (i, idx, p), tk_ in zip(srows, toks_s):
                     out[idx] = tk_
-                    nfb += int(fb)
+                if os.environ.get("DSV41_VLLM_SAMPLE_AUDIT") == "1":
+                    self._audit_draws(reqs, toks_s, cv, ci, Ub if phys is not None else None)
                 self.sample_stats["rows"] += len(srows)
                 self.sample_stats["fallback"] += nfb
                 self.timing["sample"] = time.perf_counter() - t_s
@@ -957,6 +995,50 @@ class DeepseekV41ForCausalLM:
             self.m.read_logits_bucket(Ub).float() if self.bucketing else self.m.read_logits().float()
         )  # [B', vocab] host
         return VS.scatter_rows(logits.reshape(logits.shape[0], 1, -1), rows, W)
+
+    def _audit_draws(self, reqs, toks, cv, ci, Ub):
+        """DSV41_VLLM_SAMPLE_AUDIT=1: check every sampled draw of the step against the full logits rows (slow: one batched full read per step). Logs the request parameters seen, the violations
+        (sampled token outside the request's top-k / top-p support, or different from the reference inverse CDF for the same u), the rank / preceding-mass statistics and the argmax agreement of the
+        candidate set with the full row."""
+        rows = self.m.read_logits_rows(Ub, [r[7] for r in reqs])
+        st = self.__dict__.setdefault(
+            "_audit",
+            {
+                "n": 0,
+                "viol": 0,
+                "ref_mismatch": 0,
+                "argmax_bad": 0,
+                "max_rank": 0,
+                "rank0": 0,
+                "max_before": 0.0,
+                "params": {},
+                "tail_n": 0,
+                "tail_beyond_k": 0,
+            },
+        )
+        for (v, ix, sm, temp, tk, tp, u, key), tok, row in zip(reqs, toks, rows):
+            r = VS.audit_draw(row, tok, temp, tk, tp, u, cand_argmax=ix[int(torch.argmax(v))])
+            st["n"] += 1
+            st["params"][(round(float(temp), 3), int(tk), round(float(tp), 3))] = (
+                st["params"].get((round(float(temp), 3), int(tk), round(float(tp), 3)), 0) + 1
+            )
+            st["viol"] += int(not r["in_support"])
+            st["ref_mismatch"] += int(r["ref_token"] != int(tok))
+            st["argmax_bad"] += int(not r["argmax_ok"])
+            st["max_rank"] = max(st["max_rank"], r["rank"])
+            st["rank0"] += int(r["rank"] == 0)
+            st["max_before"] = max(st["max_before"], r["before"] if r["in_support"] else st["max_before"])
+            st["tail_n"] += 1
+            st["tail_beyond_k"] += int(r["rank"] >= self.m.cand_k)
+            if not r["in_support"] or r["ref_token"] != int(tok):
+                logger.warning(
+                    f"DSV4.1 sample AUDIT violation: token {tok} rank {r['rank']} preceding mass {r['before']:.4f} params T={temp} top_k={tk} top_p={tp} ref token {r['ref_token']}"
+                )
+        if st["n"] // 64 != (st["n"] - len(reqs)) // 64:
+            logger.info(
+                f"DSV4.1 sample AUDIT: {st['n']} draws, support violations {st['viol']}, reference-inverse-CDF mismatches {st['ref_mismatch']}, candidate-argmax != full argmax {st['argmax_bad']}, "
+                f"rank-0 share {st['rank0'] / st['n']:.3f}, max rank {st['max_rank']}, max preceding mass inside support {st['max_before']:.4f}, draws with rank >= {self.m.cand_k}: {st['tail_beyond_k']}, params seen {st['params']}"
+            )
 
     def _maybe_compact(self):
         """Move stragglers into the lowest free users when the live set fits a smaller decode bucket (see ``compact``). At most one user per mesh row per call."""
@@ -1115,7 +1197,15 @@ class DeepseekV41ForCausalLM:
         )
 
     def _spec_verify(
-        self, tokens, start_pos, num_valid_drafts=None, accepted_counts=None, spec_mode=None, slot_remap=None, **kwargs
+        self,
+        tokens,
+        start_pos,
+        num_valid_drafts=None,
+        accepted_counts=None,
+        spec_mode=None,
+        slot_remap=None,
+        sampling_params=None,
+        **kwargs,
     ):
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
@@ -1155,10 +1245,23 @@ class DeepseekV41ForCausalLM:
             base[r] = pos
             force[r] = -1.0 if nv > 0 else 0.0
             rows.append((i, p, pos, r))
-        if any(not bool(self.spec_has[p]) for _, p, _, _ in rows):
-            self._spec_seed_active([(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows])
+        if any(bool(self.spec_ok[p]) and not bool(self.spec_has[p]) for _, p, _, _ in rows):
+            self._spec_seed_active(
+                [(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows]
+            )  # (safety net: propose_draft_tokens seeds before a request's first verify)
+        srows = {}
+        sp = sampling_params
+        if sp is not None and runner.sampled:
+            samp = VS.row_sampling(sp, W)
+            for i, p, pos, r in rows:
+                if not VS.row_is_greedy(samp[0][i], samp[1][i]):
+                    srows[r] = (float(samp[0][i]), samp[1][i], samp[2][i], self._gen_for(p))
         t0 = time.perf_counter()
-        a, mm, d = runner._round(X, base, force)
+        if srows:
+            a, mm, d = runner._round_sampled(X, base, force, srows, VS.sample_many)
+            self.spec_stats["sampled_rows"] = self.spec_stats.get("sampled_rows", 0) + len(srows)
+        else:
+            a, mm, d = runner._round(X, base, force)
         t1 = time.perf_counter()
         self.timing["decode"] = t1 - t0
         self._calls["decode"] += 1
@@ -1168,8 +1271,11 @@ class DeepseekV41ForCausalLM:
                 self.book.note_fed(p, pos + j, int(X[r, j]))
             self.spec_drafts[p] = d[r, :K].to(torch.int32)
             self.spec_last[p] = int(a[r, m])
-            self.spec_has[p] = True
+            self.spec_has[p] = bool(self.spec_ok[p])
             self.spec_stats["accepted"] += m
+            if float(force[r]) < 0:  # a verified row (not the forced single-token first round of a request)
+                self.spec_stats["acc_verified"] = self.spec_stats.get("acc_verified", 0) + m
+                self.spec_stats["rows_verified"] = self.spec_stats.get("rows_verified", 0) + 1
         self.spec_stats["rounds"] += 1
         self.spec_stats["rows"] += len(rows)
         st = self.__dict__.setdefault("_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None})
@@ -1183,34 +1289,67 @@ class DeepseekV41ForCausalLM:
             ss = self.spec_stats
             logger.info(
                 f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms, "
-                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)})"
+                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)}, sampler draws {sum(r_.sample_stats['rows'] for r_ in [self.spec] + list(self.spec_buckets.values()))} / full-row fallbacks {sum(r_.sample_stats['fallback'] for r_ in [self.spec] + list(self.spec_buckets.values()))})"
             )
             st.update(n=0, t=0.0, g=0.0)
         out = VS.scatter_rows(a.to(torch.int32), [(i, r, pos) for i, p, pos, r in rows], W)
         self.spec_bucket_calls[Ub] = self.spec_bucket_calls.get(Ub, 0) + 1
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
 
+    def _seed_items(self, extra):
+        """Rows of a drafter seeding round: EVERY live user with a history (the replay writes the verify block of all rows: a user left out would get a dummy block at position 0). ``extra``
+        {user: next token} of the rows that need seeding; every other live row continues from its last committed token (``spec_last``).
+        """
+        items = []
+        for p in sorted(self.slots.live):
+            n = int(self.book.n[p])
+            if n == 0:
+                continue
+            if p in extra:
+                first = int(extra[p])
+            elif int(self.spec_last[p]) >= 0:
+                first = int(self.spec_last[p])
+            else:
+                continue
+            items.append((p, n, first))
+        return items
+
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
-        """Hand out the drafts of the last round / seeding (computed on the device already). A row is offered only if the token its drafts continue is the token the plugin committed."""
+        """Hand out the drafts of the last round / seeding. A row is offered drafts only if it is inside the speculative range (ISL <= DSV41_VLLM_SPEC_ISL_MAX) and the token its drafts continue is the
+        token the plugin committed. A row whose drafter state is not current (its prefill just finished, a draftless ordinary decode step, a mismatch) is SEEDED here (replay of its last 128 tokens through
+        the captured verify trace), so its first decode step is a real verify, not a forced single-token round."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
         K = self.spec.k
         W = int(committed_tokens.shape[0])
         ids = torch.zeros(W, int(num_drafts), dtype=torch.int32)
         nv = torch.zeros(W, dtype=torch.int32)
+        offer, need = [], {}
         for i in range(W):
             if int(committed_positions[i, 0]) < 0:
                 continue
             p = self.slots.physical(i)
-            if p not in self.slots.live or not bool(self.spec_has[p]):
+            if p not in self.slots.live:
                 continue
             last = int(committed_tokens[i, int(accepted_counts[i]) - 1])
-            if last != int(self.spec_last[p]):
-                logger.warning(
-                    f"DSV4.1 spec: row {i} (user {p}) committed token {last} != the drafter's {int(self.spec_last[p])}: no drafts offered"
-                )
-                self.spec_has[p] = False
+            if last < 0:
                 continue
+            if not bool(self.spec_ok[p]):
+                self.spec_last[p] = last  # (kept for a later reseed of the other rows)
+                continue
+            if bool(self.spec_has[p]) and last == int(self.spec_last[p]):
+                offer.append((i, p))
+                continue
+            if bool(self.spec_has[p]):
+                logger.warning(
+                    f"DSV4.1 spec: row {i} (user {p}) committed token {last} != the drafter's {int(self.spec_last[p])}: reseeding"
+                )
+            if int(self.book.n[p]) > 0:
+                need[p] = last
+                offer.append((i, p))
+        if need:
+            self._spec_seed_active(self._seed_items(need))
+        for i, p in offer:
             ids[i, :K] = self.spec_drafts[p]
             nv[i] = min(K, int(num_drafts))
         return DraftOutput(draft_token_ids=ids, num_valid=nv)
