@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>

@@ -331,7 +331,7 @@ llk:
     bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu: 75
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
@@ -422,7 +422,7 @@ models:
   demo:
     bh_galaxy: 470
     bh_sc1: 1836
-    bh_sc1_high_power: 493
+    bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
