@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -205,7 +206,7 @@ def run_cases(a, extra: list, cwd: Path) -> dict:
             "-v",
             "-m",
             "pytest",
-            nid,
+            shlex.quote(nid),  # tracy re-joins its args into one `sh -c` string; node ids contain ( ) { } '
         ]
         print(f"[adapter] case {name}: {nid}", flush=True)
         with open(log, "w") as f:
