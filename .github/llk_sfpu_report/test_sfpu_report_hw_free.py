@@ -199,6 +199,36 @@ def test_the_accuracy_driver_is_in_the_harness_only_while_it_runs(monkeypatch, t
     assert not installed.exists()
 
 
+def test_the_binary_accuracy_driver_hooks_names_that_exist():
+    """The driver replaces functions of test_eltwise_binary_sfpu.py by name; a rename
+    there (#57137 dropped ``_assert_against_contract``) would otherwise only show up
+    on hardware, as an accuracy run with no results."""
+    import ast
+
+    def module_names(path):
+        names = set()
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names.update((a.asname or a.name).split(".")[0] for a in node.names)
+            elif isinstance(node, ast.Assign):
+                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        return names
+
+    hooked = {
+        call.args[1].value
+        for call in ast.walk(ast.parse(accuracy.DRIVER_SOURCE.read_text()))
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "setattr"
+        and len(call.args) >= 2
+        and isinstance(call.args[1], ast.Constant)
+    }
+    assert hooked == {"assert_against_contract", "generate_stimuli"}
+    assert hooked <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
+
+
 def test_requested_ops_take_any_case_and_skip_unknown_names():
     ops, unknown = cli._requested_ops("tanh,SFPULOGSIGMOID,typecast,tanhh,Tanh")
     assert ops == ["Tanh", "SfpuLogsigmoid", "Typecast"]

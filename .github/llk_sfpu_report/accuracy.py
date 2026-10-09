@@ -31,7 +31,11 @@ CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
 
 
 def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
-    """Dump the side's raw results for ``ops`` (MathOperation names) to ``out_dir``."""
+    """Dump the side's raw results for ``ops`` (MathOperation names) to ``out_dir``.
+
+    Returns the device run's pytest exit code: 0 or 5 (nothing collected) is clean,
+    anything else means some variants failed and left no results.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     unary = [o for o in ops if not o.startswith("Sfpu")]
     binary = [o for o in ops if o.startswith("Sfpu")]
@@ -45,10 +49,9 @@ def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
     shutil.copyfile(DRIVER_SOURCE, installed)
     try:
         # A variant that fails on one side shows up as missing in the comparison.
-        runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs, check=False)
+        return runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs, check=False)
     finally:
         installed.unlink(missing_ok=True)
-    return out_dir
 
 
 def _sweep_stats(d):
