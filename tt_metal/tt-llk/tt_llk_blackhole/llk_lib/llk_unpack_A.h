@@ -634,9 +634,8 @@ inline void _llk_unpack_A_block_(
 }
 
 /**
- * @brief Unpack num_tiles tiles of each of num_operands operands into consecutive DEST slots with one DEST slot handshake:
- *        operand 0's tiles go to the slots from the math thread's start slot on, then operand 1's, and so on. Four-face
- *        32-bit tiles into a 32-bit DEST, every operand in the same formats, each operand's tiles back to back in L1.
+ * @brief Unpack num_tiles four-face 32-bit tiles of each operand, operand by operand, into consecutive DEST slots with one DEST
+ *        slot handshake; every operand has the same formats and its tiles back to back in L1.
  *
  * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread takes the num_operands * num_tiles tiles as one
  *         block through @ref _llk_math_eltwise_unary_datacopy_block_.

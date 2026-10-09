@@ -75,7 +75,7 @@ def test_perf_unpack_tilize_int(
     )
 
 
-# Float32 to Float32 unpacks to dest and stays per tile inside the block call: the check that the fallback costs nothing.
+# Float32 to Float32 unpacks to dest, where the block call falls back to one call per tile.
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16], same=True)

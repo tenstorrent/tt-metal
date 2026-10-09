@@ -20,15 +20,10 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
- * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST.
- *
- * Extracts the 16 source rows of the left face into SrcB four at a time, then broadcasts each row's
- * datum[0] across all 16 datums of that row into the left face (rows 0-15) and the right face
- * (rows 16-31), in a hi16 and a lo16 pass because MOVB2D writes 16 bits at a time.
+ * @brief Column-broadcast one face pair of a 32-bit tile already unpacked into DEST, hi16 then lo16 since MOVB2D moves 16 bits.
  *
  * @tparam face_base: Intra-tile DEST row of the face pair, values = <0 (faces 0+1)/32 (faces 2+3)>
- * @note Point the math dest offset at the target tile (@ref math::set_dst_write_addr) before calling:
- *       the move operands are intra-tile rows only.
+ * @note The moves take intra-tile rows, so the math dest offset must point at the tile (@ref math::set_dst_write_addr).
  */
 template <std::uint32_t face_base>
 inline void eltwise_unary_bcast_col_32b_face_pair()
@@ -107,11 +102,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Point the math dest offset at this tile. The budabackend#2730 ZEROACC below takes a CLR_16 block index
-        // relative to the 4-tile 32-bit bank (local_tile wraps tiles 4-7 onto 0-3) and selects the bank from this
-        // offset, so SyncFull tiles 4-7 clear their own faces. The broadcast sequences add it to their
-        // MOVD2B/MOVB2D immediates, which carry only the intra-tile row and issue as compile-time TTI_ instructions.
-        // A plain copy (NONE) skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
+        // The broadcast moves take intra-tile rows, so the offset points at the tile, and the zero flag clear below takes
+        // its bank from it; a plain copy has no moves and keeps the offset.
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -350,7 +342,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(start_dst_index);
             math::math_unpack_to_dest_tile_ready();
 
-            // budabackend#2730 zero flag clear, per face of every tile (see _llk_math_eltwise_unary_datacopy_)
+            // The zero flag clear of every face, as _llk_math_eltwise_unary_datacopy_ issues after an unpack to dest
             const std::uint32_t dst_format_masked = masked_data_format(dst_format);
             const int clear_fp32                  = static_cast<int>(
                 dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
