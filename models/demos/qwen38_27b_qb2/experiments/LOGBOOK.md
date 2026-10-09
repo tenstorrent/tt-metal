@@ -1555,3 +1555,7 @@ No session connection is needed for that queue to continue.
   caches and has bounded cleanup. No shared CI, registry or Helm deployment
   was modified. Evidence: galaxy-evidence/gpqa-first-final-v2/ and TTIS branch
   scripts/release/evidence/qwen38-20261009/.
+
+- Publication follow-up: restored copied status/JUnit metadata omitted by a
+  hash-only evidence-index refresh. Raw receipts, scores and running jobs were
+  unchanged. Revalidated all hashes and preserved every original metadata field.
