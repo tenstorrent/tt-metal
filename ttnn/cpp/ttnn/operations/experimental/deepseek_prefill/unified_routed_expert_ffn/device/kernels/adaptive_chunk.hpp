@@ -27,16 +27,18 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
-#ifdef ROW_EXPERTS
-constexpr uint32_t kGridY = 1;  // ROW_EXPERTS: each grid row runs its own experts, a chunk is one row's per_core_M
+#ifdef ROW_GROUP
+// ROW_GROUP (rows per expert group, dividing the ROW_EXPERTS grid rows): each group of ROW_GROUP grid rows runs its
+// own experts; a chunk spans per_core_M * ROW_GROUP tile-rows.
+constexpr uint32_t kGridY = ROW_GROUP;
 #else
 constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
 #endif
-// Expert loop of the three kernels: ROW_EXPERTS (= the grid row count) gives grid row gy the local experts gy,
-// gy + ROW_EXPERTS, ...; otherwise every core walks all of them.
-#ifdef ROW_EXPERTS
-#define RE_EXPERT_FIRST (static_cast<uint32_t>(get_absolute_logical_y()))
-#define RE_EXPERT_STEP (static_cast<uint32_t>(ROW_EXPERTS))
+// Expert loop of the three kernels: with ROW_GROUP, grid row gy's group g = gy / ROW_GROUP walks local experts g,
+// g + ROW_EXPERTS / ROW_GROUP, ...; otherwise every core walks all of them.
+#ifdef ROW_GROUP
+#define RE_EXPERT_FIRST (static_cast<uint32_t>(get_absolute_logical_y()) / ROW_GROUP)
+#define RE_EXPERT_STEP (static_cast<uint32_t>(ROW_EXPERTS / ROW_GROUP))
 #else
 #define RE_EXPERT_FIRST 0u
 #define RE_EXPERT_STEP 1u

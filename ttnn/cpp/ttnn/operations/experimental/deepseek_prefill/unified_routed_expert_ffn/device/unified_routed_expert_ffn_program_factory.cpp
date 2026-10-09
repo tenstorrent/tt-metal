@@ -143,20 +143,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kCoreGridX;
     uint32_t GRID_Y = kCoreGridY;
-    // ROW_EXPERTS (stacked weights): each of the GRID_Y grid rows runs as an independent one-row instance over every
-    // GRID_Y-th local expert (row gy: experts gy, gy + GRID_Y, ...), each core reading its own weight slices. The
-    // default layout splits ONE expert's tokens over the rows, which leaves most rows idle when an expert has fewer
-    // than GRID_Y token tiles (the usual case for routed prefill), while a row's per-expert matmul work bounds time.
-    // Chosen from the dispatch capacity (op.m_tiles, part of the program hash): Laguna-S on p150x4 (64 local experts,
-    // ~10 * T / 256 tokens each) measured 48-layer prefill 1K 274 -> 211, 1.5K 314 -> 271, 2K 366 -> 340 ms, but
-    // 3K 455 -> 463 and 4K 569 -> 611 ms, where each row's M work outgrows the parallel win.
-    constexpr uint32_t kRowExpertsMaxMTiles = 64;
-    const bool row_experts = op.stacked_packed_weights && op.m_tiles <= kRowExpertsMaxMTiles;
+    // Row groups (stacked weights): the GRID_Y grid rows split into groups of row_group rows; each group runs as an
+    // independent instance over every (GRID_Y / row_group)-th local expert, its weights multicast down the group's
+    // rows only. The default single group splits ONE expert's tokens over all rows, which leaves most rows idle when
+    // an expert has few token tiles (routed prefill), while a row's per-expert matmul work bounds time.
+    // row_group: grid rows per expert group (1 = one row per expert ... GRID_Y = the default single group). Chosen
+    // from the dispatch capacity op.m_tiles (part of the program hash); Laguna-S on p150x4, 48-layer prefill:
+    //   <= 64 tile-rows: 1 row  (1K 274 -> 176, 2K 366 -> 285 ms with 8-tile chunks)
+    //   <= 128         : 2 rows (4K 517 -> 476 ms)
+    //   above          : 4 rows (8K 888 -> 857 ms)
+    uint32_t row_group = GRID_Y;
+    if (op.stacked_packed_weights) {
+        row_group = op.m_tiles <= 64 ? 1u : (op.m_tiles <= 128 ? 2u : 4u);
+    }
+    const bool row_experts = row_group < GRID_Y;
     // A row runs its expert's whole token range in chunks of up to this many tile-rows; every chunk re-streams the
     // expert's weights through each core, so a 2K bucket's ~5-tile experts take one chunk (1K 183 -> 176 ms, 2K
     // 304 -> 285 ms vs 4); 16 narrows the gate/up K-block in L1 and loses.
     constexpr uint32_t row_chunk = 8;
-    const uint32_t M_ROWS = row_experts ? 1u : GRID_Y;  // grid rows one expert's tokens are split over
+    const uint32_t M_ROWS = row_group;  // grid rows one expert's tokens are split over
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -179,7 +184,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
     constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
-    uint32_t chunk_M_tiles = row_experts ? row_chunk : kMaxChunkMTiles;
+    uint32_t chunk_M_tiles = row_experts ? row_chunk * row_group : kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -561,7 +566,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // fabric safety. Validate against a fabric-enabled run with concurrent CCL before
     // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
     // NoC-0 multicast.
-    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr && !row_experts;
+    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr && row_group > 1;
     const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
@@ -819,6 +824,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     }
     if (row_experts) {
         reader_defines["ROW_EXPERTS"] = std::to_string(GRID_Y);
+        reader_defines["ROW_GROUP"] = std::to_string(row_group);
     }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -896,6 +902,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             }
             if (row_experts) {
                 d["ROW_EXPERTS"] = std::to_string(GRID_Y);
+                d["ROW_GROUP"] = std::to_string(row_group);
             }
             return d;
         }()));
@@ -986,6 +993,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     compute_defines["PACKER_L1_ACC"] = "1";
     if (row_experts) {
         compute_defines["ROW_EXPERTS"] = std::to_string(GRID_Y);
+        compute_defines["ROW_GROUP"] = std::to_string(row_group);
     }
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
@@ -1041,7 +1049,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const auto& core = cores[idx];
         const uint32_t gy = idx / GRID_X;
         const uint32_t gx = idx % GRID_X;
-        const uint32_t my_mt = row_experts ? 0u : gy;
+        const uint32_t my_mt = gy % row_group;
+        const uint32_t group_y0 = gy - my_mt;  // first grid row of this core's expert group
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
@@ -1063,7 +1072,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //   x      sender for row    gy -> column (gy + 1) % GRID_X
         // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
         // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
-        const uint32_t in1_sender_row = gx % GRID_Y;
+        const uint32_t in1_sender_row = group_y0 + gx % row_group;
         const uint32_t in0_sender_col = (gy + 1) % GRID_X;
         TT_FATAL(
             row_experts || !(gy == in1_sender_row && gx == in0_sender_col),
@@ -1071,16 +1080,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             gx,
             gy);
 
-        const bool is_in1_sender = row_experts || (gy == in1_sender_row);
+        const bool is_in1_sender = (gy == in1_sender_row);
         const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
-        const uint32_t in1_num_receivers = row_experts ? 0u : GRID_Y - 1;
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, group_y0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, group_y0 + row_group - 1});
+        const uint32_t in1_num_receivers = row_group - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
         const uint32_t in1_mcast_nx_end = last_recv_noc.x;
