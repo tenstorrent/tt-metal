@@ -431,8 +431,12 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         blocking.l1_budget,
         blocking.describe());
 
+    // With NEED_START the counts scratch holds two pages: counts, then `start` (the reader's
+    // COUNTS_BCAST fills both once per dispatch, so start no longer reuses the counts page).
+    const bool need_start = direct_write || operation_arguments.read_x_at_offset;
+    const uint32_t counts_scratch_bytes = need_start ? 2 * counts_page : counts_page;
     for (const auto& allocation : blocking.cb_allocations(
-             activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
+             activations_are_row_major, output_tile, idx_page, counts_scratch_bytes, /*aliases_enabled=*/true)) {
         CBDescriptor cb_descriptor{
             .total_size = allocation.total_size,
             .core_ranges = all_cores,
@@ -457,6 +461,13 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             .initial_value = 0,
         });
     }
+    static_assert(geo::SEM_COUNTS_VALID < geo::NUM_DEVICE_SEMAPHORES);
+    descriptor.semaphores.push_back(SemaphoreDescriptor{
+        .id = geo::SEM_COUNTS_VALID,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
 
     const auto x_mcast_ct =
         mcast_compile_time_args(geo::SEM_X_BASE, geo::SEM_X_BASE + 1, hgroups - 1, /*handshake=*/true);
@@ -659,7 +670,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(*device, NOC::NOC_0, 0, y, hgroups - 1, y);
             reader_args.reserve(
-                10 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
+                11 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
             reader_args.push_back(blocking.kr_sizes[y]);
             reader_args.push_back(blocking.kr_starts[y]);
             reader_args.push_back(blocking.hn_starts[x]);
@@ -679,6 +690,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
             }
+            // COUNTS_BCAST valid flag (RT_COUNTS_SEM): core (0, 0) reads counts/idx/start once and
+            // multicasts them to the grid behind it.
+            reader_args.push_back(geo::SEM_COUNTS_VALID);
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
             KernelDescriptor::RTArgList writer_args;

@@ -92,6 +92,9 @@ inline constexpr uint32_t SEM_WDSPLIT = 12;
 inline constexpr uint32_t SEM_PHASE_FREE = 13;
 inline constexpr uint32_t SEM_HROW_FREE = 14;
 inline constexpr uint32_t SEM_COUNT = 15;
+// moe_fused_swiglu only (not the hybrid op, whose pass barrier takes the id after SEM_COUNT): the
+// COUNTS_BCAST valid flag, passed to the reader as a runtime argument.
+inline constexpr uint32_t SEM_COUNTS_VALID = SEM_COUNT;
 inline constexpr uint32_t NUM_DEVICE_SEMAPHORES = 16;
 
 enum class FormatKey : uint8_t { Bfp8, Bf16, Weight, Out, U32, XIn };

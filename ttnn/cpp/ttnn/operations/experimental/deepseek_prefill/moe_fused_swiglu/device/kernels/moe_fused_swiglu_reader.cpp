@@ -209,6 +209,8 @@ constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
 constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
 // The group rectangle remains per core; the full-grid table is common.
 constexpr uint32_t RT_HGROUP_RECT = RT_XMCAST + 4 + 2 * HGROUPS;
+// COUNTS_BCAST: the counts-valid semaphore id, appended after the group rectangle.
+constexpr uint32_t RT_COUNTS_SEM = RT_HGROUP_RECT + 4;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
 // W_down addresses, shared by every worker through common runtime arguments.
 constexpr uint32_t COMMON_WEIGHTS = 4;  // Common runtime arguments: shared expert buffer addresses.
@@ -443,6 +445,60 @@ void kernel_main() {
     constexpr uint32_t H_FAST = WD_MROW_ROUNDS ? HID_T : (M_BLOCK * HN_PAD);
     constexpr uint32_t H_CAP = DEPTH_H * H_FAST;
 
+    // COUNTS_BCAST — idx, counts and (NEED_START) start pages, once per dispatch. Every core needs
+    // them, but all of them reading the same DRAM pages at once serialises ~2-3 x NUM_CORES
+    // requests on one bank. Grid core (0, 0) reads them and multicasts them to the full grid
+    // (the common h-mcast rectangle, NOC_0 order) at the same L1 addresses; the multicasts are
+    // LINKED so the valid semaphore that terminates the chain cannot overtake the data. No NoC1
+    // read can overlap the chain: each writer waits for its reader's mailbox before reading.
+    // `start` takes the counts scratch CB's second page (the host sizes it for two), so it no
+    // longer reuses the counts page and every expert can index both.
+    const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);
+    const uint32_t l1_cnt = get_write_ptr(cb_counts_scratch);
+    constexpr uint32_t START_L1_OFFSET = COUNTS_PAGE > START_PAGE ? COUNTS_PAGE : START_PAGE;
+    const uint32_t l1_start = l1_cnt + START_L1_OFFSET;
+    {
+        Semaphore<> counts_valid_sem(get_arg_val<uint32_t>(RT_COUNTS_SEM));
+        if (my_col == 0 && my_row == 0) {
+            noc.async_read(idx_acc, CoreLocalMem<uint32_t>(l1_idx), IDX_PAGE, {.page_id = 0}, {});
+            noc.async_read(cnt_acc, CoreLocalMem<uint32_t>(l1_cnt), COUNTS_PAGE, {.page_id = 0}, {});
+            if constexpr (NEED_START) {
+                noc.async_read(start_acc, CoreLocalMem<uint32_t>(l1_start), START_PAGE, {.page_id = 0}, {});
+            }
+            noc.async_read_barrier();
+            constexpr uint32_t ndest = HGROUPS * KGROUPS - 1;
+            if constexpr (ndest > 0) {
+                const uint32_t mx0 = get_common_arg_val<uint32_t>(COMMON_HMCAST + 0);
+                const uint32_t my0 = get_common_arg_val<uint32_t>(COMMON_HMCAST + 1);
+                const uint32_t mx1 = get_common_arg_val<uint32_t>(COMMON_HMCAST + 2);
+                const uint32_t my1 = get_common_arg_val<uint32_t>(COMMON_HMCAST + 3);
+                const auto bcast = [&](uint32_t l1, uint32_t size) {
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(l1),
+                        MulticastEndpoint{},
+                        size,
+                        ndest,
+                        {.offset_bytes = 0},
+                        {.noc_x_start = mx0, .noc_y_start = my0, .noc_x_end = mx1, .noc_y_end = my1, .addr = l1},
+                        /*linked=*/true);
+                };
+                bcast(l1_idx, IDX_PAGE);
+                bcast(l1_cnt, COUNTS_PAGE);
+                if constexpr (NEED_START) {
+                    bcast(l1_start, START_PAGE);
+                }
+                noc.async_writes_flushed();
+                counts_valid_sem.set(1);
+                counts_valid_sem.set_multicast<NocOptions::DEFAULT>(noc, mx0, my0, mx1, my1, ndest);
+            }
+        } else {
+            counts_valid_sem.wait(1);
+            // Reset our own copy: a cached program must not see a stale 1 and skip the wait.
+            counts_valid_sem.set(0);
+        }
+        invalidate_l1_cache();
+    }
+
     // ======================= per-local-expert loop =======================
     // ONE program, every local expert. `gb` is the M-block index ACROSS experts: every monotone
     // semaphore and mailbox counter below is expressed in it, because those counters are never
@@ -512,18 +568,8 @@ void kernel_main() {
             cb_push_back(cb_down_bias, EC_MAX);
         }
 #endif
-        // Phase 0 — this expert's device-resident count. count = counts[ idx[local_expert_id] ].
-        // Two one-page reads into unpushed scratch CBs, read back through a volatile L1 pointer.
-        const uint32_t l1_idx = get_write_ptr(cb_idx_scratch);
-        const uint32_t l1_cnt = get_write_ptr(cb_counts_scratch);
-        // Both accessors fetch page zero into distinct scratch pages.  Only the L1 lookup below
-        // depends on `global_expert_id`; the counts PAGE address does not, so issue the two independent DRAM reads
-        // together and pay one completion round-trip.  The optional region-start read remains later:
-        // it deliberately reuses l1_cnt after `count` is extracted.
-        noc.async_read(idx_acc, CoreLocalMem<uint32_t>(l1_idx), IDX_PAGE, {.page_id = 0}, {});
-        noc.async_read(cnt_acc, CoreLocalMem<uint32_t>(l1_cnt), COUNTS_PAGE, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        invalidate_l1_cache();
+        // Phase 0 — this expert's device-resident count. count = counts[ idx[local_expert_id] ],
+        // looked up in the scratch pages the COUNTS_BCAST above filled once for every expert.
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
         // The routing table lives on device, so the host can size it but never bound its VALUES. An
         // id past the counts tensor indexes outside the scratch page, which would turn whatever L1
@@ -541,19 +587,14 @@ void kernel_main() {
             m_t = M_T_MAX;
         }
 
-        // This expert's REGION BASE in a shared buffer, in token rows. Reuses cb_counts_scratch's page,
-        // dead once the count is extracted and exactly the right size (host validates equal lengths), so
-        // the fused mode costs zero extra L1. Read ahead of the M-block derivations, not after, so a
-        // rejected region can zero the count they are built from.
+        // This expert's REGION BASE in a shared buffer, in token rows, from cb_counts_scratch's second
+        // page (COUNTS_BCAST). Looked up ahead of the M-block derivations, not after, so a rejected
+        // region can zero the count they are built from.
         uint32_t start_row = 0;
         bool region_ok = true;
         if constexpr (NEED_START) {
             // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
             if (expert_in_range) {
-                const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
-                noc.async_read(start_acc, CoreLocalMem<uint32_t>(l1_start), START_PAGE, {.page_id = 0}, {});
-                noc.async_read_barrier();
-                invalidate_l1_cache();
                 start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
                 // The offsets are device-produced too, so the host sizes the table and cannot bound
                 // what it holds. This value becomes the x read base below and, through the mailbox,
