@@ -36,6 +36,7 @@ EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
     "linkbank": "link loads from only the DRAM banks each K step touches (bank camping concentrates link traffic)",
     "msync0": "in0 mcast only: receivers ack after computing on the block, so the ack collection adds to each compute step",
+    "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
@@ -69,6 +70,11 @@ CONSTANTS = {
     "lat_write": (65.0, "cycles: one subblock of output page writes + barrier", "write"),
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
+    "lat_shard": (
+        500.0,
+        "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
+        "shardhop",
+    ),
     "pad_elem": (5.0, "cycles per element the in0 reader zero-fills in a partial K tile", "pad"),
     "link_eff_mc": (0.6, "achievable fraction of a NoC link's rate for multicast traffic", "linkmc"),
 }
@@ -257,6 +263,8 @@ def predict(g, p, parts=False):
     if on("mcast") and (on("msync0") or on("msync")):  # the sender gathers each receiver's ack after it computed
         sync = g["rx0"] * p["ack_rx"] + (g["rx1"] * p["ack_rx"] if on("msync") else 0.0)
         comp = comp + sync
+    if on("shardhop"):  # rotating in0 sender: a cross-core handoff on the critical path of every K step
+        comp = comp + np.where((g["src_a"] == 2) & (g["rx0"] > 0), p["lat_shard"], 0.0)
     piped = read + (nK - 1) * np.maximum(read, comp) + comp  # double-buffered K loop
     serial = nK * (read + comp)
     block = np.where(g["dbuf"], piped, serial) + epi + write

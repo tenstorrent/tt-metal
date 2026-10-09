@@ -171,7 +171,14 @@ def sweep_regret(sweep_csv, picks_csv):
 
 # ---------- versions ----------
 V = json.load(open("versions.json"))
-commit = {"v5_tb": "3888c8c", "v5_argmin": "3888c8c", "v6": "779a8de", "v7": "0e8ab14", "v8": "0554d53"}
+commit = {
+    "v5_tb": "3888c8c",
+    "v5_argmin": "3888c8c",
+    "v6": "779a8de",
+    "v7": "0e8ab14",
+    "v8": "0554d53",
+    "v9": "bf6978e",
+}
 rules = rules_cv()
 CVPRED = {
     "v5_tb": tiebreak(np.load("pred_cv.npy")),
@@ -179,6 +186,7 @@ CVPRED = {
     "v6": np.load("pred_cv_x_noc_rl_burstl1+dram_eff=0.77_launch_us=0.5_rl_init=340_u2d=100.npy"),
     "v7": np.load("pred_cv_m7_pad.npy"),  # current code with the v8 term (pad) switched off
     "v8": np.load("pred_cv_v8.npy"),
+    "v9": np.load("pred_cv_v9.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -326,11 +334,27 @@ for vid, meta in V.items():
     cv, _ = cv_block(CVPRED[vid])
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
     doc["bounds"] = bounds(doc["device"])
+    sheet = {"v7": "abl/v7_nopad.json", "v8": "abl/v8_bhharv.json", "v9": "abl/v9.json"}.get(vid)
+    if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
+        import model7
+
+        doc["constants_sheet"] = [
+            dict(
+                name=k,
+                meaning=model7.CONSTANTS.get(k, (None, ""))[1],
+                source={
+                    a: ("measured: " + model7.PINNED[k][1]) if a in model7.PINNED.get(k, ({},))[0] else "fitted"
+                    for a in v
+                },
+                **{a: v[a] for a in v},
+            )
+            for k, v in json.load(open(sheet))["constants"].items()
+        ]
     if os.path.exists(f"{OUT}/coverage_{vid}.json"):  # written by coverage.py
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v8"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v9"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [

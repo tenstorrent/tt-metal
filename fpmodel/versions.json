@@ -65,5 +65,15 @@
    "BH harvested layout from bh-30 (columns 7 and 10)",
    "nocload fused-batch rows"
   ]
+ },
+ "v9": {
+  "title": "v9: mcast ack sync",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at bf6978e (frozen as frozen_v9_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v8",
+   "mcast receivers ack only after computing on a block, so the sender's ack collection (receivers x ack_rx) sits on every compute-bound K step (msync)"
+  ]
  }
 }
