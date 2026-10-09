@@ -17,4 +17,17 @@ Tensor chronological_selections(
         prim::ChronologicalSelectionsParams{sequence_parallel_axis, local_rows, batch_heads, key_dim, value_dim},
         prim::ChronologicalSelectionsInputs{actual_start, actual_end})[0];
 }
+
+Tensor select_request_history(
+    const Tensor& projected_qkv,
+    const Tensor& layer_history,
+    const Tensor& predecessor_history,
+    const Tensor& selection_records,
+    const Tensor& actual_start) {
+    return ttnn::device_operation::launch<prim::SelectRequestHistoryOperation>(
+        prim::SelectRequestHistoryParams{},
+        prim::SelectRequestHistoryInputs{
+            projected_qkv, layer_history, predecessor_history, selection_records, actual_start})[0];
+}
+
 }  // namespace ttnn::experimental::kda

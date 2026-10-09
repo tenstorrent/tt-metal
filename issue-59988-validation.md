@@ -51,7 +51,7 @@ One native recurrent/convolution pair allocates 1,720,320 bytes/device. The meas
 - Combining single-device and mesh model suites in one pytest process failed at fixture setup (`SetFabricConfig` while a device remained open), after eight local recurrence passes. Those groups now run in separate safe-runner processes; no test assertion was weakened to bypass the fixture error.
 - The distributed chain suite collected Galaxy TorusXY cases alongside LB cases, activating the topology guard that skips LB 2x4 with FABRIC_1D. Its LB parametrization now uses the existing FABRIC_2D profile; Galaxy remains unchanged. The first six skips in `chain-distributed.log` are diagnostic only.
 
-## Final local latency measurement
+## Pre-merge local latency measurement
 
 Synthetic production geometry, SP2xTP4, 5,120 tokens, five samples of ten replays:
 
@@ -64,7 +64,7 @@ Synthetic production geometry, SP2xTP4, 5,120 tokens, five samples of ten replay
 
 The longer run's controls rose from roughly 8.2 to 10.1 ms, so absolute times from different sample groups are not directly comparable. Each policy sample is bracketed by controls. These are local layer measurements, not full-model throughput.
 
-## Device program profile and seed-read evidence
+## Pre-merge device program profile and seed-read evidence
 
 The synthetic TP4 profile uses production state geometry (96 heads, K/V=128), hidden width 256, and 256 tokens. It labels a test-only reconstruction of the historical reset separately from the generic forward and the enabled-policy forward. Outputs and both carries are bit-identical between the old reset plus forward and the new dirty-state request start.
 
@@ -120,7 +120,7 @@ The result is limited to KDA-layer implementation validated on LB plus the synth
 - The separate `test_request_initialization_perf_loudbox` passed in 15.02 seconds (`review-fix-lb-perf.log`). Median enabled/control ratios: 1.000531 at absolute zero, 0.999799 at positive start, and 0.984927 including the historical reset versus device initialization (about 1.51% faster locally). These differences do not establish production throughput or statistical significance.
 - The shared synthetic LB gate retains its original 8.758 ms reference and Galaxy behavior. The original two-sided gate can still fail on this faster local machine; it has not been rebaselined to force a pass.
 - Pre-commit checks cover every changed/new file. The first pass removed trailing whitespace in the review document; the final result is recorded in `pre-pr-precommit-final.log`.
-- The native C++ and device algorithms are unchanged from the completed release builds and LB compatibility matrix above.
+- These cleanup results predate the subsequent merge with main described below.
 
 ## Recommended CI validation for this branch
 
@@ -149,3 +149,10 @@ gh workflow run blackhole-e2e-tests.yaml --ref pjosipovic/kda-device-request-ini
   -f 'system-type=LoudBox (8xP150)' -f model=disaggregated_prefill -f test-selection=all \
   -f build-type=Release -f 'platform=Ubuntu 22.04'
 ```
+
+
+## Integration with main after draft creation
+
+Main at `d67f1017750` includes #59473, allowing non-32-aligned prompt ends. The merge preserves that behavior and adds a native `select_request_history` operation for policy-enabled layers: a fresh one/two-token prompt produces `[0, 0, qkv0]` / `[0, qkv0, qkv1]` without reading the previous request's history. It fuses the existing local history selection steps and preserves predecessor history and default-off behavior. Earlier timing and program counts above describe the pre-merge graph.
+
+Validation results for the merged source are recorded below as each required check completes. The CI recommendations above remain applicable; the new direct native history tests are also discovered by the Blackhole experimental suite.

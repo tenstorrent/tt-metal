@@ -279,17 +279,22 @@ class ttKDA:
         actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         config = self.config
+        request_start = actual_start if self._zero_initial_state_on_start else None
         if not self._is_sequence_parallel:
             batch, rows, width = qkv.shape
             new_state = (
-                selections.select_local_final_history(qkv)
+                selections.select_local_final_history(qkv, incoming_layer_carry, request_start=request_start)
                 if selections is not None
                 else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
             )
             predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
-                qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
+                qkv,
+                incoming_layer_carry,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+                selections=selections,
+                request_start=request_start,
             )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
@@ -471,10 +476,11 @@ class ttKDA:
         performed. Pass an explicit zero-valued tensor for a zero-start call.
 
         Optional ``actual_end`` is a replicated device scalar defining the
-        exclusive global valid end. The interval is nonempty, 32-aligned, and
-        no larger than the constructed capacity. Omission means full capacity.
-        Bounds may change during trace replay; their addresses must stay alive.
-        Padded output rows are unspecified; returned carries stop at the valid end.
+        exclusive global valid end. The interval is nonempty and no larger than
+        the constructed capacity; the end need not be 32-aligned. Omission means
+        full capacity. Bounds may change during trace replay; their addresses must
+        stay alive. Padded rows may hold any values, including NaN: padded output
+        rows are unspecified, and returned carries stop at the valid end.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output

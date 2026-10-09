@@ -9,8 +9,8 @@
   Kimi-K3's 93 layers write a KV slab and its residual is block-structured, so it cannot reuse the
   shared block; and
 * KDA readers initialize request state on device at absolute start zero, even during trace replay; and
-* both chunk bounds must be 32-token aligned for KDA. Host bounds are checked before execution;
-  device-only trace metadata must satisfy the same contract on every replay.
+* the chunk start must be 32-token aligned for KDA; the end may be any real length. Host bounds
+  are checked before execution; device-only trace metadata must satisfy the same contract on every replay.
 """
 
 from __future__ import annotations
@@ -271,6 +271,6 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     def prefill_chunk(self, *args, **kwargs):
         """Validate host bounds before dispatch; KDA readers initialize request state on device."""
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
-        # Device-only metadata has the same aligned, nonempty-interval caller contract.
+        # Device-only metadata has the same aligned-start, nonempty-interval caller contract.
         validate_kda_bounds(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
         return super().prefill_chunk(*args, **kwargs)

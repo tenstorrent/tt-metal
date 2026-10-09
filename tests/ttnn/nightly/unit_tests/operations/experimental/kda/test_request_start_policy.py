@@ -160,3 +160,46 @@ def test_request_start_policy(device, operation, width):
         ttnn.release_trace(device, trace)
         for output in outputs:
             ttnn.deallocate(output)
+
+
+@pytest.mark.parametrize("channels", [32, 9216])
+def test_request_history_selection_rebinds_inputs(device, channels):
+    """Fresh short tails ignore NaNs; cache hits bind newly allocated input buffers."""
+    cache_entries = None
+    for iteration, (start, length) in enumerate(((0, 1), (32, 2), (0, 2), (32, 1), (0, 32))):
+        generator = torch.Generator().manual_seed(871 + iteration)
+        projected = torch.randn(1, 32, channels, generator=generator).bfloat16()
+        history = torch.randn(1, 3, channels, generator=generator).bfloat16()
+        if start == 0:
+            history.fill_(float("nan"))
+        qkv, carry = (
+            ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            for t in (projected, history)
+        )
+        start_tt, end_tt = make_actual_start(device, start), make_actual_start(device, start + length)
+        selections = ttnn.experimental.kda.chronological_selections(start_tt, 0, 32, 1, 32, 32, actual_end=end_tt)
+        output = ttnn.experimental.kda.select_request_history(qkv, carry, carry, selections, start_tt)
+        expected = torch.cat((torch.zeros_like(history) if start == 0 else history, projected[:, :length]), dim=1)
+        assert torch.equal(ttnn.to_torch(output), expected[:, -3:])
+        if cache_entries is not None:
+            assert device.num_program_cache_entries() == cache_entries
+        cache_entries = device.num_program_cache_entries()
+        for tensor in (qkv, carry, start_tt, end_tt, selections, output):
+            ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("invalid", ["layout", "dtype", "shape"])
+def test_request_history_selection_rejects_invalid_inputs(device, expect_error, invalid):
+    qkv = ttnn.from_torch(torch.zeros(1, 32, 32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    carry = ttnn.from_torch(
+        torch.zeros(1, 2 if invalid == "shape" else 3, 32),
+        device=device,
+        dtype=ttnn.float32 if invalid == "dtype" else ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT if invalid == "layout" else ttnn.ROW_MAJOR_LAYOUT,
+    )
+    start = make_actual_start(device, 0)
+    selections = ttnn.experimental.kda.chronological_selections(start, 0, 32, 1, 32, 32)
+    with expect_error(RuntimeError, "select_request_history"):
+        ttnn.experimental.kda.select_request_history(qkv, carry, carry, selections, start)
+    for tensor in (qkv, carry, start, selections):
+        ttnn.deallocate(tensor)

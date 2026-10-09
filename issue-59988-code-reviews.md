@@ -238,3 +238,10 @@ Updated verdict: **no confirmed KDA computational bug; one confirmed P2 migratio
 A read-only follow-up of the final cleanup found no new correctness findings. Rank zero now announces failure through a matched collective before validators enter the resident broadcast. Setup, scheduling and acknowledgement failures are covered. Prefix/channel checks run before scheduling or attaching migration. The original performance baseline and Galaxy behavior are restored; policy benchmarks are isolated to the explicit LB test.
 
 Other distributed exceptions outside the coordinated region remain preexisting limitations. Mocked collective tests establish control flow and do not replace a real multi-rank smoke test. The reviewer ran `git diff --check`, with no edits or device tests.
+
+
+## Codex Astra — integration with unaligned prompt ends
+
+During draft preparation, main gained #59473 (non-32-aligned KDA prompt ends). A plain merge would have retained old convolution-history rows for fresh one/two-token requests. The final integration adds a native `select_request_history` reader to the existing chronological-selection implementation. It directly gathers the selected rows and synthesizes zeros only for missing external-history rows at absolute start zero. Generic explicit-state callers retain their existing selection path.
+
+Astra reviewed the new kernel, validation/factory, cache bindings and both Python routes, finding no confirmed correctness bug. The review checked index mapping, predecessor preservation, scratch separation/barriers, trace-bound metadata, allocation ownership and inactive-rank placeholders. Follow-ups were addressed with direct input-rebinding/invalid-input tests and a documented selection-record provenance precondition. Post-merge execution and profile evidence are recorded in the validation document.

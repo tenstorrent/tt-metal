@@ -227,3 +227,8 @@ Core LB completion checklist (all items require recorded local evidence):
 Bonus checklist:
 
 - [x] A synthetic KDA-only transformer case runs and passes on LB through the safe runner; existing Galaxy cases remain available for later qualification.
+
+
+## Integration with current main
+
+Draft PR preparation merged main at `d67f1017750`, including #59473's support for non-32-aligned prompt ends. Starts remain 32-aligned. For a fresh one/two-token request, the outgoing convolution tail must synthesize missing prefix rows instead of reusing the previous request. A policy-only native history selector replaces the intermediate gather/concatenate/select sequence and preserves predecessor history. The short-request matrix now includes these lengths with NaN-poisoned seeds, and direct native tests cover input rebinding and invalid inputs. See the validation record for the post-merge build, test and profiling results.

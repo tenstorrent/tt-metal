@@ -302,7 +302,7 @@ def test_kda_chunk_shares_bounds_and_selections_across_layers(monkeypatch):
     assert [call.args for call in deallocate.call_args_list] == [(start,), (end,)]
 
 
-@pytest.mark.parametrize("start,end", [(1, 64), (0, 33), (-32, 32), (32, 32), (64, 32)])
+@pytest.mark.parametrize("start,end", [(1, 64), (33, 64), (-32, 32), (32, 32), (64, 32), (32, 31)])
 def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_error, start, end):
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
@@ -312,7 +312,7 @@ def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_end_before_dispatch(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_start_before_dispatch(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
@@ -322,12 +322,13 @@ def test_runtime_rejects_unaligned_end_before_dispatch(monkeypatch, expect_error
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
-        runtime.prefill_chunk(object(), object(), 0, 0, 33)
+        runtime.prefill_chunk(object(), object(), 0, 33, 64)
     parent_forward.assert_not_called()
 
 
 @pytest.mark.parametrize("start", [0, 128, None])
-def test_runtime_delegates_valid_bounds_without_touching_carries(monkeypatch, start):
+@pytest.mark.parametrize("length", [1, 2, 32, 33])
+def test_runtime_delegates_valid_bounds_without_touching_carries(monkeypatch, start, length):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
@@ -335,6 +336,6 @@ def test_runtime_delegates_valid_bounds_without_touching_carries(monkeypatch, st
     # No model/cache is installed: validation and delegation must need neither at request start.
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
-    args = (object(), object(), 0, start, None if start is None else start + 32)
+    args = (object(), object(), 0, start, None if start is None else start + length)
     assert runtime.prefill_chunk(*args) is parent_forward.return_value
     parent_forward.assert_called_once_with(runtime, *args)

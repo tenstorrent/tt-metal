@@ -177,9 +177,15 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(
     cases = [(0, capacity), (32, 32), (96, 64), (32, 96), (32, 224), (0, min(capacity, 288))]
     if sp > 1:
         cases += [(96, capacity - 64)]
+    # Unaligned prompt ends, continued by the following cases from their carries,
+    # including end segments with fewer than three valid rows.
+    cases += [(0, 33), (96, capacity - 1), (32, 1), (0, 2)]
+    if sp > 1:
+        cases += [(32, capacity - 31), (0, local_rows + 2)]
+    cases += [(0, capacity)]
     cases += [(0, capacity), (capacity, 32), (0, capacity), (capacity, 64)]
     if request_cases == "fresh_short":
-        cases = [(0, 32), (32, 32), (0, 96), (96, 32)]
+        cases = [(0, 32), (32, 32), (0, 96), (96, 32), (0, 1), (32, 1), (0, 2), (32, 2)]
 
     def snapshots(output, permutation, length, state=None):
         state = cache.read(1) if state is None else state
@@ -213,6 +219,18 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(
                 # Grade each transition from its actual incoming carry, retaining
                 # the existing error gates without accumulating prior BF16 error.
                 incoming = cache.read(1)
+                if start == 0 and request_cases == "fresh_short":
+                    # Even missing history rows in one/two-token requests must ignore stale/NaN seeds.
+                    for tensor in (incoming.recurrent, incoming.convolution):
+                        poison = ttnn.from_torch(
+                            torch.full(tuple(tensor.shape), float("nan")),
+                            dtype=tensor.dtype,
+                            layout=tensor.layout,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                        )
+                        ttnn.copy(poison, tensor)
+                        ttnn.deallocate(poison)
                 history = reconstruct_convolution_at_sp_rank(
                     incoming.convolution,
                     mesh_device,

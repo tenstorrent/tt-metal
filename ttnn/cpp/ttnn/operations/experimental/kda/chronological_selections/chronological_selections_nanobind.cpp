@@ -18,6 +18,20 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("FINAL_STATE") = final_state;
     layout.attr("LOCAL_FINAL_HISTORY") = local_final_history;
 
+    ttnn::bind_function<"select_request_history", "ttnn.experimental.kda.">(
+        mod,
+        "Select three outgoing convolution-history rows using a chronological selection table. "
+        "Request-owned state only: missing prefix rows are zeros at device absolute start zero; "
+        "positive starts consume the supplied BF16 row-major history. Predecessor history is preserved. "
+        "selection_records must be produced by chronological_selections for the same bounds and geometry; "
+        "record contents are device-side caller preconditions.",
+        &ttnn::experimental::kda::select_request_history,
+        nb::arg("projected_qkv").noconvert(),
+        nb::arg("layer_history").noconvert(),
+        nb::arg("predecessor_history").noconvert(),
+        nb::arg("selection_records").noconvert(),
+        nb::arg("actual_start").noconvert());
+
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
         R"doc(
@@ -37,8 +51,9 @@ void bind_chronological_selections(nb::module_& mod) {
         Keyword Args:
             actual_end (ttnn.Tensor, optional): Replicated, interleaved UINT32
                 row-major device scalar containing the exclusive absolute end.
-                Both bounds must be 32-aligned and define a nonempty interval no
-                longer than the full physical capacity. Omission uses full capacity.
+                It need not be 32-aligned; with ``actual_start`` it defines a nonempty
+                interval no longer than the full physical capacity. Omission uses full
+                capacity.
 
         Bounds are read on every execution without host readback. Keep their
         addresses stable and update their contents before replaying a captured trace.
@@ -49,10 +64,13 @@ void bind_chronological_selections(nb::module_& mod) {
             ttnn.Tensor: Interleaved UINT32 row-major DRAM table of shape
                 ``[6, 8]`` per device. This private representation contains three
                 history-index records, paired start/exclusive-end bounds for the
-                final state, and a local final-history record selecting the last
-                three valid local rows (a placeholder on empty ranks). Consumers
-                must use the shared ``_selection_layout`` definitions rather than
-                hard-coded offsets.
+                final state, and a local final-history record. Its first three words
+                select local rows; the next three select the three tokens ending at the
+                rank's valid end from the candidate rows ``[layer history; predecessor
+                history; those local rows]``, so an end segment with fewer than three
+                valid rows continues the history before it (placeholders on empty
+                ranks). Consumers must use the shared ``_selection_layout`` definitions
+                rather than hard-coded offsets.
         )doc",
         &ttnn::experimental::kda::chronological_selections,
         nb::arg("actual_start").noconvert(),

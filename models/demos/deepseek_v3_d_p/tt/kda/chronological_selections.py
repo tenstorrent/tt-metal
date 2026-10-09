@@ -16,7 +16,8 @@ class ChronologicalSelections:
 
     The private UINT32 row-major device table has shape (6, 8) per device and
     contains selection instructions, not activations or states. Each aligned
-    record has eight words: history records use three row indices, and the
+    record has eight words: history records use three row indices (the local
+    final history adds three indices into its candidate table), and the
     final-state selection uses consecutive start/end records with four
     coordinates each (exclusive end).
 
@@ -27,10 +28,10 @@ class ChronologicalSelections:
     """
 
     _selection_records: ttnn.Tensor
-    # Index rows sliced out of the table, by (record, count). Every KDA layer of a chunk reads the same rows, so a
-    # table shared across layers slices each row once per chunk instead of once per layer. They live in DRAM: a
-    # shared table keeps them for the whole chunk, and long-lived L1 buffers clash with later programs' static
-    # circular buffers.
+    # Index rows sliced out of the table, by (record, count, offset). Every KDA layer of a chunk reads the same
+    # rows, so a table shared across layers slices each row once per chunk instead of once per layer. They live
+    # in DRAM: a shared table keeps them for the whole chunk, and long-lived L1 buffers clash with later programs'
+    # static circular buffers.
     _indices_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def select_outgoing_history(self, projected_qkv: ttnn.Tensor) -> ttnn.Tensor:
@@ -41,9 +42,36 @@ class ChronologicalSelections:
         """The preceding physical rank's history from the gathered candidates."""
         return self._select_rows(gathered_history, _layout.PREDECESSOR_HISTORY)
 
-    def select_local_final_history(self, projected_qkv: ttnn.Tensor) -> ttnn.Tensor:
-        """Last three locally valid rows; ignored when this rank is empty."""
-        return self._select_rows(projected_qkv, _layout.LOCAL_FINAL_HISTORY)
+    def select_local_final_history(
+        self,
+        projected_qkv: ttnn.Tensor,
+        layer_history: ttnn.Tensor,
+        predecessor_history: ttnn.Tensor | None = None,
+        *,
+        request_start: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Three tokens ending at this rank's valid end; ignored when this rank is empty.
+
+        An end segment with fewer than three valid rows continues the tokens before
+        it: ``layer_history`` before the logical start, else ``predecessor_history``
+        (the layer history when omitted, as on a single rank).
+        """
+        if request_start is not None:
+            return ttnn.experimental.kda.select_request_history(
+                projected_qkv,
+                layer_history,
+                layer_history if predecessor_history is None else predecessor_history,
+                self._selection_records,
+                request_start,
+            )
+        record = _layout.LOCAL_FINAL_HISTORY
+        local = self._select_rows(projected_qkv, record)
+        candidates = ttnn.concat(
+            [layer_history, layer_history if predecessor_history is None else predecessor_history, local],
+            dim=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return self._select_rows(candidates, record, offset=_layout.HISTORY_ROWS)
 
     def select_final_history(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
         """History at the logical sequence end, replicated for the next call."""
@@ -59,14 +87,14 @@ class ChronologicalSelections:
         )
         return self._select_block(candidates, _layout.FINAL_STATE)
 
-    def _indices(self, record_index: int, count: int) -> ttnn.Tensor:
-        key = (record_index, count)
+    def _indices(self, record_index: int, count: int, offset: int = 0) -> ttnn.Tensor:
+        key = (record_index, count, offset)
         if key not in self._indices_cache:
             self._indices_cache[key] = ttnn.reshape(
                 ttnn.slice(
                     self._selection_records,
-                    (record_index, 0),
-                    (record_index + 1, count),
+                    (record_index, offset),
+                    (record_index + 1, offset + count),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 (count,),
@@ -83,11 +111,11 @@ class ChronologicalSelections:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _select_rows(self, tensor: ttnn.Tensor, record_index: int) -> ttnn.Tensor:
+    def _select_rows(self, tensor: ttnn.Tensor, record_index: int, offset: int = 0) -> ttnn.Tensor:
         width = tensor.shape[-1]
         table = ttnn.reshape(tensor, (-1, width))
         selected = ttnn.embedding(
-            self._indices(record_index, _layout.HISTORY_ROWS),
+            self._indices(record_index, _layout.HISTORY_ROWS, offset),
             table,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
