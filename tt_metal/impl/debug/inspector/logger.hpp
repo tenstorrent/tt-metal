@@ -10,17 +10,30 @@
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
-#define TT_INSPECTOR_THROW(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
-        TT_THROW(__VA_ARGS__); \
-    } else { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
-        return; \
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
+namespace tt::tt_metal::inspector {
+
+// Error reporting policy of the inspector, used by the macros below. Taken from the rtoptions of the MetalContext
+// whose session is active (see Inspector::initialize); defaults apply while no session was ever created.
+bool initialization_is_important();
+bool warn_on_write_exceptions();
+
+}  // namespace tt::tt_metal::inspector
+
+#define TT_INSPECTOR_THROW(...)                                   \
+    if (tt::tt_metal::inspector::initialization_is_important()) { \
+        TT_THROW(__VA_ARGS__);                                    \
+    } else {                                                      \
+        log_warning(tt::LogInspector, __VA_ARGS__);               \
+        return;                                                   \
     }
 
-#define TT_INSPECTOR_LOG(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
+#define TT_INSPECTOR_LOG(...)                                  \
+    if (tt::tt_metal::inspector::warn_on_write_exceptions()) { \
+        log_warning(tt::LogInspector, __VA_ARGS__);            \
     }
 
 namespace tt::tt_metal::inspector {
@@ -42,7 +55,8 @@ private:
     }
 
 public:
-    Logger(const std::filesystem::path& logging_path, std::optional<int> rank);
+    // `rtoptions` selects which optional log files are written.
+    Logger(const std::filesystem::path& logging_path, std::optional<int> rank, const llrt::RunTimeOptions& rtoptions);
 
     std::filesystem::path get_logging_path() const noexcept {
         return logging_path;
