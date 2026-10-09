@@ -95,6 +95,11 @@ inline bool cached_geometry_ok(const SemaphoreSpec& sem, const SemaphoreBinderIn
            sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() && all_binders_are_dm(binders);
 }
 
+// Archs with a compute semaphore implementation (the Tensix hardware semaphore, UNPACK <-> PACK).
+inline bool has_compute_semaphore(const Hal& hal) {
+    return hal.get_arch() == tt::ARCH::BLACKHOLE || hal.get_arch() == tt::ARCH::QUASAR;
+}
+
 // Check if the cached tier is available on this target device. Arch and the target device both
 // come from the program's own env (BuildProgramFromSpec builds against the mesh device's env),
 // not the default context.
@@ -108,17 +113,19 @@ inline bool cached_tier_available(MetalEnvImpl& env) {
 // binder is treated as a possible reader and writer.
 inline SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreBinderInfo& binders, MetalEnvImpl& env) {
     const Hal& hal = env.get_hal();
+
+    // COMPUTE_ATOMIC is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore) and nothing else,
+    // so it applies only when EVERY binder is a compute kernel. A mixed compute/DM binding is rejected by
+    // ValidateProgramSpec (program_spec.cpp), since a DM core cannot reach that semaphore. One compute
+    // binding compiles into several TRISC binaries with two writers (UNPACK and PACK), so a compute-bound
+    // semaphore must never take the non-atomic path. Wormhole has no compute implementation; its compute
+    // bindings are rejected on the host.
+    if (all_binders_are_compute(binders) && has_compute_semaphore(hal)) {
+        return SemScope::COMPUTE_ATOMIC;
+    }
+
     // Gen1 (Wormhole/Blackhole)
     if (!is_gen2_target(hal)) {
-        // COMPUTE_ATOMIC is a Blackhole UNPACK <-> PACK mechanism (the Tensix hardware semaphore)
-        // and nothing else, so it applies only when EVERY binder is a compute kernel. A mixed
-        // compute/DM binding is rejected by ValidateProgramSpec (program_spec.cpp), since a DM core
-        // cannot reach that semaphore. One compute binding compiles into three TRISC binaries with two
-        // writers (UNPACK and PACK), so a compute-bound word must never take the non-atomic path.
-        // Wormhole has no compute implementation; its compute bindings are rejected on the host.
-        if (all_binders_are_compute(binders) && hal.get_arch() == tt::ARCH::BLACKHOLE) {
-            return SemScope::COMPUTE_ATOMIC;
-        }
         return SemScope::LOCAL_NONATOMIC;
     }
 
@@ -171,9 +178,9 @@ inline SemaphoreBinderCensus CollectSemaphoreBinders(
     for (auto& [sem_name, sem_info] : census) {
         for (const auto& rec : sem_info.binders) {
             const NodeRangeSet& binder_nodes = kernel_node_set.at(rec.kernel->unique_id);
-            // Not a hart count for Gen1 compute: num_threads is forced to 1 there, but one compute
-            // kernel is three TRISC binaries with two semaphore writers (UNPACK and PACK). Gen1
-            // compute binders are routed to COMPUTE_ATOMIC without consulting this count.
+            // Not a hart count for compute: one compute kernel is several TRISC binaries with two
+            // semaphore writers (UNPACK and PACK). Compute binders are routed to COMPUTE_ATOMIC
+            // without consulting this count.
             sem_info.binder_instance_count += binder_nodes.num_cores() * rec.kernel->num_threads;
             sem_info.binder_node_set = sem_info.binder_node_set.merge(binder_nodes);
         }
