@@ -201,7 +201,8 @@ class MLP:
             hidden_states.deallocate(True)
             if x is not hidden_states:
                 x.deallocate(True)
-            hidden = ttnn.mul(gate, up, memory_config=act_mc)
+            # LOCAL EXPERIMENT (G4X_GEGLU_FAST=1): the FPU multiply (<= 1 ULP) instead of binary_ng's SFPU default.
+            hidden = ttnn.mul(gate, up, memory_config=act_mc, fast_and_approximate_mode=bool(os.environ.get("G4X_GEGLU_FAST")))
         if "gate" in locals():
             gate.deallocate(True)
             up.deallocate(True)

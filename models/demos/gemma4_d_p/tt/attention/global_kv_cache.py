@@ -21,6 +21,8 @@ own permutations.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -204,6 +206,37 @@ def pack_global_rope_device(
     return _pack_rope_device("full_attention", cos_cache, sin_cache, memory_config)
 
 
+_PERMUTATION_CACHE: dict[tuple, ttnn.Tensor] = {}
+
+
+def _permute_columns_matmul(tensor: ttnn.Tensor, columns: torch.Tensor, memory_config) -> ttnn.Tensor:
+    """LOCAL EXPERIMENT: tensor[..., columns] as tensor @ P (P one-hot), exact at HiFi4 with fp32 accumulation."""
+    width = int(tensor.shape[-1])
+    cols = tuple(int(x) for x in columns.tolist())
+    key = (id(tensor.device()), width, cols)
+    perm = _PERMUTATION_CACHE.get(key)
+    if perm is None:
+        p = torch.zeros(width, len(cols), dtype=torch.bfloat16)
+        p[torch.tensor(cols), torch.arange(len(cols))] = 1
+        perm = ttnn.from_torch(
+            p.reshape(1, 1, width, len(cols)),
+            device=tensor.device(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(tensor.device()),
+        )
+        _PERMUTATION_CACHE[key] = perm
+    exact = ttnn.init_device_compute_kernel_config(
+        tensor.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    return ttnn.matmul(tensor, perm, memory_config=memory_config, compute_kernel_config=exact)
+
+
 def pack_global_kv_device(
     value: ttnn.Tensor,
     k_norm_rotary_weight: ttnn.Tensor,
@@ -258,7 +291,10 @@ def pack_global_kv_device(
             None,
             memory_config=memory_config,
         )
-        k_rotary = _gather_columns(roped, interleave, memory_config)
+        if os.environ.get("G4X_KROT_MM"):  # LOCAL EXPERIMENT: the fixed column permutation as an exact matmul
+            k_rotary = _permute_columns_matmul(roped, interleave, memory_config)
+        else:
+            k_rotary = _gather_columns(roped, interleave, memory_config)
         for tensor in (active_value, scaled, roped):
             tensor.deallocate(True)
         if owns_active_rope:
