@@ -425,7 +425,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
             // O3 explicitly: the legacy compute config set no opt_level and so resolved to O3, but
             // Metal 2.0's type-agnostic CompilerOptions defaults to O2. Leaving it unset would drop a
             // level on both compute specs' compile and link.
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options =
+                {.defines = output_sharded ? KernelSpec::CompilerOptions::Defines{{"OUT_SELF_LOOP", "1"}}
+                                           : KernelSpec::CompilerOptions::Defines{},
+                 .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(compute_dfb_bindings),
             .compile_time_args = std::move(compute_compile_time_args),
             .hw_config = compute_hw,
