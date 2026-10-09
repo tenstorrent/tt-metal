@@ -310,12 +310,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
-std::string ensure_kernel_binaries(
+// With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
+std::optional<std::string> ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
     IDevice* device,
     JitBuildOptions& build_options,
     const DeviceBuildEnv& build_env,
-    size_t kernel_hash) {
+    size_t kernel_hash,
+    bool no_wait = false) {
     if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
         if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
             log_debug(
@@ -333,14 +335,21 @@ std::string ensure_kernel_binaries(
         }
     }
 
-    jit_build_once(kernel_hash, [&] {
+    auto build = [&] {
         try {
             jit_build_genfiles_descriptors(build_env.build_env, build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
-    });
+    };
+    if (no_wait) {
+        if (!jit_build_once_no_wait(kernel_hash, build)) {
+            return std::nullopt;
+        }
+    } else {
+        jit_build_once(kernel_hash, build);
+    }
     return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
@@ -3191,6 +3200,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return std::pair{std::move(build_options), kernel_hash};
     };
 
+    auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
+                                    const JitBuildOptions& build_options,
+                                    const std::string& binary_root) {
+        kernel->read_binaries(device, binary_root);
+        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+    };
+
+    // Validate every kernel before starting any build: a throw after a local task launches would unwind
+    // locals it still references, and a throw after a remote submit would leave its dedup entry pending.
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+        }
+    }
+
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
@@ -3218,7 +3243,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -3246,28 +3270,37 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            load_kernel_binaries(kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
+        std::mutex deferred_mutex;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        const std::string binary_root =
-                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
-                        kernel->read_binaries(device, binary_root);
-                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        // A duplicate that waited here would hold a compile worker, so it joins the
+                        // build after the sync below.
+                        const auto binary_root = ensure_kernel_binaries(
+                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
+                        if (!binary_root) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
+                            return;
+                        }
+                        load_kernel_binaries(kernel, build_options, *binary_root);
                     },
                     events);
             }
         }
         sync_build_steps(events);
+        // Join in-progress builds only now, once this Program's tasks have released their compile workers.
+        for (auto& [kernel, build_options, kernel_hash] : deferred) {
+            load_kernel_binaries(
+                kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
+        }
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
