@@ -8,7 +8,7 @@
 #include "noc.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 
 #include <kernel_includes.hpp>

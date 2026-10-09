@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-// #include "tt_metal/tools/profiler/kernel_profiler.hpp"
+// #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     uint32_t sender_noc_x = get_arg_val<uint32_t>(0);

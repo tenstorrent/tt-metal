@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
 // api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,

@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
 
 using namespace tt::tt_fabric::common::experimental;

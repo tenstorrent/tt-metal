@@ -13,7 +13,7 @@ static constexpr uint8_t worker_handshake_noc = noc_index;
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric {
 

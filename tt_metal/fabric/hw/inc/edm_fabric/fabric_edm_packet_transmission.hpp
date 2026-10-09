@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"

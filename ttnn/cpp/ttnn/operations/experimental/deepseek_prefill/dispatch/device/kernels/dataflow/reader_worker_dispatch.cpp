@@ -37,7 +37,7 @@
 // After the last batch: push an end-of-plan sentinel — ROUTE_INFO_SENTINEL to
 // compute (cb_signal_id, TILE only) and a zero-entry sentinel plan page to the writer.
 
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

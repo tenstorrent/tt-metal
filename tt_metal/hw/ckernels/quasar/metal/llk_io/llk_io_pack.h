@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "ckernel.h"
 #include "ckernel_trisc_common.h"
 #include "internal/circular_buffer_interface.h"

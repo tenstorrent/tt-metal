@@ -42,7 +42,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);

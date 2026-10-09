@@ -18,7 +18,7 @@
 
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && defined(PROFILE_SYNC_EVENTS) && defined(PROFILE_STREAMING)
 
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Records a timed zone for a blocking wait, with the key embedded inside.
 #define SYNC_WAIT(name, key) \

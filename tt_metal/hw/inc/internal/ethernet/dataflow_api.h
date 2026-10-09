@@ -10,7 +10,7 @@
 #include "risc_common.h"
 #include "internal/ethernet/tt_eth_api.h"
 #include "internal/ethernet/erisc.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "noc_nonblocking_api.h"
 #include "internal/ethernet/tunneling.h"
 #if defined(KERNEL_BUILD)

@@ -7,7 +7,7 @@
 #include "internal/firmware_common.h"
 #include "noc_parameters.h"
 #include "internal/risc_attribs.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #include "api/debug/device_print.h"

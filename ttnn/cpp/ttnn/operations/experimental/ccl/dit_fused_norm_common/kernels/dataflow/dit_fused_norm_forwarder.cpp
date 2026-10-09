@@ -52,7 +52,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // ---------- compile-time args ----------
 constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)

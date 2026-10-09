@@ -15,8 +15,8 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
-#include "tt_metal/tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS

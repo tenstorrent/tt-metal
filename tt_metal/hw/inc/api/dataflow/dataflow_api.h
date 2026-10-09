@@ -23,7 +23,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "internal/tensor/transfer_noc_addr.h"
 #include "api/dataflow/buf_rw_note.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 

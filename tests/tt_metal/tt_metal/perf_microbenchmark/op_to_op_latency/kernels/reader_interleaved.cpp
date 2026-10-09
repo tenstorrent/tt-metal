@@ -46,7 +46,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Research-only detail markers. Compiled out on the lean CI path (PROFILE_DETAIL == 0) so
 // they add zero device cycles to the gated op2op measurement. Expanded only inside

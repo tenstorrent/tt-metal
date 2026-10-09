@@ -19,7 +19,7 @@
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
 

@@ -14,7 +14,7 @@
 
 #include "chlkc_list.h"
 
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer_api.h"

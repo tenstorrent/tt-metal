@@ -13,7 +13,7 @@
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
 #if defined(PROFILE_KERNEL)

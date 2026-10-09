@@ -8,8 +8,8 @@
 #include "api/dataflow/noc.h"
 #endif
 #include "api/lock.h"
-#include "tt_metal/tools/profiler/noc_debugging_metadata.hpp"
-#include "tt_metal/tools/profiler/noc_debugging_profiler.hpp"
+#include "internal/profiler/noc_debugging_metadata.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "internal/scoped_lock_cache_ops.h"
 

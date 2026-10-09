@@ -12,7 +12,7 @@
 #include "ckernel_defs.h"
 #include "api/debug/dprint.h"
 #include "internal/circular_buffer_interface.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG

@@ -22,7 +22,7 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 

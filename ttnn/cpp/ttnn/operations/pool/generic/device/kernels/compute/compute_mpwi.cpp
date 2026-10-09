@@ -22,7 +22,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 #define ALWI inline __attribute__((always_inline))

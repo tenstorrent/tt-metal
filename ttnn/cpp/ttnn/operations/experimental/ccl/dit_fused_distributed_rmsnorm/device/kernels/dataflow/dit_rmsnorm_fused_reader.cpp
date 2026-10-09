@@ -26,7 +26,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 #include <tt-metalium/constants.hpp>
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);

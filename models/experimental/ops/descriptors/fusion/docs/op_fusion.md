@@ -2302,7 +2302,7 @@ Below is the layout for a 3-phase fused reader kernel.
 // Deduplicated includes from all phases
 #include <cstdint>
 #include "dataflow_api.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <array>
 
 

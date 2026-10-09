@@ -10,7 +10,7 @@
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_assert.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 using namespace ckernel;
 

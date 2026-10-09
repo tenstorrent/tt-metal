@@ -27,7 +27,7 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input DFB wait. Quasar has no such handshake, so it stays disabled there and the normal DFB

@@ -36,7 +36,7 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
 # =============================================================================
 
 _SECTION_SEP = "// " + "=" * 76
-_PROFILER_INCLUDE = '#include "tt_metal/tools/profiler/kernel_profiler.hpp"'
+_PROFILER_INCLUDE = '#include "api/debug/kernel_profiler.hpp"'
 _ARRAY_INCLUDE = "#include <array>"
 
 
