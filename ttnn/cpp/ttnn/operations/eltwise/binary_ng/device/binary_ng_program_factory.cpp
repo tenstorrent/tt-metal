@@ -1385,8 +1385,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole, sharded bf16 FPU ops without operand activations or broadcast: a DEST section is unpacked with one
-    // call (BINARY_NG_BLOCK) and, from 16 tiles per core, packed with one (BINARY_NG_BLOCK_PACK); below that only add
+    // Blackhole, sharded bf16 FPU ops without operand activations or broadcast: from 16 tiles per core a DEST section
+    // is unpacked with one call (BINARY_NG_BLOCK) and packed with one (BINARY_NG_BLOCK_PACK); from 6 tiles per core add
     // and sub without a post activation take the unpack call alone.
     const bool block_kernel = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                               std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
@@ -1394,8 +1394,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                               compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
                               a_data_format == tt::DataFormat::Float16_b &&
                               b_data_format == tt::DataFormat::Float16_b && c_data_format == tt::DataFormat::Float16_b;
-    const bool block_pack = block_kernel && c_num_tiles_per_shard.value_or(0) >= 16;
-    const bool block_unpack_alone = block_kernel && !has_post_activations &&
+    const uint32_t block_tiles = c_num_tiles_per_shard.value_or(0);
+    const bool block_pack = block_kernel && block_tiles >= 16;
+    const bool block_unpack_alone = block_kernel && !has_post_activations && block_tiles >= 6 &&
                                     std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL;
     if (block_pack || block_unpack_alone) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
