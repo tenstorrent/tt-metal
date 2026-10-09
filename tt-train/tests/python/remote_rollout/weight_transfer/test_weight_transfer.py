@@ -49,7 +49,7 @@ pytestmark = pytest.mark.usefixtures("_set_fabric_2d")
 # per-submesh model-state investigation. Re-enable by removing the
 # ``@pytest.mark.skip`` decorator on the test function below.
 # (The earlier ttml-vs-ttnn asymmetric fabric-init deadlock is fixed by the
-# ``_set_fabric_2d`` fixture above plus ``_completer_utils.open_device`` only
+# ``_set_fabric_2d`` fixture above plus ``_ttt_sampler_utils.open_device`` only
 # calling ``enable_fabric`` when fabric is currently ``DISABLED``.)
 _SKIP_REASON = (
     "test_weight_transfer: per-submesh determinism regression on BH after " "push_weights — see module docstring."
@@ -123,7 +123,7 @@ def _ttml_side() -> None:
     import ttml
     from ttml.common.config import get_model_config
 
-    from _completer_utils import close_device, load_device_config
+    from _ttt_sampler_utils import close_device, load_device_config
     from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model, weights_ref_hf_dict
     from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
     from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
