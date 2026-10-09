@@ -1398,7 +1398,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_pack = block_kernel && block_tiles >= 16;
     const bool block_unpack_alone = block_kernel && !has_post_activations && block_tiles >= 6 &&
                                     std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL;
-    if (block_pack || block_unpack_alone) {
+    // Qwen3-32B's Galaxy decode residual adds, a bfp8_b a and a bf16 or bfp8_b b into bf16 or bfp8_b: the unpack call
+    // alone from 4 tiles.
+    const bool block_unpack_mixed =
+        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+        std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL &&
+        !has_operand_activations && !has_post_activations && num_tiles_per_cycle > 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+        a_data_format == tt::DataFormat::Bfp8_b &&
+        (b_data_format == tt::DataFormat::Float16_b || b_data_format == tt::DataFormat::Bfp8_b) &&
+        (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b) && block_tiles >= 4;
+    if (block_pack || block_unpack_alone || block_unpack_mixed) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
     if (block_pack) {
