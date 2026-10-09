@@ -134,11 +134,10 @@ inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& t
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, DST_INDEX, VectorMode::RC_custom, 0.0f);
     _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    // The tile count is a runtime argument here; the API unrolls this loop for its compile-time count.
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
     }
     _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
     _llk_math_mul_reduce_scalar_clear_dvalid_();
