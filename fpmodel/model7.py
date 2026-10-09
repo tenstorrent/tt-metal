@@ -193,7 +193,8 @@ def geometry(d):
     g["nsb"] = np.ceil(obh / sbh) * np.ceil(obw / sbw)
     g["tb_a"] = d.a_dtype.map(TILE_BYTES).to_numpy(float)
     g["tb_b"] = d.b_dtype.map(TILE_BYTES).to_numpy(float)
-    g["tb_o"] = d.out_dtype.map(TILE_BYTES).fillna(2048).to_numpy(float)
+    # ttnn's output dtype defaults to in0's when the op doesn't name one
+    g["tb_o"] = d.out_dtype.fillna(d.a_dtype).map(TILE_BYTES).fillna(2048).to_numpy(float)
     acc32 = d.fp32_acc.fillna(0).to_numpy() == 1
     l1acc = d.packer_l1_acc.fillna(0).to_numpy() == 1
     bias = d.bias.fillna(0).to_numpy() == 1

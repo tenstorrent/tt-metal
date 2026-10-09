@@ -57,6 +57,26 @@ def multicore_candidates(e):
 if os.environ.get("NO_MC") != "1":  # v13 on
     mc = multicore_candidates(e)
     e = pd.concat([e, mc], ignore_index=True)
+MAX_LOWP_SPILLS = 32
+
+
+def precision_valid(e):
+    """numerics, not speed: bfp8/bfp4 partials without fp32 or L1 accumulation lose precision with every spill round trip.
+    Across the fresh and suite runs, pcc failures go from 1 in 128 configs at <= 32 round trips to 7 in 8 at 65-96 and
+    24 in 24 above 96, so candidates over 32 are dropped when the problem has one at or under 32."""
+    lowp = (
+        e.out_dtype.fillna(e.a_dtype).isin(["bfp8", "bfp4"])
+        & (e.fp32_acc.fillna(0) == 0)
+        & (e.packer_l1_acc.fillna(0) == 0)
+    )
+    spills = np.ceil(np.ceil(e.K / 32) / e.in0_block_w.fillna(1)) - 1
+    bad = lowp & (spills > MAX_LOWP_SPILLS) & (e.family != "multicore")
+    has_ok = (~bad).groupby(e.case).transform("any")
+    return e[~(bad & has_ok)]
+
+
+if os.environ.get("NO_PRECISION_RULE") != "1":  # v14 on
+    e = precision_valid(e).reset_index(drop=True)
 e = M.annotate(e)
 e["pred"] = M.predict(M.geometry(e), p)
 r = e.loc[e.groupby("case").pred.idxmin(), ["case", "config", "family", "origin", "pred"]]
