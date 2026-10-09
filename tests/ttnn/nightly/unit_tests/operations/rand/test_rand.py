@@ -697,16 +697,9 @@ def test_rand_mesh_replicate(mesh_device):
 )
 def test_rand_mesh_shard_matches_single_device(mesh_device):
     """
-    Verify that each shard of a multi-device sharded ttnn.rand matches a
-    replicated ttnn.rand run with the equivalent per-device seed.
-
-    The kernel seeds core `i` on device at linear index `d` as:
-        core_seed = user_seed + i + d * num_active_cores
-    where num_active_cores = min(compute_grid_total, num_tiles).
-
-    For each device d we run a replicated (no mesh_mapper) ttnn.rand with
-    seed = user_seed + d * num_active_cores, then compare device d's copy
-    against the corresponding shard from the sharded run.
+    Shard 0 of a sharded ttnn.rand equals a replicated ttnn.rand with the same seed and per-device
+    shape: both use distribution index 0, so their per-core keys are identical. Every other shard
+    uses a different distribution index and must differ.
     """
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
@@ -729,24 +722,41 @@ def test_rand_mesh_shard_matches_single_device(mesh_device):
         mesh_mapper=ttnn.MeshMapperConfig(_shard_placements(mesh_shape, shard_dim)),
     )
     shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_tensor)]
+    replicated = ttnn.to_torch(
+        ttnn.get_device_tensors(ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=seed))[0]
+    ).float()
 
-    # num_active_cores mirrors split_work_to_cores: min(grid_total, num_tiles)
-    TILE_HW = 32 * 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_tiles = (per_device_rows * cols) // TILE_HW
-    num_active_cores = min(grid.x * grid.y, num_tiles)
+    assert torch.equal(shards[0], replicated), "shard 0 must equal the replicated call (distribution index 0)"
+    for d in range(1, num_devices):
+        assert tuple(shards[d].shape) == shard_shape
+        assert not torch.equal(shards[d], replicated), f"shard {d} must differ from distribution index 0"
 
-    for d in range(num_devices):
-        device_seed = seed + d * num_active_cores
 
-        # Replicated rand — every device gets the same data; pick device d's copy
-        reference_tensor = ttnn.rand(shard_shape, mesh_device, dtype=dtype, seed=device_seed)
-        reference = ttnn.to_torch(ttnn.get_device_tensors(reference_tensor)[d]).float()
-
-        assert tuple(shards[d].shape) == shard_shape, f"Shard {d}: expected {shard_shape}, got {tuple(shards[d].shape)}"
-        assert torch.equal(shards[d], reference), (
-            f"Shard {d} does not match replicated rand with seed={device_seed} " f"(offset {d * num_active_cores})"
-        )
+def test_rand_mesh_shard_pins_device_index(mesh_device):
+    """Every shard equals the host Threefry reference for ITS distribution index, not merely something
+    different from shard 0: an off-by-one in the shard_linear_idx / shard_stride walk would still
+    produce distinct shards and pass a mere inequality check."""
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+    seed = 100
+    tiles_per_device = 8
+    mesh_shape = tuple(mesh_device.shape)
+    sharded = ttnn.rand(
+        (32, 32 * tiles_per_device * num_devices),
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        generator=ttnn.RandGenerator.THREEFRY,
+        mesh_mapper=ttnn.MeshMapperConfig(_shard_placements(mesh_shape, 1)),
+    )
+    for d, t in enumerate(ttnn.get_device_tensors(sharded)):
+        shard = ttnn.to_torch(t).float()
+        key0 = _stream_key(seed, d)
+        for i in (0, tiles_per_device - 1):
+            assert torch.equal(
+                _threefry_reference_tile(i, key0, 0), shard[:, 32 * i : 32 * (i + 1)].contiguous()
+            ), f"shard {d} tile {i} does not match the reference for distribution index {d}"
 
 
 @pytest.mark.parametrize(
@@ -816,3 +826,255 @@ def test_rand_mesh_2d_shard_and_replicate(mesh_device, shard_mesh_dim):
                     f"Device {coord} and device {tuple(shard_neighbor)} are on different "
                     f"shards but hold identical data"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Device-side state (trace replay) and generator selection
+# ---------------------------------------------------------------------------
+
+M32 = 0xFFFFFFFF
+
+
+def _threefry2x32(x0, x1, k0, k1, rounds=20):
+    rot = [13, 15, 26, 6, 17, 29, 16, 24]
+    ks = [k0, k1, k0 ^ k1 ^ 0x1BD11BDA]
+    x0 = (x0 + ks[0]) & M32
+    x1 = (x1 + ks[1]) & M32
+    for r in range(rounds):
+        x0 = (x0 + x1) & M32
+        x1 = ((x1 << rot[r % 8]) | (x1 >> (32 - rot[r % 8]))) & M32
+        x1 ^= x0
+        if r % 4 == 3:
+            j = r // 4 + 1
+            x0 = (x0 + ks[j % 3]) & M32
+            x1 = (x1 + ks[(j + 1) % 3] + j) & M32
+    return x0, x1
+
+
+# Mirrors compute_kernel_lib::rand_stream_key / rand_core_key in threefry_key.hpp.
+def _stream_key(seed, shard_index):
+    return _threefry2x32(0, 1, seed, shard_index)[0]
+
+
+def _core_key(seed, shard_index, core_index):
+    return _threefry2x32(core_index, 0, seed, shard_index)[0]
+
+
+def _threefry_reference_tile(tile_index, key0, key1):
+    """One 32x32 fp32 tile of ttnn.rand(low=0, high=1, generator=THREEFRY). Counter (16*tile + 4*face + pair, lane_id)
+    with lane_id = 2*k for lane index k; the SFPU stores word w of lane k at face row 4*pair + k//8, column 2*(k%8) + w.
+    The [0, 1) scale 1 - 2^-24 is folded with 2^-31 and applied by one FMA, so the float64 product rounded once to
+    float32 reproduces the device value."""
+    scale = float(torch.tensor([0x3F7FFFFF - (31 << 23)], dtype=torch.int32).view(torch.float32)[0])
+    out = torch.zeros((32, 32), dtype=torch.float32)
+    for f in range(4):
+        r0, c0 = 16 * (f // 2), 16 * (f % 2)
+        for p in range(4):
+            ctr = (tile_index * 16 + f * 4 + p) & M32
+            words = [_threefry2x32(ctr, 2 * k, key0, key1) for k in range(32)]
+            for w in (0, 1):
+                vals = (torch.tensor([float(x[w] >> 1) for x in words], dtype=torch.float32).double() * scale).float()
+                for k in range(32):
+                    out[r0 + 4 * p + k // 8, c0 + 2 * (k % 8) + w] = vals[k]
+    return out
+
+
+def test_rand_generator_threefry_matches_reference(device):
+    """Device Threefry-2x32-20 output equals the host reference bit for bit, on tiles spread across cores."""
+    seed = 1
+    grid = device.compute_with_storage_grid_size()
+    data = ttnn.to_torch(
+        ttnn.rand(
+            (64, 32 * grid.x * grid.y),
+            device=device,
+            dtype=ttnn.float32,
+            seed=seed,
+            generator=ttnn.RandGenerator.THREEFRY,
+        )
+    ).float()
+    tiles = data.reshape(2, 32, -1, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
+    key0 = _stream_key(seed, 0)
+    for i in (0, 1, tiles.shape[0] // 2, tiles.shape[0] - 1):
+        assert torch.equal(
+            _threefry_reference_tile(i, key0, 0), tiles[i]
+        ), f"tile {i} differs from the Threefry reference"
+
+
+@pytest.mark.parametrize("generator", [ttnn.RandGenerator.LFSR, ttnn.RandGenerator.THREEFRY])
+def test_rand_generator_uniform_and_deterministic(device, generator):
+    shape = (1024, 1024)
+    a = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=9, generator=generator)).float()
+    b = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=9, generator=generator)).float()
+    c = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=10, generator=generator)).float()
+    assert torch.equal(a, b)
+    assert not torch.equal(a, c)
+    assert check_uniform_distribution(a)
+    assert a.min() >= 0.0 and a.max() < 1.0
+
+
+def test_rand_neighbouring_seeds_share_no_tiles(device):
+    """Hashed per-core keys: seed s+1 must not be seed s shifted by one core (the old additive contract)."""
+    shape = (256, 32 * 130)
+    a = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=5)).float()
+    b = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=6)).float()
+    tiles_a = {t.numpy().tobytes() for t in a.reshape(8, 32, -1, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)}
+    shared = sum(
+        t.numpy().tobytes() in tiles_a for t in b.reshape(8, 32, -1, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
+    )
+    assert shared == 0
+
+
+def test_rand_state_rejects_wrong_tensor(device, expect_error):
+    bad = ttnn.zeros((4, 32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y <= 4:
+        pytest.skip("grid too small to make the state tensor short")
+    with expect_error(RuntimeError, "state must come from ttnn::rand_state"):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=1, state=bad)
+
+
+@pytest.mark.parametrize("generator", [ttnn.RandGenerator.LFSR, ttnn.RandGenerator.THREEFRY])
+def test_rand_state_advances_eagerly_and_resets(device, generator):
+    shape = (512, 512)
+    state = ttnn.rand_state(device)
+    grid = device.compute_with_storage_grid_size()
+    assert tuple(state.shape) == (grid.x * grid.y, 32)
+    a = ttnn.to_torch(
+        ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, state=state, generator=generator)
+    ).float()
+    b = ttnn.to_torch(
+        ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, state=state, generator=generator)
+    ).float()
+    assert not torch.equal(a, b), "consecutive calls with state must differ"
+    epochs = ttnn.to_torch(state)[:, 0].to(torch.int64)
+    assert int(epochs.min()) == 2 and int(epochs.max()) == 2, "every active core advanced twice"
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.zeros((grid.x * grid.y, 32), dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        ),
+        state,
+    )
+    again = ttnn.to_torch(
+        ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, state=state, generator=generator)
+    ).float()
+    assert torch.equal(again, a), "resetting the state must reproduce the first call"
+    assert check_uniform_distribution(b)
+
+
+@pytest.mark.parametrize("generator", [ttnn.RandGenerator.LFSR, ttnn.RandGenerator.THREEFRY])
+def test_rand_state_no_repeats_across_work_splits(device, generator):
+    """Epoch pages advance on every core each call, participating or not, so the epoch is a property of
+    the call and not of the core. Without that, calls whose work splits differ can hand the same
+    (key, counter) to different cores and emit byte-identical tiles."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    state = ttnn.rand_state(device)
+    seen, dups = {}, []
+    for ntiles in (1, 2 * cores, cores, 1, 2 * cores):
+        out = ttnn.to_torch(
+            ttnn.rand((32, 32 * ntiles), device=device, dtype=ttnn.float32, seed=7, state=state, generator=generator)
+        ).float()
+        for i in range(ntiles):
+            key = out[:, 32 * i : 32 * (i + 1)].contiguous().numpy().tobytes()
+            if key in seen:
+                dups.append((ntiles, i, seen[key]))
+            else:
+                seen[key] = (ntiles, i)
+    assert not dups, f"identical tiles across calls sharing one state: {dups[:4]}"
+
+
+def test_rand_state_epoch_pages_advance_in_lockstep(device):
+    """Every page advances once per call even when only one core carries tiles."""
+    grid = device.compute_with_storage_grid_size()
+    state = ttnn.rand_state(device)
+    for _ in range(3):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=3, state=state)  # one tile, one busy core
+    epochs = ttnn.to_torch(state)[:, 0].to(torch.int64)
+    assert int(epochs.min()) == 3 and int(epochs.max()) == 3, f"pages out of lockstep: {epochs.tolist()[:8]}"
+
+
+def test_rand_state_high_epoch_word_reaches_the_key(device):
+    """The epoch is 64 bits. If only the low word folded into the key the stream would repeat every 2^32
+    advances, so a page that differs only in the high word must produce different values."""
+    shape = (512, 512)
+    grid = device.compute_with_storage_grid_size()
+    state = ttnn.rand_state(device)
+    low = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=11, state=state)).float()
+    page = torch.zeros((grid.x * grid.y, 32), dtype=torch.int32)
+    page[:, 1] = 1  # epoch_lo back to 0, epoch_hi = 1
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(page, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), state)
+    high = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=11, state=state)).float()
+    assert not torch.equal(low, high), "the high epoch word must change the stream"
+
+
+def test_rand_state_cache_hit_rebinds_state_address(device):
+    """The state address is patched by override_runtime_arguments, so a cache hit must advance the state
+    tensor it was given, not the one the program was built with."""
+    shape = (512, 512)
+    first_state = ttnn.rand_state(device)
+    second_state = ttnn.rand_state(device)
+    first = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=9, state=first_state)).float()
+    entries = device.num_program_cache_entries()
+    second = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=9, state=second_state)).float()
+    assert device.num_program_cache_entries() == entries, "second call must hit the cached program"
+    assert torch.equal(first, second), "both states start at epoch 0, so the values must match"
+    for state, name in ((first_state, "first"), (second_state, "second")):
+        epochs = ttnn.to_torch(state)[:, 0].to(torch.int64)
+        assert int(epochs.min()) == 1 and int(epochs.max()) == 1, f"{name} state advanced exactly once"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32 << 20}], indirect=True)
+@pytest.mark.parametrize("generator", [ttnn.RandGenerator.LFSR, ttnn.RandGenerator.THREEFRY])
+def test_rand_state_trace_replays_fresh_values(device, generator):
+    shape = (512, 512)
+    state = ttnn.rand_state(device)
+    ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, state=state, generator=generator)  # compile
+    frozen = ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, generator=generator)  # no state: compile
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    fresh = ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, state=state, generator=generator)
+    frozen = ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=4, generator=generator)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    outs, frozens = [], []
+    for _ in range(3):
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        outs.append(ttnn.to_torch(fresh).float())
+        frozens.append(ttnn.to_torch(frozen).float())
+    ttnn.release_trace(device, tid)
+    assert all(torch.equal(frozens[0], f) for f in frozens[1:]), "without state a replay repeats its values"
+    for i in range(3):
+        for j in range(i + 1, 3):
+            assert not torch.equal(outs[i], outs[j]), f"replays {i} and {j} with state must differ"
+    assert all(check_uniform_distribution(o) for o in outs)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],
+    indirect=True,
+)
+@pytest.mark.parametrize("generator", [ttnn.RandGenerator.LFSR, ttnn.RandGenerator.THREEFRY])
+def test_rand_mesh_state_per_device(mesh_device, generator):
+    """Each device advances its own state page; replicated calls stay identical across devices per call."""
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Need at least 2 devices")
+    state = ttnn.rand_state(mesh_device)
+    shape = (1024, 1024)  # 1024 tiles: every core runs, so every epoch page advances
+    a = [
+        ttnn.to_torch(t).float()
+        for t in ttnn.get_device_tensors(
+            ttnn.rand(shape, mesh_device, dtype=ttnn.float32, seed=3, state=state, generator=generator)
+        )
+    ]
+    b = [
+        ttnn.to_torch(t).float()
+        for t in ttnn.get_device_tensors(
+            ttnn.rand(shape, mesh_device, dtype=ttnn.float32, seed=3, state=state, generator=generator)
+        )
+    ]
+    for d in range(num_devices):
+        assert torch.equal(a[0], a[d]), "replicated call: devices agree"
+        assert not torch.equal(a[d], b[d]), "second call: state advanced"
+    epochs = [ttnn.to_torch(t)[:, 0].to(torch.int64) for t in ttnn.get_device_tensors(state)]
+    for e in epochs:
+        assert int(e.min()) == 2 and int(e.max()) == 2
