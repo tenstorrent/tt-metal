@@ -136,6 +136,10 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
     _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
+    # same GSM8K prompts with a model context of 2048 (> 512: the decode indexer is ON): the demo-side reference of the vLLM adapter's indexer-on speculative rounds
+    _s(GSM, 8, 2048, 384, "idxon_b8", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 2048, 384, "idxon_b16", instruct=True, stop_at_eos=True),
+    _s(GSM, 32, 2048, 384, "idxon_b32", instruct=True, stop_at_eos=True),
     _s(f"{LONG}/input_data_long_4k.json", 8, 8192, 64, "isl4k_b8"),
     _s(f"{LONG}/input_data_long_8k.json", 8, 16384, 64, "isl8k_b8"),
     _s(f"{LONG}/input_data_long_32k.json", 8, 40000, 64, "isl32k_b8"),

@@ -467,3 +467,55 @@ def sample_exact(vals, ids, sums, k, temperature, top_k, top_p, u, fetch_logits)
     if tp < 1.0:
         pr = pr * ((pr.cumsum(0) - pr) < tp)
     return int(si[_pick(pr, u)]), True
+
+
+class _NeedFull(Exception):
+    pass
+
+
+def _raise_need_full():
+    raise _NeedFull()
+
+
+def sample_many(reqs, k, fetch_rows):
+    """Exact draws of many rows with ONE batched full-row read for the rows that need it. ``reqs`` [(vals, ids, sums, temperature, top_k, top_p, u, key)]; ``fetch_rows(keys)`` -> full logits rows
+    (same order). -> (tokens, number of full-row fallbacks). Same result as calling ``sample_exact`` per row (the draw ``u`` is the caller's).
+    """
+    out, need = [None] * len(reqs), []
+    for i, (v, ix, sm, temp, tk, tp, u, key) in enumerate(reqs):
+        try:
+            out[i], _ = sample_exact(v, ix, sm, k, temp, tk, tp, u, _raise_need_full)
+        except _NeedFull:
+            need.append(i)
+    if need:
+        rows = fetch_rows([reqs[i][7] for i in need])
+        for i, row in zip(need, rows):
+            v, ix, sm, temp, tk, tp, u, key = reqs[i]
+            out[i], _ = sample_exact(v, ix, sm, k, temp, tk, tp, u, lambda row=row: row)
+    return out, len(need)
+
+
+def audit_draw(row, tok, temperature, top_k, top_p, u, cand_argmax=None):
+    """End-to-end audit of ONE sampled draw against the full-vocabulary row (DSV41_VLLM_SAMPLE_AUDIT=1): the exact distribution of the request (temperature first, then top-k, then top-p over the sorted
+    probabilities, the rule of vLLM's sampler), the rank of the sampled token, the probability mass ranked before it, and the token of the reference inverse CDF for the same ``u``.
+    -> dict(rank, before, in_support, ref_token, argmax_ok)."""
+    lg = row.double()
+    srt, si = torch.sort(lg, descending=True)
+    pr = torch.softmax(srt / float(temperature), 0)
+    rank = int((si == int(tok)).nonzero()[0])
+    before = float(pr[:rank].sum())
+    tk = int(top_k) if top_k is not None and 0 < int(top_k) < VOCAB_FULL else 0
+    tp = float(top_p) if top_p is not None else 1.0
+    q = pr[:tk] / pr[:tk].sum() if tk else pr
+    sidx = si[: q.numel()]
+    if tp < 1.0:
+        q = q * ((q.cumsum(0) - q) < tp)
+    ref = int(sidx[_pick(q, u)])
+    in_support = (not tk or rank < tk) and (tp >= 1.0 or before < tp + 1e-9)
+    return dict(
+        rank=rank,
+        before=before,
+        in_support=in_support,
+        ref_token=ref,
+        argmax_ok=(cand_argmax is None or int(cand_argmax) == int(si[0])),
+    )

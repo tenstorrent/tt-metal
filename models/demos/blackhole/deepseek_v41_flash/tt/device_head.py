@@ -239,6 +239,20 @@ class DSV41DeviceHead:
         ]
         return torch.cat(parts)
 
+    def read_logits_rows(self, logits, items):
+        """Full logits rows [vocab] fp32 for ``items`` [(mesh_row, local_row)]: only the 8 devices of every mesh row that is needed are read (once each; a whole-mesh read costs 4x the bytes)."""
+        rows, cols = tuple(self.md.shape)
+        devs = ttnn.get_device_tensors(logits)
+        cache = {}
+        out = []
+        for mr, lr in items:
+            if mr not in cache:
+                cache[mr] = [
+                    ttnn.to_torch(ttnn.from_device(devs[mr * cols + c])).reshape(-1, VOCAB // cols) for c in range(cols)
+                ]
+            out.append(torch.cat([cache[mr][c][lr].float() for c in range(cols)]))
+        return out
+
     def gather_logits(self, logits):
         """Host copy of the full logits [B, vocab] (diagnostics / PCC; the decode loop uses ``argmax``)."""
         rows, cols = tuple(self.md.shape)

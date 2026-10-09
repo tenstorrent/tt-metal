@@ -170,6 +170,9 @@ class FakeModel:
     def release_trace(self):
         self.log.append("release_trace")
 
+    def admit_idle_users(self):
+        self.log.append("admit_idle")
+
     def prefill_forward(
         self,
         tokens,
@@ -214,7 +217,8 @@ HOT = SimpleNamespace(temperature=[0.8] * 8, top_k=[-1] * 8, enable_log_probs=[F
 
 def test_capabilities_declared():
     c = DeepseekV41ForCausalLM.model_capabilities
-    assert c["supports_sample_on_device"] and c["max_device_top_k"] == 1
+    # (a speculative launch declares supports_sampled_verify or max_device_top_k = 1 from its argv: this process is a plain launch)
+    assert c["supports_sample_on_device"] and "max_device_top_k" not in c
     assert not c["supports_prefix_caching"] and not c["supports_async_decode"]
     assert not c["supports_device_penalties"]
 
@@ -389,6 +393,168 @@ def test_chat_template_matches_checkpoint_encoder():
         assert got == encode_messages(msgs, thinking_mode="chat")
 
 
+def test_class_satisfies_vllm_text_generation_protocol():
+    """ModelConfig resolves --runner generate through vLLM's is_text_generation_model before the TT plugin loads the model (stubs: embed_input_ids / forward / compute_logits)."""
+    pytest.importorskip("vllm")
+    from vllm.model_executor.models.interfaces_base import is_text_generation_model
+
+    from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
+
+    assert is_text_generation_model(DeepseekV41ForCausalLM)
+
+
+def test_context_bound_by_batch(monkeypatch):
+    from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM as C
+
+    monkeypatch.delenv("DSV41_VLLM_MAX_CTX", raising=False)
+    assert C.bounded_max_seq_len(65536, 128) == 33280
+    assert C.bounded_max_seq_len(20000, 128) == 20000
+    assert C.bounded_max_seq_len(65536, 64) == 65536
+    monkeypatch.setenv("DSV41_VLLM_MAX_CTX", "40000")
+    assert C.bounded_max_seq_len(65536, 64) == 40000
+
+
+# ---- speculative decoding (plugin model-owned drafter contract) against a fake SpecRunner ----------------------------------------------------
+class FakeSpec:
+    """Stand-in of tt/spec_model.SpecRunner: target argmax of a row = (token + 1) % 7; drafts continue the chain from the last committed token."""
+
+    def __init__(self, B, k):
+        self.B, self.k, self.n, self.released = B, k, k + 1, 0
+        self.d_final = torch.zeros(B, 5, dtype=torch.long)
+        self.dev_first = torch.zeros(B, dtype=torch.long)
+        self.rounds = []
+
+    def release(self):
+        self.released += 1
+
+    def seed(self, tokens, lens, first):
+        self.rounds.append(("seed", lens.clone(), first.clone()))
+        self.dev_first = first.clone()
+        self.d_final = torch.stack([(first + j + 1) % 7 for j in range(5)], dim=1)
+
+    def _round(self, X, base, force):
+        self.rounds.append(("round", X.clone(), base.clone(), force.clone()))
+        a = (X + 1) % 7
+        m = torch.zeros(self.B, dtype=torch.long)
+        for b in range(self.B):
+            while m[b] < self.k and int(X[b, m[b] + 1]) == int(a[b, m[b]]):
+                m[b] += 1
+            if force[b] >= 0:
+                m[b] = int(force[b])
+        last = a[torch.arange(self.B), m]
+        d = torch.stack([(last + j + 1) % 7 for j in range(5)], dim=1)
+        return a, m, d
+
+
+def make_spec(max_num_seqs=8, k=3):
+    B = VS.padded_batch(max_num_seqs)
+    m = FakeModel(B)
+    spec = FakeSpec(B, k)
+    gen = SimpleNamespace(m=m, spec=spec, prefill_chunk=None, auto_chunk=lambda max_len: 256)
+    return DeepseekV41ForCausalLM(gen, max_num_seqs, 4096), m, spec
+
+
+def test_spec_plan_by_batch(expect_error):
+    f = DeepseekV41ForCausalLM.spec_plan
+    cfg = SimpleNamespace(model_config=SimpleNamespace(max_model_len=33280))
+    assert f(cfg, 32, 5).effective_k == 3  # U=8: 8 * (1 + 3) = 32 rows
+    assert f(cfg, 16, 5).effective_k == 5 and f(cfg, 4, 2).effective_k == 2
+    assert f(cfg, 32, 5).supports_narrow_decode  # draftless steps run as the ordinary decode
+    with expect_error(ValueError, ".*users per mesh row.*"):
+        f(cfg, 128, 3)  # B=128 is not supported any more (largest build: 64)
+    assert f(SimpleNamespace(model_config=SimpleNamespace(max_model_len=60000)), 32, 3).supported_k == (
+        1,
+        2,
+        3,
+    )  # context too long for the runners
+
+
+def test_spec_prefill_seeds_and_propose_offers_drafts():
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 2], empty_slots=[0, 1], sampling_params=GREEDY)
+    assert spec.released == 1 and spec.rounds[-1][0] == "seed"
+    assert spec.rounds[-1][1].tolist() == [3, 2, 1, 1, 1, 1, 1, 1]  # idle rows replay one dummy token
+    committed = torch.zeros(8, 4, dtype=torch.int32)
+    committed[0, 0], committed[1, 0] = first[0], first[1]
+    cpos = torch.full((8, 4), -1)
+    cpos[0, 0], cpos[1, 0] = 3, 2
+    out = gen.propose_draft_tokens(3, committed, cpos, torch.ones(8, dtype=torch.int32))
+    assert out.num_valid.tolist() == [3, 3, 0, 0, 0, 0, 0, 0]
+    assert out.draft_token_ids[0].tolist() == [(int(first[0]) + j + 1) % 7 for j in range(3)]
+
+
+def test_spec_verify_walks_like_the_plugin_and_forces_zero_without_drafts():
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 2], empty_slots=[0, 1], sampling_params=GREEDY)
+    f0, f1 = int(first[0]), int(first[1])
+    X = torch.zeros(8, 4, dtype=torch.int32)
+    X[0] = torch.tensor([f0, (f0 + 1) % 7, (f0 + 2) % 7, (f0 + 3) % 7])  # all drafts right
+    X[1] = torch.tensor([f1, -1, -1, -1])  # no drafts (placeholders)
+    pos = torch.full((8, 4), -1)
+    pos[0], pos[1, 0] = torch.arange(3, 7), 2
+    nv = torch.tensor([3, 0, 0, 0, 0, 0, 0, 0], dtype=torch.int32)
+    vo = gen.decode_forward(
+        X, pos, num_valid_drafts=nv, accepted_counts=torch.ones(8, dtype=torch.int32), spec_mode="argmax_ids"
+    )
+    r = spec.rounds[-1]
+    assert (
+        r[0] == "round" and r[3][0] == -1 and r[3][1] == 0
+    )  # row 0 free, row 1 forced to commit nothing beyond its token
+    assert vo.argmax_ids.shape == (8, 4) and vo.argmax_ids[0].tolist() == [
+        (f0 + 1) % 7,
+        (f0 + 2) % 7,
+        (f0 + 3) % 7,
+        (f0 + 4) % 7,
+    ]
+    assert vo.argmax_ids[2:].eq(0).all()
+    p0, p1 = gen.slots.physical(0), gen.slots.physical(1)
+    assert int(gen.book.n[p0]) == 3 + 4 and int(gen.book.n[p1]) == 2 + 1  # fed: token + 3 accepted drafts / the token
+    # the next proposal continues from what the plugin commits (its walk: 3 accepted + bonus; row 1: the argmax)
+    committed = torch.zeros(8, 4, dtype=torch.int32)
+    committed[0] = vo.argmax_ids[0]
+    committed[1, 0] = vo.argmax_ids[1, 0]
+    cpos = torch.full((8, 4), -1)
+    cpos[0], cpos[1, 0] = torch.arange(4, 8), 3
+    acc = torch.ones(8, dtype=torch.int32)
+    acc[0] = 4
+    out = gen.propose_draft_tokens(3, committed, cpos, acc)
+    assert out.num_valid[:2].tolist() == [3, 3]
+    # a row whose committed token is not the one the drafts continue gets nothing
+    committed[1, 0] = (int(committed[1, 0]) + 1) % 7
+    n_seed = sum(1 for r_ in spec.rounds if r_[0] == "seed")
+    assert gen.propose_draft_tokens(3, committed, cpos, acc).num_valid[:2].tolist() == [
+        3,
+        3,
+    ]  # reseeded (the drafts continue the committed token)
+    assert sum(1 for r_ in spec.rounds if r_[0] == "seed") == n_seed + 1
+    # a request beyond the speculative ISL range gets no drafts and is never reseeded
+    gen.spec_ok[p1] = False
+    assert gen.propose_draft_tokens(3, committed, cpos, acc).num_valid[:2].tolist() == [3, 0]
+
+
+def test_spec_refuses_partial_drafts_and_serves_plain_calls(expect_error):
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0]], dtype=torch.int32)
+    gen.prefill_forward(toks, prompt_lens=[3], empty_slots=[0], sampling_params=GREEDY)
+    pos = torch.full((8, 4), -1)
+    pos[0] = torch.arange(3, 7)
+    with expect_error(ValueError, ".*valid drafts.*"):
+        gen.decode_forward(
+            torch.zeros(8, 4, dtype=torch.int32),
+            pos,
+            num_valid_drafts=torch.tensor([2] + [0] * 7, dtype=torch.int32),
+            accepted_counts=torch.ones(8, dtype=torch.int32),
+            spec_mode="argmax_ids",
+        )
+    # a draftless ordinary [B, 1] step (the plugin's narrow decode) runs the plain path; the drafter is then stale for that user (reseeded at the next propose)
+    p0 = gen.slots.physical(0)
+    assert bool(gen.spec_has[p0])
+    out = gen.decode_forward(torch.zeros(8, 1, dtype=torch.int32), torch.tensor([3] + [-1] * 7), sampling_params=GREEDY)
+    assert out.shape == (8, 1) and not bool(gen.spec_has[p0]) and int(gen.spec_last[p0]) == int(out[0, 0])
+
+
 # ---- interleaved / chunked prefill (DSV41_VLLM_INTERLEAVE=1; tt/dsv41_model.Model.prefill_interleaved) ------------------------------------------
 def test_slot_table_bind_keeps_a_permutation():
     st = VS.SlotTable(6, 8)
@@ -466,8 +632,8 @@ def test_chunked_prefill_capability_is_on_by_default(monkeypatch):
     )  # default ON
     monkeypatch.setattr("sys.argv", ["vllm", "serve", "--speculative-config", "{}"])
     assert (
-        importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is False
-    )  # spec launch: whole-prompt path
+        importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is True
+    )  # spec launch: interleaved too (the drafter is seeded when the plugin asks for the first drafts)
     monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "0")
     assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is False
     importlib.reload(GV)
@@ -870,3 +1036,93 @@ def test_sample_exact_equals_the_full_vocabulary_inverse_cdf(scale, cfg):
         assert (
             fb_n == 0
         )  # (the plugin sends top_k = vocab_size for 'no top-k')  # peaked + top-k inside the guaranteed prefix: never needs the full row
+
+
+def _bigram_logits(table, prev):
+    return table[int(prev) % table.shape[0]]
+
+
+def _target_probs(full, T, top_p):
+    srt, si = torch.sort(full.double(), descending=True)
+    pr = torch.softmax(srt / T, 0)
+    if top_p < 1.0:
+        pr = pr * ((pr.cumsum(0) - pr) < top_p)
+        pr = pr / pr.sum()
+    out = torch.zeros_like(full, dtype=torch.double)
+    out[si] = pr
+    return out
+
+
+@pytest.mark.parametrize("cfg", [(1.0, 0.95), (1.0, 1.0), (0.7, 0.9)])
+def test_sampled_speculative_rounds_have_the_non_speculative_law(cfg):
+    """Lossless speculative sampling for point-mass drafts (SpecRunner.sampled): the first two generated tokens of a chain whose next-token law depends on the previous token, produced by
+    verify rounds with arbitrary (here partly wrong) drafts, are distributed like the sequential samples. Compared with the sampling noise floor of two sequential runs.
+    """
+    from models.demos.blackhole.deepseek_v41_flash.tt import spec_model
+
+    T, top_p = cfg
+    torch.manual_seed(11)
+    table = torch.randn(6, 8 * 200) * 4.0
+    n, N = 3, 5000
+    t0 = 3
+    gen = torch.Generator().manual_seed(5)
+    gen2 = torch.Generator().manual_seed(6)
+
+    def draw_seq(g):  # sequential reference
+        out = []
+        prev = t0
+        for _ in range(2):
+            full = _bigram_logits(table, prev)
+            v, ids, sums = _cand(full, T=T)
+            u = float(torch.rand(1, generator=g, dtype=torch.float64))
+            tok, _ = VS.sample_exact(v, ids, sums, 16, T, -1, top_p, u, lambda: full)
+            out.append(tok)
+            prev = tok
+        return tuple(out)
+
+    def draw_spec(g):
+        got, prev = [], t0
+        while len(got) < 2:
+            drafts = []
+            d = prev
+            for _ in range(n - 1):  # drafts follow the argmax chain, one in three is wrong
+                d = (
+                    int(torch.argmax(_bigram_logits(table, d)))
+                    if torch.rand(1, generator=g) > 0.33
+                    else int(torch.randint(0, 1600, (1,), generator=g))
+                )
+                drafts.append(d)
+            X = torch.tensor([[prev] + drafts])
+            cands = [_cand(_bigram_logits(table, X[0, j]), T=T) for j in range(n)]
+            cv = torch.stack([c[0] for c in cands])
+            ci = torch.stack([c[1] for c in cands])
+            cs = torch.stack([c[2] for c in cands])
+            a = torch.zeros(1, n, dtype=torch.long)
+            spec_model.sample_block_ids(
+                a,
+                X,
+                torch.tensor([-1.0]),
+                {0: (T, -1, top_p, g)},
+                (cv, ci, cs),
+                16,
+                VS.sample_many,
+                lambda gs: [_bigram_logits(table, X[0, gg]) for gg in gs],
+            )
+            m = 0
+            while m < n - 1 and int(a[0, m]) == int(X[0, m + 1]):
+                m += 1
+            got += [int(a[0, j]) for j in range(m + 1)]
+            prev = got[-1]
+        return tuple(got[:2])
+
+    def law(fn, g):
+        c = {}
+        for _ in range(N):
+            k_ = fn(g)
+            c[k_] = c.get(k_, 0) + 1
+        return {k_: v / N for k_, v in c.items()}
+
+    ref1, ref2, spec = law(draw_seq, gen), law(draw_seq, gen2), law(draw_spec, torch.Generator().manual_seed(7))
+    tv = lambda p, q: 0.5 * sum(abs(p.get(k_, 0) - q.get(k_, 0)) for k_ in set(p) | set(q))
+    floor = tv(ref1, ref2)
+    assert tv(spec, ref1) < max(0.06, 2.0 * floor), (tv(spec, ref1), floor)
