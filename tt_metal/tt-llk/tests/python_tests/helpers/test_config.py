@@ -2012,7 +2012,7 @@ class TestConfig:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            # A load that raises part way leaves the TRISCs with a mix of two variants
+            # A failed load or start address update leaves the TRISCs on two variants
             TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
@@ -2042,8 +2042,6 @@ class TestConfig:
                         verify_write=False,
                     )
 
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
-
             if (
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
@@ -2053,7 +2051,10 @@ class TestConfig:
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
+                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
                 return
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
         match boot_mode:
             case BootMode.BRISC:

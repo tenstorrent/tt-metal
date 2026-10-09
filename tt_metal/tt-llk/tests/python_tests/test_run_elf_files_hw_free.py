@@ -24,11 +24,12 @@ THREADS = ["unpack", "math", "pack"]
 
 
 class _Core:
-    """Records the device calls run_elf_files makes and fails the loads it is told to."""
+    """Records the device calls run_elf_files makes and fails the loads and BRISC commands it is told to."""
 
     def __init__(self):
         self.events = []
         self.fail_loads = set()
+        self.fail_commands = set()
 
     def load_elf(self, elf_file, risc_name, **kwargs):
         path = Path(elf_file)
@@ -41,6 +42,8 @@ class _Core:
 
     def brisc_command(self, location, command, **kwargs):
         self.events.append(("brisc", command.name))
+        if command.name in self.fail_commands:
+            raise TimeoutError(f"BRISC command {command.name} timed out")
 
     def loads(self):
         return [event for event in self.events if event[0] == "load"]
@@ -163,3 +166,21 @@ def test_failed_load_of_another_variant_reloads_the_first(core):
         ("load", "trisc1", "a"),
         ("load", "trisc2", "a"),
     ]
+
+
+@pytest.mark.parametrize("core", [ChipArchitecture.WORMHOLE], indirect=True)
+def test_timed_out_start_address_update_makes_the_next_run_load_again(core):
+    # Only Wormhole's BRISC caches the TRISC entry addresses
+    variant = _variant(core, "a")
+    core.fail_commands = {"UPDATE_START_ADDR_CACHE_AND_START"}
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        TimeoutError
+    ):
+        _run(variant)
+    assert TestConfig.LAST_LOADED_ELFS == Path()
+
+    core.fail_commands = set()
+    core.events.clear()
+    _run(variant)
+    assert [event[1] for event in core.loads()] == ["trisc0", "trisc1", "trisc2"]
+    assert core.starts() == ["RESET_TRISCS", "UPDATE_START_ADDR_CACHE_AND_START"]
