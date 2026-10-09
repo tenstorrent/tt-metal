@@ -176,7 +176,7 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t" // all parked on their hold read: nothing below depends on data
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
-        "li    a4, 512 + LLK_SERVE_PRE_N\n"
+        "li    a4, 512 + " LLK_SERVE_PRE_N "\n"
         "15:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
         "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
