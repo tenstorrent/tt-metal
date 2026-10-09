@@ -22,8 +22,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
-namespace tt::tt_metal::experimental {
-namespace scratch_cb_test {
+namespace tt::tt_metal::experimental::scratch_cb_test {
 
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
@@ -103,7 +102,8 @@ Program MakeScratchCbProgram(distributed::MeshDevice& mesh_device, const Scratch
     auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/test_scratch_cb_compute.cpp";
     compute.runtime_arg_schema.runtime_arg_names = {"num_iters", "tile_bytes", "ring_a_addr", "ring_b_addr"};
-    compute.compile_time_args = {{"pattern", run.pattern}, {"capacity", run.capacity}, {"nosync", run.nosync}};
+    compute.compile_time_args = {
+        {"pattern", run.pattern}, {"capacity", run.capacity}, {"nosync", run.nosync}, {"batch", run.batch}};
 
     std::vector<DataflowBufferSpec> real_cbs;
     if (run.real_cbs) {
@@ -305,7 +305,7 @@ TEST_F(ProgramSpecHWTest, ScratchCbBoundedProducer) {
         GTEST_SKIP() << "Blackhole-only";
     }
     constexpr std::uint32_t num_iters = 1024;
-    for (std::uint32_t batch : {1u, 2u}) {
+    for (std::uint32_t batch : {1u, 2u, kBoundedDepth}) {
         SCOPED_TRACE("batch=" + std::to_string(batch));
         const auto r = RunScratchCbBoundedProducer(
             *mesh_device, {.pattern = kPatternB, .capacity = kBoundedDepth, .num_iters = num_iters, .batch = batch});
@@ -396,5 +396,4 @@ TEST_F(ProgramSpecHWTest, ScratchCbAllNodes) {
     ExpectDatacopyCorrect(RunScratchCbDatacopy(*mesh_device, {.num_iters = 4 * kNumTiles}, 0x19u, all_nodes));
 }
 
-}  // namespace scratch_cb_test
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal::experimental::scratch_cb_test

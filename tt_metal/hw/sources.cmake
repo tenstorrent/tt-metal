@@ -226,6 +226,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/prefetcher_pipe_binding_token.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
+    inc/experimental/scratch_cb_api.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
@@ -258,6 +259,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/risc_attribs.h
     inc/internal/runtime_reload.h
     inc/internal/scoped_lock_cache_ops.h
+    inc/internal/scratch_cb.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h
