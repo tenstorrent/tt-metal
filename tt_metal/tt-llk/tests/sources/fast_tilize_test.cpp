@@ -238,11 +238,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_UNINIT_BEGIN
     {
         _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
     }
-    LLK_INIT_END;
+    LLK_UNINIT_END;
 }
 
 #endif
