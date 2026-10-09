@@ -12,7 +12,7 @@ import pytest
 
 from tests.perf import compare as cmp
 from tests.perf import golden as golden_io
-from tests.perf import session, update
+from tests.perf import runner, session, update
 from tests.perf.registry import Suite
 from tests.perf.unit.expect import expect_error  # noqa: F401
 
@@ -26,6 +26,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(session, "OUTPUT_ROOT", tmp_path / "generated")
+    monkeypatch.setattr(runner, "BINARY_ROOT", tmp_path)
     wrapper = tmp_path / "bench"
     wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} {FAKE} "$@"\n')
     wrapper.chmod(0o755)
@@ -119,6 +120,7 @@ def test_report_only_suite_still_fails_on_benchmark_errors(setup):
 
 def test_contract_suite_runs_one_process_per_repetition_with_templated_env(tmp_path, monkeypatch):
     monkeypatch.setattr(session, "OUTPUT_ROOT", tmp_path / "generated")
+    monkeypatch.setattr(runner, "BINARY_ROOT", tmp_path)
     monkeypatch.setenv("DROP_ME", "1")
     binary = tmp_path / "compile_bench"
     binary.write_text(
@@ -146,3 +148,19 @@ def test_contract_suite_runs_one_process_per_repetition_with_templated_env(tmp_p
     assert record.cases == {"compile/n:3": {"compile_ms": 100.0}} and record.repetitions == 3
     scratch = Path((session.output_dir("compile", ENV) / "run_rep0" / "run.log").read_text().strip())
     assert not scratch.exists()
+
+
+def test_binary_outside_the_build_tree_is_refused(setup, expect_error, tmp_path, monkeypatch):
+    make, _ = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    monkeypatch.setattr(runner, "BINARY_ROOT", tmp_path / "build")
+    with expect_error(runner.RunError, "outside"):
+        session.execute(suite, ENV)
+
+
+@pytest.mark.parametrize("case_filter, message", [("a\nb", "control characters"), ("a(", "not a valid regex")])
+def test_unsafe_case_filters_are_refused(setup, expect_error, case_filter, message):
+    make, _ = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    with expect_error(runner.RunError, message):
+        session.execute(suite, ENV, case_filter=case_filter)
