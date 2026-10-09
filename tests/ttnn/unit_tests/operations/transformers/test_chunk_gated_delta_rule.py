@@ -196,6 +196,69 @@ def test_gated_delta_attn_seq_golden_matches_documented_scan():
     torch.testing.assert_close(actual_state, expected_state)
 
 
+def _gated_delta_attn_seq_inputs(batch_heads, num_chunks, with_initial_state, seed):
+    """Inputs for gated_delta_attn_seq at the only size it accepts (C = Dk = Dv = 128)."""
+    gen = torch.Generator().manual_seed(seed)
+    C = Dk = Dv = 128
+
+    def r(*shape):
+        return torch.randn(*shape, generator=gen) * 0.1
+
+    # Well-conditioned unit-lower-triangular L, and the inverse of each of its 32x32 diagonal blocks.
+    L_unit = (
+        torch.eye(C).expand(batch_heads, num_chunks, C, C)
+        + torch.tril(r(batch_heads, num_chunks, C, C), diagonal=-1) * 0.1
+    )
+    L_inv = torch.cat([torch.linalg.inv(L_unit[..., i : i + 32, i : i + 32]) for i in range(0, C, 32)], dim=-2)
+    inputs = dict(
+        L_unit=L_unit,
+        v_beta_sc=r(batch_heads, num_chunks, C, Dv),
+        k_bd_sc=r(batch_heads, num_chunks, C, Dk),
+        intra_attn=torch.tril(r(batch_heads, num_chunks, C, C)),
+        q_decay=r(batch_heads, num_chunks, C, Dk),
+        k_decay_t=r(batch_heads, num_chunks, Dk, C),
+        dl_exp=torch.rand(batch_heads, num_chunks, 1, 1, generator=gen) * 0.5 + 0.5,
+        L_inv=L_inv,
+    )
+    initial_state = r(batch_heads, Dk, Dv) if with_initial_state else None
+    return inputs, initial_state
+
+
+@pytest.mark.parametrize(
+    "num_chunks", [1, 2, pytest.param(3, marks=_hw_only), pytest.param(4, marks=_hw_only)], ids=lambda n: f"NC{n}"
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
+    """Device gated_delta_attn_seq vs its golden.
+
+    The reader seeds the starting state (loaded, or zero-filled when there is none) into its own CB,
+    which compute reads on chunk 0; on later chunks compute reads the state it carried over itself.
+    NC = 1 covers the seed alone; NC >= 2 covers the hand-off from the seed to the carried state.
+    The op runs twice with fresh inputs, so the second run hits the program cache.
+    """
+    batch_heads = 3
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for run in range(2):
+        inputs, initial_state = _gated_delta_attn_seq_inputs(
+            batch_heads, num_chunks, with_initial_state, seed=100 * num_chunks + 10 * with_initial_state + run
+        )
+        out_tt, state_tt = ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state) if initial_state is not None else None,
+        )
+        out_ref, state_ref = golden(**inputs, initial_state=initial_state)
+
+        ok_o, pcc_o = check_with_pcc(out_ref, ttnn.to_torch(out_tt), 0.999)
+        ok_s, pcc_s = check_with_pcc(state_ref, ttnn.to_torch(state_tt), 0.999)
+        print(f"\nrun {run}: PCC output={pcc_o} final_state={pcc_s}")
+        assert ok_o, f"run {run}: output vs golden: {pcc_o}"
+        assert ok_s, f"run {run}: final_state vs golden: {pcc_s}"
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 
