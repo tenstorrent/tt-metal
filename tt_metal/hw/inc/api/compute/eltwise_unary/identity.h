@@ -24,8 +24,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void identity_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+#endif
 }
 
 /**
