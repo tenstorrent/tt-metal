@@ -1,0 +1,33 @@
+# ema on Float32 unpacked straight to Dest (no TF32 narrowing); stimuli as in sfpu_ema_dest32.yaml.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-1000.0, -10.5]
+        - [-9.5, -0.01]
+        - [0.01, 9.5]
+        - [10.5, 1000.0]
+        - -10.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 10.0
+  - name: "sfpu_out"
+    dims: [32, 64]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - type: "UnarySfpu"
+        operation: [Ema]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 64]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 64]}
