@@ -64,6 +64,9 @@ constexpr uint32_t QUASAR_NUM_WRITER_THREADS = 2;
 constexpr uint32_t MIN_OPERAND_BUFFER_DEPTH = 2;
 constexpr uint32_t C_BUFFER_DEPTH = 2;
 static_assert(QUASAR_NUM_READER_THREADS + QUASAR_NUM_WRITER_THREADS <= 6, "a Quasar cluster has six DM cores");
+static_assert(
+    std::max(MIN_OPERAND_BUFFER_DEPTH, QUASAR_NUM_READER_THREADS) % QUASAR_NUM_READER_THREADS == 0,
+    "each reader thread owns whole A and B slices");
 
 // True when every sized DFB fits the extent cap and their total fits the L1 budget.
 bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
@@ -748,12 +751,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         }
     }
 
-    // Every compute thread reads the whole A and B slices (ALL: one resident copy, each thread its own
-    // credits) and packs its own subblocks. ALL also gives each reader thread a contiguous part of the A and B
-    // DFBs (STRIDED would interleave the reader threads' tiles), so only one compute thread with one reader thread
-    // takes the plain bindings. The DFBs the compute produces are always STRIDED (each thread owns every N-th
-    // entry), the only pattern for producers.
-    const bool threads_share_operands = plan.num_compute_threads > 1 || plan.num_reader_threads > 1;
+    // A and B are bound ALL: every compute thread reads every entry, and each reader thread fills a contiguous part
+    // of the DFB. The DFBs the compute produces are always STRIDED (each thread owns every N-th entry), the only
+    // pattern for producers.
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "compute/unified_matmul_compute.cpp"),
@@ -761,8 +761,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {
-                threads_share_operands ? AllConsumerOf(A_SLICE_DFB, "A_slice") : ConsumerOf(A_SLICE_DFB, "A_slice"),
-                threads_share_operands ? AllConsumerOf(B_SLICE_DFB, "B_slice") : ConsumerOf(B_SLICE_DFB, "B_slice"),
+                AllConsumerOf(A_SLICE_DFB, "A_slice"),
+                AllConsumerOf(B_SLICE_DFB, "B_slice"),
                 ProducerOf(C_SLICE_DFB, "C_slice"),
                 ProducerOf(C_PARTIALS_DFB, "C_partials"),
                 ConsumerOf(C_PARTIALS_DFB, "C_partials"),
