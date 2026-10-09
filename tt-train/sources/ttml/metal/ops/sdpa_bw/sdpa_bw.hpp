@@ -9,8 +9,8 @@
 
 namespace ttml::metal {
 
-// Returns [grad_Q, grad_K, grad_V]
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
+// Returns [grad_Q, grad_K, grad_V, grad_gate]
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> sdpa_bw(
     const ttnn::Tensor& grad_output,                              // Gradient w.r.t. output
     const ttnn::Tensor& attn_output,                              // sdpa forward output (needed for gradients)
     const ttnn::Tensor& query,                                    // input Q (needed for gradients)
@@ -19,6 +19,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     const ttnn::Tensor& intermediates,                            // From forward pass (max_val, 1/sum_exp values)
     AttentionMaskType mask_type = AttentionMaskType::Arbitrary,   // Mask type (None, Causal, or Arbitrary)
     const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,  // attention mask (only for Arbitrary)
-    const float dropout_probability = 0.0F);
+    const float dropout_probability = 0.0F,
+    const std::optional<ttnn::Tensor>& gate =
+        std::nullopt);  // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, H, S, Dv)
 
 }  // namespace ttml::metal

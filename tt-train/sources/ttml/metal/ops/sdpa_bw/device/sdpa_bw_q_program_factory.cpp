@@ -31,10 +31,13 @@ constexpr uint32_t kKeyBufferIdx = 3U;
 constexpr uint32_t kValueBufferIdx = 4U;
 constexpr uint32_t kAttnMaskBufferIdx = 5U;
 constexpr uint32_t kIntermediatesBufferIdx = 6U;
+constexpr uint32_t kGateBufferIdx = 7U;
 
 // Writer runtime args
 constexpr uint32_t kGradQueryBufferIdx = 0;
 constexpr uint32_t kUScalerOutputBufferIdx = 1U;
+constexpr uint32_t kGradGateBufferIdx = 2U;
+constexpr uint32_t kGatedGradOutputBufferIdx = 3U;
 
 // Circular buffer indices
 constexpr auto kGradOutputCbIndex = tt::CBIndex::c_0;
@@ -52,6 +55,10 @@ constexpr auto kGradScoresCbIndex = tt::CBIndex::c_11;
 constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_12;
 constexpr auto kGradQueryCbIndex = tt::CBIndex::c_13;
 constexpr auto kUScalerOutputCbIndex = tt::CBIndex::c_14;
+constexpr auto kGateCbIndex = tt::CBIndex::c_15;                  // Input: gate G row
+constexpr auto kGradGateCbIndex = tt::CBIndex::c_16;              // Output: grad_gate = dY * Y * (1 - sigmoid(G))
+constexpr auto kGatedGradOutputCbIndex = tt::CBIndex::c_17;       // Output: gated dO to DRAM for KV kernel
+constexpr auto kGatedGradOutputLocalCbIndex = tt::CBIndex::c_18;  // Compute-local gated dO for dP matmul
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per Q row
@@ -59,6 +66,7 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kHasGateDefKey = "HAS_GATE";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward.
@@ -119,6 +127,9 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* value_buffer,
     const tt::tt_metal::Buffer* attn_mask_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
+    const tt::tt_metal::Buffer* gate_buffer,
+    const tt::tt_metal::Buffer* grad_gate_buffer,
+    const tt::tt_metal::Buffer* gated_grad_output_buffer,
     const tt::tt_metal::Buffer* grad_query_buffer,
     const tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
@@ -153,6 +164,7 @@ void assign_per_core_runtime_args(
                 value_buffer->address(),                                         // value buffer address
                 attn_mask_buffer != nullptr ? attn_mask_buffer->address() : 0U,  // mask buffer address
                 intermediates_buffer->address(),                                 // intermediates buffer address
+                gate_buffer != nullptr ? gate_buffer->address() : 0U,            // gate buffer address
                 num_rows_per_core,                                               // rows to process in this kernel
                 num_rows_written                                                 // starting row for this core
             });
@@ -163,10 +175,13 @@ void assign_per_core_runtime_args(
             kernels.writer,
             core,
             {
-                grad_query_buffer->address(),  // grad_query buffer address
-                u_scaler_buffer->address(),    // u_scaler output buffer address
-                num_rows_per_core,             // rows to process in this kernel
-                num_rows_written               // starting row for this core
+                grad_query_buffer->address(),                                    // grad_query buffer address
+                u_scaler_buffer->address(),                                      // u_scaler output buffer address
+                grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,  // grad_gate buffer address
+                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address()
+                                                    : 0U,  // gated dO buffer address
+                num_rows_per_core,                         // rows to process in this kernel
+                num_rows_written                           // starting row for this core
             });
 
         // Compute kernel runtime args - needed for causal mask to know global position
@@ -192,6 +207,9 @@ void assign_per_core_runtime_args_balanced(
     const tt::tt_metal::Buffer* key_buffer,
     const tt::tt_metal::Buffer* value_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
+    const tt::tt_metal::Buffer* gate_buffer,
+    const tt::tt_metal::Buffer* grad_gate_buffer,
+    const tt::tt_metal::Buffer* gated_grad_output_buffer,
     const tt::tt_metal::Buffer* grad_query_buffer,
     const tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
@@ -214,6 +232,7 @@ void assign_per_core_runtime_args_balanced(
                 value_buffer->address(),
                 0U,  // mask_addr unused for balanced causal
                 intermediates_buffer->address(),
+                gate_buffer != nullptr ? gate_buffer->address() : 0U,  // gate buffer address
                 num_pairs,
                 start_pair_idx,
             });
@@ -226,6 +245,9 @@ void assign_per_core_runtime_args_balanced(
             {
                 grad_query_buffer->address(),
                 u_scaler_buffer->address(),
+                grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,  // grad_gate buffer address
+                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address()
+                                                    : 0U,  // gated dO buffer address
                 num_pairs,
                 start_pair_idx,
             });
@@ -246,6 +268,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
     const auto& intermediates = tensor_args.intermediates;
+    const auto& gate = tensor_args.gate;
 
     auto* device = grad_output.device();
     tt::tt_metal::Program program{};
@@ -340,8 +363,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * vWt);
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    [[maybe_unused]] auto cb_query = create_circular_buffer(  // CBIndex::c_2
+        program,
+        all_cores,
+        kQueryCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        2 * qWt);
 
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
@@ -434,6 +462,24 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
+    if (args.has_gate) {
+        [[maybe_unused]] auto cb_gate =  // CBIndex::c_15
+            create_circular_buffer(
+                program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+
+        [[maybe_unused]] auto cb_grad_gate =  // CBIndex::c_16
+            create_circular_buffer(
+                program, all_cores, kGradGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+
+        [[maybe_unused]] auto cb_gated_grad_output =  // CBIndex::c_17
+            create_circular_buffer(
+                program, all_cores, kGatedGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+
+        [[maybe_unused]] auto cb_gated_grad_output_local =  // CBIndex::c_18
+            create_circular_buffer(
+                program, all_cores, kGatedGradOutputLocalCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
+    }
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -446,9 +492,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto* attn_mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
 
-    auto& [grad_query_output, u_scaler_output] = output;
+    auto* gate_buffer = args.has_gate ? gate.value().buffer() : nullptr;
+
+    auto& [grad_query_output, u_scaler_output, grad_gate_output, gated_grad_output_output] = output;
     auto* grad_query_buffer = grad_query_output.buffer();
     auto* u_scaler_buffer = u_scaler_output.buffer();
+    auto* grad_gate_buffer = args.has_gate ? grad_gate_output.value().buffer() : nullptr;
+    auto* gated_grad_output_buffer = args.has_gate ? gated_grad_output_output.value().buffer() : nullptr;
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -476,6 +526,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
 
+    // Gate: reader streams G, compute produces grad_gate + gated dO, writer flushes both
+    if (args.has_gate) {
+        reader_defines[kHasGateDefKey] = "1";
+        writer_defines[kHasGateDefKey] = "1";
+        compute_defines[kHasGateDefKey] = "1";
+    }
+
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
     const auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
@@ -498,6 +555,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
 
@@ -505,9 +563,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     std::vector<uint32_t> writer_compile_args = {
         qWt,  // 0: query width in tiles
         St,   // 1: sequence length in tiles
+        vWt,  // 2: V/dO width in tiles (grad_gate / gated dO rows)
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_gate_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(gated_grad_output_buffer).append_to(writer_compile_args);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
 
@@ -612,6 +673,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             key_buffer,
             value_buffer,
             intermediates_buffer,
+            gate_buffer,
+            grad_gate_buffer,
+            gated_grad_output_buffer,
             grad_query_buffer,
             u_scaler_buffer,
             num_cores,
@@ -628,6 +692,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             value_buffer,
             attn_mask_buffer,
             intermediates_buffer,
+            gate_buffer,
+            grad_gate_buffer,
+            gated_grad_output_buffer,
             grad_query_buffer,
             u_scaler_buffer,
             num_cores,
@@ -674,10 +741,14 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     const auto* intermediates_buffer = tensor_args.intermediates.buffer();
+    const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
 
-    auto& [grad_query_tensor, u_scaler_tensor] = tensor_return_value;
+    auto& [grad_query_tensor, u_scaler_tensor, grad_gate_tensor, gated_grad_output_tensor] = tensor_return_value;
     const auto* grad_query_buffer = grad_query_tensor.buffer();
     const auto* u_scaler_buffer = u_scaler_tensor.buffer();
+    const auto* grad_gate_buffer = grad_gate_tensor.has_value() ? grad_gate_tensor.value().buffer() : nullptr;
+    const auto* gated_grad_output_buffer =
+        gated_grad_output_tensor.has_value() ? gated_grad_output_tensor.value().buffer() : nullptr;
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
@@ -695,6 +766,7 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             runtime_args[kValueBufferIdx] = value_buffer->address();
             runtime_args[kAttnMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0U;
             runtime_args[kIntermediatesBufferIdx] = intermediates_buffer->address();
+            runtime_args[kGateBufferIdx] = gate_buffer != nullptr ? gate_buffer->address() : 0U;
         }
 
         // Update output buffers for writer kernel
@@ -702,6 +774,9 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kGradQueryBufferIdx] = grad_query_buffer->address();
             runtime_args[kUScalerOutputBufferIdx] = u_scaler_buffer->address();
+            runtime_args[kGradGateBufferIdx] = grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U;
+            runtime_args[kGatedGradOutputBufferIdx] =
+                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U;
         }
     }
 }
