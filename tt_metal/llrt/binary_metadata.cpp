@@ -56,8 +56,6 @@ BufRwInfo parse_buf_rw(const ElfFile& elf) {
 BinaryMetadata parse_binary_metadata(const ElfFile& elf) {
     BinaryMetadata md;
     md.buf_rw = parse_buf_rw(elf);
-    // Future (separate commit): fold ZoneMetaRegistry's .tt_zone_meta / .tt_zone_str harvest in here so it
-    // shares this same single ELF open instead of re-reading the file in llrt::get_risc_binary.
     return md;
 }
 

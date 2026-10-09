@@ -47,8 +47,7 @@ struct BufRwInfo {
 };
 
 // All host-side metadata harvested from one binary's ELF. Deliberately a bundle (not just BufRwInfo) so
-// other per-ELF metadata gathered at load time -- e.g. profiler zone names (.tt_zone_meta), today
-// re-opened separately by ZoneMetaRegistry -- can fold in here later and share the loader's one open.
+// other per-ELF metadata gathered at load time can fold in here and share the loader's one open.
 struct BinaryMetadata {
     BufRwInfo buf_rw;
 };
