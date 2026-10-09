@@ -742,7 +742,10 @@ def test_repeat_nd_sharded_output(shape, repeat_shape, layout, input_factory, ou
         pytest.param((1, 2, 64, 64), (1, 2, 1, 1), (1, 1, 32, 64), id="round_robin"),
     ],
 )
-def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, device):
+# The same ND config may also be passed as memory_config: it must be accepted even though the preallocated
+# tensor's memory_layout was normalized away from ND_SHARDED.
+@pytest.mark.parametrize("pass_memory_config", [False, True], ids=["prealloc_only", "with_memory_config"])
+def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, pass_memory_config, device):
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     expected = x.repeat(*repeat_shape)
@@ -755,10 +758,35 @@ def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape,
         memory_config=output_mem_config,
     )
 
-    result = ttnn.repeat(ttnn_input, list(repeat_shape), optional_output_tensor=out)
+    result = ttnn.repeat(
+        ttnn_input,
+        list(repeat_shape),
+        memory_config=output_mem_config if pass_memory_config else None,
+        optional_output_tensor=out,
+    )
 
     _assert_nd_output(result, output_mem_config)
     assert_equal(expected, ttnn.to_torch(out))
+
+
+def test_repeat_nd_memory_config_conflicts_with_preallocated_output_raises(device, expect_error):
+    """An explicit ND memory_config whose nd_shard_spec differs from the prealloc's must be rejected."""
+    x = torch.rand((1, 2, 64, 64), dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    out = ttnn.from_torch(
+        torch.zeros((1, 4, 64, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_nd_shard_config((1, 1, 64, 64), num_cores=3),
+    )
+
+    with expect_error(RuntimeError, "nd_shard_spec must match"):
+        ttnn.repeat(
+            ttnn_input,
+            [1, 2, 1, 1],
+            memory_config=_nd_shard_config((1, 1, 32, 64), num_cores=4),
+            optional_output_tensor=out,
+        )
 
 
 # TILE universal-I/O matrix: essential input × output routing paths.
