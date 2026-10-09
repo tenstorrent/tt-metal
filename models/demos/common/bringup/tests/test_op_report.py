@@ -7,7 +7,9 @@ Profiles the chunk at BRINGUP_OPREP_START (default the target's last chunk: seq 
 records, and the same layers at BRINGUP_OPREP_CONTEXT_START (default 0; "none" to skip) for the context-scaling
 section. Layers (BRINGUP_OPREP_LAYERS): "rep" (default) one representative layer per spec block type, weighted by the
 block type's layer count so totals are the full model's (op mode syncs after every op: the whole model is slow);
-"all"; or "lo-hi". Writes <repo>/generated/<model>/op_report{.json,.txt} and prints the text.
+"all"; or "lo-hi". BRINGUP_OPREP_RT=1: per-call device time from the program real-time profiler instead (no per-op
+syncs, no TT_METAL_DEVICE_PROFILER build; a program's time is its dispatch-side start to end, per chip). Writes
+<repo>/generated/<model>/op_report{.json,.txt} and prints the text.
 
     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 \\
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 BRINGUP_SPEC=<spec.yaml> \\
@@ -60,8 +62,10 @@ def test_op_report(mesh_device):
     import ttnn
     from models.demos.common.bringup.reference.prompt import tokens as prompt_tokens
 
-    for k, v in profiler.PROFILER_ENV.items():
-        assert os.environ.get(k) == v, f"set {k}={v}"
+    rt = os.environ.get("BRINGUP_OPREP_RT", "0") == "1"  # the program real-time profiler (no syncs, no profiler build)
+    if not rt:
+        for k, v in profiler.PROFILER_ENV.items():
+            assert os.environ.get(k) == v, f"set {k}={v}"
     seq, chunk = int(S.get("target.seq")), int(S.get("target.chunk"))
     start = int(os.environ.get("BRINGUP_OPREP_START", seq - chunk))
     ctx_env = os.environ.get("BRINGUP_OPREP_CONTEXT_START", "0")
@@ -83,11 +87,11 @@ def test_op_report(mesh_device):
     def profile_at(s0):
         run(s0)  # compile / warm this position's programs
         model.sync()
-        profiler.enable(mesh_device, ops=True, calls=True)
+        profiler.enable(mesh_device, ops=True, calls=True, rt=rt)
         try:
             run(s0)
             profiler.signpost("end")
-            return profiler.result()["calls"]
+            return profiler.finish_rt() if rt else profiler.result()["calls"]
         finally:
             profiler.disable()
 
