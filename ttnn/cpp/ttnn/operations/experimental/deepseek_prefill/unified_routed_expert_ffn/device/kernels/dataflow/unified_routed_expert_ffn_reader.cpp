@@ -324,6 +324,10 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
+    // The `start` page rides the counts broadcast too: it lands in cb_start_scratch at the
+    // same L1 address on every core, so no core issues its own start read.
+    const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+    const uint32_t start_page_size = start_acc.get_aligned_page_size();
     {
         MaybeDeviceZoneScope("rd_counts");
         // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
@@ -340,9 +344,10 @@ void kernel_main() {
         if (is_counts_reader) {
             noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
             noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
+            noc_read.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
             noc_read.async_read_barrier();
             if (counts_num_receivers > 0) {
-                // linked=true so the valid-sem multicast is ordered behind both data
+                // linked=true so the valid-sem multicast is ordered behind all three data
                 // multicasts on the same reserved path (as for the weight mcast).
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(counts_l1),
@@ -368,6 +373,18 @@ void kernel_main() {
                      .noc_y_end = cb_ny_end,
                      .addr = idx_l1},
                     /*linked=*/true);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(start_l1),
+                    MulticastEndpoint{},
+                    start_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = start_l1},
+                    /*linked=*/true);
                 noc.async_writes_flushed();
                 counts_valid_sem.set(1);
                 counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
@@ -388,16 +405,12 @@ void kernel_main() {
     const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1. x
-    // is the shared dispatched buffer; each expert's rows begin at
-    // start[global_id]. Indexed per expert in the loop below (must agree with
-    // the writer's row_offset_tiles so x is read and y is written to the same
+    // The `start` (= expert_region_offsets) page arrived with the counts broadcast
+    // above and stays resident. x is the shared dispatched buffer; each expert's rows
+    // begin at start[global_id]. Indexed per expert in the loop below (must agree
+    // with the writer's row_offset_tiles so x is read and y is written to the same
     // region).
     cb_start_scratch_obj.reserve_back(1);
-    const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
-    noc_read.async_read(
-        start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
-    noc_read.async_read_barrier();
     cb_start_scratch_obj.push_back(1);
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
 
