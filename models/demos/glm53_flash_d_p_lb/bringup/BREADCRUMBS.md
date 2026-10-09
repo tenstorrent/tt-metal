@@ -226,3 +226,16 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - All attention at HiFi4 (GLM_ATTN_FIDELITY=HiFi4; KDA already HiFi4): warm 56k prefill 7.66 -> 7.76 s, s4096 KV PCC
   within noise (kv_latent 0.96883 / 0.98505 vs 0.96876 / 0.98514, index_key 0.98929 / 0.99562 vs 0.98899 / 0.99550,
   final hidden 0.9465 vs 0.9460). The MLA / indexer HiFi2 bias (0.28%) does not reach the caches; kept at HiFi2.
+
+## Explicit matmul configs (2026-10-09), tt/mm_configs.py (GLM_MM_CONFIGS=0: ttnn auto)
+
+- tests/test_matmul_tune.py (one chip, every model matmul shape, math utilization vs the fidelity peak, fp32-truth
+  error): explicit configs beat the auto picks on every shape, identical numerics. 2D multicast with MiMo's rule (M over
+  the 10 grid rows, ceil(Nt / 11) N tiles per core, widest in0 block within L1) for every ttnn.linear (MLA kv_a / o_proj,
+  indexer, shared expert / MLP, q_a, router; KDA o_proj via _GlmKDA); minimal_matmul blockings for KDA in-proj (M4 K8 N4:
+  1.511 -> 1.260 ms, 91% of HiFi4) and MLA q_b. Shared expert gate + up fused into one N=512 matmul (2 x 0.297 ->
+  0.261 ms); its down projection writes bf16 when the bf16 reduce-scatter follows (output-write bound, K=256).
+- L1 budget 1.2 MB per core: 1.4 MB clashed with the model's other L1 buffers (the single-chip sweep has all of L1).
+- Warm 56k prefill 7.66 -> 7.42 s (7595 tok/s). Component tests: KDA attention / dense MLP / shared expert / q_a /
+  router pass. MLA attention component fails its norm gate (rel 0.017 > 0.012, norm ratio 0.98..0.99) with configs on
+  and off alike: HiFi2 (HiFi4 passes, rel 0.0044); attention HiFi4 does not move KV PCC (above), kept HiFi2.

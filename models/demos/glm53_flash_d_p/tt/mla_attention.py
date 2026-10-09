@@ -27,6 +27,7 @@ import torch
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, mm_config, replicate
+from models.demos.glm53_flash_d_p.tt.mm_configs import linear_config, minimal_config
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 MC = ttnn.DRAM_MEMORY_CONFIG
@@ -39,6 +40,8 @@ SDPA_MODE = os.environ.get("GLM_MLA_SDPA", "fork")
 # dtype of q, the per-head outputs and the o_proj output. bf16 (rounded) is unbiased; fp32 inputs to the next matmul are
 # read at TF32 precision, which shrinks the output by about 0.05% ("fp32" for comparison)
 MID_DTYPE = os.environ.get("GLM_MLA_MID", "bf16")
+# dtype of the 2D projection weights kv_a, q_b, o_proj (bf16 | bfp8; MiMo runs its projections on bfp8 weights)
+W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_MLA_WDTYPE", "bf16")]
 
 
 class TtMLA:
@@ -52,7 +55,9 @@ class TtMLA:
         self.mm = hifi4_config(fidelity=attn_fidelity())
         self.mid = ttnn.float32 if MID_DTYPE == "fp32" else ttnn.bfloat16
         self.max_seq = max_seq
-        up = lambda t: replicate(mesh, t.float().T.reshape(1, 1, t.shape[1], t.shape[0]).to(torch.bfloat16))  # noqa
+        up = lambda t: replicate(  # noqa: E731
+            mesh, t.float().T.reshape(1, 1, t.shape[1], t.shape[0]).to(torch.bfloat16), dtype=W_DTYPE
+        )
         self.w_kva = up(w["kv_a"])  # [4096, 512]
         self.kv_norm = TtRMSNorm(mesh, w["kv_a_norm"], cfg.rms_norm_eps)
         self.w_qb = up(w["q_b"])  # [1536, 64 * 256]
@@ -61,6 +66,7 @@ class TtMLA:
         w_uv = kv_b[:, self.dqk :].transpose(1, 2).reshape(1, self.nh, self.r, self.dv)
         self.w_uv = replicate(mesh, w_uv.contiguous().to(torch.bfloat16))
         self.w_o = up(w["o_proj"])  # [64 * 256, 4096]
+        self.qb_cfg = minimal_config(mesh, 2, 8, 8, 1, 4)
         self.cache = latent_cache(mesh, cfg, max_seq)
 
     def bind_cache(self, cache: ttnn.Tensor) -> None:
@@ -76,7 +82,14 @@ class TtMLA:
 
     def _write_latent(self, x: ttnn.Tensor, start: int) -> None:
         s = x.shape[-2]
-        lat = ttnn.linear(x, self.w_kva, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        lat = ttnn.linear(
+            x,
+            self.w_kva,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.w_kva, ttnn.float32),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         ln = self.kv_norm(lat)
         ttnn.deallocate(lat)
         lb = ttnn.typecast(ln, ttnn.bfloat16, memory_config=MC)
@@ -98,7 +111,14 @@ class TtMLA:
         self._write_latent(x, start)
 
         qr = q_resid if split else self._local_rows(q_resid)
-        q = ttnn.linear(qr, self.w_qb, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        q = ttnn.experimental.minimal_matmul(  # 0.271 -> 0.228 ms (tests/test_matmul_tune.py), same error
+            qr,
+            self.w_qb,
+            config=self.qb_cfg,
+            dtype=self.mid,
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         if qr is not q_resid:
             ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -139,7 +159,14 @@ class TtMLA:
         ttnn.deallocate(ot)
         oc = self._concat_heads(oh)  # [1, 1, S/4, 64 * 256]
         ttnn.deallocate(oh)
-        y = ttnn.linear(oc, self.w_o, dtype=self.mid, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        y = ttnn.linear(
+            oc,
+            self.w_o,
+            dtype=self.mid,
+            program_config=linear_config(oc, self.w_o, self.mid),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         ttnn.deallocate(oc)
         if y.dtype != ttnn.bfloat16:
             yb = ttnn.typecast(y, ttnn.bfloat16, memory_config=MC)
