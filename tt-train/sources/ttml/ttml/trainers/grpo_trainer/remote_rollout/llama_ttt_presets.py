@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Llama-family presets (optimizations + stop/pad IDs) for the family-agnostic
-:mod:`ttt_generation_worker`. Consulted by the launcher, not the worker."""
+:mod:`ttt_rollout_sampler`. Consulted by the launcher, not the sampler."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def bf16_attn_bfp8_mlp_optimizations(num_decoders: int, model_name: str) -> Any:
 
 def llama_stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
     """Load the HF tokenizer for ``model_id`` to derive ``(stop_token_ids,
-    pad_token_id)`` for :class:`TttGenerationWorker`.
+    pad_token_id)`` for :class:`TTTRolloutSampler`.
 
     Call with the same ``model_id`` as the ttml side so the IDs stay consistent
     with the peer tokenizer.

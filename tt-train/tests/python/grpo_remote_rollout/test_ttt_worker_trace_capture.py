@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Regression test for TttGenerationWorker trace-capture warmup.
+"""Regression test for TTTRolloutSampler trace-capture warmup.
 
-TttGenerationWorker.generate() must set ``warmup_prefill=True`` when it
+TTTRolloutSampler.generate_tokens() must set ``warmup_prefill=True`` when it
 calls ``Generator.prefill_forward_text``. If it does not, the first
-``generate(..., enable_trace=True)`` call might raise this TT_FATAL from
+``generate_tokens(..., enable_trace=True)`` call might raise this TT_FATAL from
 ``tt_metal/distributed/mesh_workload.cpp``:
 
     Cannot load new binaries during trace capture. This program is not
@@ -16,7 +16,7 @@ the program cache when the decode trace capture opens. ``warmup_prefill=
 True`` runs ``warmup_model_prefill`` before the capture, which puts the
 kernels in the cache.
 
-This test does one traced ``generate()`` call and shows that it does
+This test does one traced ``generate_tokens()`` call and shows that it does
 not raise. Uses dummy weights, so no HF token or weight download is
 needed.
 
@@ -58,7 +58,7 @@ def test_traced_generate_does_not_fatal_on_first_call():
         prompt = list(range(1, PROMPT_LEN + 1))
 
         try:
-            completions = completer.generate(
+            completions = completer.generate_tokens(
                 [prompt],
                 max_new_tokens=MAX_NEW_TOKENS,
                 enable_trace=True,
