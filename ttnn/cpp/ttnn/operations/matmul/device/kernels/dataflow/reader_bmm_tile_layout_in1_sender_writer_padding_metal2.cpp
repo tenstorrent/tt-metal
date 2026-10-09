@@ -324,6 +324,20 @@ void kernel_main() {
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
+#if !defined(ENABLE_PREFETCHER_PIPE) && !defined(ENABLE_GLOBAL_CB) && !defined(IN1_SHARDED) && \
+    !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
+    // Whether the current K iteration's interleaved in1 block was already requested, and its L1 address.
+    bool in1_block_requested = false;
+    uint32_t in1_block_address = 0;
+#ifndef FUSE_OP_ALL_GATHER
+    // Within a K loop the next interleaved in1 block is read before the current one is multicast when its slot is
+    // already free, so its DRAM reads overlap the wait for the receivers and the multicast. If compute still holds the
+    // slot, waiting for it would hold back the multicast, so the next block is read after the multicast instead. A
+    // fused all-gather picks each K block only when its turn comes, so it keeps reading every block in its iteration.
+#define IN1_PREFETCH_NEXT_BLOCK
+#endif  // FUSE_OP_ALL_GATHER
+#endif  // interleaved in1
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
 
@@ -503,33 +517,54 @@ void kernel_main() {
                         noc.async_read_barrier();
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
-                        dfb_in1.reserve_back(in1_block_num_tiles);
-                        uint32_t in1_write_offset = 0;
-                        const uint64_t in1_start_address =
-                            dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
-
-                        // Copy in1 block into the buffer, as the default kernel
-                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
-                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
-                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc.async_read(
-                                        s1,
-                                        dfb_in1,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = in1_write_offset});
+                        // Issues the reads of the block starting at block_start_tile_id into write_address, without
+                        // waiting for them.
+                        auto issue_in1_block_reads = [&](uint32_t block_start_tile_id, uint32_t write_address) {
+                            uint32_t in1_tensor_row_start_tile_id = block_start_tile_id;
+                            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                    if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                        noc.async_read(
+                                            s1,
+                                            CoreLocalMem<uint32_t>(write_address),
+                                            in1_single_tile_size_bytes,
+                                            {.page_id = in1_tensor_tile_id},
+                                            {});
+                                    }
+                                    write_address += in1_aligned_tile_size_bytes;
+                                    in1_tensor_tile_id += in1_tensor_stride_w;
                                 }
-                                in1_write_offset += in1_aligned_tile_size_bytes;
-                                in1_tensor_tile_id += in1_tensor_stride_w;
+                                in1_tensor_row_start_tile_id += in1_tensor_stride_h;
                             }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                        };
+                        // Reserves the next in1 slot and starts reading the block into it.
+                        auto request_in1_block = [&](uint32_t block_start_tile_id) {
+                            dfb_in1.reserve_back(in1_block_num_tiles);
+                            in1_block_address = dfb_in1.get_write_ptr();
+                            issue_in1_block_reads(block_start_tile_id, in1_block_address);
+                        };
+                        if (!in1_block_requested) {
+                            request_in1_block(in1_tensor_current_inner_dim_block_start_tile_id);
                         }
+                        // copy start address of block, to be used for mcasting
+                        const uint64_t in1_start_address = in1_block_address;
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
+#ifdef IN1_PREFETCH_NEXT_BLOCK
+                        // Hand the block to compute before multicasting it, which frees its predecessor's slot sooner.
+                        dfb_in1.push_back(in1_block_num_tiles);
+                        const bool has_next_in1_block = block + 1 < num_blocks_inner_dim;
+                        in1_block_requested =
+                            has_next_in1_block && dfb_in1.pages_reservable_at_back(in1_block_num_tiles);
+                        if (in1_block_requested) {
+                            // The free slot last held the previous block: its multicast must have left L1.
+                            noc.async_writes_flushed();
+                            request_in1_block(in1_tensor_current_inner_dim_block_start_tile_id);
+                        }
+#endif  // IN1_PREFETCH_NEXT_BLOCK
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
@@ -584,9 +619,14 @@ void kernel_main() {
                         if (block >= 1) {
                             pipe.pop_front(1, noc);
                         }
+#elif defined(IN1_PREFETCH_NEXT_BLOCK)
+                        if (has_next_in1_block && !in1_block_requested) {
+                            request_in1_block(in1_tensor_current_inner_dim_block_start_tile_id);
+                            in1_block_requested = true;
+                        }
 #elif !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_PREFETCH_NEXT_BLOCK / IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
