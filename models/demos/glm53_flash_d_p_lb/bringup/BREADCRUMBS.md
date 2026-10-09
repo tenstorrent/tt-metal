@@ -266,3 +266,10 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   kv_latent 0.96918 / 0.98528, index_key 0.98931 / 0.99575, kda_recurrent 0.97490 / 0.99403, kda_conv 0.96516 /
   0.99398 (unified 0.96928 / 0.98530, 0.98870 / 0.99533, 0.97420 / 0.99374, 0.96762 / 0.99431); final hidden 0.9463;
   56k top1 0.8673. Warm 56k prefill 7.09 s (from 10.74 s at the start of the day; unified 13.77 s).
+- MLA per-head absorb matmuls ([64, 640, 256] x [64, 256, 512] and [64, 640, 512] x [64, 512, 256], 5% math):
+  tests/test_matmul_tune.py::test_bmm_tune finds MatmulMultiCoreReuseProgramConfig 2.3x / 3.9x faster on one chip
+  (0.620 -> 0.268, 0.905 -> 0.231 ms; correct, rel 4.5e-3). In the model: the best blocks (per_core_M 10 / 20,
+  ~1.5 MB CBs) clash with L1 buffers at 1.46 MB; the 1.2 MB-budget blocks (5 / 10) run but give WRONG results
+  (last-chunk top1 0.41 vs 0.65; GLM_MLA_BMM_L1=0 restores 0.6519). Not used - suspect the batched multi-core-reuse
+  path with more blocks (256) than cores (110); to investigate before retrying.
+- Warm-prefill noise: the same code measured 7.09 and 7.40 s on different runs today; compare changes back to back.
