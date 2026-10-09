@@ -33,10 +33,14 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
  * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
  *
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
- * @note The ELWADD below reads the Src zero-substitution flag as it consumes the transposed SrcB rows (MOVD2B
- *       only stages them; see the reader list in cmath_common.h). At the operand default it flushes any datum
- *       whose Src low byte is zero: a zero-exponent float (-0.0 loses its sign) or an integer datum whose low
- *       magnitude byte is zero. Run with the flag in PRESERVE, which @ref _llk_math_reduce_ asserts.
+ * @note Run with the Src zero-substitution flag in PRESERVE, which @ref _llk_math_reduce_ asserts, so the
+ *       transpose moves its datums unmodified, as it did when the flag was toggled around it. At the operand
+ *       default, the MOVD2B/TRNSPSRCB/ELWADD sequence flushes a datum whose Src exponent field is zero. The WH ISA
+ *       models show none of the three reading the flag, but silicon does: Float16 -> Float32 MAX/REDUCE_ROW gives
+ *       different output at the two values. For the supported formats the only such datums are +-0 and
+ *       denormals, which are already flushed before the transpose (-0.0 loses its sign on unpack), so the output
+ *       is bit-identical at either value. The integer path cannot hit it: a nonzero INT8 datum has exponent
+ *       field 16.
  */
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()

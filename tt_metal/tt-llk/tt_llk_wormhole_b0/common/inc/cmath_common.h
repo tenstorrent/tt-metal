@@ -40,12 +40,13 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 // RMW). src_zero_flag_hw caches that physical value (0xff = unknown, only at power-on).
 //
 // What each op wants:
-//   FP compute (matmul / eltwise-binary / reduce) and format reconfigs -> the
+//   FP compute (matmul / eltwise-binary / reduce except MAX/REDUCE_ROW) and format reconfigs -> the
 //     operand-driven value (keep for the int formats that require it, flush otherwise; see
 //     ckernel::requires_disabled_src_zero_flag). The cached operand formats feed this.
-//   Data-movement (datacopy / copy_init / transpose_dest) and MAX/REDUCE_ROW reduce, whose per-face-row
-//     SrcB transpose ends in an ELWADD, held from its init to its uninit -> keep (1), so bf16 -0.0
-//     (which the SFPU sign ops read back out of DEST) and 16b/32b int datums pass through faithfully.
+//   Data-movement (datacopy / copy_init / transpose_dest) -> keep (1), so bf16 -0.0 (which the SFPU
+//     sign ops read back out of DEST) and 16b/32b int datums pass through faithfully.
+//   MAX/REDUCE_ROW reduce -> keep (1), held from its init to its uninit, so its per-face-row SrcB
+//     transpose moves datums unmodified (see reduce_row_perform_transpose for what that protects).
 //
 // Canonical (non-experimental) LLKs only touch the flag from math-thread code, so the tracked value
 // stays coherent. A raw cfg write that bypasses the setter must call _invalidate_src_zero_flag_state_().

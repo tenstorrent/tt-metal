@@ -262,10 +262,11 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
 
     _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 
-    // The reduce runs on the FPU pool (GMPOOL). Restore the operand-driven zero-flag baseline so a
-    // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it. The standard
-    // _llk_math_reduce_init_ does the same for every reduce except MAX/REDUCE_ROW, which holds PRESERVE
-    // for its ELWADD transpose.
+    // Restore the operand-driven zero-flag baseline so a preceding datacopy/copy_init that left PRESERVE
+    // (keep denormals) does not carry into this op. GMPOOL does not read the flag; the reader here is the
+    // MOVB2D write-back of each transposed row, which runs at this default with a 16-bit DEST (the fp32 DEST
+    // path switches to PRESERVE around its hi/lo16 transpose in execute). Unlike this op, the standard
+    // MAX/REDUCE_ROW (_llk_math_reduce_init_) holds PRESERVE for its transpose.
     math::_configure_default_zero_flag_state_();
 }
 

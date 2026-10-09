@@ -89,8 +89,12 @@ ALWI void reduce_init(
  * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
  * by the latest reduce_init call, which may lead to incorrect packing behavior in subsequent operations.
  *
+ * On Wormhole it also returns the Src zero-substitution flag to the operand-driven default. A MAX reduce
+ * across rows (Reduce::R) holds that flag in its keep state from reduce_init until this call, so an op
+ * whose init does not set the flag itself (e.g. fast_tilize) would otherwise inherit it.
+ *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
- * as a part of tt-metal#22904.
+ * as a part of tt-metal#22904. Removing it needs a replacement for the Wormhole zero-flag restore.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -109,9 +113,8 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #elif defined(ARCH_BLACKHOLE)
     MATH((llk_math_reduce_uninit()));
 #else
-    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-    // See _llk_math_reduce_init_ for more details
+    // Returns the Src zero-substitution flag, which MAX/REDUCE_ROW holds in PRESERVE from reduce_init,
+    // to the operand-driven default (see _llk_math_reduce_uninit_).
     MATH((llk_math_reduce_uninit(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
