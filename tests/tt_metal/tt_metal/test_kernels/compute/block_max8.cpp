@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "block_max8_test_config.h"
 #include "api/compute/common.h"
 #include "api/compute/experimental/block_max8.h"
 #include "api/compute/experimental/pack_rows_to_addr.h"
@@ -11,12 +12,11 @@
 /** Exercise the public unary API and compact row pack with eight occupied DST slots.
  * Other slots use ordinary tile packing after restoring pack state. Thirteen
  * acquisitions visit masking boundaries and repeatedly reuse both DST halves.
+ * Dirty ADDR_MOD_7 before each init to verify that fused-op state is reset.
  */
 void kernel_main() {
     constexpr uint32_t count = get_compile_time_arg_val(0);
-    constexpr uint32_t slots = 8;
-    constexpr uint32_t valid_counts[] = {0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024};
-    constexpr uint32_t dst_indices[] = {0, 3, 7};
+    using namespace block_max8_test;
     constexpr uint32_t input = tt::CBIndex::c_0;
     constexpr uint32_t output = tt::CBIndex::c_16;
     CircularBuffer in(input);
@@ -25,18 +25,19 @@ void kernel_main() {
     copy_init(input);
     for (uint32_t tile = 0; tile < count; tile += slots) {
         const uint32_t batch = tile / slots;
-        const uint32_t dst = dst_indices[batch % 3];
+        const uint32_t dst = dst_indices[batch % dst_index_count];
         in.wait_front(slots);
         out.reserve_back(slots);
         tile_regs_acquire();
         for (uint32_t slot = 0; slot < slots; ++slot) {
             copy_tile(input, slot, slot);
         }
+        MATH((addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7)));
         block_max8_init();
         block_max8(dst, valid_counts[batch]);
         tile_regs_commit();
         tile_regs_wait();
-        pack_rows_to_addr_init(8);
+        pack_rows_to_addr_init(result_rows);
         PACK((pack_rows_to_addr(
             dst, get_local_cb_interface(output).fifo_wr_ptr + dst * get_local_cb_interface(output).fifo_page_size)));
         pack_rows_to_addr_uninit();

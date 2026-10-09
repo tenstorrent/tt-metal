@@ -76,7 +76,13 @@ inline sfpi::vFloat load_masked(std::uint32_t band, std::uint32_t valid_scores)
  * @brief Retain the pairwise maximum in EVEN and use ODD as scratch afterward.
  *
  * SFPSWAP writes the maximum to its first source register and the minimum
- * to its second. SFPNOP supplies Blackhole's required idle SFPU cycle.
+ * to its second. Blackhole auto-stalls if the next SFPU instruction is not
+ * SFPNOP. Keeping the NOP takes two cycles instead of three; it is a scheduling
+ * optimization, not a correctness requirement for this non-macro sequence.
+ * See the Blackhole ISA SFPSWAP instruction-scheduling section:
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSWAP.md#instruction-scheduling
+ * @tparam EVEN: Working LREG receiving the maximum.
+ * @tparam ODD: Scratch LREG receiving the minimum.
  */
 template <std::uint32_t EVEN, std::uint32_t ODD>
 inline void max_pair()
@@ -101,8 +107,12 @@ inline void max_four_pairs()
 /**
  * @brief Rotate SRC right by one instance into DST without mixing physical lanes.
  *
- * The source may equal the destination. SFPNOP supplies Blackhole's required
- * idle SFPU cycle after the shuffle.
+ * The source may equal the destination. Blackhole auto-stalls after SHFLROR1
+ * if another SFPU instruction follows. Keeping SFPNOP takes two cycles instead
+ * of three, as described in the Blackhole ISA instruction-scheduling section:
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSHFT2.md#instruction-scheduling
+ * @tparam SRC: Source LREG.
+ * @tparam DST: Destination LREG.
  */
 template <std::uint32_t SRC, std::uint32_t DST>
 inline void shuffle_right_one()
@@ -274,9 +284,9 @@ inline void _calculate_block_max8_(std::uint32_t valid_scores)
     for (std::uint32_t band = 0; band < TILE_R_DIM / 4; ++band)
     {
         const std::uint32_t address = block_max8::face_row_address(band);
-        const std::uint32_t packed  = (band / 4) * 4;
-        block_max8::compact_row_band<1>(address, packed + 2, band % 4);
-        block_max8::compact_row_band<0>(address, packed, band % 4);
+        const std::uint32_t dst_address = (band / 4) * 4;
+        block_max8::compact_row_band<1>(address, dst_address + 2, band % 4);
+        block_max8::compact_row_band<0>(address, dst_address, band % 4);
     }
 }
 

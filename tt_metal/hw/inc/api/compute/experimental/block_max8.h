@@ -29,7 +29,10 @@ ALWI void block_max8_init() { MATH((llk_math_block_max8_init<DST_ACCUM_MODE>()))
  * pooling. The first eight physical DST rows contain the result; the original
  * scores and the rest of the tile are not preserved. Pack using the existing
  * row-pack compute API configured for eight rows.
- * @param dst_index Runtime tile index in the acquired BF16 DST half.
+ * Use BF16 DST with SyncHalf throughout the call; runtime FP32 accumulation
+ * and full-DST synchronization are unsupported. Values outside the documented
+ * argument ranges are unsupported; release builds do not validate or clamp them.
+ * @param dst_index Runtime tile index in the acquired BF16 DST half (0 through 7).
  * @param valid_scores Valid row-major prefix length, from zero through 1024; defaults to the full tile.
  */
 ALWI void block_max8(uint32_t dst_index, uint32_t valid_scores = TILE_R_DIM * TILE_C_DIM) {

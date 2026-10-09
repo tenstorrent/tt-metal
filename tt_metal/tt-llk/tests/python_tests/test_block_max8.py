@@ -22,17 +22,21 @@ from tt_llk_harness import (
 
 @dataclass
 class ValidScores(params.RuntimeParameter):
-    """Pass a tile-local valid prefix through the harness runtime parameter block."""
+    """Pass the valid prefix and optional DST sign-bit probe to the driver."""
 
     valid_scores: int
+    inject_negative_zero: int
 
     def convert_to_cpp(self):
         """Provide the equivalent constant for harness template mode."""
-        return f"constexpr unsigned VALID_SCORES = {self.valid_scores};"
+        return (
+            f"constexpr unsigned VALID_SCORES = {self.valid_scores};"
+            f"constexpr unsigned INJECT_NEGATIVE_ZERO = {self.inject_negative_zero};"
+        )
 
     def convert_to_struct_fields(self):
-        """Serialize a single unsigned runtime argument."""
-        return "unsigned VALID_SCORES;", "I"
+        """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
+        return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
 
 
 @blackhole_only
@@ -40,13 +44,19 @@ class ValidScores(params.RuntimeParameter):
 @pytest.mark.parametrize(
     "valid", [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
 )
-@pytest.mark.parametrize("pattern", ["random", "winners", "fractional"])
+@pytest.mark.parametrize(
+    "pattern", ["random", "winners", "fractional", "negative_zero"]
+)
 def test_block_max8(dst_index, valid, pattern):
     """Check all pooled blocks and preserve every other tile in both DST halves.
 
     Three batches reuse the first half after exercising the second. Directed
-    winners cover every position within each eight-score block. Invalid tails
-    contain large positive values so masking omissions cannot pass accidentally.
+    winners cover every position within each eight-score block. Ordinary patterns
+    put large positive values in invalid tails to detect masking omissions.
+    The negative-zero pattern is injected directly into DST because the input
+    unpack/datacopy path can canonicalize its sign before the SFPU sees it.
+    Exact negative-zero output bits are encoded as -1 in DST before packing,
+    which otherwise canonicalizes zeros; positive zero cannot pass this probe.
     """
     generator = torch.Generator().manual_seed(4869)
     logical = torch.randint(-256, 0, (24, 32, 32), generator=generator).bfloat16()
@@ -62,11 +72,15 @@ def test_block_max8(dst_index, valid, pattern):
         )
         targets[:, 1, :] = float("-inf")
         targets[:, 2, 0] = float("inf")
+    elif pattern == "negative_zero":
+        targets.fill_(-0.0)
     targets.reshape(3, 1024)[:, valid:] = 2048
     logical[dst_index::8] = targets.reshape(3, 32, 32)
     masked = targets.reshape(3, 1024).clone()
     masked[:, valid:] = float("-inf")
     expected = masked.reshape(3, 128, 8).amax(-1)
+    if pattern == "negative_zero":
+        expected[expected.view(torch.int16) == -32768] = -1.0
     src = tilize_block(
         logical.reshape(-1), [24 * 32, 32], DataFormat.Float16_b
     ).flatten()
@@ -77,7 +91,7 @@ def test_block_max8(dst_index, valid, pattern):
         runtimes=[
             params.TILE_COUNT(24),
             params.DEST_INDEX(dst_index),
-            ValidScores(valid),
+            ValidScores(valid, int(pattern == "negative_zero")),
         ],
         variant_stimuli=StimuliConfig(
             src,
@@ -96,7 +110,7 @@ def test_block_max8(dst_index, valid, pattern):
             3, 8, 1024
         )
         assert torch.equal(
-            actual[:, dst_index, :128], expected
+            actual[:, dst_index, :128].view(torch.int16), expected.view(torch.int16)
         ), "Pooled values or compacted order differ"
         untouched = [i for i in range(8) if i != dst_index]
         assert torch.equal(

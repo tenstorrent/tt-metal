@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -11,22 +10,22 @@
 #include <tt-metalium/constants.hpp>
 #include "llk_device_fixture.hpp"
 #include "single_core_compute_runners.hpp"
+#include "tests/tt_metal/tt_metal/test_kernels/compute/block_max8_test_config.h"
 
 namespace tt::tt_metal {
 
 TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservation) {
-    constexpr std::array<uint32_t, 13> valid_counts{0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024};
-    constexpr std::array<uint32_t, 3> dst_indices{0, 3, 7};
-    constexpr uint32_t slots = 8;
+    using namespace block_max8_test;
+    constexpr uint32_t bf16_per_word = sizeof(uint32_t) / sizeof(bfloat16);
     constexpr uint32_t tile_size = tt::constants::TILE_HW;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
-    constexpr uint32_t tiles = valid_counts.size() * slots;
+    constexpr uint32_t tiles = batches * slots;
     std::vector<bfloat16> input(tiles * tile_size);
     auto expected = input;
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         const uint32_t batch = tile / slots;
-        const uint32_t dst = dst_indices[batch % dst_indices.size()];
+        const uint32_t dst = dst_indices[batch % dst_index_count];
         float maximum = -std::numeric_limits<float>::infinity();
         for (uint32_t i = 0; i < tile_size; ++i) {
             const uint32_t row = i / tile_width;
@@ -43,8 +42,8 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
                 if (i < valid_counts[batch]) {
                     maximum = std::max(maximum, value);
                 }
-                if (i % 8 == 7) {
-                    expected[tile * tile_size + i / 8] = bfloat16(maximum);
+                if (i % block_size == block_size - 1) {
+                    expected[tile * tile_size + i / block_size] = bfloat16(maximum);
                     maximum = -std::numeric_limits<float>::infinity();
                 }
             }
@@ -64,10 +63,11 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
             slots);
         ASSERT_EQ(actual.size(), golden.size());
         for (uint32_t tile = 0; tile < tiles; ++tile) {
-            const auto dst = dst_indices[(tile / slots) % dst_indices.size()];
-            const uint32_t words = tile % slots == dst ? tile_size / 8 / 2 : tile_size / 2;
+            const auto dst = dst_indices[(tile / slots) % dst_index_count];
+            const uint32_t words =
+                tile % slots == dst ? tile_size / block_size / bf16_per_word : tile_size / bf16_per_word;
             for (uint32_t word = 0; word < words; ++word) {
-                const auto offset = tile * tile_size / 2 + word;
+                const auto offset = tile * tile_size / bf16_per_word + word;
                 EXPECT_EQ(actual[offset], golden[offset])
                     << "repeat=" << repeat << " tile=" << tile << " word=" << word;
             }
