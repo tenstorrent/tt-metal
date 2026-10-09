@@ -20,8 +20,10 @@ using namespace ckernel::packer;
 /**
  * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
  *
- * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * Programs ADDR_MOD_0/1/2 with the src Y and Z increment/clear patterns the pack MOP relies
  * on to traverse the destination register and step through faces for the given layout.
+ * The dest (channel-1) counters are left alone: output placement comes from L1_Dest_addr and
+ * the packer's own write pointer, and channel-1 strides are zero outside fast-untilize.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  */
@@ -30,47 +32,42 @@ inline void _llk_pack_configure_addrmod_()
 {
     if constexpr (pack_mode == PackMode::Untilize)
     {
-        /*  Y src & Y dest inc by 1 to give strided increments:
+        /*  Y src inc by 1 to give strided increments:
             Rows: 0, 16, 1, 17, 2, 18, ........ 15, 31
         */
-        addr_mod_pack_t {.y_src = {.incr = 1}, .y_dst = {.incr = 1}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_0);
+        addr_mod_pack_t {.y_src = {.incr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
 
         /* Increment Faces by 2 to give next 2 faces:
             Rows: 32, 48, 33, 49, 34, 50........47, 63
         */
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}, .z_dst = {.incr = 0}}.set(ADDR_MOD_1);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_1);
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}, .z_dst = {.incr = 0, .clr = 1}}.set(
-            ADDR_MOD_2);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_2);
     }
     else if constexpr (pack_mode == PackMode::Tilize)
     {
-        addr_mod_pack_t {.y_src = {.incr = 4}, .y_dst = {.incr = 2}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_0);
+        addr_mod_pack_t {.y_src = {.incr = 4}, .z_src = {.incr = 0}}.set(ADDR_MOD_0);
 
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_1);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0}}.set(ADDR_MOD_1);
 
         // Increment faces by 2 (jump 2 dest address 32)
-        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}, .z_dst = {.incr = 0}}.set(ADDR_MOD_2);
+        addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
     }
     else
     {
         addr_mod_pack_t {
             .y_src = {.incr = 4},
-            .y_dst = {.incr = 4},
         }
             .set(ADDR_MOD_0);
 
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 0, .clr = 1, .cr = 0},
             .z_src = {.incr = 0, .clr = 1},
-            .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_1);
 
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 4, .clr = 0, .cr = 0},
             .z_src = {.incr = 1, .clr = 0},
         }
             .set(ADDR_MOD_2);
@@ -189,7 +186,6 @@ inline void _llk_pack_mop_config_(
                     p_pacr::NO_CTXT_CTRL,
                     0,
                     1));
-            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
             tmp.program();
             return;
         }
@@ -297,8 +293,6 @@ inline void _llk_pack_mop_config_(
             p_pacr::NO_CTXT_CTRL,
             0,
             1));
-
-        tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
 
         tmp.program();
     }
