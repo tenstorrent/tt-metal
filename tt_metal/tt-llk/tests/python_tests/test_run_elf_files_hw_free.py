@@ -2,13 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hardware-free test of TestConfig.run_elf_files and its TRISC image cache.
-
-The device calls are stubbed and recorded. The cache (LAST_LOADED_ELFS) must name a
-variant only while all of that variant's ELFs are on the core: a variant with a
-missing thread ELF is refused before the core is touched, and a load that fails part
-way makes the next run load every thread again, so no core starts on the code a
-previous variant left in a thread's memory.
+"""Hardware-free test of TestConfig.run_elf_files with stubbed device calls: LAST_LOADED_ELFS names a
+variant only while all its ELFs are on the core, so no core starts on code a previous variant left.
 """
 
 from pathlib import Path
@@ -109,7 +104,6 @@ def test_complete_variant_is_loaded_once_and_started_every_run(core):
 
 
 def test_variant_without_a_thread_elf_is_refused_on_every_node(core):
-    # Two nodes of one variant whose pack thread did not compile
     variant = _variant(core, "a", threads=["unpack", "math"])
     for _ in range(2):
         with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
