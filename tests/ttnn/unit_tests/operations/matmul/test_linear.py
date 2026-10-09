@@ -1665,7 +1665,9 @@ def test_linear_batched_reuse_fused_bias_program_cache(device):
     assert_with_pcc(torch.matmul(torch_a, torch_b) + torch_biases[1], ttnn.to_torch(out1), 0.9997)
 
 
-def _in0_column_window_config(per_core_M, per_core_N, in0_block_w, activation=None):
+def _in0_column_window_config(
+    per_core_M, per_core_N, in0_block_w, activation=None, *, fuse_batch=True, transpose_mcast=False
+):
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
         in0_block_w=in0_block_w,
@@ -1673,9 +1675,9 @@ def _in0_column_window_config(per_core_M, per_core_N, in0_block_w, activation=No
         out_subblock_w=2,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        transpose_mcast=False,
+        transpose_mcast=transpose_mcast,
         fused_activation=activation,
-        fuse_batch=True,
+        fuse_batch=fuse_batch,
     )
 
 
@@ -1699,6 +1701,40 @@ def test_linear_in0_column_offset(device, offset, in0_memory_config):
     expected = ttnn.linear(tt_window, tt_weight, bias=tt_bias, program_config=config)
     actual = ttnn.linear(tt_wide, tt_weight, bias=tt_bias, program_config=config, in0_column_offset=offset)
     assert tuple(actual.shape) == (1, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
+@pytest.mark.parametrize(
+    "shape,width,offset,fuse_batch,transpose_mcast",
+    [
+        ((2, 1, 128), 384, 128, False, False),
+        ((2, 1, 128), 384, 256, True, False),
+        ((1, 1, 256), 500, 352, True, False),
+        ((1, 1, 256), 512, 96, True, True),
+    ],
+    ids=["batched", "batched-fused", "unaligned-a-width", "transpose-mcast"],
+)
+def test_linear_in0_column_offset_layouts(device, shape, width, offset, fuse_batch, transpose_mcast):
+    """Batched A (the in0 batch stride), A with a non-tile-aligned width, and a transposed multicast grid."""
+    K, N = 128, 256
+    batch, channels, M = shape
+    torch.manual_seed(0)
+    wide = torch.randn(batch, channels, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_window, tt_weight = (
+        to_device(wide),
+        to_device(wide[..., offset : offset + K].contiguous()),
+        to_device(weight),
+    )
+    # The 4x4 grid splits A's row tiles (per batch unless fused) and B's column tiles four ways.
+    row_tiles = (batch * channels * M if fuse_batch else M) // 32
+    config = _in0_column_window_config(
+        row_tiles // 4, N // 32 // 4, 2, fuse_batch=fuse_batch, transpose_mcast=transpose_mcast
+    )
+    expected = ttnn.linear(tt_window, tt_weight, program_config=config)
+    actual = ttnn.linear(tt_wide, tt_weight, program_config=config, in0_column_offset=offset)
+    assert tuple(actual.shape) == (batch, channels, M, N)
     assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
 
 
