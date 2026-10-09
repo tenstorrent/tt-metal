@@ -1,13 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""qwen_q_prep (custom_ops/qwen_q_prep) against the chain it replaces, TtLlamaAttention._qwen_local_q_prep.
+"""qwen_q_prep (custom_ops/qwen_q_prep) against the stock-op chain it replaces,
+TtLlamaAttention._qwen_local_q_prep_stock.
 
-The reference runs the production helper itself (_qwen_local_q_setup + _qwen_local_q_prep from
+The reference runs the production stock helper (_qwen_local_q_setup + _qwen_local_q_prep_stock from
 llama_attention.py, bound to a stub that carries only the attributes they read) with a real
-models.common.rmsnorm.RMSNorm built the way llama_attention.py builds q_norm. Both paths update their own
-copy of the same bf8 Q buffer in place; every device's whole buffer must match exactly (owned slices
-rewritten identically, the other slices untouched by both). Prints the wall time of each path.
+models.common.rmsnorm.RMSNorm built the way llama_attention.py builds q_norm. (_qwen_local_q_prep itself routes
+qk_norm=True to the op, so it cannot be the reference.) Both paths update their own copy of the same bf8 Q buffer
+in place; every device's whole buffer must match exactly (owned slices rewritten identically, the other slices
+untouched by both). A second pair of fresh Q tensors (new buffer addresses) runs through the op's program-cache
+hit path and must match too. Prints the wall time of each path.
 
 Run on the Wormhole Galaxy (8x4 mesh):
     pytest models/demos/llama3_70b_galaxy/tests/test_qwen_q_prep_op.py -s
@@ -35,7 +38,7 @@ class _RefAttention:
     """The attributes TtLlamaAttention._qwen_local_q_setup / _qwen_local_q_prep read, nothing else."""
 
     _qwen_local_q_setup = TtLlamaAttention._qwen_local_q_setup
-    _qwen_local_q_prep = TtLlamaAttention._qwen_local_q_prep
+    _qwen_local_q_prep_stock = TtLlamaAttention._qwen_local_q_prep_stock
 
     def __init__(self, mesh_device, gamma_torch, trans_mat):
         self.mesh_device = mesh_device
@@ -113,39 +116,51 @@ def test_qwen_q_prep_bit_exact(mesh_device, seq_len):
     sin = _replicated(mesh_device, sin_torch, ttnn.bfloat16)
     trans_mat = _replicated(mesh_device, get_rot_transformation_mat(HEAD_DIM), ttnn.bfloat16)
     ref = _RefAttention(mesh_device, gamma_torch, trans_mat)
-    q_ref = _replicated(mesh_device, q_torch, ttnn.bfloat8_b)
-    q_op = _replicated(mesh_device, q_torch, ttnn.bfloat8_b)
-    q_in = ttnn.to_torch(ttnn.get_device_tensors(q_ref)[0])  # bf8-quantised input, for the untouched slices
-
-    ref._qwen_local_q_prep(q_ref, [cos, sin], seq_len)
-    out = qwen_q_prep(q_op, cos, sin, trans_mat, ref.q_norm.weight, eps=ref.q_norm.eps)
-    assert out.buffer_address() == q_op.buffer_address()
-    ttnn.synchronize_device(mesh_device)
-
     sl = seq_len // (2 * cols)
-    mismatches = []
-    for i, (t_ref, t_op) in enumerate(zip(ttnn.get_device_tensors(q_ref), ttnn.get_device_tensors(q_op))):
-        col = i % cols  # get_device_tensors is row-major over the mesh
-        a = ttnn.to_torch(t_ref)
-        b = ttnn.to_torch(t_op)
-        owned = column_slices(col, cols)
-        for s in range(2 * cols):
-            rs = slice(s * sl, (s + 1) * sl)
-            if s in owned:
-                if not torch.equal(a[:, :, rs], b[:, :, rs]):
-                    diff = (a[:, :, rs].float() - b[:, :, rs].float()).abs()
-                    mismatches.append(
-                        f"device {i} col {col} slice {s}: {int((diff > 0).sum())} values differ, max {diff.max():.3e}"
-                    )
-                assert not torch.equal(b[:, :, rs], q_in[:, :, rs]), f"device {i} slice {s} was not rewritten"
-            else:
-                assert torch.equal(b[:, :, rs], q_in[:, :, rs]), f"device {i} slice {s} (not owned) was modified"
-                assert torch.equal(a[:, :, rs], b[:, :, rs])
-    assert not mismatches, "\n".join(mismatches[:16])
+
+    def check_pair(q_torch_in, tag):
+        q_ref = _replicated(mesh_device, q_torch_in, ttnn.bfloat8_b)
+        q_op = _replicated(mesh_device, q_torch_in, ttnn.bfloat8_b)
+        q_in = ttnn.to_torch(ttnn.get_device_tensors(q_ref)[0])  # bf8-quantised input, for the untouched slices
+        ref._qwen_local_q_prep_stock(q_ref, [cos, sin], seq_len)
+        out = qwen_q_prep(q_op, cos, sin, trans_mat, ref.q_norm.weight, eps=ref.q_norm.eps)
+        assert out.buffer_address() == q_op.buffer_address()
+        ttnn.synchronize_device(mesh_device)
+        mismatches = []
+        for i, (t_ref, t_op) in enumerate(zip(ttnn.get_device_tensors(q_ref), ttnn.get_device_tensors(q_op))):
+            col = i % cols  # get_device_tensors is row-major over the mesh
+            a = ttnn.to_torch(t_ref)
+            b = ttnn.to_torch(t_op)
+            owned = column_slices(col, cols)
+            for s in range(2 * cols):
+                rs = slice(s * sl, (s + 1) * sl)
+                if s in owned:
+                    if not torch.equal(a[:, :, rs], b[:, :, rs]):
+                        diff = (a[:, :, rs].float() - b[:, :, rs].float()).abs()
+                        mismatches.append(
+                            f"{tag} device {i} col {col} slice {s}: {int((diff > 0).sum())} values differ, "
+                            f"max {diff.max():.3e}"
+                        )
+                    assert not torch.equal(b[:, :, rs], q_in[:, :, rs]), f"{tag} device {i} slice {s} not rewritten"
+                else:
+                    assert torch.equal(b[:, :, rs], q_in[:, :, rs]), f"{tag} device {i} slice {s} (not owned) modified"
+                    assert torch.equal(a[:, :, rs], b[:, :, rs])
+        assert not mismatches, "\n".join(mismatches[:16])
+        logger.info(f"S={seq_len} {tag}: op == stock chain on all {len(ttnn.get_device_tensors(q_op))} devices")
+        return q_ref, q_op
+
+    q_ref, q_op = check_pair(q_torch, "first call")
+    # Fresh tensors at new buffer addresses: a new descriptor-cache key, and generic_op's program-cache hit path
+    # (same program, new runtime-arg addresses).
+    q_ref_keep, q_op_keep = q_ref, q_op
+    q_ref, q_op = check_pair(torch.randn(1, N_LOCAL_HEADS, seq_len, HEAD_DIM) * 4.0, "fresh buffers")
+    assert q_op.buffer_address() != q_op_keep.buffer_address()
+    ttnn.deallocate(q_ref_keep)
+    ttnn.deallocate(q_op_keep)
 
     # Timing (both paths keep rewriting their own buffer in place; values stay bounded by the norm).
     def run_ref():
-        ref._qwen_local_q_prep(q_ref, [cos, sin], seq_len)
+        ref._qwen_local_q_prep_stock(q_ref, [cos, sin], seq_len)
         return mesh_device
 
     def run_op():

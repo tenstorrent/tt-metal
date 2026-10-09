@@ -1123,6 +1123,12 @@ class TtLlamaAttention(LightweightModule):
                 self.q_norm.weight,
                 eps=self.q_norm.eps,
             )
+        return self._qwen_local_q_prep_stock(q_pre_bf8, rot_mats, seq_len)
+
+    def _qwen_local_q_prep_stock(self, q_pre_bf8, rot_mats, seq_len):
+        """The stock-op chain that qwen_q_prep replaces: slice x2 + concat, typecast, q_norm, RoPE, typecast, scatter
+        back with paged_fill_cache. The model runs it only when qk_norm is off; test_qwen_q_prep_op.py uses it as the
+        reference for the op."""
         starts, ends_q, page_table, (cos_local, sin_local) = self._qwen_local_q_setup(rot_mats, seq_len)
         sl = seq_len // 8
         parts = [ttnn.slice(q_pre_bf8, starts=st, ends=ends_q, slice_dim=2, num_devices=8) for st in starts]
