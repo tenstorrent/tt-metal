@@ -295,9 +295,14 @@ void py_module(nb::module_& m) {
                     }
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
+                } else if (
+                    tensor.get_value(ttml::autograd::PreferredPrecision::NATIVE).dtype() == ttnn::DataType::BFLOAT16) {
+                    auto value = tensor.get_value_for_update();
+                    (void)self.recv(value.tensor(), ctx, Rank{rank});
                 } else {
-                    // Transfers use the bf16 view at both ends; assign() keeps the dtype the tensor is stored in.
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
+                    // The sender sends the bf16 view: receive it into a buffer of its own, and assign() installs it in
+                    // the dtype the tensor is stored in.
+                    auto filled = self.recv(ttnn::empty_like(tensor.get_value()), ctx, Rank{rank});
                     tensor.assign(filled);
                 }
                 return tensor;

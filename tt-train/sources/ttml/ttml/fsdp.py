@@ -534,12 +534,10 @@ def _shard_replicated_param(
     new_placements[axis_index] = ttnn.PlacementShard(shard_dim)
     new_mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(new_placements))
 
-    # Redistribute. Target dtype = the parameter's half-precision dtype
-    # (typically bfloat16); to_numpy returned float32 because the autograd
-    # FULL view is fp32, but from_numpy will convert during host→device.
-    target_dtype = autograd_tensor.get_value().dtype
-    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, target_dtype, new_mapper)
-    return new_at.get_value()
+    # Redistribute in the dtype the parameter is stored in. to_numpy gave a
+    # float32 array; from_numpy converts it back during host→device.
+    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, autograd_tensor.dtype(), new_mapper)
+    return new_at.get_value(ttml.autograd.PreferredPrecision.NATIVE)
 
 
 def _shard_lazy_param(

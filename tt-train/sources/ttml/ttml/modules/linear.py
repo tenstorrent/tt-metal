@@ -5,7 +5,6 @@
 from typing import Callable
 import math
 
-
 import ttnn
 import ttml
 

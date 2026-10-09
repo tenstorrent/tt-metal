@@ -420,7 +420,7 @@ def load_weights_from_hf(
             # device ops are not thread-safe -- see the note in ``_prepare_hf_weights``).
             param = ttml_params[ttml_name]
             # Built in the dtype the param is stored in, so an fp32 param keeps the exact values.
-            dtype = param.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
+            dtype = param.dtype()
             # When sharded, ``prepared`` is the padded GLOBAL-shape host weight (see above), distributed with the
             # param's precomputed mapper (FSDP-shard or replicate). assign() swaps the value in place, which keeps
             # the FSDP markers.

@@ -434,7 +434,8 @@ class SFTTrainer:
 
         Delegates to ``checkpoint_loader`` if one was supplied; otherwise reads
         the default ``{step, model_state}`` format and loads parameters with
-        ``ttml.autograd.assign_numpy``, in the dtype each is stored in.  Returns the step the checkpoint was taken at.
+        ``ttml.autograd.assign_numpy``, in the dtype each is stored in.  Returns
+        the step the checkpoint was taken at.
         Call before :meth:`train` — the loop iterates from ``self.step`` to
         ``cfg.max_steps`` so resume picks up exactly where the run stopped.
         """

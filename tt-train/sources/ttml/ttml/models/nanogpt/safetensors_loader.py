@@ -38,8 +38,8 @@ def _to_4d(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def _assign_tensor(param, arr_4d: np.ndarray) -> None:
-    ttml.autograd.assign_numpy(param, arr_4d)
+def _assign_tensor(param, arr: np.ndarray) -> None:
+    ttml.autograd.assign_numpy(param, _to_4d(arr))
 
 
 def load_gpt2_from_safetensors(
@@ -94,24 +94,24 @@ def load_gpt2_from_safetensors(
             param = get_param(param_name)
             tgt_rows = param.shape()[-2]
             resized = _pad_rows(hf_arr, tgt_rows)
-            _assign_tensor(param, _to_4d(resized))
+            _assign_tensor(param, resized)
             continue
 
         # wpe.weight → positional embedding (truncate to model's block_size)
         if hf_name == "wpe.weight":
             param = get_param("NanoGPT/pos_emb/weight")
             tgt_seq_len = param.shape()[-2]
-            _assign_tensor(param, _to_4d(hf_arr[:tgt_seq_len]))
+            _assign_tensor(param, hf_arr[:tgt_seq_len])
             continue
 
         # ln_f.weight / ln_f.bias → final layer norm
         if hf_name == "ln_f.weight":
             param = get_param("NanoGPT/ln_f_gamma")
-            _assign_tensor(param, _to_4d(hf_arr))
+            _assign_tensor(param, hf_arr)
             continue
         if hf_name == "ln_f.bias":
             param = get_param("NanoGPT/ln_f_beta")
-            _assign_tensor(param, _to_4d(hf_arr))
+            _assign_tensor(param, hf_arr)
             continue
 
         # Per-block weights
@@ -120,68 +120,66 @@ def load_gpt2_from_safetensors(
             pfx = f"h.{i}"
 
             if hf_name == f"{pfx}.ln_1.weight":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln1/gamma"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln1/gamma"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.ln_1.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln1/beta"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln1/beta"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.ln_2.weight":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln2/gamma"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln2/gamma"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.ln_2.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln2/beta"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/ln2/beta"), hf_arr)
                 matched = True
                 break
 
             # GPT-2 Conv1D weights are stored as (in_features, out_features),
             # standard linear expects (out_features, in_features) → transpose.
-            # np.ascontiguousarray is required because .T returns a non-contiguous
-            # Fortran-order view and from_numpy reads the raw buffer linearly.
             if hf_name == f"{pfx}.attn.c_attn.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/attention/qkv_linear/weight"),
-                    _to_4d(np.ascontiguousarray(hf_arr.T)),
+                    hf_arr.T,
                 )
                 matched = True
                 break
             if hf_name == f"{pfx}.attn.c_attn.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/attention/qkv_linear/bias"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/attention/qkv_linear/bias"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.attn.c_proj.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/attention/out_linear/weight"),
-                    _to_4d(np.ascontiguousarray(hf_arr.T)),
+                    hf_arr.T,
                 )
                 matched = True
                 break
             if hf_name == f"{pfx}.attn.c_proj.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/attention/out_linear/bias"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/attention/out_linear/bias"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.mlp.c_fc.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/mlp/fc1/weight"),
-                    _to_4d(np.ascontiguousarray(hf_arr.T)),
+                    hf_arr.T,
                 )
                 matched = True
                 break
             if hf_name == f"{pfx}.mlp.c_fc.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/mlp/fc1/bias"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/mlp/fc1/bias"), hf_arr)
                 matched = True
                 break
             if hf_name == f"{pfx}.mlp.c_proj.weight":
                 _assign_tensor(
                     get_param(f"NanoGPT/blocks/{i}/mlp/fc2/weight"),
-                    _to_4d(np.ascontiguousarray(hf_arr.T)),
+                    hf_arr.T,
                 )
                 matched = True
                 break
             if hf_name == f"{pfx}.mlp.c_proj.bias":
-                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/mlp/fc2/bias"), _to_4d(hf_arr))
+                _assign_tensor(get_param(f"NanoGPT/blocks/{i}/mlp/fc2/bias"), hf_arr)
                 matched = True
                 break
 

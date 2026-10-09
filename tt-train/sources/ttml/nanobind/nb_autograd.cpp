@@ -151,13 +151,10 @@ void py_module(nb::module_& m) {
                std::optional<tt::tt_metal::DataType> new_type,
                ttnn::distributed::MeshToTensor* composer,
                std::optional<PreferredPrecision> precision) {
-                if (precision) {
-                    return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(*precision), new_type, composer);
-                }
                 // By default, read the tensor as stored and convert a bf16 tensor to a float32 array on the host:
                 // the same array a FULL read gives, without creating an fp32 copy on the device.
-                const auto& value = tensor.get_value(PreferredPrecision::NATIVE);
-                if (!new_type && value.dtype() == ttnn::DataType::BFLOAT16) {
+                const auto& value = tensor.get_value(precision.value_or(PreferredPrecision::NATIVE));
+                if (!precision && !new_type && value.dtype() == ttnn::DataType::BFLOAT16) {
                     new_type = ttnn::DataType::FLOAT32;
                 }
                 return ttml::nanobind::util::make_numpy_tensor(value, new_type, composer);
@@ -166,7 +163,7 @@ void py_module(nb::module_& m) {
             nb::arg("composer") = nullptr,
             nb::arg("precision") = std::nullopt,
             "Construct a numpy tensor from a Tensor. By default a bf16 tensor gives a float32 array, converted on the "
-            "host; precision reads that view instead (NATIVE: the value as stored, no conversion).");
+            "host; precision= reads that view (HALF, FULL or NATIVE) without the conversion.");
         py_tensor.def(
             "to_string",
             [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::NATIVE).write_to_string(); },

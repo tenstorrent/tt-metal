@@ -124,8 +124,8 @@ def _to_4d(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def _assign(param, arr_4d: np.ndarray) -> None:
-    ttml.autograd.assign_numpy(param, arr_4d)
+def _assign(param, arr: np.ndarray) -> None:
+    ttml.autograd.assign_numpy(param, _to_4d(arr))
 
 
 def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str, expected_shape: Optional[tuple] = None) -> np.ndarray:
@@ -400,7 +400,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
         # expected_shape uses the ORIGINAL hf_name (before any tie remap) so the
         # config lookup is correct even when embed_tokens/lm_head share a param.
         arr = _fit_to_param_shape(arr, param, hf_name, expected_shape=hf_shapes.get(hf_name))
-        _assign(param, _to_4d(arr))
+        _assign(param, arr)
         loaded.add(ttml_name)
 
     # ── Fuse staged K/V into kv_proj ──
@@ -428,7 +428,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
         fused = _fit_to_param_shape(
             fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}", expected_shape=kv_expected
         )
-        _assign(param, _to_4d(fused))
+        _assign(param, fused)
         loaded.add(ttml_name)
 
     unused = sorted(p for p in parameters if p not in loaded)
