@@ -32,9 +32,11 @@ if _WORLD_SIZE != 2:
 
 _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
+import numpy as np  # noqa: E402
 import ttnn  # noqa: E402
 from transformers import AutoTokenizer  # noqa: E402
 
+from ttml.trainers.grpo_trainer import RolloutBatch, RolloutSampler  # noqa: E402
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 # Pin fabric FABRIC_2D before either rank opens a device (both ranks must match).
@@ -67,6 +69,53 @@ NUM_SUBMESHES = 4
 POST_PUSH_BATCH = 8
 TTT_MAX_BATCH_SIZE = 8
 TTT_MAX_SEQ_LEN = 512
+
+
+class _GreedyCheckedSampler(RolloutSampler):
+    """Serves a greedy TTTRolloutSampler and checks every received weight dict.
+
+    tt-transformers emits no log-probs on its greedy path, so ``generate`` reports zeros;
+    ``close`` leaves the wrapped sampler open for the per-submesh verification.
+    """
+
+    def __init__(self, sampler: Any) -> None:
+        self._sampler = sampler
+
+    @property
+    def weight_version(self) -> int:
+        return self._sampler.weight_version
+
+    def generate(self, prompts: List[List[int]]) -> RolloutBatch:
+        completions = self._sampler.generate_tokens(prompts, max_new_tokens=MAX_NEW_TOKENS)
+        return RolloutBatch(
+            weight_version=self.weight_version,
+            prompts=[list(p) for p in prompts],
+            completions=completions,
+            logprobs=np.zeros((len(prompts), MAX_NEW_TOKENS), dtype=np.float32),
+        )
+
+    def update_weights(self, weights: List[dict], version: int) -> None:
+        assert len(weights) == NUM_SUBMESHES, f"expected {NUM_SUBMESHES} dicts, got {len(weights)}"
+        for i, hf_dict in enumerate(weights):
+            for key, tensor in hf_dict.items():
+                assert tensor.dtype == ttnn.bfloat16, f"submesh {i} key={key!r} dtype={tensor.dtype}"
+                assert tensor.layout == ttnn.TILE_LAYOUT, f"submesh {i} key={key!r} layout={tensor.layout}"
+                assert (
+                    tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+                ), f"submesh {i} key={key!r} memcfg={tensor.memory_config()}"
+                shape = list(tensor.shape)
+                assert (
+                    len(shape) == 4 and shape[0] == 1 and shape[1] == 1
+                ), f"submesh {i} key={key!r} expected 4D (1,1,*,*), got {shape}"
+            for required_key in ("model.embed_tokens.weight", "lm_head.weight"):
+                assert required_key in hf_dict, f"submesh {i} missing required HF key {required_key!r}"
+        print(f"[TTT rank {TTT_RANK}] received weights v{version} for {len(weights)} submeshes; applying", flush=True)
+        t0 = time.perf_counter()
+        self._sampler.update_weights(weights, version=version)
+        print(
+            f"[TTT rank {TTT_RANK}] applied to all {len(weights)} submeshes in {time.perf_counter() - t0:.2f}s",
+            flush=True,
+        )
 
 
 def _ttml_side() -> None:
@@ -109,10 +158,7 @@ def _ttml_side() -> None:
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
 
         # step 1: pre-push remote generate (dummy weights -> gibberish).
-        pre_push_ids = client.remote_generate(
-            [prompt_ids],
-            max_new_tokens=MAX_NEW_TOKENS,
-        )[0]
+        pre_push_ids = client.remote_generate([prompt_ids])[0][0]
         print(
             f"[TTML rank {TTML_RANK}] (remote pre-push, dummy weights) ({len(pre_push_ids)} tok): "
             f"{tokenizer.decode(pre_push_ids, skip_special_tokens=False)!r}",
@@ -125,10 +171,8 @@ def _ttml_side() -> None:
         print(f"[TTML rank {TTML_RANK}] push_weights() complete", flush=True)
 
         # step 3: post-push remote generate, consistency check (submesh 0).
-        completions = client.remote_generate(
-            [prompt_ids] * POST_PUSH_BATCH,
-            max_new_tokens=MAX_NEW_TOKENS,
-        )
+        completions, _logprobs, version = client.remote_generate([prompt_ids] * POST_PUSH_BATCH)
+        assert version == 1, f"expected weight_version 1 after one push, got {version}"
         for i in range(POST_PUSH_BATCH):
             assert completions[i] == completions[0], (
                 f"post-push completion {i} diverged from completion 0 "
@@ -181,7 +225,7 @@ def _ttt_side() -> None:
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
             completions_per_prompt=1,
-            max_completion_length=VERIFY_NEW_TOKENS,
+            max_completion_length=MAX_NEW_TOKENS,
             temperature=TEMPERATURE,
             top_k=0,
             top_p=1.0,
@@ -192,37 +236,8 @@ def _ttt_side() -> None:
             len(worker.submeshes) == NUM_SUBMESHES
         ), f"expected {NUM_SUBMESHES} submeshes, got {len(worker.submeshes)}"
 
-        def _on_weights_received(per_submesh: List[dict]) -> None:
-            """Validate each submesh's dict against the update_weights contract, then apply."""
-            assert len(per_submesh) == NUM_SUBMESHES, f"expected {NUM_SUBMESHES} dicts, got {len(per_submesh)}"
-            for i, hf_dict in enumerate(per_submesh):
-                for key, tensor in hf_dict.items():
-                    assert tensor.dtype == ttnn.bfloat16, f"submesh {i} key={key!r} dtype={tensor.dtype}"
-                    assert tensor.layout == ttnn.TILE_LAYOUT, f"submesh {i} key={key!r} layout={tensor.layout}"
-                    assert (
-                        tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-                    ), f"submesh {i} key={key!r} memcfg={tensor.memory_config()}"
-                    shape = list(tensor.shape)
-                    assert (
-                        len(shape) == 4 and shape[0] == 1 and shape[1] == 1
-                    ), f"submesh {i} key={key!r} expected 4D (1,1,*,*), got {shape}"
-                for required_key in ("model.embed_tokens.weight", "lm_head.weight"):
-                    assert required_key in hf_dict, f"submesh {i} missing required HF key {required_key!r}"
-            print(f"[TTT rank {TTT_RANK}] received weights for {len(per_submesh)} submeshes; applying", flush=True)
-            t0 = time.perf_counter()
-            worker.update_weights(per_submesh, version=worker.weight_version + 1)
-            print(
-                f"[TTT rank {TTT_RANK}] applied to all {len(per_submesh)} submeshes in {time.perf_counter() - t0:.2f}s",
-                flush=True,
-            )
-
         bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes)
-        server = MPIRolloutServer(
-            peer_rank=TTML_RANK,
-            bridge=bridge,
-            generate_fn=worker.generate_tokens,
-            on_weights_received=_on_weights_received,
-        )
+        server = MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=_GreedyCheckedSampler(worker))
         server.serve_forever()
 
         # verify all submeshes got correct weights: a batch spanning every submesh
