@@ -85,12 +85,11 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 //
 // `mask` must be a ROW_MAJOR, BFLOAT16 or UINT16 tensor of exactly G elements in one page (every dim
 // but the last is 1), G <= 256, on the same mesh as the weight, in DRAM (interleaved) or in L1 on a
-// single core. It must be written before the request is queued (fence the writing queue with
-// WaitForCqOnTensorPrefetcher) and must not change until the consumer that reads it has run;
-// otherwise the prefetcher and the consumer disagree on which groups arrive and the delivery
-// target deadlocks. That fence cannot be captured into a trace while the request can, so a mask
-// written by an op inside the same trace is not fenced on replay: today the mask must be written,
-// and fenced, before execute_trace.
+// single core. It must be written before the prefetcher reaches the request and must not change until
+// the consumer that reads it has run; otherwise the prefetcher and the consumer disagree on which
+// groups arrive and the delivery target deadlocks. Order the prefetcher after the write with
+// WaitForCqOnTensorPrefetcher when the host enqueues it, or with QueueTensorPrefetcherWaitForSignal
+// and a signaling op after the write when the write is device work captured into a trace.
 struct TensorPrefetcherGroupSelector {
     std::reference_wrapper<const MeshTensor> mask;
 };
@@ -237,6 +236,39 @@ void QueueTensorPrefetcherRequest(
 void WaitForCqOnTensorPrefetcher(
     distributed::MeshCommandQueue& cq,
     ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset);
+
+// Number of op signals a running Tensor prefetcher offers. Signal ids are [0, kTensorPrefetcherNumSignals).
+inline constexpr uint32_t kTensorPrefetcherNumSignals = 8;
+
+// Returns the L1 address of op signal `signal_id`. A device kernel raises the signal by passing it to
+// experimental::tensor_prefetcher_signal (api/dataflow/tensor_prefetcher_signal.h);
+// ttnn.experimental.signal_tensor_prefetcher is an op that does only that. The address is the same on
+// every device of the mesh, so one program signals them all. It stays valid until StopTensorPrefetcher.
+//
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, and signal_id is in range.
+uint32_t GetTensorPrefetcherSignalAddress(distributed::MeshDevice& mesh_device, uint32_t signal_id);
+
+// Queue a wait on op signal `signal_id`. On each device of the mesh, the prefetcher processes no request
+// queued after this one until that device has received the signal that pairs with this wait. Use it to
+// order the prefetcher after device work that has no host-side fence, such as a mask an op inside a
+// trace writes: run that op, then an op that signals, and queue the wait ahead of the request that
+// reads the mask.
+//
+// Waits and signals on one id pair up in order, counted per device from StartTensorPrefetcher: the n-th
+// wait proceeds once the n-th signal has arrived. A signal that arrives before its wait is kept, so the
+// signaling op may run before or after this call. Every device waits, so every device must signal, and
+// a signal with no matching wait releases a later wait early.
+//
+// `trace_capture_cq` works as it does for QueueTensorPrefetcherRequest. A captured wait is re-sent on
+// every replay, and each replay waits for one further signal rather than the count seen at capture, so
+// a trace that also captures the signaling op releases its own wait on every run.
+//
+// Preconditions (TT_FATAL): a prefetcher is active on `mesh_device`, signal_id is in range, and
+// `trace_capture_cq`, if given, belongs to `mesh_device`.
+void QueueTensorPrefetcherWaitForSignal(
+    distributed::MeshDevice& mesh_device,
+    uint32_t signal_id,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

@@ -14,7 +14,7 @@
 //
 // Request page wire format (one socket page): a TensorPrefetcherRequestHeader
 // (one-byte command id + per-command union). The STOP command (all-zero page) exits
-// the request loop; WAIT_CQ blocks on a per-CQ signal slot; PREFETCH is followed by a
+// the request loop; WAIT_SIGNAL blocks on a signal slot; PREFETCH is followed by a
 // forward-growing table of per-tensor TensorPrefetcherEntry (address + layout index)
 // and a backward-growing (from the end of the payload) deduplicated table of
 // TensorPrefetcherTensorLayout. The kernel walks the entries in order, resolving each
@@ -41,7 +41,6 @@
 
 using tt::tt_metal::DramSenderStateBlock;
 using tt::tt_metal::kDrainTargetPipeBit;
-using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
 using tt::tt_metal::TensorPrefetcherEntry;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
@@ -278,13 +277,12 @@ void kernel_main() {
     constexpr uint32_t stage_ring_size = get_compile_time_arg_val(1);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
-    // Base of this core's per-CQ signal slots (kNumCqSignalSlots uint32 counters).
-    // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
-    // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
-    // Slots are `cq_signal_slot_stride` bytes apart, not packed: each is the target of
-    // its own dispatcher write, which only lands on an L1-aligned address.
-    constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
-    constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
+    // Base of this core's signal slot table (see kNumCqSignalSlots in tensor_prefetcher_request.hpp):
+    // uint32 counters the dispatcher and device kernels raise, which a WAIT_SIGNAL request blocks on.
+    // Slots are `signal_slot_stride` bytes apart, not packed: a CQ fence slot is the target of its own
+    // dispatcher write, which only lands on an L1-aligned address.
+    constexpr uint32_t signal_slots_l1_base = get_compile_time_arg_val(4);
+    constexpr uint32_t signal_slot_stride = get_compile_time_arg_val(5);
     constexpr bool controls_ordinary_mpfe = get_compile_time_arg_val(6) != 0;
     constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(7);
     constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
@@ -312,6 +310,12 @@ void kernel_main() {
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t own_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t ordinary_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    // Where this sender passes on the op signal counts it waits for: 0 for nowhere, else the virtual coords
+    // (x in the low 16 bits, y in the high 16) of the bank's NOC1-endpoint sender, which no signal reaches.
+    const uint32_t op_signal_forward_xy = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t op_signal_forward_noc_xy = uint32_t(NOC_XY_ENCODING(
+        DYNAMIC_NOC_X(noc_index, op_signal_forward_xy & 0xFFFFu),
+        DYNAMIC_NOC_Y(noc_index, op_signal_forward_xy >> 16)));
 
     // ---- Init ----
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
@@ -329,16 +333,11 @@ void kernel_main() {
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
 
-    // Zero the per-CQ signal slots before parking on the socket. Safe to do here
-    // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
-    // can be enqueued until StartTensorPrefetcher returns to the single-threaded
-    // host caller, long after this init runs.
-    auto cq_signal_slot = [](uint32_t index) -> volatile tt_l1_ptr uint32_t* {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cq_signal_l1_base + index * cq_signal_slot_stride);
+    // The host zeroed the signal slots before launching this kernel, so a signal that lands before the
+    // kernel gets here is still counted.
+    auto signal_slot = [](uint32_t index) -> volatile tt_l1_ptr uint32_t* {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_slots_l1_base + index * signal_slot_stride);
     };
-    for (uint32_t i = 0; i < kNumCqSignalSlots; ++i) {
-        *cq_signal_slot(i) = 0;
-    }
 
     // ---- Request loop ----
     while (true) {
@@ -367,13 +366,24 @@ void kernel_main() {
             socket_notify_sender(socket);
             continue;
         }
-        if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_CQ) {
-            // Block until the dispatcher has bumped this CQ's signal slot to the
-            // requested value. Wrap-safe: compare the unsigned difference as signed.
-            volatile tt_l1_ptr uint32_t* slot = cq_signal_slot(req->wait_cq.cq_index);
-            const uint32_t target = req->wait_cq.cq_wait_value;
+        if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_SIGNAL) {
+            // Block until the slot -- written by the dispatcher for a CQ fence, incremented by device
+            // kernels for an op signal -- reaches the requested value. Wrap-safe: compare the unsigned
+            // difference as signed.
+            const uint32_t slot_index = req->wait_signal.slot_index;
+            volatile tt_l1_ptr uint32_t* slot = signal_slot(slot_index);
+            const uint32_t target = req->wait_signal.wait_value;
             while ((int32_t)(*slot - target) < 0) {
                 invalidate_l1_cache();
+            }
+            // Op signals reach only a bank's free sender: its partner's NOC 1 NIU, in NOC2AXI mode, drops NoC
+            // atomics and repeats register writes. So on passing an op signal wait the free sender copies its
+            // count into the same slot of its partner, which gets the same WAIT and spins on that slot.
+            if (op_signal_forward_xy != 0 && slot_index >= tt::tt_metal::kNumCqSignalSlots) {
+                const uint32_t slot_addr = reinterpret_cast<uint32_t>(slot);
+                noc_async_write(
+                    slot_addr, get_noc_addr_helper(op_signal_forward_noc_xy, slot_addr), sizeof(uint32_t), noc_index);
+                noc_async_write_barrier(noc_index);
             }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
