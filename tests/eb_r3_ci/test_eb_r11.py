@@ -494,10 +494,10 @@ def test_softmax_cfg(device, cfg):
 def _qb2_mc(device, cfg):
     if cfg.startswith("dp_"):
         # gemma4_d_p/tt/rms_norm.py _block_sharded_memory_config: chunk 8192 on 8x4, 256 rows of 5376 per chip, block
-        # shards of 64x448 on 12x4 cores (28 tiles per core)
+        # shards of 64x448 on 12x4 Galaxy cores (28 tiles per core); a P150 has 11 columns, so 8x4 cores of the same shard
         return ttnn.create_sharded_memory_config(
             shape=(64, 448),
-            core_grid=ttnn.CoreGrid(x=12, y=4),
+            core_grid=ttnn.CoreGrid(x=8, y=4),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -510,6 +510,17 @@ def _qb2_mc(device, cfg):
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+    if cfg == "llama_p150":
+        # tt_transformers Llama 3.1-8B decode on a P150: width shards of 32x128 on 8x4 cores (4 tiles per core)
+        return ttnn.create_sharded_memory_config(
+            (32, 128), ttnn.CoreGrid(x=8, y=4), ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True
+        )
+    if cfg == "qwen_qb2_40":
+        # qwen38_27b_qb2/tt/decoder_tp.py residual_cores=40 (the TP decoder's override): 32x128 on a 10x4 grid
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 3))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
         )
     if cfg == "llama_qb2":
         # llama31_8b_qb2/tt/decoder.py _width_memcfg(1024, 8): 32x128 on the first 8 cores, row-wise
@@ -527,7 +538,7 @@ def _qb2_mc(device, cfg):
     )
 
 
-QB2_WIDTH = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 5376, "dp_add": 5376}
+QB2_WIDTH = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 3584, "dp_add": 3584, "llama_p150": 4096, "qwen_qb2_40": 5120}
 QB2_ROWS = {"dp_post": 256, "dp_add": 256}
 
 
