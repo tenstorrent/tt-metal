@@ -41,6 +41,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 using namespace ckernel;
@@ -129,14 +130,18 @@ ALWI void settle_row(
     pack_reconfig_data_format(cb_total);
     add_init(cb_prefix, cb_pending);
 
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    constexpr uint32_t settle_block = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t wt = 0; wt < Wt; wt += settle_block) {
+        const uint32_t n = Wt - wt < settle_block ? Wt - wt : settle_block;
         tile_regs_acquire();
-        add_tiles(cb_prefix, cb_pending, wt, wt, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_tiles(cb_prefix, cb_pending, wt + i, wt + i, i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_total, wt);
-        pack_tile(0, cb_total_out, wt);
+        pack_block(0, cb_total, n);
+        pack_block(0, cb_total_out, n);
         tile_regs_release();
     }
 
