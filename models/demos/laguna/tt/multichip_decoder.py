@@ -66,10 +66,11 @@ ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass sli
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
 # XS p150x2's power-of-two buckets plus S's finer prefill ladder (generator_vllm._PREFILL_FINE_BUCKETS)
 TOKEN_DISPATCH_BUCKETS = frozenset({1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192})
-# A 512-token bucket through dispatch too (48-layer prefill on p150x4, serving flags: 581 -> 251 ms vs the 256-row
-# sparse MoE loop; fp32-reference PCC 0.9701 -> 0.9700). At 128 tokens dispatch is slower (163 -> 173 ms).
+# Short buckets through dispatch too (48-layer prefill on p150x4 vs the 256-row sparse MoE loop, with the row-expert
+# routed op and the local combine): 128 163 -> 123, 256 284 -> 120, 512 581 -> 133 ms. Dispatch computes each token
+# the same way in every bucket (fp32-reference accuracy measured at 512..8192).
 TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | {
-    int(v) for v in os.environ.get("TT_LAGUNA_DISPATCH_SMALL", "512").split(",") if v.strip()
+    int(v) for v in os.environ.get("TT_LAGUNA_DISPATCH_SMALL", "128,256,512").split(",") if v.strip()
 }
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
 # (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
