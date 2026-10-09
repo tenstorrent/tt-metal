@@ -69,6 +69,11 @@ struct UnifiedMatmulPlan {
     // thread's shares).
     uint32_t operand_buffer_depth = 0;
     uint32_t C_buffer_depth = 0;
+    // Multicast, when each core produces one C slice per batch on a rectangle laid out as the C slices tile C: the
+    // first core of each row reads the row's A slices and multicasts them along the row, and the first core of each
+    // column does the same with B down the column. Cores each sender multicasts to; 0 = that operand is not.
+    uint32_t A_mcast_num_dests = 0;
+    uint32_t B_mcast_num_dests = 0;
 
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
