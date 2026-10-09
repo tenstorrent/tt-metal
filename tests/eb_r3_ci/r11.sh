@@ -47,5 +47,6 @@ case $1 in
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
   pt17)     for i in 1 2 3; do ab pt17 - EB_R3_PER_FACE=1 "test_mul_cfg and (glxq_attn or glxq_mlp_s1024)"; done ;;
   gpre17)   for i in 1 2 3; do ab gpre17 - EB_R3_MAIN_REINIT=1 "test_gemma_prefill_post or (test_qb2_add and gemma_add)"; done ;;
+  gpre18)   for i in 1 2 3; do ab gpre18 - EB_R3_MAIN_REINIT=1 "test_gemma_prefill_post or (test_qb2_add and (gemma_post or dp_post or gemma_add)) or (test_qwen36_softplus_add and not 2) or sdxl_temb_add"; done ;;
 esac
 echo "##### end $(date -u +%T)"

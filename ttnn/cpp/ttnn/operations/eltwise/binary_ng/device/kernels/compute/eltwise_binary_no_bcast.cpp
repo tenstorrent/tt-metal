@@ -24,12 +24,11 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
-// Blackhole: a post activation (SFPU on DEST) keeps the binary init, so only operand activations rerun it per chunk.
-#if defined(ARCH_BLACKHOLE) && !defined(EB_R3_MAIN_REINIT)  // CI: EB_R3_MAIN_REINIT keeps main's re-init
-#define BINARY_NG_POST_REINIT 0
-#else
-#define BINARY_NG_POST_REINIT HAS_ACTIVATIONS(POST)
+// A post activation (SFPU on DEST) leaves the binary init in place, so BINARY_NG_POST_KEEPS_INIT skips its rerun.
+#ifndef BINARY_NG_POST_KEEPS_INIT
+#define BINARY_NG_POST_KEEPS_INIT 0
 #endif
+#define BINARY_NG_POST_REINIT (HAS_ACTIVATIONS(POST) and not BINARY_NG_POST_KEEPS_INIT)
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
