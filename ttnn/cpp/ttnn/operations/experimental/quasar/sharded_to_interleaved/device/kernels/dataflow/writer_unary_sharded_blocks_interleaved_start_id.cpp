@@ -36,6 +36,18 @@ void kernel_main() {
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 
     uint32_t row_start_tile_id = start_id;
+#ifdef IMPLICIT_SYNC
+    // Host enables this only for unpadded blocks: each TXN_ID write drains the next posted DFB entry
+    // and acks it when it lands.
+    for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
+        uint32_t tile_id = row_start_tile_id;
+        for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
+            noc.async_write<NocOptions::TXN_ID>(cb_out, s, {}, {.page_id = tile_id});
+            tile_id++;
+        }
+        row_start_tile_id += output_width_tiles;
+    }
+#else
     cb_out.wait_front(block_num_tiles);
     uint32_t l1_read_offset = 0;
     for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
@@ -51,4 +63,5 @@ void kernel_main() {
     }
     noc.async_write_barrier();
     cb_out.pop_front(block_num_tiles);
+#endif
 }

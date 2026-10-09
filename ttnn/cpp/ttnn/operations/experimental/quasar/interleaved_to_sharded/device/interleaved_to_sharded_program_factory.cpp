@@ -152,6 +152,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
 
     bool is_tile = (input.layout() == Layout::TILE);
+    // Implicit sync lands one full DFB entry per read at the DFB's own write pointer, so the reader can
+    // use it only when every core reads its whole block contiguously: no width or height padding.
+    // The DFB stores entries per txn ID as a uint8 and picks two txn IDs for an even shard but may
+    // pick one for an odd one, so a larger shard wraps that count and the credit ISR never fires.
+    const bool implicit_sync =
+        is_tile && !convert_df && !dst_is_dram && num_units_per_shard_width_last == num_units_per_shard_width &&
+        num_units_per_shard_height_last == num_units_per_shard_height &&
+        (num_units_per_shard <= 255 || (num_units_per_shard % 2 == 0 && num_units_per_shard <= 510));
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;
@@ -215,6 +223,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         reader.compile_time_args = {
             {"num_readers", all_cores.num_cores()}, {"tile_bytes", convert_df ? input_unit_size : output_unit_size}};
         reader.dfb_bindings = {ProducerOf(reader_out_dfb, "in0")};
+        if (implicit_sync) {
+            reader.hw_config = ttnn::create_reader_datamovement_config();
+            reader.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+        }
         reader.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height_tiles",

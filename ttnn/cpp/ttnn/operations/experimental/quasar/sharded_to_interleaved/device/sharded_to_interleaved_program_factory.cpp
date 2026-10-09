@@ -127,6 +127,14 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     bool is_tile = (output.layout() == Layout::TILE);
+    // Implicit sync acks one full DFB entry per write in order, so the writer can use it only when it
+    // writes every tile the reader posts: no width or height padding on any core.
+    // The DFB stores entries per txn ID as a uint8 and picks two txn IDs for an even shard but may
+    // pick one for an odd one, so a larger shard wraps that count and the credit ISR never fires.
+    const bool implicit_sync =
+        is_tile && !convert_df && num_units_per_shard_width_last == num_units_per_shard_width &&
+        num_units_per_shard_height_last == num_units_per_shard_height &&
+        (num_units_per_shard <= 255 || (num_units_per_shard % 2 == 0 && num_units_per_shard <= 510));
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;
@@ -187,6 +195,10 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         writer.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
             "writer_unary_sharded_blocks_interleaved_start_id.cpp";
+        if (implicit_sync) {
+            writer.hw_config = ttnn::create_writer_datamovement_config();
+            writer.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+        }
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height_tiles",

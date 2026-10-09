@@ -37,6 +37,19 @@ void kernel_main() {
     DataflowBuffer cb_in(dfb::in0);
     const auto s = TensorAccessor(tensor::src);
 
+#ifdef IMPLICIT_SYNC
+    // Host enables this only for unpadded blocks: each TXN_ID read fills the next DFB entry and posts
+    // its credit when it lands.
+    uint32_t curr_tile_id = start_id;
+    for (uint32_t h = 0; h < block_height_tiles; h++) {
+        uint32_t tile_id = curr_tile_id;
+        for (uint32_t w = 0; w < block_width_tiles; w++) {
+            noc.async_read<NocOptions::TXN_ID>(s, cb_in, {.page_id = tile_id}, {});
+            tile_id++;
+        }
+        curr_tile_id += input_width_offset_tiles;
+    }
+#else
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;
     uint32_t curr_tile_id = start_id;
@@ -58,4 +71,5 @@ void kernel_main() {
     }
     noc.async_read_barrier();
     cb_in.push_back(block_num_tiles);
+#endif
 }
