@@ -62,7 +62,7 @@ namespace tt::tt_metal::experimental {
 //   runtime arguments (see ProgramRunArgs) — so sibling instances can do different
 //   work from the same binary.
 //
-// PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+// PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
 // ============================================================================
 
@@ -152,7 +152,7 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the binding token: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)

@@ -53,38 +53,36 @@ struct KernelAdvancedOptions {
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
-    // In Metal 2.0, kernel arguments are NAMED parameters declared in the KernelSpec.
-    // However, until typed kernel argument support is available, certain advanced use
-    // cases require a VARIABLE number of arguments. e.g.:
-    //   - N runtime arguments, representing the size of an N-dimensional tensor
-    //   - a kernel that accepts a variadic number of tensor arguments
+    // In Metal 2.0, kernel arguments are named parameters declared in the KernelSpec.
+    // Varargs are the exception: unnamed arguments that the kernel accesses POSITIONALLY,
+    // by index. They are intended for arguments that the kernel reads only as elements of an
+    // indexed collection, e.g. N runtime arguments holding the shape of an N-dimensional tensor.
     //
-    // Varargs must be accessed POSITIONALLY in the kernel code.
-    //
-    // The vararg schema below is a temporary mechanism to support these use cases.
-    // It will later be deprecated and replaced by std::array typed arguments.
+    // (For a variable number of tensor bindings, use a TensorBindingSequence instead; see below.)
 
     //--------------------------------
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
-    // Set the vararg values (per node) via ProgramRunArgs.
+    // Set the vararg values (per node) via ProgramRunArgs (KernelRunArgs::advanced_options.runtime_varargs).
     //
     // To retrieve these values in kernel code, use:
     //   get_vararg(uint32_t idx); // index in [0, num_runtime_varargs - 1]
+    // (There is no kernel-side count accessor; if the kernel needs the count, pass it as a named argument.)
     //
-    // CAUTION: This feature exists to address niche uses cases only.
-    //          Prefer regular, named runtime arguments unless varargs are strictly necessary.
+    // CAUTION: This feature exists to address niche use cases only.
+    //          Prefer named runtime arguments unless varargs are strictly necessary.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
-    // Set the vararg values via ProgramRunArgs.
+    // Set the vararg values via ProgramRunArgs (KernelRunArgs::advanced_options.common_runtime_varargs).
     // (The same argument values are broadcast to every node the kernel runs on.)
     //
     // To retrieve these values in kernel code, use:
-    //    get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    //   get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    // (There is no kernel-side count accessor; if the kernel needs the count, pass it as a named argument.)
     //
-    // CAUTION: This feature exists to address niche uses cases only.
+    // CAUTION: This feature exists to address niche use cases only.
     //          Prefer named common runtime arguments unless varargs are strictly necessary.
     uint32_t num_common_runtime_varargs = 0;
 
@@ -92,8 +90,9 @@ struct KernelAdvancedOptions {
     // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
     // different nodes. Each entry pairs a node set with its vararg count; nodes
     // not listed default to num_runtime_varargs.
-    // TODO: This feature is truly bizarre. It will be removed from the API once
-    //       existing uses are refactored to avoid it.
+    //
+    // CAUTION: This feature is deprecated and will be removed from the API once all existing
+    //          uses are refactored to avoid it. Do not add new uses of this feature.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
@@ -102,17 +101,15 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Compile-time vararg VALUES for the kernel.
     // (Unlike the runtime varargs fields above, these values are baked into the Program
-    // at kernel compile time.)
+    // at kernel compile time: each distinct set of values compiles a distinct kernel binary.)
     //
     // To retrieve these values in kernel code, use:
     //   - get_compile_time_vararg(idx)   // for a computed index
     //   - get_compile_time_vararg<idx>() // for a compile-time constant index
     //   - get_num_compile_time_varargs() // for the count
     //
-    // CAUTION: This is a temporary API that will removed in favor of compile-time array arguments.
-    //          It exists to solve a niche, isolated use case.
-    //          Always prefer regular, named compile-time arguments.
-    [[deprecated("Compile-time varargs is a temporary feature that will be removed in the future.")]]
+    // CAUTION: This feature exists to address niche use cases only.
+    //          Always prefer named compile-time arguments.
     std::vector<uint32_t> compile_time_varargs;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -295,7 +292,8 @@ struct AdvancedKernelRunArgs {
 
     // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
-    // Specified per-node; length can vary per-node (as declared in schema).
+    // Specified per-node; each node's list must have num_runtime_varargs entries
+    // (unless overridden by the deprecated num_runtime_varargs_per_node).
     Table<NodeCoord, Varargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
@@ -345,8 +343,8 @@ struct SemaphoreAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
-    // NOTE: Runtime wants to deprecate this feature for ALL architectures.
-    //       When cross-node DFB becomes available, non-zero initial values will be removed.
+    //       Once existing uses are refactored to avoid it, this feature will be removed
+    //       for Gen1 architectures as well. Do not add new uses of this feature.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
 

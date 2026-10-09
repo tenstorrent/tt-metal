@@ -44,6 +44,7 @@
 //     - non-overlapping node coverage, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
+//   (Exception: DFBAdvancedOptions::allow_instance_multi_binding, Gen1 only.)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
 //   One independent DFB instance is allocated per node where its endpoint
@@ -92,12 +93,8 @@ struct DataflowBufferSpec {
     // The data format is required for any DFB bound to a compute kernel
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
-    // Optional; if unspecified, the default tile format (32x32) is assumed.
-    //
-    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces", and the compute
-    // engine derives the face layout from this field. If an entry holds shorter, more numerous faces
-    // than the default layout for its tile shape, say so with the `Tile(tile_shape, face_shape)`
-    // constructor -- the compute engine then reads exactly that much data.
+    // The tile format is optional; if unspecified, the default tile format (32x32) is assumed.
+    // Tile format includes the tile's "face" layout (sub-block arrangement within the tile).
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////
@@ -114,62 +111,14 @@ struct DataflowBufferSpec {
     // (Currently, only TensorParameter is supported.) The actual memory address is supplied
     // at runtime via ProgramRunArgs.
     //
-    // The bound memory object must have L1-based storage and be large enough to hold the DFB's
-    // total size (entry_size * num_entries).
-    //
-    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
+    // The bound memory object must have L1-based storage, and its allocation on each node must be
+    // large enough to hold the DFB (entry_size * num_entries).
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////
     DFBAdvancedOptions advanced_options;
-};
-
-//------------------------------------------------
-// CrossNodeDataflowBufferSpec
-//------------------------------------------------
-
-// NOTE: Cross-Node DataflowBuffer is not yet supported!
-//       A sketch is included in the experimental Metal 2.0 APIs for visibility.
-//       See also Global DataflowBuffer (which has a user-managed lifetime).
-//
-// CrossNodeDataflowBufferSpec is the descriptor for a "cross-node" DFB:
-// A DFB whose producer and consumer kernels run on different nodes, with data
-// flowing over the NoC. Its semantics should be as close as possible to that of
-// a local DFB.
-//
-// A CrossNodeDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
-// but must specify additional cross-node DFB specific properties, such as the
-// producer-consumer node mapping.
-//
-// TBD: Much about cross-node DFBs is still TBD! Everything below this line is expected
-//   to change with the implementation.
-//
-// Invariant: Every cross-node DFB instance has exactly one producer kernel instance and
-//   one consumer kernel instance. The instances must not be on the same node.
-//
-// Instancing: At runtime, one cross-node DFB instance is allocated per entry in the
-//   producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
-//   endpoints.
-//
-// Placement: Specified directly via producer_consumer_map (rather than derived as
-//   for local DFBs).
-//
-struct CrossNodeDataflowBufferSpec {
-    // A cross-node DFB has all of the same properties as a local DFB
-    DataflowBufferSpec dfb_spec;
-
-    // Plus, some cross-node DFB-specific properties.
-    // (These are TBD...)
-
-    // Producer-consumer node mapping: each entry pairs a producer node with the
-    // consumer node it feeds.
-    // (What about multi-casting? TBD.)
-    using ProducerNode = NodeCoord;
-    using ConsumerNode = NodeCoord;
-    using ProducerConsumerMap = Table<ProducerNode, ConsumerNode>;
-    ProducerConsumerMap producer_consumer_map;
 };
 
 }  // namespace tt::tt_metal::experimental
