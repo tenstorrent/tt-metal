@@ -42,6 +42,7 @@ from helpers.test_variant_parameters import (
 )
 
 _NOT_IN_API_FORM = {
+    MathOperation.TopKDefuse,
     MathOperation.TopKLocalSort,
     MathOperation.TopKMerge,
     MathOperation.TopKRebuild,
