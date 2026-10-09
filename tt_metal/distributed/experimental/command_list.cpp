@@ -14,6 +14,7 @@
 
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_coord_utils.hpp"

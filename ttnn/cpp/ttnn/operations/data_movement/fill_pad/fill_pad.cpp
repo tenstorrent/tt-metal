@@ -9,6 +9,7 @@
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace ttnn {
 

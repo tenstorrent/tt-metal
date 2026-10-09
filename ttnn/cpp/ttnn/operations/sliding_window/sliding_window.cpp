@@ -8,6 +8,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <shared_mutex>
 
 using namespace tt::tt_metal;
