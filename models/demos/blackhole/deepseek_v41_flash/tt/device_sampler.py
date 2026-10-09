@@ -60,6 +60,7 @@ class DSV41DeviceSampler:
             packer_l1_acc=False,
         )
         self.params = None
+        self.stop = None  # stage name: forward returns right after it (cost bisection)
         self.prof = None  # list of (stage, seconds) when profiling eagerly
 
     def _mark(self, name):
@@ -172,18 +173,24 @@ class DSV41DeviceSampler:
             ttnn.sum(ttnn.multiply(ttnn.eq(best, self.col_ids), ix_all), dim=-1, keepdim=True),
         )
         self._mark("greedy_part")
+        if self.stop == "greedy_part":
+            return tok_greedy
         # the slice as [T,1,PR,32] tiles; padding entries have logit -1e30 (never kept, zero weight)
         pad = ttnn.pad(logits, [(0, 0), (0, 0), (0, 0), (0, PR * 32 - shard)], value=-1e30)
         x4 = ttnn.to_layout(ttnn.reshape(ttnn.to_layout(pad, ttnn.ROW_MAJOR_LAYOUT), [T, 1, PR, 32]), ttnn.TILE_LAYOUT)
         s4 = ttnn.multiply(ttnn.subtract(x4, self._v4(M)), self._v4(invT))  # <= 0
         e4 = ttnn.exp(s4)
         self._mark("scale_exp")
+        if self.stop == "scale_exp":
+            return e4
         lo0 = ttnn.multiply(ttnn.subtract(mn_g, M), invT)  # <= s of every token (scaled minimum)
         hi0 = ttnn.add(ttnn.multiply(lo0, 0.0), 1e-3)  # a hair above the max so that the grid covers s = 0
         off_k = ttnn.eq(kk, 0.0)  # top-k off -> k = vocabulary
         k_eff = ttnn.add(ttnn.multiply(ttnn.subtract(1.0, off_k), kk), ttnn.multiply(off_k, float(VOCAB)))
         tau_k = self._search(s4, e4, lo0, hi0, k_eff, use_mass=False)
         self._mark("search_k")
+        if self.stop == "search_k":
+            return tau_k
         mass_k = self._mass_ge(s4, e4, tau_k)
         tau_p = self._search(s4, e4, tau_k, hi0, ttnn.multiply(pp, mass_k), use_mass=True)
         no_p = ttnn.ge(
@@ -191,6 +198,8 @@ class DSV41DeviceSampler:
         )  # top_p off: keep the whole top-k set (mass below fp32 resolution of the sum would be cut otherwise)
         tau_p = ttnn.add(ttnn.multiply(no_p, tau_k), ttnn.multiply(ttnn.subtract(1.0, no_p), tau_p))
         self._mark("search_p")
+        if self.stop == "search_p":
+            return tau_p
         w = ttnn.multiply(e4, ttnn.ge(s4, self._v4(tau_p)))
         # inclusive prefix over the slice in vocabulary order: within rows of 32 (matmul with a triangular matrix), then the exclusive prefix over the row totals
         P = ttnn.matmul(w, self.u32, compute_kernel_config=self.ckc)  # [T,1,PR,32]
@@ -200,6 +209,8 @@ class DSV41DeviceSampler:
         )  # [T,1,PR,1]
         cs = ttnn.add(P, offs)
         self._mark("prefix")
+        if self.stop == "prefix":
+            return cs
         tot_c = ttnn.reshape(ttnn.slice(cs, [0, 0, PR - 1, 31], [T, 1, PR, 32]), [1, 1, T, 1])
         tot_all = self.mc.allgather(tot_c, self.ccl, axis=1, dim=3)  # [1,1,T,cols]
         total = ttnn.sum(tot_all, dim=-1, keepdim=True)
