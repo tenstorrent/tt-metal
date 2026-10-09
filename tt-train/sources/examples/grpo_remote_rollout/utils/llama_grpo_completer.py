@@ -35,7 +35,7 @@ from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.trainers.grpo_trainer.grpo_ttml_model import weights_ref_hf_dict
 
-from .mpi_rollout import MPIRolloutClient
+from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
 
 
 @dataclass
