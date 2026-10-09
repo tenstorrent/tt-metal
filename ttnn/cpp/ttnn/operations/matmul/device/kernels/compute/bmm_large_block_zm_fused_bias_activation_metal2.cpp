@@ -252,6 +252,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
     constexpr auto bias_ntiles = get_arg(args::bias_ntiles);
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
@@ -351,13 +356,6 @@ void kernel_main() {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
@@ -380,6 +378,14 @@ void kernel_main() {
                         pack_init(mm_partials_dfb_id);
 #endif
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_dfb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    }
+#endif
 
 #ifdef ARCH_QUASAR
                     // Quasar (§7): the accumulation blocks pack to mm_partials_dfb_id; the FINAL block packs to
@@ -588,7 +594,8 @@ void kernel_main() {
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
 #ifdef ARCH_QUASAR
@@ -675,7 +682,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
-                if constexpr (num_blocks_w_dim > 1) {
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
@@ -720,7 +727,7 @@ void kernel_main() {
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the buffer is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
     // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
+    if constexpr (!bias_per_group && num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
 #endif
