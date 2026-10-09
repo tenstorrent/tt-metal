@@ -106,7 +106,6 @@ struct RecipeBlockingProblem {
     // Dense/joint: the grid the op may use. Ring: the SDPA worker grid. Exp ring: the program
     // config grid including the fabric MUX column (the chooser may narrow its width).
     CoreCoord grid{1, 1};
-    uint32_t max_cores_per_head_batch = 16;
     uint64_t l1_bytes = 0;  // unreserved L1 per core available to circular buffers
     // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes. Key ranges (causal,
     // sliding window, chunked, windowed) use a BF16 mask CB plus extra_l1_bytes (recipe_key_range_extra_bytes).

@@ -182,10 +182,11 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
   beats them or ties (table below). Routed ring-distributed calls choose their chunks on the caller's grid (8/1 heads,
   D128, BFP8, 131072 rows: the caller's Q64/K64 143 ms, the choice 43 ms). Ring and exp ring calls keep the caller's
   chunks and grid when the recipe supports them.
-  `sub_core_grids`, which prefill ignored, is dropped. Routed dense and joint calls also ignore
-  `max_cores_per_head_batch` (a decode setting, default 16, that legacy prefill ignored): a head's K/V chain may span
-  the grid, which single-head calls need (one head, D512, S16384: 57 ms on 16 cores, 7 ms on the grid). Zero chunk
-  sizes still need an explicit `precision`.
+  `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still need an explicit `precision`.
+- Every prefill op rejects `max_cores_per_head_batch`, with or without `precision`: it is a decode setting (the cores
+  that split one head's K/V in `scaled_dot_product_attention_decode`). A recipe head's K/V chain spans its share of
+  the grid, which single-head calls need (one head, D512, S16384, ACCURATE: 57 ms on a 16-core chain, 11 ms on the
+  grid).
 - A routed joint call with empty joint tensors (`[B, H, 0, D]`, FLUX.2 single-stream blocks) runs as dense SDPA and
   returns an empty joint output with legacy's spec.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).

@@ -33,7 +33,7 @@ void py_module(nb::module_& mod) {
                 std::size_t,
                 std::size_t,
                 std::optional<bool>,
-                uint32_t,
+                std::optional<uint32_t>,
                 uint32_t,
                 std::optional<tt::tt_metal::MathFidelity>,
                 bool>(),
@@ -44,7 +44,7 @@ void py_module(nb::module_& mod) {
             nb::arg("q_chunk_size").noconvert() = 0,
             nb::arg("k_chunk_size").noconvert() = 0,
             nb::arg("exp_approx_mode") = nb::none(),
-            nb::arg("max_cores_per_head_batch") = 16,
+            nb::arg("max_cores_per_head_batch") = nb::none(),
             nb::arg("max_k_splits") = 1,
             nb::arg("matmul_math_fidelity") = nb::none(),
             nb::arg("segmented_accumulation") = false)

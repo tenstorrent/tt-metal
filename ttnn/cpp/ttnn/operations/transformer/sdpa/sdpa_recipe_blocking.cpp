@@ -214,7 +214,6 @@ using ProblemKey = std::tuple<
     uint32_t,
     std::size_t,
     std::size_t,
-    uint32_t,
     uint64_t,
     uint32_t,
     uint32_t,
@@ -246,7 +245,6 @@ ProblemKey key_of(const RecipeBlockingProblem& p) {
         p.vd_tiles,
         p.grid.x,
         p.grid.y,
-        p.max_cores_per_head_batch,
         p.l1_bytes,
         p.mask_page_bytes,
         p.extra_l1_bytes,
@@ -588,8 +586,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                     // batch/heads than cores, every head's Q chunks split evenly over the grid.
                     const uint32_t cores = p.grid.x * p.grid.y;
                     const uint32_t jobs_per_head = div_up(p.q_rows + p.joint_q_rows, q_chunk);
-                    const uint32_t chain =
-                        std::min({jobs_per_head, cores / batch_heads, p.max_cores_per_head_batch});
+                    const uint32_t chain = std::min(jobs_per_head, cores / batch_heads);
                     if (p.key_range) {
                         // run_recipe_segments: all heads' Q chunks dealt over the grid in snake order by cost.
                         const uint32_t total_jobs = batch_heads * jobs_per_head;
@@ -614,9 +611,6 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                                 .v_storage = p.v_storage},
                             0.0,
                             work);
-                        break;
-                    }
-                    if (chain == 0 && p.max_cores_per_head_batch == 0) {
                         break;
                     }
                     const uint32_t k_blocks = div_up(p.k_rows + p.joint_k_rows, k_chunk);
@@ -808,7 +802,6 @@ RecipeBlockingProblem base_problem(
     problem.q_heads = q.logical_shape()[1];
     problem.d_tiles = div_up(q.logical_shape()[3], kTile);
     problem.grid = config.compute_with_storage_grid_size;
-    problem.max_cores_per_head_batch = config.max_cores_per_head_batch;
     problem.fixed_q_tiles = fixed_tiles(config.q_chunk_size);
     problem.fixed_k_tiles = fixed_tiles(config.k_chunk_size);
     return problem;
@@ -917,11 +910,6 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         // 7.77 vs 14.49 ms, Qwen3-VL vision 2.03 vs 3.50; Flux-style joint 1.52 vs 1.58, qwen_image joint equal).
         config.compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         problem.grid = config.compute_with_storage_grid_size;
-        // Legacy prefill ignores max_cores_per_head_batch (a decode setting, default 16), and spreads a head's Q
-        // chunks over the whole grid: a routed head's K/V chain may span it too (one head D512 S16384, ACCURATE
-        // Q64/K64: 16 cores 57.1 ms, 110 cores 10.9 ms; the legacy kernel 8.2 ms on 64 cores).
-        config.max_cores_per_head_batch = problem.grid.x * problem.grid.y;
-        problem.max_cores_per_head_batch = config.max_cores_per_head_batch;
         problem.fixed_q_tiles = 0;
         problem.fixed_k_tiles = 0;
         config.q_chunk_size = 0;
