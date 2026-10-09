@@ -146,8 +146,7 @@ class PrefillTaps:
             )
             ids = ttnn.slice(ids_dev, [gi, 0], [gi + 1, g * PIECES])
             P.paged_scatter_rows(self.stash, src, ids, base_offset=li * self.S10)
-            ttnn.deallocate(src)
-            ttnn.deallocate(ids)
+            del src, ids  # (a full-range slice / a reshape alias their input: never deallocate them explicitly)
         ttnn.deallocate(rm)
         if own is not rm:
             ttnn.deallocate(own)
