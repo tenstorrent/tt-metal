@@ -1316,3 +1316,32 @@ No session connection is needed for that queue to continue.
   comparable to a B16/32K measurement, and the new BFP8 G0 has no timing yet.
 
 [Precision cost estimate and persistent comparison](../galaxy-evidence/precision-perf-v1/README.md).
+
+## Oct 9, 10:13-10:21 UTC: BFP8 G0 passes; exact-SHA packaging build launched
+
+- BFP8 G0 passed all eight physical TP4 replicas, including matched greedy
+  repetitions and concurrency interference checks. It finished at 10:13:29
+  UTC after 45m19s including serial model loads. Full traced aggregate decode
+  was 211.54 tok/s versus 281.33 for the head-only control: 24.81% lower at
+  one short-context user per replica. Source hashes match except for precision.
+- The unchanged persistent controller advanced to serving. At 10:19:15 workers
+  were actively loading layers 54-56, with zero GPQA results and no reported
+  admission error. Replied to the user's score question without treating G0
+  or the short reference comparison as a GPQA pass.
+- Created a separate runtime worktree from head-control commit d3e8d6021f7,
+  added the two already tested decoder precision configs, and verified all 33
+  runtime/config files against the frozen active source. Pushed exact runtime
+  `20619e008a236aaf393937b222a60a5b03e49cdc` on the anatarajan BFP8 branch.
+- Prepared its exact-G0 TTIS runtime/Helm bundle and extended existing wrapper
+  parameterization to the all-BFP8 policy. The combined packaging/startup/OCI
+  suite passed 44 tests. Pushed TTIS `bbb1ca07e7cd0f97af47745a1686545a16089b9c`.
+- Verified .34 had no running build containers, 22.04 GB disk and 291.91 GB
+  tmpfs free. Started bounded persistent image build v7 there, preserving .98
+  for hardware evaluation. It was observed building as PID 3977785, invocation
+  `ea312e233d9e4dd5995f81ccadd7f564`. Image digest and accuracy remain unqualified.
+- Local searches for old temporary release Python environments found them
+  absent; the existing qwen38-tools environment successfully imported the
+  preparation CLI and ran the 44 tests. No dependencies were installed.
+
+[BFP8 G0 result](../galaxy-evidence/decoder-g0-v1/README.md),
+[exact-SHA build](../galaxy-evidence/image-build-v7/README.md).

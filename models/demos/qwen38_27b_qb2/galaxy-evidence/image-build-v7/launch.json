@@ -1,0 +1,17 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-release-build-v7-20261009",
+    "--property=RuntimeMaxSec=4h",
+    "--property=TimeoutStopSec=90",
+    "--property=KillMode=control-group",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-release-build-20261009-v7/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-release-build-20261009-v7/run.log",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-release-build-20261009-v7/controller.py",
+    "/home/ttuser/qwen38-release-build-20261009-v7"
+  ],
+  "source": "bbb1ca07e7cd0f97af47745a1686545a16089b9c"
+}

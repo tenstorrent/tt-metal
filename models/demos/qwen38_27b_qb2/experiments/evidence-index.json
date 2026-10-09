@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T10:09:44.887274+00:00",
+  "generated_at": "2026-10-09T10:23:08.732108+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 99314,
-      "sha256": "44488d362abd226503fed3bd295e894c76d7d8bda5ff6c5fa856fa067342e6d5"
+      "bytes": 101272,
+      "sha256": "879bde1246ecd11ab23f7859d70f7ca2caf42bc387673e061edcf31853d35c55"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 31411,
-      "sha256": "c4c9af7deca974243f2e0cce980b7e093094a895768bbc92bd4253190ccae24c"
+      "bytes": 31942,
+      "sha256": "60dcef9a68bf074aa84a93c8fc3a21cef2b5011441262492f7f179465d513e6f"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1159,9 +1159,44 @@
       "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
     },
     {
+      "path": "galaxy-evidence/decoder-g0-v1/README.md",
+      "bytes": 2152,
+      "sha256": "21f1087d7c73d8ab41f9aad33b1add0dfb388e7f41dbb1fd5f8eef1aab5bf76b"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/baseline-head-g0.json",
+      "bytes": 261153,
+      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/full-model.json",
+      "bytes": 264158,
+      "sha256": "62871c0fd29b981678e85cd04a0e017a583884ea1bf5ebbd174d4f05e662e54e"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/hardware.log.gz",
+      "bytes": 7776,
+      "sha256": "93ae56efd73bb5e5ca4f5f3cee9486c3cacbcb48ae5428d8994403c96fd0287c"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/hardware.xml.gz",
+      "bytes": 307,
+      "sha256": "992480845ee69018a3ae57a1633396ee53fd7408a5e16f3c649235690dac7efe"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/queue-at-completion.json",
+      "bytes": 24261,
+      "sha256": "7330d2e79acda5b65008ff2689deff90d990c50cc7bc80e8f09f6a1a6a9cbc89"
+    },
+    {
+      "path": "galaxy-evidence/decoder-g0-v1/service-at-g0-completion.txt",
+      "bytes": 81,
+      "sha256": "7059c62b3ffcc329ec0930315cf3429f5a2745d8e0134395039faccdf6fe7e33"
+    },
+    {
       "path": "galaxy-evidence/decoder-gpqa-v1/README.md",
-      "bytes": 2473,
-      "sha256": "ad2edcdfb5d93ffce301161a97482e494441376d227ef9862a3c2bb073588f55"
+      "bytes": 2790,
+      "sha256": "815316bf6f1ae1faf612e9ccd7b78371ebbcc875e71be2381002f69c3c9ee8ae"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/audit-launch.json",
@@ -2822,6 +2857,61 @@
       "path": "galaxy-evidence/image-build-v6/state.json",
       "bytes": 552,
       "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/README.md",
+      "bytes": 2420,
+      "sha256": "ef680ba51f13d7371b0f1d3c895995f5bd884965851f7ea9db427f6019f4c593"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/bundle/manifest.json",
+      "bytes": 3565,
+      "sha256": "df784ad57ae8029f0f4a7fcb2500fd1369d538ae0c98d371ac49188a4feb1856"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/bundle/runtime-model-spec.json",
+      "bytes": 6188,
+      "sha256": "dbac37f0b8d8ed5ad1cfe92615e396df99b4419fd17c892eb1b73d7681ff61db"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/bundle/values.yaml",
+      "bytes": 2926,
+      "sha256": "e0f5c60fe72e9dd29dc037fda10c7c23f75ab948526954b1b460b4d84011cbb5"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/bundle/verify_image.py.gz",
+      "bytes": 1172,
+      "sha256": "4a8498bb33a02d691ad57a3246e37a3d2c911a512d138a6358526806322f65dd"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/context-manifest.json",
+      "bytes": 4483,
+      "sha256": "6ebbb9c6d9e5df5911e03fd279f282c47f5eb5d2916d1adb5e960a15a2822a22"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/controller.py.gz",
+      "bytes": 2642,
+      "sha256": "78070ec1edca39ffb15448e974289d43d0f506cee81c19eebff3b624935614ba"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/launch.json",
+      "bytes": 636,
+      "sha256": "5a1893b87deede2dbae3cf15fa5f71cf82eddc2751220df55482caf10ab5a3aa"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "a9f280fdbb9251c5b23fcc5ba5311ff36f6eae8543b5cf13ff8d1e350c54c46b"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/state-at-launch.json",
+      "bytes": 551,
+      "sha256": "42676eaba9cc3c37d0b6f58bd8c74b07b74455da447d67dfc3574c78187776d5"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/wrapper-validation.json",
+      "bytes": 850,
+      "sha256": "e38bd86c2ec9c9a8d28247144de9070699c9b5e54f671db0249c2f05463276a8"
     },
     {
       "path": "galaxy-evidence/image-recovery-v2/README.md",

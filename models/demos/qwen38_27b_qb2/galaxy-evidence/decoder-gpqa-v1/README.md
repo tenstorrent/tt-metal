@@ -1,5 +1,10 @@
 # Full GPQA with BFP8 decoder weights
 
+Update Oct 9, 10:19 UTC: [eight-replica G0 passed](../decoder-g0-v1/README.md)
+and the controller advanced to serving startup. Workers were loading layers
+54-56 at the latest check. No GPQA questions had completed yet. The exact
+runtime is separately pinned and pushed as `20619e008a236aaf393937b222a60a5b03e49cdc`.
+
 Started **Oct 9, 09:28:02 UTC**, after the completed decoder reference controls.
 This experiment is running, not qualified. The previous head-only control
 finished at 166/198; native BFP4 at the same output budget finished at 170/198.

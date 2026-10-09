@@ -1,5 +1,14 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 10:21 UTC update: BFP8 passed all eight G0 replicas and concurrent
+execution. Short-context B1-per-replica traced aggregate decode is 211.54 tok/s,
+24.81% below the matched BFP4-decoder control. Serving is starting; zero GPQA
+results at the latest check. The exact runtime is pinned/pushed and its separate
+CPU-only image build is persistent. Packaging tests pass 44 cases; no accuracy
+or container inference promotion.
+[G0](../galaxy-evidence/decoder-g0-v1/README.md),
+[build](../galaxy-evidence/image-build-v7/README.md).
+
 Oct 9 10:09 UTC update: BFP8 G0 has loaded seven of eight replicas; no new
 accuracy or throughput result yet. A matched BFP4/LoFi, BFP4/HiFi2, BFP8/HiFi2
 performance comparison is persistently queued after the accuracy/state chain,

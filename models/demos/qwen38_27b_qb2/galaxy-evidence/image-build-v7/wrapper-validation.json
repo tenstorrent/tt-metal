@@ -1,0 +1,12 @@
+{
+  "ttis_sha": "bbb1ca07e7cd0f97af47745a1686545a16089b9c",
+  "command": "/Users/anatarajan/Documents/tt-blaze/local-notes/qwen38-tools/bin/python -m pytest tests/test_qwen38_galaxy_release.py tests/test_qwen38_startup_probe.py tests/test_local_oci_image.py -q",
+  "observed_result": "44 passed in 1.90s",
+  "observed_via": "local exec output; no saved JUnit from this invocation",
+  "source_sha256": {
+    "tests/test_qwen38_galaxy_release.py": "4e27277ef516e7e04d07a0cc97de34a79d24deb92574a05ba7e69fe813593230",
+    "tests/test_qwen38_startup_probe.py": "2329b7c71ca47a008f394be3ccf2b11e8ff64f23df41c19fd17504e940d4500a",
+    "tests/test_local_oci_image.py": "3a4a3e0debbe5e8fb3ba50c448f1e7bd8def46a834d5df2931e1889e7a3bc64f",
+    "scripts/release/prepare_qwen38_galaxy.py": "8ec4ef00635df94de7802626ea825b2a328426aaca02c78850115f71c61faa91"
+  }
+}
