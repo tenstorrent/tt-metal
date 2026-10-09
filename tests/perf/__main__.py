@@ -27,8 +27,10 @@ from tests.perf.registry import load as load_registry
 ARTIFACT_PATTERN = "perf_results_*"
 
 
-def _download_run(run_id: str, dest: Path) -> list[Path]:
-    subprocess.run(["gh", "run", "download", run_id, "--pattern", ARTIFACT_PATTERN, "--dir", str(dest)], check=True)
+def _download_run(run_id: int, dest: Path) -> list[Path]:
+    # The run id is parsed as an int and the command has no shell, so no outside text reaches the command line.
+    command = ["gh", "run", "download", str(int(run_id)), "--pattern", ARTIFACT_PATTERN, "--dir", str(dest)]
+    subprocess.run(command, check=True, shell=False)
     return sorted(dest.rglob("measurements.json"))
 
 
@@ -115,7 +117,7 @@ def main(argv=None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     up = sub.add_parser("update", help="update goldens from a CI run's perf artifacts")
-    up.add_argument("--from-run", required=True, help="GitHub Actions run id")
+    up.add_argument("--from-run", required=True, type=int, help="GitHub Actions run id")
     up.add_argument("--suite", help="only update this suite")
     up.add_argument("--force", action="store_true", help="accept regressions, new and missing cases")
     up.set_defaults(func=cmd_update)
