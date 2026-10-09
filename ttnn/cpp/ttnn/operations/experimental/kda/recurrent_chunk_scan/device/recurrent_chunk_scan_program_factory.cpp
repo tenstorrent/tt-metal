@@ -80,6 +80,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName k_decay_transposed_dfb_name{"k_decay_transposed"};
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
+    const tt::tt_metal::experimental::DFBSpecName state_update_dfb_name{"state_update"};
+    const tt::tt_metal::experimental::DFBSpecName state_temporary_dfb_name{"state_temporary"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
@@ -135,6 +137,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
+        // The state update and the decayed state, each kept in FP32 until they are added.
+        make_dfb(state_update_dfb_name, state_tiles, fp32),
+        make_dfb(state_temporary_dfb_name, state_tiles, fp32),
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
         // summary and recurrent restart payload simultaneously.
@@ -291,6 +296,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           k_decay_transposed_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
+          state_update_dfb_name,
+          state_temporary_dfb_name,
           summary_head_output_dfb_name,
           summary_head_state_dfb_name,
           tail_entry_states_dfb_name}) {
@@ -322,6 +329,10 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),
                 tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
+                tt::tt_metal::experimental::ProducerOf(state_update_dfb_name, "state_update"),
+                tt::tt_metal::experimental::ConsumerOf(state_update_dfb_name, "state_update"),
+                tt::tt_metal::experimental::ProducerOf(state_temporary_dfb_name, "state_temporary"),
+                tt::tt_metal::experimental::ConsumerOf(state_temporary_dfb_name, "state_temporary"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
