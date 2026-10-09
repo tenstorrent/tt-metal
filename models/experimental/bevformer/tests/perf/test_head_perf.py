@@ -18,10 +18,14 @@ import torch
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.decoder_common import BEV_SHAPES, assert_channels_close, random_bev_features
-from models.experimental.bevformer.tests.head_common import build_reference_head
-from models.experimental.bevformer.tt.model_preprocessing_head import create_head_parameters
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_channels_close,
+    assert_pcc,
+    build_reference_head,
+    random_bev,
+)
+from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 
@@ -48,7 +52,7 @@ def test_head_perf(device, reset_seeds):
     coder = TtNMSFreeCoder()
 
     generator = torch.Generator().manual_seed(0)
-    bev_embed = random_bev_features(bev_shape, 1, generator).permute(1, 0, 2).contiguous()
+    bev_embed = random_bev(bev_shape, 1, generator).permute(1, 0, 2).contiguous()
     torch_outputs = torch_model(bev_embed)
     # Uploaded once so the profiled replay measures the head, not the transfer.
     tt_bev_embed = ttnn.from_torch(bev_embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
