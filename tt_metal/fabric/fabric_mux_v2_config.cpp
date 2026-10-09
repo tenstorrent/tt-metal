@@ -9,6 +9,7 @@
 #include <limits>
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
 

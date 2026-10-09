@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal::distributed {
 
