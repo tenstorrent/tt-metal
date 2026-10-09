@@ -8,13 +8,30 @@ import torch
 import ttnn
 
 
-def hifi4_config(fp32_acc: bool = True, fidelity=None):
-    """HiFi4 + fp32 dest by default; ``fidelity`` overrides the math fidelity (see attn_fidelity)."""
+def hifi4_config(fp32_acc: bool = True, fidelity=None, l1_acc: bool = False):
+    """HiFi4 + fp32 dest by default; ``fidelity`` overrides the math fidelity (see attn_fidelity). l1_acc: packer L1
+    accumulation, for matmuls (mm_config)."""
     return ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=fidelity or ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=l1_acc,
+    )
+
+
+def mm_config(cfg):
+    """A matmul's copy of ``cfg`` with packer L1 accumulation (GLM_MM_L1ACC, default on): same results (fp32 reference,
+    tests/test_matmul_tune.py GLM_MMT_TRUTH=1), ttnn.linear 1.2..2.4x faster (MLA o_proj 640x16384x4096 1.86 -> 0.76 ms).
+    """
+    import os
+
+    if os.environ.get("GLM_MM_L1ACC", "1") == "0":
+        return cfg
+    return ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=cfg.math_fidelity,
+        math_approx_mode=cfg.math_approx_mode,
+        fp32_dest_acc_en=cfg.fp32_dest_acc_en,
+        packer_l1_acc=True,
     )
 
 

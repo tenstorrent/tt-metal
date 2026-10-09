@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, env_fidelity, hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, env_fidelity, hifi4_config, mm_config, replicate
 
 KP = 4
 TOPK_POOLS = 512
@@ -108,12 +108,12 @@ class TtIndexer:
     def _pooled_keys(self, x: ttnn.Tensor, s: int) -> ttnn.Tensor:
         """x [1, 1, S, H] -> pooled keys [1, 1, S/4, 128] bf16."""
         m, hd = s // KP, self.hd
-        k = ttnn.linear(x, self.wk, dtype=ttnn.float32, compute_kernel_config=self.mm, memory_config=MC)
+        k = ttnn.linear(x, self.wk, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         kn = ttnn.layer_norm(
             k, weight=self.kn_w, bias=self.kn_b, epsilon=1e-6, compute_kernel_config=self.mm, memory_config=MC
         )
         ttnn.deallocate(k)
-        g = ttnn.linear(x, self.wg, dtype=ttnn.float32, compute_kernel_config=self.mm, memory_config=MC)
+        g = ttnn.linear(x, self.wg, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         g4 = ttnn.reshape(g, (1, 1, m, KP * hd))
         k4 = ttnn.reshape(kn, (1, 1, m, KP * hd))
         lg = ttnn.add(g4, self.ape, memory_config=MC)
@@ -157,7 +157,7 @@ class TtIndexer:
         ttnn.deallocate(pooled)
 
         qr = q_resid if q_local else self._local_rows(q_resid)
-        q = ttnn.linear(qr, self.wq, dtype=ttnn.bfloat16, compute_kernel_config=self.mm, memory_config=MC)
+        q = ttnn.linear(qr, self.wq, dtype=ttnn.bfloat16, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         if qr is not q_resid:
             ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -166,7 +166,7 @@ class TtIndexer:
         ttnn.deallocate(q)
         xl = self._local_rows(x)
         wdt = ttnn.float32 if self.score_mode == "heads" else ttnn.bfloat16
-        wts = ttnn.linear(xl, self.wp, dtype=wdt, compute_kernel_config=self.mm, memory_config=MC)
+        wts = ttnn.linear(xl, self.wp, dtype=wdt, compute_kernel_config=mm_config(self.mm), memory_config=MC)
         ttnn.deallocate(xl)
         score = self._scores_heads(qh, wts, kv) if self.score_mode == "heads" else self._scores_op(qh, wts, kv)
         ttnn.deallocate(qh)
@@ -239,7 +239,12 @@ class TtIndexer:
         for h in range(self.nh):
             q1 = ttnn.slice(qh, (0, h, 0, 0), (1, h + 1, sq, self.hd), memory_config=MC)
             m = ttnn.linear(
-                q1, kt, dtype=ttnn.float32, activation="relu", compute_kernel_config=self.mm, memory_config=MC
+                q1,
+                kt,
+                dtype=ttnn.float32,
+                activation="relu",
+                compute_kernel_config=mm_config(self.mm),
+                memory_config=MC,
             )
             ttnn.deallocate(q1)
             w1 = ttnn.slice(wts, (0, 0, 0, h), (1, 1, sq, h + 1), memory_config=MC)

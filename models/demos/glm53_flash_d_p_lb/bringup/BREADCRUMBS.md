@@ -210,3 +210,16 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Payload sweep (warm 56k prefill, KDA HiFi4): 4352 8.62 s, 6144 8.27, 8192 8.07, 10240 8.07, 12288 8.06, 14400 8.26,
   15232 8.28. Plateau 8192..12288; the larger packets lose (fewer packets in flight per router channel). Spec: 8192 =
   one bf16 token row (4096 x 2 B), as the DeepSeek-family configs size it to the dispatched row; 4 bf16 / 2 fp32 tiles.
+
+## Matmuls: packer L1 accumulation (2026-10-09), tt/common.py mm_config (GLM_MM_L1ACC=0 restores)
+
+- No GLM matmul had a tuned config; hifi4_config set packer_l1_acc=False for everything. tests/test_matmul_tune.py
+  (one chip, the model's shapes / dtypes / fidelity): packer_l1_acc on gives identical results vs fp32 torch (same rel
+  and scale on every shape) and ttnn.linear 1.1..2.4x faster: MLA o_proj 640x16384x4096 1.86 -> 0.76 ms, q_b 0.53 ->
+  0.27, kv_a 0.43 -> 0.34, shared expert gate 0.34 -> 0.30. Applied to every ttnn.linear / matmul in mla_attention,
+  indexer, mlp, q_a, router (norms, SDPA, score op unchanged).
+- Warm 56k prefill 8.07 -> 7.66 s (7355 tok/s). s4096 KV PCC min/mean kv_latent 0.96876 / 0.98514, index_key 0.98899 /
+  0.99550 (before 0.96868 / 0.98509, 0.98867 / 0.99546).
+- Also from the sweep: HiFi2 matmuls are 0.28% low (scale 0.99722 vs fp32; HiFi4 1.00004) - MLA q_b / kv_a / o_proj
+  run at the attention fidelity (HiFi2). minimal_matmul: another 1.2..1.7x at bf16 out, but fp32 out is 0.03% low
+  (0.99969) and fp32 input fails; not used yet.
