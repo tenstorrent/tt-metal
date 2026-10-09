@@ -19,6 +19,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
 
@@ -39,7 +40,8 @@ class PagedStateSink:
         self.rows, self.cols = tuple(md.shape)
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
         self.lens = None  # [B] real prompt lengths (global user order: row-major over mesh rows)
-        self.bufs = {}  # C -> {"ring": t, "lat": {src: t}, "idx": t, "mask": t}
+        self.bufs = {}  # C -> {"ring": t, "lat": {src: t}, "idx": t, "mask": t, "tap": t}
+        self.taps = None  # PrefillTaps (tt/prefill_taps.py): drafter taps of the last 128 positions, written inside the chunk trace (speculative builds)
 
     def set_lengths(self, lens):
         self.lens = torch.as_tensor(lens).long()
@@ -151,28 +153,31 @@ class PagedStateSink:
             self.bufs[C]["hmask_cs"] = ttnn.to_device(
                 self._host_cs(hm, C), self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+        if self.taps is not None:
+            self.bufs[C]["tap"] = self.taps.upload(self._host_taps(0, C))
         return self.bufs[C]
+
+    def _host_taps(self, s0, C):
+        return self.taps.host_ids(s0, C, self.U, self._user_of, self.lens)
 
     def update(self, s0, C):
         """Refresh the persistent index tensors for the chunk of positions [s0, s0 + C) (host work + 6 small uploads; call before each chunk / replay)."""
         bufs = self.bind(C)
         ring, lat, idx, m, hm = self._host_values(s0, C)
-        ttnn.copy_host_to_device_tensor(
-            self._host(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["ring"]
-        )
+        h2d(self._host(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["ring"])
         for s, v in lat.items():
-            ttnn.copy_host_to_device_tensor(
-                self._host(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["lat"][s]
-            )
-        ttnn.copy_host_to_device_tensor(self._host(idx, ttnn.uint32), bufs["idx"])
+            h2d(self._host(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["lat"][s])
+        h2d(self._host(idx, ttnn.uint32), bufs["idx"])
         if isinstance(m, list):
             for x, dev in zip(m, bufs["masks"]):
-                ttnn.copy_host_to_device_tensor(self._host(x, ttnn.float32, ttnn.TILE_LAYOUT), dev)
+                h2d(self._host(x, ttnn.float32, ttnn.TILE_LAYOUT), dev)
         else:
-            ttnn.copy_host_to_device_tensor(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
-        ttnn.copy_host_to_device_tensor(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
+            h2d(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
+        h2d(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
         if colsplit_active(self.U, C):
-            ttnn.copy_host_to_device_tensor(self._host_cs(hm, C), bufs["hmask_cs"])
+            h2d(self._host_cs(hm, C), bufs["hmask_cs"])
+        if self.taps is not None:
+            h2d(self.taps.upload(self._host_taps(s0, C), host=True), bufs["tap"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):

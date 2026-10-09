@@ -20,6 +20,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_LAYERS
 
 T = 32
 ER_RM = (
@@ -204,6 +205,8 @@ class DSV41PrefillModel:
         [1,1,1,vocab/cols] of its last token} for the last chunk, else None."""
         tok_dev, erows_dev = bufs
         last = s0 + C >= S
+        sink = getattr(self, "sink", None)
+        taps = getattr(sink, "taps", None) if dyn else None  # (the traced / dynamic chunk of the hand-off model only)
         if (
             dyn
         ):  # traced-chunk mode: the masks are built on the device from the per-chunk tensors, the outputs stay in ``self.dyn_out``
@@ -310,6 +313,9 @@ class DSV41PrefillModel:
                     ttnn.deallocate(x)
                 xs = new
                 sync("engram_dev", t0)
+            if taps is not None and lid in TAP_LAYERS:
+                # drafter taps (tt/prefill_taps.py): mean over the 4 streams at the input of layers 37 / 38 / 39 (after the Engram), last 128 positions of every user -> persistent stash
+                taps.write(TAP_LAYERS.index(lid), xs, pl.L.mesh_config, pl.L.ccl, self.cs, self.sink.bufs[C]["tap"])
             t0 = time.perf_counter()
             outs, pouts = pl.forward(xs, pres, S, s0=s0)
             if xs[0] is not outs[0]:
