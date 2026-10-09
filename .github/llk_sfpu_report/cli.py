@@ -257,24 +257,18 @@ def cmd_run(args):
     acc_ops = [o for o in ops if o != "Typecast"]
     acc = []
     if acc_ops:
-        accuracy.measure(
-            base,
-            args.arch,
-            acc_ops,
-            work / "accuracy" / "base",
-            log,
-            jobs=args.jobs,
-            formats=formats,
-        )
-        accuracy.measure(
-            head,
-            args.arch,
-            acc_ops,
-            work / "accuracy" / "head",
-            log,
-            jobs=args.jobs,
-            formats=formats,
-        )
+        exit_codes = [
+            accuracy.measure(
+                side,
+                args.arch,
+                acc_ops,
+                work / "accuracy" / side.name,
+                log,
+                jobs=args.jobs,
+                formats=formats,
+            )
+            for side in (base, head)
+        ]
         acc = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
         one_sided = [r for r in acc if r.get("missing")]
         if one_sided:
@@ -285,7 +279,13 @@ def cmd_run(args):
             )
         measured = {r["key"][0] for r in acc}
         missing = [o for o in acc_ops if o not in measured]
-        if missing:
+        if missing and any(code not in (0, 5) for code in exit_codes):
+            notes.append(
+                "⚠️ The accuracy run failed for "
+                + ", ".join(f"`{o}`" for o in missing)
+                + ", so this report has no accuracy for it; see run.log."
+            )
+        elif missing:
             notes.append(
                 "No accuracy driver covers "
                 + ", ".join(f"`{o}`" for o in missing)

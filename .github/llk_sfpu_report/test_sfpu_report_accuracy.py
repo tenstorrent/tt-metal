@@ -385,7 +385,10 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
         captured["src"] = out[0]
         return out
 
-    monkeypatch.setattr(fb, "_assert_against_contract", capture_assert)
+    # The functional driver's last line gates on its accuracy contract; replacing that
+    # call keeps its golden and result instead. test_sfpu_report_hw_free.py checks
+    # that both names still exist in test_eltwise_binary_sfpu.py.
+    monkeypatch.setattr(fb, "assert_against_contract", capture_assert)
     monkeypatch.setattr(fb, "generate_stimuli", capture_generate)
 
     kwargs = {}
