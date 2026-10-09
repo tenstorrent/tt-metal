@@ -17,14 +17,15 @@ The carries live in address-stable buffers (kimi_k3/kda_state.py pattern); a chu
 An optional actual_end (exclusive valid end, 32-aligned; the serving contract pads the last chunk) is sliced from a
 second load-time table (every 32-aligned end up to max_seq) and passed to ttKDA, so the carries stop at the valid end.
 bind_state points the module at another address-stable state (one per serving slot, tt/runners).
-Precision departures from ttKDA: the decay gate in fp32, and prepare_chunk_recurrence's k_dec_t recomputed without
-its TF32 cancellation (_PreciseDecayRecurrence; GLM_KDA_DECAY=kernel keeps the kernel's own term for comparison).
+The gate, beta and bounded-decay paths are ttKDA's fused ones (PR #59918: the decay projection reads its rank columns
+in place with the per-head scale folded into its weights and the sigmoid in its pack; chunk preparation applies -5 and
+beta's sigmoid; the gated norm reads its gate in place). GLM's own fp32 gate path and recomputed k_dec_t
+(_PreciseDecayRecurrence) were dropped with it.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import replace
 
 import torch
 
@@ -37,7 +38,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDARecurrenceProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.glm53_flash_d_p.tt import mm_configs
@@ -54,7 +54,6 @@ def kda_fidelity():
 
 KDA_OUT_RS = os.environ.get("GLM_KDA_OUT_RS", "fabric")
 KDA_LINKS = int(os.environ.get("GLM_MOE_LINKS", "2"))
-PRECISE_DECAY = os.environ.get("GLM_KDA_DECAY", "precise") == "precise"  # "kernel": prepare's own k_dec_t
 START_ALIGN = 64
 END_ALIGN = 32
 _KDA_NAMES = (
@@ -89,84 +88,11 @@ def kda_config(cfg) -> KDAConfig:
     )
 
 
-def _replicated(mesh, t: torch.Tensor, dtype) -> ttnn.Tensor:
-    return ttnn.from_torch(
-        t.contiguous(),
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-    )
-
-
-class _PreciseDecayRecurrence(KDARecurrence):
-    """KDARecurrence with prepare_chunk_recurrence's k_dec_t recomputed without cancellation.
-
-    The kernel forms k_dec_t = k * exp(G_last - G_j) as exp(a - G_j) * exp(G_last - a) with G = cumsum(g) and
-    a = G_last / 2, subtracting on the FPU, which reads fp32 operands at TF32 precision (10-bit mantissa). Near
-    the -5 gate bound |G| reaches ~150 per 32-token chunk (TF32 step 0.125), so the factor is off by up to e^0.1 and
-    biased low (GLM layer 0: the last token's factor, exactly 1, reads 0.967), and the fast-decay rows of the carried
-    state come out ~5% small. Here: G_last - G_j = sum_{i > j} g_i as a bf16 matmul with a constant 0/1 mask (exact
-    products, fp32 accumulation), exp and the l2-normalized k in fp32 (SFPU), then the kernel's layout [H, N, K, 32].
-    """
-
-    def __init__(self, device, program_config, *, heads, key_dim, compute_config, **kwargs):
-        super().__init__(device, program_config, heads=heads, key_dim=key_dim, **kwargs)
-        c = ttnn.TILE_SIZE
-        self._ckc = compute_config
-        i = torch.arange(c)
-        self._suffix = _replicated(device, (i.view(c, 1) > i.view(1, c)).float(), ttnn.bfloat16)  # M[i, j] = i > j
-        cols = torch.arange(heads * key_dim) // key_dim
-        heads_of = (cols.view(-1, 1) == torch.arange(heads).view(1, -1)).float()  # [H*K, H]
-        self._head_sum = _replicated(device, heads_of, ttnn.bfloat16)
-        self._head_bcast = _replicated(device, heads_of.t(), ttnn.bfloat16)
-
-    def _k_dec_t(self, k: ttnn.Tensor, gate: ttnn.Tensor) -> ttnn.Tensor:
-        geo = self._geometry
-        n, c, h, kd = geo.num_chunks, geo.chunk_size, geo.heads, geo.key_dim
-        mm = dict(compute_kernel_config=self._ckc, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        # l2 norm over each head's K channels (eps 1e-6 inside the sqrt, as the kernel and FLA)
-        k32 = ttnn.typecast(k, ttnn.float32, memory_config=dram)
-        sq = ttnn.multiply(k32, k32, memory_config=dram)
-        ss = ttnn.matmul(sq, self._head_sum, **mm)  # [1, T, H]
-        ttnn.deallocate(sq)
-        inv = ttnn.rsqrt(ttnn.add(ss, 1e-6, memory_config=dram), memory_config=dram)
-        ttnn.deallocate(ss)
-        invb = ttnn.matmul(inv, self._head_bcast, **mm)  # [1, T, H*K]
-        ttnn.deallocate(inv)
-        khat = ttnn.multiply(k32, invb, memory_config=dram)
-        ttnn.deallocate(k32)
-        ttnn.deallocate(invb)
-        kt = ttnn.transpose(ttnn.reshape(khat, (n, c, h * kd)), -2, -1, memory_config=dram)  # [N, H*K, C]
-        ttnn.deallocate(khat)
-        gt = ttnn.transpose(ttnn.reshape(gate, (n, c, h * kd)), -2, -1, memory_config=dram)
-        suf = ttnn.matmul(gt, self._suffix, **mm)  # [N, H*K, C]: sum_{i > j} g_i
-        ttnn.deallocate(gt)
-        dec = ttnn.exp(suf, memory_config=dram)
-        ttnn.deallocate(suf)
-        out = ttnn.multiply(kt, dec, memory_config=dram)
-        ttnn.deallocate(kt)
-        ttnn.deallocate(dec)
-        res = ttnn.permute(ttnn.reshape(out, (n, h, kd, c)), (1, 0, 2, 3), memory_config=dram)  # [H, N, K, C]
-        ttnn.deallocate(out)
-        return res
-
-    def _prepare(self, *, k, gate, **kwargs):
-        prepared, state, geometry = super()._prepare(k=k, gate=gate, **kwargs)
-        ttnn.deallocate(prepared.k_dec_t)
-        return replace(prepared, k_dec_t=self._k_dec_t(k, gate)), state, geometry
-
-
 class _GlmKDA(ttKDA):
-    """ttKDA with the precise-decay recurrence, and the bounded decay computed in fp32 (f_b output, dt_bias,
-    exp(A_log), sigmoid, x -5) and rounded to bf16 once for prepare_chunk_recurrence (ttKDA keeps exp(A_log) and
-    dt_bias in bf16)."""
+    """ttKDA with GLM's projection matmul configs, its fidelity override and the row-partial output path."""
 
-    def __init__(self, *args, decay_scale32, decay_bias32, program_config, **kwargs):
+    def __init__(self, *args, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
-        self.decay_scale32, self.decay_bias32 = decay_scale32, decay_bias32
         # explicit projection schedules (tt/mm_configs.py; tests/test_matmul_tune.py at 2560 rows per chip): input
         # projection minimal_matmul M4 K8 N4 (1.511 -> 1.260 ms, 91% of HiFi4), o_proj 2D multicast (0.504 -> 0.450 ms)
         if mm_configs.ENABLED:
@@ -183,17 +109,6 @@ class _GlmKDA(ttKDA):
             )
             self.kda_compute_config = ttnn.init_device_compute_kernel_config(
                 arch, math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
-            )
-        if PRECISE_DECAY:
-            self.recurrence = _PreciseDecayRecurrence(
-                self.device,
-                program_config.recurrence,
-                sequence_parallel_axis=self.sequence_parallel_axis,
-                local_rows=self.active_seq_len_local,
-                heads=self.config.num_heads,
-                key_dim=self.config.head_k_dim,
-                value_dim=self.config.head_v_dim,
-                compute_config=self.kda_compute_config,
             )
 
     row_partial = False  # set per call by TtKdaAttention: skip the TP reduction, return o_proj's bf16 partial
@@ -212,30 +127,6 @@ class _GlmKDA(ttKDA):
             compute_kernel_config=self.output_projection_compute_config,
         )
         return o
-
-    def _compute_gates(self, *, beta, decay_rank):
-        beta32 = ttnn.sigmoid(
-            ttnn.typecast(beta, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        raw = ttnn.linear(
-            decay_rank,
-            self.weights.decay_output_projection,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
-        z = ttnn.add(raw, self.decay_bias32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(raw)
-        zs = ttnn.multiply(z, self.decay_scale32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(z)
-        sg = ttnn.sigmoid(zs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(zs)
-        gate = ttnn.multiply(
-            sg, self.config.gate_lower_bound, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(sg)
-        return gate, beta32
 
 
 def _scan_groups(mesh, local_chunks: int, local_heads: int) -> int:
@@ -263,21 +154,6 @@ class TtKdaAttention(LightweightModule):
             None,
             cache_name_prefix=f"glm53.layer_{layer}.kda",
             tensor_parallel_axis=TP_AXIS,
-        )
-        h, d = self.kcfg.num_heads, self.kcfg.head_k_dim
-        scale = state_dict["A_log"].float().reshape(h, 1).exp().expand(h, d).reshape(1, 1, h * d)
-        bias = state_dict["dt_bias"].float().reshape(1, 1, h * d)
-        tp_mapper = ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=tuple(mesh.shape))
-        self.decay_scale32, self.decay_bias32 = (
-            ttnn.from_torch(
-                t.contiguous(),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=tp_mapper,
-            )
-            for t in (scale, bias)
         )
         self._layers: dict[int, ttKDA] = {}
         n = max_seq // START_ALIGN + 1
@@ -338,8 +214,6 @@ class TtKdaAttention(LightweightModule):
                 tp_axis=TP_AXIS,
                 program_config=self._program_config(s // self.sp),
                 active_seq_len=s,
-                decay_scale32=self.decay_scale32,
-                decay_bias32=self.decay_bias32,
             )
         return self._layers[s]
 
