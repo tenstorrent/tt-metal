@@ -391,7 +391,6 @@ std::shared_ptr<distributed::MeshBuffer> make_l1_region(distributed::MeshDevice&
 void expect_transfer_stats(
     const std::string& kernel,
     const std::vector<uint32_t>& stats,
-    const LayoutCase& lc,
     uint32_t pages,
     IterMode iter_mode,
     bool addrgen_allowed,
@@ -600,10 +599,10 @@ void run_case(
     std::vector<uint32_t> stats;
     if (producer_is_ta) {
         slow_dispatch::ReadFromL1(device, node, producer_report, kNumStatsWords * sizeof(uint32_t), stats);
-        expect_transfer_stats("reader", stats, lc, pages, iter_mode, /*addrgen_allowed=*/true);
+        expect_transfer_stats("reader", stats, pages, iter_mode, /*addrgen_allowed=*/true);
     }
     slow_dispatch::ReadFromL1(device, node, consumer_report, kNumStatsWords * sizeof(uint32_t), stats);
-    expect_transfer_stats("writer", stats, lc, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly);
+    expect_transfer_stats("writer", stats, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly);
 
     expect_buf_rw(
         "producer",
@@ -1160,18 +1159,26 @@ LayoutCase random_layout_case(std::mt19937& rng, uint32_t index) {
         }
     }
 
+    const char* layout_name = "Block";
+    switch (lc.memory_layout) {
+        case TensorMemoryLayout::INTERLEAVED: layout_name = "Interleaved"; break;
+        case TensorMemoryLayout::HEIGHT_SHARDED: layout_name = "Height"; break;
+        case TensorMemoryLayout::WIDTH_SHARDED: layout_name = "Width"; break;
+        default: break;
+    }
+    const char* dtype_name = "U8";
+    if (lc.dtype == DataType::UINT32) {
+        dtype_name = "U32";
+    } else if (lc.dtype == DataType::UINT16) {
+        dtype_name = "U16";
+    }
     lc.name = fmt::format(
         "Fuzz{:03d}_{}_{}_{}_{}",
         index,
-        lc.memory_layout == TensorMemoryLayout::INTERLEAVED      ? "Interleaved"
-        : lc.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? "Height"
-        : lc.memory_layout == TensorMemoryLayout::WIDTH_SHARDED  ? "Width"
-                                                                 : "Block",
+        layout_name,
         lc.buffer_type == BufferType::DRAM ? "Dram" : "L1",
         lc.layout == Layout::TILE ? "Tile" : "Rm",
-        lc.dtype == DataType::UINT32   ? "U32"
-        : lc.dtype == DataType::UINT16 ? "U16"
-                                       : "U8");
+        dtype_name);
     return lc;
 }
 
@@ -1389,7 +1396,6 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
         expect_transfer_stats(
             kernel,
             stats,
-            lc,
             transfers,
             IterMode::PageIdLoop,
             /*addrgen_allowed=*/true,
@@ -1557,7 +1563,6 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
     expect_transfer_stats(
         "mixed",
         stats,
-        lc,
         transfers,
         IterMode::PageIdLoop,
         /*addrgen_allowed=*/true,
@@ -2108,7 +2113,14 @@ struct Param {
     Path path;
 };
 
-std::string path_name(Path p) { return p == Path::Hw ? "Hw" : p == Path::Sw ? "Sw" : "HwStats"; }
+std::string path_name(Path p) {
+    switch (p) {
+        case Path::Hw: return "Hw";
+        case Path::Sw: return "Sw";
+        case Path::HwStats: return "HwStats";
+    }
+    return "?";
+}
 
 std::string param_name(const Param& p) {
     return fmt::format(
@@ -2174,6 +2186,7 @@ TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
     };
     const TensorSpec tensor_spec = make_tensor_spec(lc);
     std::vector<MeshTensor> tensors;
+    tensors.reserve(perf::kMaxTensors);
     for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
         tensors.push_back(MeshTensor::allocate_on_device(device, tensor_spec));
     }
@@ -2301,7 +2314,14 @@ std::string mode_name(Mode m) {
     return "?";
 }
 
-std::string path_name(Path p) { return p == Path::Hw ? "Hw" : p == Path::Sw ? "Sw" : "HwStats"; }
+std::string path_name(Path p) {
+    switch (p) {
+        case Path::Hw: return "Hw";
+        case Path::Sw: return "Sw";
+        case Path::HwStats: return "HwStats";
+    }
+    return "?";
+}
 
 std::string param_name(const Param& p) {
     return fmt::format("{}_{}_{}", p.layout.name, mode_name(p.mode), path_name(p.path));
