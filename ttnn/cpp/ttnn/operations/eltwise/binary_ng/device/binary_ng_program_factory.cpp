@@ -1413,8 +1413,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
     // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && has_post_activations && num_tiles_per_cycle > 1 &&
-        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+        num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
     }
 
