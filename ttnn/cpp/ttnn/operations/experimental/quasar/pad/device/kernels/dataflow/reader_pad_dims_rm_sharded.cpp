@@ -22,6 +22,9 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 
 // Pad-value fill helpers (moved here from the writer; identical logic). The reader produces cb_pad so a
 // single DM kernel no longer both produces and consumes it.
@@ -29,9 +32,18 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     Noc& noc, DataflowBuffer& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
-    for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
+    const uint32_t num_words = (num_bytes_risc + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; ++i) {
         ptr[i] = val;
     }
+    // The loop-back reads below source these CPU stores, so they must be visible to the NoC first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(reinterpret_cast<uintptr_t>(ptr), static_cast<size_t>(num_bytes_risc));
+#else
+    if (num_words > 0) {
+        (void)ckernel::load_blocking(ptr + num_words - 1);
+    }
+#endif
 
     uint32_t pad_val_addr = cb.get_write_ptr();
     uint32_t l1_write_addr = pad_val_addr;
