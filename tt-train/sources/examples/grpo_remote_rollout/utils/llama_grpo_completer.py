@@ -189,6 +189,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         self.transformer_config = tf_config
 
         self._client = inference_client
+        self._pushed_version = 0
 
     @property
     def tokenizer(self) -> Any:
@@ -202,17 +203,10 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
         """Generate remotely via the ttt worker.
 
-        For N prompts, returns N * ``completions_per_prompt`` completions.
+        For N prompts, returns N * the ttt sampler's ``completions_per_prompt`` completions.
         """
-        ctx = self._ctx
-        if ctx.completions_per_prompt > 1:
-            expanded = [list(p) for p in prompts for _ in range(ctx.completions_per_prompt)]
-        else:
-            expanded = [list(p) for p in prompts]
-        return self._client.remote_generate(
-            expanded,
-            max_new_tokens=int(ctx.max_tokens_to_complete),
-        )
+        completions, _logprobs, _version = self._client.remote_generate([list(p) for p in prompts])
+        return completions
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
         """Generate from strings: tokenise locally, ship IDs, decode locally."""
@@ -293,8 +287,9 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         boot weights; the caller re-invokes it to re-sync during training.
         """
         hf_dict = weights_ref_hf_dict(self._model)
+        self._pushed_version += 1
         try:
-            self._client.send_weights(hf_dict)
+            self._client.send_weights(hf_dict, version=self._pushed_version)
         finally:
             del hf_dict
             gc.collect()
