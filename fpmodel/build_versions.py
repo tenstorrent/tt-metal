@@ -187,6 +187,7 @@ CVPRED = {
     "v7": np.load("pred_cv_m7_pad.npy"),  # current code with the v8 term (pad) switched off
     "v8": np.load("pred_cv_v8.npy"),
     "v9": np.load("pred_cv_v9.npy"),
+    "v10": np.load("pred_cv_v10.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -340,7 +341,7 @@ for vid, meta in V.items():
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
     doc["bounds"] = bounds(doc["device"])
     doc["bounds_bh"] = bounds(doc["device"], bh=True)
-    sheet = {"v7": "abl/v7_nopad.json", "v8": "abl/v8_bhharv.json", "v9": "abl/v9.json"}.get(vid)
+    sheet = {"v7": "abl/v7_nopad.json", "v8": "abl/v8_bhharv.json", "v9": "abl/v9.json", "v10": "abl/v10.json"}.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
 
@@ -360,7 +361,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v9"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v10"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [

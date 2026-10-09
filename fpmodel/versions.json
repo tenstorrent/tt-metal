@@ -75,5 +75,16 @@
    "v8",
    "mcast receivers ack only after computing on a block, so the sender's ack collection (receivers x ack_rx) sits on every compute-bound K step (msync)"
   ]
+ },
+ "v10": {
+  "title": "v10: measured constants",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at a9fbdc9 (frozen as frozen_v10_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v9",
+   "multicast data at its own measured rate, falling with receivers (mcrate)",
+   "WH lat_dram, lat_l1, issue, noc_eff, mc_eff0, mc_eff_rx pinned from data-movement microbenchmarks (10 of 22 WH constants measured)"
+  ]
  }
 }

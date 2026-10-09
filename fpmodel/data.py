@@ -15,6 +15,9 @@ SETS = {  # name -> (path, arch); read-only inputs
     "wh_designed": (f"{WORK}/frozen/wh_1505.csv", "wh"),
     "wh_target": (f"{WORK}/device/target_wh.csv", "wh"),
     "bh_designed": (f"{WORK}/frozen/bh_0200.csv", "bh"),
+    # full sweeps of fresh problems, added once their draws had served as clean tests (active learning)
+    "wh_fresh1": (f"{WORK}/frozen/wh_fresh1_sweep.csv", "wh"),  # 59 swept draw-1 problems
+    "wh_miss2": (f"{WORK}/frozen/wh_miss_draw2.csv", "wh"),  # draw-2 problems where v6 was > 3% slower than legacy
 }
 KEY = ["problem_id", "origin", "config"]
 CAND = ("enumerated", "heuristic")

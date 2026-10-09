@@ -32,6 +32,7 @@ TERMS = {
     "pad": "K not a multiple of 32: the in0 reader zero-fills each row tile of the last K block (barrier + RISC-V loop)",
     "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
     "mcrate": "multicast data moves at its own rate, falling with the receiver count (measured: one-to-all microbenchmark)",
+    "corecc": "a core's DRAM read rate when other cores read DRAM concurrently (measured: 4-core interleaved reads)",
 }
 EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
@@ -73,6 +74,11 @@ CONSTANTS = {
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
     "mc_eff0": (0.59, "multicast rate as a fraction of the link rate, extrapolated to zero receivers", "mcrate"),
     "mc_eff_rx": (0.0026, "drop in that fraction per receiver", "mcrate"),
+    "noc_eff_cc": (
+        0.48,
+        "one core's DRAM read rate with other cores reading concurrently, fraction of 32 B/cycle",
+        "corecc",
+    ),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -100,6 +106,7 @@ PINNED = {
     "noc_eff": ({"wh": 0.96}, "data-movement microbenchmark: one core's interleaved read rate, 30.7 of 32 B/cycle"),
     "mc_eff0": ({"wh": 0.59}, "one-to-all multicast microbenchmark: 17.1 B/cycle to 24 receivers, 13.9 to 63"),
     "mc_eff_rx": ({"wh": 0.0026}, "one-to-all multicast microbenchmark: slope of the rate with receivers"),
+    "noc_eff_cc": ({"wh": 0.48}, "multi-core interleaved DRAM reads: 15.4 B/cycle per core with 4 cores reading"),
 }
 
 
@@ -242,8 +249,11 @@ def predict(g, p, parts=False):
         """one K block read by one core: all pages in flight, then a barrier; bandwidth shared by `readers` cores"""
         r = np.maximum(readers, 1)
         floor = nbytes / tile * p["issue"] if on("issue") else 0.0
+        noc_rd = noc
+        if on("corecc"):  # concurrent DRAM readers each get the loaded per-core rate
+            noc_rd = np.where(r > 1, s["noc_Bpc"] * p["noc_eff_cc"], noc)
         if on("sat"):
-            dr = np.maximum(p["lat_dram"] + nbytes / noc, nbytes * r / (dram * eff))
+            dr = np.maximum(p["lat_dram"] + nbytes / noc_rd, nbytes * r / (dram * eff))
             l1 = np.maximum(p["lat_l1"] + nbytes / noc, nbytes * r * cg / l1bw)
         else:
             dr = p["lat_dram"] + nbytes / np.minimum(noc, dram * eff / r)
