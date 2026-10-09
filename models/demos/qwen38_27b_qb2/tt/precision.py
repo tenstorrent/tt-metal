@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import SINGLE_STEP_POLICIES
+
 ROLES = ("attention", "output", "gate", "up", "down")
 BASELINE = {
     "config_id": "baseline_bfp4_lofi_head_bfp8_hifi2",
@@ -58,7 +60,7 @@ def load_precision(value=None):
         raise ValueError("Precision policy must contain exactly the supported fields")
     if policy["decode_attention"] not in ("native", "accurate_full_tile"):
         raise ValueError("Unsupported decode attention policy")
-    if policy["decode_recurrence"] not in ("native", "single_step", "single_step_shared_qk"):
+    if policy["decode_recurrence"] not in ("native", *SINGLE_STEP_POLICIES):
         raise ValueError("Unsupported decode recurrence policy")
     # These are explicit runtime contracts of the native norm/GDN/sampler and
     # replicated residual path. Reject unsupported requests instead of ignoring them.

@@ -1,0 +1,33 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-gdn-phase-profile-v2-20261009",
+    "--property=RuntimeMaxSec=2h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=48G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-control-v2/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-control-v2/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_gdn_phase_profile",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-v2",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-control-v2/source-manifest.json"
+  ],
+  "created_at": 1791586145.5491977,
+  "scope": "GDN reader/compute/writer phase markers, buffers 1 versus 2; diagnostic timing with instrumentation overhead",
+  "source_manifest_sha256": "ba840448d376846da4d306ebcee86444baf043b8d9d8d45940a24bce6c30f616"
+}

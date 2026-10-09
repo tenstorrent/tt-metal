@@ -1,0 +1,627 @@
+{
+  "scope": "Reanalysis of completed warm eager two-layer BFP8 Tracy profiles; not traced full-model attribution or measured NoC utilization",
+  "sources": {
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/profile-summary.json": "3faa2aa615400ecee6bcdce480ed294698e0befc52054301796f795e2f25a7d2",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/tracy/reports/2026_10_09_22_24_40/ops_perf_results_2026_10_09_22_24_40.csv.gz": "b7769e6a6a19eaa977880d844ed4bd3d25f631cd362fd6becc89171a040c562f",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/profile-summary.json": "b3b4e83fca7811b7e2a2efa35ea043b0bdd4e4af7dd7ff876dca8b75685f2b17",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/tracy/reports/2026_10_09_22_25_35/ops_perf_results_2026_10_09_22_25_35.csv.gz": "29cd89b32ac5a3ffb2c39d7d84730fef7c1d5dae5ec0bf6c0ac7623fe4175e6f",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/tracy/reports/2026_10_09_22_22_47/ops_perf_results_2026_10_09_22_22_47.csv.gz": "bab318b63395eac7a903e0c722a77ae5d4d30bbf326995c952acc5a876771352",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38",
+    "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/tracy/reports/2026_10_09_22_23_45/ops_perf_results_2026_10_09_22_23_45.csv.gz": "6ea06dc6782c42bf56a5f51ed130962e1d714a05fccdd223cd6149acf38426b0",
+    "galaxy-evidence/precision-perf-v1/bandwidth-estimate.json": "f6769f9f87a9f0ff78efe943ad413f2694867af8aca53fe82b044e290a50e711"
+  },
+  "profiles": [
+    {
+      "name": "profile-s32768-b16-native",
+      "op_rows": 644,
+      "missing_attribution_columns": {
+        "DEVICE COMPUTE CB WAIT FRONT [ns]": 0,
+        "DEVICE COMPUTE CB RESERVE BACK [ns]": 0,
+        "NOC UTIL (%)": 0,
+        "DRAM BW UTIL (%)": 0,
+        "NPE CONG IMPACT (%)": 0,
+        "DEVICE KERNEL DURATION PER CORE MIN [ns]": 0,
+        "DEVICE KERNEL DURATION PER CORE MAX [ns]": 0
+      },
+      "inclusive_stages": [
+        {
+          "stage": "P0_S32768_B16_L0__delta",
+          "kernel_us_median_rank": 1013.369,
+          "device_op_rows": 73.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__delta_recurrence",
+          "kernel_us_median_rank": 584.8635,
+          "device_op_rows": 33.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__finish",
+          "kernel_us_median_rank": 228.2175,
+          "device_op_rows": 14.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_linear_attn_out_proj",
+          "kernel_us_median_rank": 64.0495,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_linear_attn_packed",
+          "kernel_us_median_rank": 124.034,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_mlp_down_proj",
+          "kernel_us_median_rank": 89.949,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.621,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__norm",
+          "kernel_us_median_rank": 13.9595,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0_decode_forward",
+          "kernel_us_median_rank": 1248.7085,
+          "device_op_rows": 89.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0_packed_decode_conv",
+          "kernel_us_median_rank": 110.6975,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__finish",
+          "kernel_us_median_rank": 227.7765,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__full_decode",
+          "kernel_us_median_rank": 1008.605,
+          "device_op_rows": 37.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_mlp_down_proj",
+          "kernel_us_median_rank": 91.223,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.3955,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_self_attn_o_proj",
+          "kernel_us_median_rank": 52.761,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_self_attn_qkvg",
+          "kernel_us_median_rank": 55.5735,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__norm",
+          "kernel_us_median_rank": 24.2485,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__rope_decode",
+          "kernel_us_median_rank": 63.338,
+          "device_op_rows": 16.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3_decode_forward",
+          "kernel_us_median_rank": 1241.445,
+          "device_op_rows": 51.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3_paged_decode",
+          "kernel_us_median_rank": 795.6615,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B16_MODEL",
+          "kernel_us_median_rank": 3473.8645,
+          "device_op_rows": 161.0
+        }
+      ],
+      "recurrence_generic_ops": [
+        {
+          "device": 0,
+          "generic_op_us": []
+        },
+        {
+          "device": 4,
+          "generic_op_us": []
+        },
+        {
+          "device": 8,
+          "generic_op_us": []
+        },
+        {
+          "device": 12,
+          "generic_op_us": []
+        }
+      ]
+    },
+    {
+      "name": "profile-s32768-b16-shared-qk",
+      "op_rows": 640,
+      "missing_attribution_columns": {
+        "DEVICE COMPUTE CB WAIT FRONT [ns]": 0,
+        "DEVICE COMPUTE CB RESERVE BACK [ns]": 0,
+        "NOC UTIL (%)": 0,
+        "DRAM BW UTIL (%)": 0,
+        "NPE CONG IMPACT (%)": 0,
+        "DEVICE KERNEL DURATION PER CORE MIN [ns]": 0,
+        "DEVICE KERNEL DURATION PER CORE MAX [ns]": 0
+      },
+      "inclusive_stages": [
+        {
+          "stage": "P0_S32768_B16_L0__delta",
+          "kernel_us_median_rank": 670.6515,
+          "device_op_rows": 72.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__delta_recurrence",
+          "kernel_us_median_rank": 243.8875,
+          "device_op_rows": 32.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__finish",
+          "kernel_us_median_rank": 229.1235,
+          "device_op_rows": 14.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_linear_attn_out_proj",
+          "kernel_us_median_rank": 63.61,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_linear_attn_packed",
+          "kernel_us_median_rank": 123.8465,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_mlp_down_proj",
+          "kernel_us_median_rank": 91.0575,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.5355,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0__norm",
+          "kernel_us_median_rank": 13.931,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0_decode_forward",
+          "kernel_us_median_rank": 906.619,
+          "device_op_rows": 88.0
+        },
+        {
+          "stage": "P0_S32768_B16_L0_packed_decode_conv",
+          "kernel_us_median_rank": 110.7525,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__finish",
+          "kernel_us_median_rank": 227.9835,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__full_decode",
+          "kernel_us_median_rank": 1008.491,
+          "device_op_rows": 37.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_mlp_down_proj",
+          "kernel_us_median_rank": 91.1195,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_mlp_gate_up",
+          "kernel_us_median_rank": 121.0405,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_self_attn_o_proj",
+          "kernel_us_median_rank": 54.4785,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__linear_self_attn_qkvg",
+          "kernel_us_median_rank": 55.3975,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__norm",
+          "kernel_us_median_rank": 24.242,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3__rope_decode",
+          "kernel_us_median_rank": 63.243,
+          "device_op_rows": 16.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3_decode_forward",
+          "kernel_us_median_rank": 1241.8035,
+          "device_op_rows": 51.0
+        },
+        {
+          "stage": "P0_S32768_B16_L3_paged_decode",
+          "kernel_us_median_rank": 795.4215,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B16_MODEL",
+          "kernel_us_median_rank": 3129.798,
+          "device_op_rows": 160.0
+        }
+      ],
+      "recurrence_generic_ops": [
+        {
+          "device": 0,
+          "generic_op_us": [
+            17.376,
+            91.448
+          ]
+        },
+        {
+          "device": 4,
+          "generic_op_us": [
+            17.276,
+            91.685
+          ]
+        },
+        {
+          "device": 8,
+          "generic_op_us": [
+            17.304,
+            91.59
+          ]
+        },
+        {
+          "device": 12,
+          "generic_op_us": [
+            17.281,
+            92.529
+          ]
+        }
+      ]
+    },
+    {
+      "name": "profile-s32768-b32-native",
+      "op_rows": 748,
+      "missing_attribution_columns": {
+        "DEVICE COMPUTE CB WAIT FRONT [ns]": 0,
+        "DEVICE COMPUTE CB RESERVE BACK [ns]": 0,
+        "NOC UTIL (%)": 0,
+        "DRAM BW UTIL (%)": 0,
+        "NPE CONG IMPACT (%)": 0,
+        "DEVICE KERNEL DURATION PER CORE MIN [ns]": 0,
+        "DEVICE KERNEL DURATION PER CORE MAX [ns]": 0
+      },
+      "inclusive_stages": [
+        {
+          "stage": "P0_S32768_B32_L0__delta",
+          "kernel_us_median_rank": 1763.0365,
+          "device_op_rows": 103.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__delta_recurrence",
+          "kernel_us_median_rank": 1160.9825,
+          "device_op_rows": 63.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__finish",
+          "kernel_us_median_rank": 228.5095,
+          "device_op_rows": 14.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_linear_attn_out_proj",
+          "kernel_us_median_rank": 73.1645,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_linear_attn_packed",
+          "kernel_us_median_rank": 172.9705,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_mlp_down_proj",
+          "kernel_us_median_rank": 90.002,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.2525,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__norm",
+          "kernel_us_median_rank": 13.899,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0_decode_forward",
+          "kernel_us_median_rank": 1999.4205,
+          "device_op_rows": 119.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0_packed_decode_conv",
+          "kernel_us_median_rank": 149.7245,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__finish",
+          "kernel_us_median_rank": 227.574,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__full_decode",
+          "kernel_us_median_rank": 1777.084,
+          "device_op_rows": 37.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_mlp_down_proj",
+          "kernel_us_median_rank": 91.3875,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.172,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_self_attn_o_proj",
+          "kernel_us_median_rank": 53.738,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_self_attn_qkvg",
+          "kernel_us_median_rank": 55.538,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__norm",
+          "kernel_us_median_rank": 26.714,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__rope_decode",
+          "kernel_us_median_rank": 109.114,
+          "device_op_rows": 16.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3_decode_forward",
+          "kernel_us_median_rank": 2012.929,
+          "device_op_rows": 51.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3_paged_decode",
+          "kernel_us_median_rank": 1505.0965,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B32_MODEL",
+          "kernel_us_median_rank": 4999.387,
+          "device_op_rows": 187.0
+        }
+      ],
+      "recurrence_generic_ops": [
+        {
+          "device": 0,
+          "generic_op_us": []
+        },
+        {
+          "device": 4,
+          "generic_op_us": []
+        },
+        {
+          "device": 8,
+          "generic_op_us": []
+        },
+        {
+          "device": 12,
+          "generic_op_us": []
+        }
+      ]
+    },
+    {
+      "name": "profile-s32768-b32-shared-qk",
+      "op_rows": 624,
+      "missing_attribution_columns": {
+        "DEVICE COMPUTE CB WAIT FRONT [ns]": 0,
+        "DEVICE COMPUTE CB RESERVE BACK [ns]": 0,
+        "NOC UTIL (%)": 0,
+        "DRAM BW UTIL (%)": 0,
+        "NPE CONG IMPACT (%)": 0,
+        "DEVICE KERNEL DURATION PER CORE MIN [ns]": 0,
+        "DEVICE KERNEL DURATION PER CORE MAX [ns]": 0
+      },
+      "inclusive_stages": [
+        {
+          "stage": "P0_S32768_B32_L0__delta",
+          "kernel_us_median_rank": 978.0705,
+          "device_op_rows": 72.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__delta_recurrence",
+          "kernel_us_median_rank": 375.6275,
+          "device_op_rows": 32.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__finish",
+          "kernel_us_median_rank": 228.303,
+          "device_op_rows": 14.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_linear_attn_out_proj",
+          "kernel_us_median_rank": 72.8625,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_linear_attn_packed",
+          "kernel_us_median_rank": 173.6725,
+          "device_op_rows": 5.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_mlp_down_proj",
+          "kernel_us_median_rank": 90.71,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.087,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0__norm",
+          "kernel_us_median_rank": 13.902,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0_decode_forward",
+          "kernel_us_median_rank": 1214.472,
+          "device_op_rows": 88.0
+        },
+        {
+          "stage": "P0_S32768_B32_L0_packed_decode_conv",
+          "kernel_us_median_rank": 149.707,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__finish",
+          "kernel_us_median_rank": 227.989,
+          "device_op_rows": 13.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__full_decode",
+          "kernel_us_median_rank": 1781.5385,
+          "device_op_rows": 37.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_mlp_down_proj",
+          "kernel_us_median_rank": 91.4475,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_mlp_gate_up",
+          "kernel_us_median_rank": 120.1695,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_self_attn_o_proj",
+          "kernel_us_median_rank": 59.3035,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__linear_self_attn_qkvg",
+          "kernel_us_median_rank": 55.423,
+          "device_op_rows": 2.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__norm",
+          "kernel_us_median_rank": 26.8585,
+          "device_op_rows": 4.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3__rope_decode",
+          "kernel_us_median_rank": 109.459,
+          "device_op_rows": 16.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3_decode_forward",
+          "kernel_us_median_rank": 2018.3425,
+          "device_op_rows": 51.0
+        },
+        {
+          "stage": "P0_S32768_B32_L3_paged_decode",
+          "kernel_us_median_rank": 1504.9045,
+          "device_op_rows": 3.0
+        },
+        {
+          "stage": "P0_S32768_B32_MODEL",
+          "kernel_us_median_rank": 4225.236,
+          "device_op_rows": 156.0
+        }
+      ],
+      "recurrence_generic_ops": [
+        {
+          "device": 0,
+          "generic_op_us": [
+            28.183,
+            158.99
+          ]
+        },
+        {
+          "device": 4,
+          "generic_op_us": [
+            28.273,
+            159.049
+          ]
+        },
+        {
+          "device": 8,
+          "generic_op_us": [
+            28.232,
+            158.826
+          ]
+        },
+        {
+          "device": 12,
+          "generic_op_us": [
+            28.257,
+            159.081
+          ]
+        }
+      ]
+    }
+  ],
+  "bandwidth_model": [
+    {
+      "batch_per_tp4": 16,
+      "context": 32768,
+      "weights_bytes": 7112560640,
+      "state_bytes": 1207959552,
+      "kv_bytes": 4563402752,
+      "total_bytes_per_chip_step": 12883922944,
+      "measured_native_tsu": 11.749089392026692,
+      "ideal_512GBps_tsu": 39.739449096785904,
+      "modeled_effective_GBps": 151.3743623890397,
+      "modeled_fraction_of_ideal": 0.29565305154109317,
+      "projected_fused_tsu": 14.843019097049762,
+      "projected_fused_fraction_of_ideal": 0.37350842637247966
+    },
+    {
+      "batch_per_tp4": 32,
+      "context": 32768,
+      "weights_bytes": 7112560640,
+      "state_bytes": 2415919104,
+      "kv_bytes": 9126805504,
+      "total_bytes_per_chip_step": 18655285248,
+      "measured_native_tsu": 7.353731782628705,
+      "ideal_512GBps_tsu": 27.445305348782625,
+      "modeled_effective_GBps": 137.18596404222203,
+      "modeled_fraction_of_ideal": 0.2679413360199649,
+      "projected_fused_tsu": 10.514453939507991,
+      "projected_fused_fraction_of_ideal": 0.38310573724312286
+    }
+  ],
+  "assumptions": [
+    "512 GB/s/chip assumed peak; one padded weight read per step; BFP8 KV; FP32 recurrent read/write; excludes compute, CCL, extra traffic, and launch costs",
+    "Effective bandwidth is modeled useful bytes times measured TSU, not a DRAM counter reading",
+    "Per-RISC timers include waits; phase and inclusive stage intervals must not be summed as independent costs"
+  ]
+}

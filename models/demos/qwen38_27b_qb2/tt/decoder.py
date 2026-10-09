@@ -21,8 +21,14 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen38_27b_qb2.tt.decode_attention import paged_decode
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.demos.qwen38_27b_qb2.tt.gdn_epilogue.op import epilogue as gdn_epilogue
 from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
-from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import DecodeWorkspace
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
+    SHARED_QK_POLICIES,
+    SINGLE_STEP_POLICIES,
+    DecodeWorkspace,
+    uses_fused_epilogue,
+)
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -263,7 +269,7 @@ class Qwen38Decoder(LightweightModule):
         c = self.config
         width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
         recurrence = self.policy.get("decode_recurrence", "native")
-        if recurrence in ("single_step", "single_step_shared_qk"):
+        if recurrence in SINGLE_STEP_POLICIES:
             if (c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim) != (
                 4,
                 12,
@@ -275,7 +281,8 @@ class Qwen38Decoder(LightweightModule):
                 self.gdn_decode_workspace = DecodeWorkspace(
                     self.device,
                     c.linear_num_value_heads,
-                    shared_qk_heads=c.linear_num_key_heads if recurrence == "single_step_shared_qk" else None,
+                    shared_qk_heads=c.linear_num_key_heads if recurrence in SHARED_QK_POLICIES else None,
+                    fused_epilogue=recurrence == "single_step_shared_qk_epilogue",
                 )
             self.gdn_decode_workspace.prepare(batch_size)
         return DecoderState(
@@ -864,14 +871,16 @@ class Qwen38Decoder(LightweightModule):
     def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False):
         b, hv = q.shape[0], self.config.linear_num_value_heads
         recurrence = self.policy.get("decode_recurrence", "native")
-        if decode and recurrence in ("single_step", "single_step_shared_qk"):
+        if decode and recurrence in SINGLE_STEP_POLICIES:
             if not hasattr(self, "gdn_decode_workspace"):
                 raise RuntimeError("Allocate the layer's GDN state before decode/trace capture")
             options = (
                 {"shared_qk_outputs": self.gdn_decode_workspace.shared_qk(b)}
-                if recurrence == "single_step_shared_qk"
+                if recurrence in SHARED_QK_POLICIES
                 else {}
             )
+            if uses_fused_epilogue(recurrence, b):
+                options["raw_output"] = True
             return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b), **options)
         # Native chunked scan remains the prefill path, including one-token
         # prefill continuations. Its independent batch axis is split to fit one
@@ -964,6 +973,12 @@ class Qwen38Decoder(LightweightModule):
             # when its convolution Q/K/V values are nonzero.
             g, beta = [pad_time(a) for a in (g, beta)]
         output = self._delta_recurrence(q, k, v, g, beta, state, decode=decode)
+        if decode and uses_fused_epilogue(self.policy.get("decode_recurrence", "native"), b):
+            # z already has [B,1,HV*128] geometry. The fused reader consumes
+            # only its live row and writes zero padded rows itself.
+            fused_output = self.gdn_decode_workspace.epilogue_output(b)
+            gdn_epilogue(output, z, self.weights["linear_attn.norm.weight"], fused_output, heads=hv, epsilon=self.eps)
+            return self._linear(fused_output, "linear_attn.out_proj")
         if padded_t != t:
             z = ttnn.pad(z, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)
         output = ttnn.experimental.kda.sigmoid_gated_rms_norm(

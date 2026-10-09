@@ -1,0 +1,11 @@
+MainPID=2993870
+Id=qwen38-gdn-epilogue-layer-v1-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=f5344bf767584289b32a55ca2c335271
+
+MainPID=2913530
+Id=qwen38-perf-priority-v1-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=4a07251dcbda49239e3b017f7fe8ef47

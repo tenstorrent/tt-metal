@@ -3,7 +3,8 @@
 """Experimental single-token GDN output layout, gated RMSNorm and z multiply.
 
 Consumes the recurrence's FP32 row-major output directly. Retains the native
-BF16 rounding boundary before multiplying by z; no model path selects this yet.
+BF16 rounding boundary before multiplying by z. Model integration is opt-in
+at B16/B32; a standalone kernel pass does not qualify model accuracy.
 """
 
 import math

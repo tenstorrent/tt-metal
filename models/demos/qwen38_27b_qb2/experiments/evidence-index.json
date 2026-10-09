@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T22:31:50.610833+00:00",
+  "generated_at": "2026-10-09T22:58:41.293223+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -36,6 +36,11 @@
       "path": "config/precision_single_step_shared_qk_bfp8_all.json",
       "bytes": 1078,
       "sha256": "f8d5a50462f171ee976d836c234a06c3bb3c08d86bec423e957be31c59be4c48"
+    },
+    {
+      "path": "config/precision_single_step_shared_qk_epilogue_bfp8_all.json",
+      "bytes": 1096,
+      "sha256": "b075e88e601caf980658b241d6a67db80dc7a3e55803401746e3d22d1ed15022"
     },
     {
       "path": "demo/overnight_plan.py",
@@ -103,6 +108,16 @@
       "sha256": "a8ba02ea58cf4b4780aab54197674476d46c6a63893276261c39925ef023809e"
     },
     {
+      "path": "demo/run_gdn_epilogue_layer.py",
+      "bytes": 4421,
+      "sha256": "93678e2bd08ea96c1eab2e6479f9a768ace7642069b58749db1d605e9eee496c"
+    },
+    {
+      "path": "demo/run_gdn_phase_profile.py",
+      "bytes": 5571,
+      "sha256": "f4a3cd5dad519c3909f785788077af7cec15e14594e2472a6d2aa95aa4ac4508"
+    },
+    {
       "path": "demo/run_gpqa_audit_followup.py",
       "bytes": 5201,
       "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"
@@ -129,8 +144,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 124174,
-      "sha256": "11f90e569e402505e8d00b934470bb5f673b95d1a791112522000ca4950e577b"
+      "bytes": 127824,
+      "sha256": "cbbbfebc0cd12acc72a3a6438b5d80a0f1e5fb71ecf11cf577086039712521d0"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -993,6 +1008,26 @@
       "path": "galaxy-evidence/bfp4-simulator-v1/summary.json",
       "bytes": 6001,
       "sha256": "95c05cc9d612ec0e2383b5a26f44621808da1cb537a87468ee787116cae67ef9"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/README.md",
+      "bytes": 2986,
+      "sha256": "90a9575f79ebd3338c218be768a2c8dd03e2e0d6993ea536c2891cdc0a43cd27"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/audit.json",
+      "bytes": 19948,
+      "sha256": "ea480d64070ea9d248b0aac10d034ebd026580443fd086547366d9a004550c4c"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/native-before-snapshot.json",
+      "bytes": 26714,
+      "sha256": "9d5fda70737687aed011bdf95a52f5013bfcf6ba8ef2e331240993e631b8ca8a"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/reproduce.py",
+      "bytes": 5405,
+      "sha256": "8e36b1cf539ad209f0419e3dc54256b461aa850e7dc753ebda38fe05ee8bbfc0"
     },
     {
       "path": "galaxy-evidence/bfp8-gdn-followup-v1/README.md",
@@ -2469,6 +2504,151 @@
       "sha256": "d01dbea42287e3121c2c82844f28aba7cf6af40dad33ddb4b711d21404021c31"
     },
     {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/README.md",
+      "bytes": 1485,
+      "sha256": "67ce994d8c0bbd22343b5c6ae90bbf8a66373a8ed4252ccaf76d68a3638ebd9a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/capture.json",
+      "bytes": 137,
+      "sha256": "63fee0091ad0efaa597a29351f9afeaa93a36ee7c1b1fe381957ba983801d8c1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-control-v1/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "7da6e8696b1e8f4ad7236b426c1d7061af6e3934f1f15d2aec0f9d9d99ea2be7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-control-v1/launch.json",
+      "bytes": 1615,
+      "sha256": "e6228a213ce5c4bab6e4f78e772f4face02597c2067f1432c288263a07c5a9bf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-control-v1/preflight.log.gz",
+      "bytes": 381,
+      "sha256": "5e9d66ae40c26d35fa6dca51b2e18a4e7d39126a7d2aa668fb3dd986d7d94637"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-control-v1/source-manifest.json",
+      "bytes": 22624,
+      "sha256": "f6ce83dc234310dc04e29a10b4ba98e86844a9a564a82278dc4235827c165e35"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-control-v1/unit.xml.gz",
+      "bytes": 8986,
+      "sha256": "afdf4a956e34aa956f73a4f1f2a9b7ace31a2fe54379121c4815296b1fafa253"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/config/precision_single_step_shared_qk_epilogue_bfp8_all.json",
+      "bytes": 1096,
+      "sha256": "b075e88e601caf980658b241d6a67db80dc7a3e55803401746e3d22d1ed15022"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue.py.gz",
+      "bytes": 2295,
+      "sha256": "faa6fdc2ef12ecf395a28e47cb3be923ec727108a97ab9f8c8c545df3cda525d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz",
+      "bytes": 1863,
+      "sha256": "71d60b429319e58286b7a67b07a510ec03a4a9db4f02c5ed7bff5f6170259d14"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_epilogue.py.gz",
+      "bytes": 928,
+      "sha256": "89146068e1e282ff2de6f6e6c12a0270aa83e765db287d43d0fedaa74b3935b5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz",
+      "bytes": 743,
+      "sha256": "d0910f8530c98781398681cfaca2d627eb3ce54df886a2e2c63560abbd1ac42b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue.py.gz",
+      "bytes": 3143,
+      "sha256": "ac7fb0aec710754bd4e4f6660f6899a4a0e41ef313802baccff140be4b409ce0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz",
+      "bytes": 1786,
+      "sha256": "a89fc61c643ca1ce9bd438e7903e0fe8e3e5b578efb94b51f51e9065271e7de0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_layer_integration.py.gz",
+      "bytes": 4085,
+      "sha256": "b1eaa780e227b6715a41f9a1332486476f88fe86b4d15af6391de7f09ec15149"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2208,
+      "sha256": "37c0c48beb5a7e428612bc58c761e2aee0399aedf24cc3d406a0ee5f96d69f90"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue.py.gz",
+      "bytes": 962,
+      "sha256": "d049114da97ab578723cdcd538d4953c157112210b14c284987340c5de3654c9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz",
+      "bytes": 888,
+      "sha256": "a0b98a75d67091c78366124adaff8544c80c35b76bfb63857243d8c406013356"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11301,
+      "sha256": "c1f02347796b1cc65f94ddb02561c52b2dff308891394092b9ca36273d54b799"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp.gz",
+      "bytes": 1502,
+      "sha256": "1071abbab28585f02327466fb1dc2dd39fb4318befb4141268f772e54ea5807e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py.gz",
+      "bytes": 2075,
+      "sha256": "f98861a1bf2689dbf18a8e12696048dbe2613c1513cbf34ff9b07701b33fe524"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp.gz",
+      "bytes": 1136,
+      "sha256": "9b1f58e74fc32c3137a4d2950a32f52fff58cbe4fbd41d7b0c16fa95e0ca9349"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp.gz",
+      "bytes": 402,
+      "sha256": "7d54d20c7620ae9a17308621ef22fccb949393c12c972c4018291258a2797890"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1680,
+      "sha256": "53a993068a053b847d21f0e79c15b02234833784cd750cfc3c89dcf851b5cd50"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1319,
+      "sha256": "b5d401310ddec492324a6937abd2609f8379c61d7f3f66a79f4bb41a1a253f47"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-source-v1/models/demos/qwen38_27b_qb2/tt/precision.py.gz",
+      "bytes": 1866,
+      "sha256": "3d630c984729bc64463a3439c0c58527efca8b31a7c9703db772f2e73a2b3e28"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-v1/queue.json",
+      "bytes": 898,
+      "sha256": "ad00889a2c041ad16889d1992c1a52b1ff62a9d671f480f06654ae12c2349fcf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/perf-priority-v1/queue.json",
+      "bytes": 5697,
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/units.txt",
+      "bytes": 290,
+      "sha256": "3cda5634c6c731d48384edb607056f49fc84ca4a2151c65b6269282927632250"
+    },
+    {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/README.md",
       "bytes": 2868,
       "sha256": "ea43104454b1586a2ce88010848ec9f54465ad92223c93711293ba71bb478fe3"
@@ -3070,6 +3250,166 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/README.md",
+      "bytes": 1803,
+      "sha256": "4c91a3d3c4e6a2f8911858843bd08cd46ca7c1de5f927027f0d78ecabd968798"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/capture.json",
+      "bytes": 137,
+      "sha256": "3d78d8f1ca7d9e7394488e3a848bc16312d92a11dcc6781f40df71cee34083d2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v1/preflight.log.gz",
+      "bytes": 1135,
+      "sha256": "fed176562a3eed3c2b5fb7b593feb8e223819553b386ee62ea531fb51c9dd98a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v1/unit.xml.gz",
+      "bytes": 9852,
+      "sha256": "a8f2bdf824b62d2b165af84d4b4b5df53c6931b015179e2ab9ee8863a0d44701"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v2/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "855b719aa6439a9e33960b15eac30f3808637f048317a897afad70dbf6fd1c67"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v2/launch.json",
+      "bytes": 1613,
+      "sha256": "6481358121285786a14a70f55e5ae417033aa6de21e0333b05c544cebe272e18"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v2/preflight.log.gz",
+      "bytes": 386,
+      "sha256": "1829e4554ad67a6f710643836ddab7b24e4724aca651fd7f782803aa30eb536e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v2/source-manifest.json",
+      "bytes": 23154,
+      "sha256": "ba840448d376846da4d306ebcee86444baf043b8d9d8d45940a24bce6c30f616"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-control-v2/unit.xml.gz",
+      "bytes": 9043,
+      "sha256": "050ef0620f067aef7c72e3cab83ecd36d596ef322324fd11a8c38f5358457da4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_phase_profile.py.gz",
+      "bytes": 2236,
+      "sha256": "ea98cc825d15100e65be52be03b4c4ccb72863ad1b42c60ea70bde522b04e0fd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_phase_profile.py.gz",
+      "bytes": 910,
+      "sha256": "7ad9161e04b68aee8d308ce0ecc0908f95824d8ede8a146f4b3905d0b016e1c3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_layer_integration.py.gz",
+      "bytes": 4085,
+      "sha256": "b1eaa780e227b6715a41f9a1332486476f88fe86b4d15af6391de7f09ec15149"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_phase_profile.py.gz",
+      "bytes": 1944,
+      "sha256": "71318992f826c898a218a4655d8984d99d9a8344285a8e96cb38ca9856df220c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2208,
+      "sha256": "37c0c48beb5a7e428612bc58c761e2aee0399aedf24cc3d406a0ee5f96d69f90"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_phase_profile.py.gz",
+      "bytes": 633,
+      "sha256": "2d66a1e5aad480cc00289271773c24a5826908977c13e95a3b8916d3c7478b95"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11301,
+      "sha256": "c1f02347796b1cc65f94ddb02561c52b2dff308891394092b9ca36273d54b799"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/__init__.py.gz",
+      "bytes": 171,
+      "sha256": "a4e41c1c85fa88472392fcff7027fa012684c8fa695a5e73f077508a59f9875f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/compute.cpp.gz",
+      "bytes": 1119,
+      "sha256": "77090d500c3844c62114d4c01871800065bda23cc997d165fa7859e0d5f9b8a5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/compute_math.hpp.gz",
+      "bytes": 1221,
+      "sha256": "a2f11eb65a667ef44b1a63f31360248b6f3548d7ea37162244958fec0ebb100f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1680,
+      "sha256": "53a993068a053b847d21f0e79c15b02234833784cd750cfc3c89dcf851b5cd50"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/op.py.gz",
+      "bytes": 2594,
+      "sha256": "fc916450fdd8c39d92bd5988da53543f8e8688547c1b6db2c996269878970016"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_compute.cpp.gz",
+      "bytes": 375,
+      "sha256": "6acfcc48bff681199bd4558d5b9c5bff6b7b4eca020dee6a8fc20a8aa368783d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_reader.cpp.gz",
+      "bytes": 621,
+      "sha256": "0bc09e6d453de3ea0cb85f1adf30e3d7cdc123e5ab2d19b0a3d49447eba1f2c2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_writer.cpp.gz",
+      "bytes": 635,
+      "sha256": "fa8d8f2c3b2dd7abd2ebd9fb8a087acb8f7741c548d3ac11575a9506fb08c24b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/reader.cpp.gz",
+      "bytes": 1310,
+      "sha256": "a9691641e1004fc2c9be0a5d35df987a5cff36f3fcf514e5b14eaa10d537acdf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/shared_qk.py.gz",
+      "bytes": 1489,
+      "sha256": "6a18eb60eaf6af650ccec3926ce38cb4388d8d9a657fd48eb7b2bcefd99ff803"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1319,
+      "sha256": "b5d401310ddec492324a6937abd2609f8379c61d7f3f66a79f4bb41a1a253f47"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/writer.cpp.gz",
+      "bytes": 990,
+      "sha256": "3c626a00db0a8b221ccc3f461e85d216bf88d756b437628895fcd46f70e0efdc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tt/precision.py.gz",
+      "bytes": 1866,
+      "sha256": "3d630c984729bc64463a3439c0c58527efca8b31a7c9703db772f2e73a2b3e28"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-v2/queue.json",
+      "bytes": 913,
+      "sha256": "24d5c1c736d7c61312701b8e3fc04904aa64b1fa2648199d6ab94336a0382ec5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/perf-priority-v1/queue.json",
+      "bytes": 5697,
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-profile-launch-v2/units.txt",
+      "bytes": 289,
+      "sha256": "1812065e22e8c473e6663797cb8c41fe754169072d11c8e0a75d70e97bd95315"
     },
     {
       "path": "galaxy-evidence/gdn-step-buffering-v1/candidate.json.gz",
@@ -7113,6 +7453,16 @@
       "sha256": "6bf53dca7ef576b9eca251a915481b85c4129086a4f83ac030658386ac0ab3cf"
     },
     {
+      "path": "tests/gdn_epilogue_layer.py",
+      "bytes": 1578,
+      "sha256": "878b2fbfa365abab2a8302a09b94717404ae5ac6325fdf51901108a986efaf0e"
+    },
+    {
+      "path": "tests/gdn_phase_profile.py",
+      "bytes": 2774,
+      "sha256": "51159c05a49dfc2ea89e216442e6fa49b16daac8c4641f0e9fcb9ad3887f9493"
+    },
+    {
       "path": "tests/gpqa_documents.py",
       "bytes": 1407,
       "sha256": "bf49f832f4f204d847e8a1bbbfb56fc94ebdc7c41bec65e08b8cfa15d6f17828"
@@ -7158,6 +7508,21 @@
       "sha256": "ade9adcc4f901e3b81df791164528a568cf5a1bf71b307c27782c1b0a5b3f66b"
     },
     {
+      "path": "tests/test_gdn_epilogue_layer.py",
+      "bytes": 4518,
+      "sha256": "9d0c2478e1139b076505681fa5f57abbddfbb737858170f96416fd035ad1aa79"
+    },
+    {
+      "path": "tests/test_gdn_layer_integration.py",
+      "bytes": 13648,
+      "sha256": "1d4c6aae16ed83e22242e4ad2c6aafdf528a6d8a48a3733743eb1cc4a0071aa2"
+    },
+    {
+      "path": "tests/test_gdn_phase_profile.py",
+      "bytes": 5158,
+      "sha256": "bdeb9e9cc1a5a07783b56eb614c5bc35ac7479a5a925855e60f99a1a64d1f592"
+    },
+    {
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1132,
       "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
@@ -7193,9 +7558,24 @@
       "sha256": "509422a5eb93b4fc2a890f94fb3651c1ad6f20d66c6ecc41fde46aebe6f43b24"
     },
     {
+      "path": "tests/unit/test_gdn_decode_integration.py",
+      "bytes": 8907,
+      "sha256": "5926d6952c94d6ae15d0182d56eeb0964379946b719ed87f3b6e60c16cf8466e"
+    },
+    {
       "path": "tests/unit/test_gdn_epilogue.py",
       "bytes": 2757,
       "sha256": "18841073ac0a6b59ff0aacb5494d78306a22843d887ccf0fc0cd46b2577c7dfb"
+    },
+    {
+      "path": "tests/unit/test_gdn_epilogue_layer.py",
+      "bytes": 2034,
+      "sha256": "bbe6287c46e2cfc0edf8afdac9b96a92a65bb75d4bbc566941bbe1a48937b8e5"
+    },
+    {
+      "path": "tests/unit/test_gdn_phase_profile.py",
+      "bytes": 1153,
+      "sha256": "c198d02ce6ce0b63a47d3c322a69a30a9cd1f39ed437ac727b7d15bb2310602a"
     },
     {
       "path": "tests/unit/test_gpqa_audit_followup.py",
@@ -7238,14 +7618,19 @@
       "sha256": "95b8f9c884a25490e49944cdc6e6c5972de97e54f9af6803d8308863ef3d4467"
     },
     {
+      "path": "tt/decoder.py",
+      "bytes": 51321,
+      "sha256": "bb02d7d8c564fcf21443ce5e059d117d07d7aec8fcfeece2f39ec20d5504e729"
+    },
+    {
       "path": "tt/gdn_epilogue/compute.cpp",
       "bytes": 6834,
       "sha256": "5e380a87e72c8f28afbf44be441a8a2dd9289df4ae8c68137a5af4dc5c914568"
     },
     {
       "path": "tt/gdn_epilogue/op.py",
-      "bytes": 4943,
-      "sha256": "bbcd1cfbf24c43f957c045e6379252b20cf252f75f092adb84439ff736549a2d"
+      "bytes": 5009,
+      "sha256": "56fe2ddc38efa008785ffb113972236c382e9df636fd9631d3f0b70265a325db"
     },
     {
       "path": "tt/gdn_epilogue/reader.cpp",
@@ -7266,6 +7651,21 @@
       "path": "tt/gdn_step/flat_prepare_reader.cpp",
       "bytes": 4831,
       "sha256": "30bbf6ec30c2f7b85ac4f0ab4b3c9c51c5ec6b1aaf0bf3d07ebce6eeb4dfbc95"
+    },
+    {
+      "path": "tt/gdn_step/model_adapter.py",
+      "bytes": 4340,
+      "sha256": "8e07fc545fceaa76a3287cbe4141100cd987d1fa74129fa6ad5af3b5f71054f9"
+    },
+    {
+      "path": "tt/gdn_step/workspace.py",
+      "bytes": 3983,
+      "sha256": "b6f8d70bedc4ff392456895a97faeeaa4540a2bbf536fd912d7f1aa607462577"
+    },
+    {
+      "path": "tt/precision.py",
+      "bytes": 5264,
+      "sha256": "e0e0b83d544cc4798ea51aab73fdd8aa58cf83b3b7dee23aa82f8d09894b3bab"
     }
   ]
 }

@@ -3,21 +3,22 @@
 """Device-only bridge from the model's convolution outputs.
 
 The model's opt-in decode path includes all preparation/layout work here.
-The existing gated RMSNorm epilogue remains external;
-this bridge is not the final fused P1/P2 implementation.
+The caller selects the existing tiled epilogue or consumes the raw recurrence
+output directly with the opt-in fused epilogue.
 """
 
 from models.demos.qwen38_27b_qb2.tt.gdn_step import op
 
 
-def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs=None):
+def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs=None, raw_output=False):
     """Consume only token zero of [B,T,H*128] and update [B,HV,128,128].
 
     Q/K are raw convolution outputs, beta is already sigmoid-transformed, and
     log_decay already contains the softplus/A calculation. output is a caller-owned
     FP32 row-major [B*HV,128] buffer retained for the complete trace lifetime.
     Optional shared_qk_outputs are two persistent FP32 row-major [B*HK,128]
-    scratch tensors. Supplying them selects the unqualified shared experiment."""
+    scratch tensors. raw_output skips head-major tilization for the fused
+    epilogue; the returned buffer remains owned by the caller."""
     import ttnn
 
     batch, time_rows, qwidth = q.shape
@@ -77,5 +78,7 @@ def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs
             input_buffer_items=2,
             qk_head_repeat=value_heads // heads,
         )
+    if raw_output:
+        return output
     head_major = ttnn.to_layout(ttnn.reshape(output, [batch * value_heads, 1, 128]), ttnn.TILE_LAYOUT)
     return ttnn.reshape(head_major, [batch * value_heads, 32, 128], head_major.padded_shape)

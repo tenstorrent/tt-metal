@@ -1677,3 +1677,52 @@ No session connection is needed for that queue to continue.
   native full-model TPOT; they are not optimized full-model results. B32 serving
   bucket and aggregate qualification remain outstanding. Saved formulas,
   assumptions, all four profiles and physical epilogue receipts.
+
+## Oct 9, 22:35-22:51 UTC: integrate epilogue and queue targeted Tracy attribution
+
+- Rechecked the eval and perf history after precision questions. BFP8 decoder
+  weights reduced short-probe mean relative logit error38.65% ->9.16%; corrected
+  GPQA preprocessing was also required for the accepted176/198 result. There
+  is no corrected-harness BFP4 rerun proving BFP8 strictly necessary. The
+  previous19.15 GPQA mean TSU used optimized BFP4 GDN; native BFP4 measured15.03,
+  accepted native BFP8 measured13.01. These variable-length workloads are not
+  causal timing controls. Matched native B16 BFP4/HiFi2 gains9.3%/8.6% over
+  BFP8/HiFi2 at16K/32K; kernel-policy changes explain a separate larger delta.
+- Implemented explicit single_step_shared_qk_epilogue policy/config. B16/B32
+  consume raw FP32 recurrence output and use a persistent BF16 output buffer;
+  B1/B8 retain the native epilogue and prefill retains chunked scan. Default and
+  frozen running model sources remain unchanged. No precision reduction.
+- CPU preflight470 tests and40 subtests passed, one unrelated skip. Queued the
+  real-weight B32/B16/B8/B1 three-control comparison with64 FP32-reference
+  updates and all-rank projected/state bit equality. Device-lock follower
+  qwen38-gdn-epilogue-layer-v1-20261009 is persistent, bounded and unqualified.
+- Reanalyzed all four existing BFP8 Tracy captures, verifying original CSV
+  hashes and every selected rank's row/time totals. AtB32 shared-QK, recurrence
+  plus preparation375.63us; largest generic recurrence kernel about159us on
+  rank0. Packed convolution149.71us, attention1504.90us. NoC utilization,
+  congestion, DRAM utilization, CB waits and per-core min/max fields are empty.
+  Reader/TRISC durations include waits, so NoC or placement causality is unknown.
+- Added isolated source annotations for reader backpressure, DRAM completion,
+  L1 preparation, compute input/math stages and writer output waits. One/two
+  input buffers atB16/B32, control/instrumented pairs,24 calls total. Original
+  kernels are unchanged; require identical outputs/state and raw timing zones.
+  First staging stopped at a CPU regex test that omitted digits in the L1 zone
+  name. Fixed it, verified source token preservation, retained the failure.
+  v2 passed472 tests/40 subtests and collected the physical test. Persistent
+  qwen38-gdn-phase-profile-v2-20261009 waits for the same global hardware lock.
+- User asked about30TSU and bandwidth ceiling. Updated the explicit BFP8 traffic
+  model: at32K B16/B32,12.884/18.655GB per chip per step. With assumed512GB/s,
+  ideal39.74/27.45TSU; current native11.75/7.35 is29.57%/26.79% of that model.
+  This is not measured DRAM utilization or a complete roofline. B32/30 needs
+  lower traffic or a different TP design; B16/30 remains an unproven stretch.
+- Both new jobs use the shared hardware lock,2h/48GiB/8CPU caps,90-minute capture
+  deadline,20-minute test limit and process-group cleanup. Profiling additionally
+  caps files/output and free disk. Survive disconnect, not reboot. Existing
+  perf-priority service remained live on native-before; no new full-model cell
+  was completed at the last observation. Source, receipts and bottleneck audit
+  are published under the three new evidence directories. Neither queued job
+  is a hardware pass, speedup or model-quality qualification.
+- Follow-up: fresh32K/B32 completed7.34297TSU and B16 completed11.75371,
+  matching the prior baseline. Native-before advanced to16K/B32. After the
+  interruption, all four owned service invocations were revalidated live;
+  the new physical experiments were still waiting for the shared device lock.

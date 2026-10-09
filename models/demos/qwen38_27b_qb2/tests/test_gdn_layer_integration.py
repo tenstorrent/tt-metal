@@ -69,7 +69,8 @@ def timing(mesh, trace):
     return dict(samples_us=samples, median_us=statistics.median(samples))
 
 
-def run_case(layer, mesh, batch):
+def run_case(layer, mesh, batch, *, recurrence="single_step"):
+    layer.policy["decode_recurrence"] = recurrence
     state = layer.allocate_state(batch_size=batch)
     rng = torch.Generator().manual_seed(20261007 + batch)
     shape = [1, 1, batch, 5120] if batch > 1 else [1, 1, 5120]
@@ -81,7 +82,6 @@ def run_case(layer, mesh, batch):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
-    layer.policy["decode_recurrence"] = "single_step"
     original = layer._delta_recurrence
     original_step = op.step
     raw_inputs = []
@@ -224,7 +224,7 @@ def run_case(layer, mesh, batch):
         assert all(torch.isfinite(value).all() for value in host_ranks(native_output))
     finally:
         ttnn.release_trace(mesh, trace)
-        layer.policy["decode_recurrence"] = "single_step"
+        layer.policy["decode_recurrence"] = recurrence
     return dict(
         batch=batch,
         passed=passed,

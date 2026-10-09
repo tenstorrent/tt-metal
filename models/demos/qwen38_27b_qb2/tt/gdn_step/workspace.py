@@ -2,14 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """Persistent scratch owned by one layer/replica, independent of request state."""
 
+SINGLE_STEP_POLICIES = ("single_step", "single_step_shared_qk", "single_step_shared_qk_epilogue")
+SHARED_QK_POLICIES = SINGLE_STEP_POLICIES[1:]
+EPILOGUE_BATCHES = (16, 32)
+
+
+def uses_fused_epilogue(recurrence, batch):
+    """Only opt in where the standalone physical comparison found a gain."""
+    return recurrence == "single_step_shared_qk_epilogue" and batch in EPILOGUE_BATCHES
+
 
 class DecodeWorkspace:
-    def __init__(self, mesh, value_heads, *, shared_qk_heads=None):
+    def __init__(self, mesh, value_heads, *, shared_qk_heads=None, fused_epilogue=False):
         self.mesh = mesh
         self.value_heads = value_heads
         self.outputs = {}
         self.shared_qk_heads = shared_qk_heads
         self.shared_outputs = {}
+        self.fused_epilogue = fused_epilogue
+        self.epilogue_outputs = {}
 
     def prepare(self, batch):
         """Setup boundary only; never replace buffers referenced by existing traces."""
@@ -41,6 +52,23 @@ class DecodeWorkspace:
                     )
                     for _ in range(2)
                 )
+            if self.fused_epilogue and size in EPILOGUE_BATCHES and size not in self.epilogue_outputs:
+                self.epilogue_outputs[size] = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([size, 1, self.value_heads * 128]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+    def epilogue_output(self, batch):
+        """Caller-owned tiled output, retained for the complete trace lifetime."""
+        try:
+            return self.epilogue_outputs[batch]
+        except KeyError:
+            raise RuntimeError(
+                "Prepare the fused epilogue during cache allocation before decode/trace capture"
+            ) from None
 
     def shared_qk(self, batch):
         """Lookup only; trace replay must keep the same two scratch addresses."""

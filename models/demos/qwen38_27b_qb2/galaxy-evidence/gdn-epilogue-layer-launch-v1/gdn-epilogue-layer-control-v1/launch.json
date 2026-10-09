@@ -1,0 +1,33 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-gdn-epilogue-layer-v1-20261009",
+    "--property=RuntimeMaxSec=2h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=48G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-control-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-control-v1/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-source-v1",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-source-v1",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_gdn_epilogue_layer",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-v1",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-layer-control-v1/source-manifest.json"
+  ],
+  "created_at": 1791585732.1144543,
+  "scope": "Real-weight BFP8 GDN layer epilogue integration; no serving promotion or full-model performance claim",
+  "source_manifest_sha256": "f6ce83dc234310dc04e29a10b4ba98e86844a9a564a82278dc4235827c165e35"
+}

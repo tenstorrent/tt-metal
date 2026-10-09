@@ -1,0 +1,11 @@
+MainPID=3016459
+Id=qwen38-gdn-phase-profile-v2-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=fac6b2aead2046e0a737ad04d6d6d0ae
+
+MainPID=2913530
+Id=qwen38-perf-priority-v1-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=4a07251dcbda49239e3b017f7fe8ef47

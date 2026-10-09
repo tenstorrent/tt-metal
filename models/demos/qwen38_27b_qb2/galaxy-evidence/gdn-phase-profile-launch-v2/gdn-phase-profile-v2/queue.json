@@ -1,0 +1,24 @@
+{
+  "state": "hardware_or_waiting_for_lock",
+  "cleanup_completed": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791586145.6094248,
+  "updated_at": "2026-10-09T22:49:05Z",
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2/scripts/run_safe_pytest.sh",
+    "--profile-ops",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_phase_profile.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-source-v2/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1200",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-v2/hardware.xml"
+  ]
+}
