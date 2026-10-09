@@ -636,9 +636,10 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     // Create a mapping of all connected devices to determine how to sync
-    static std::unordered_map<ChipId, int> num_connected_devices;
+    auto& num_connected_devices = profiler_state_manager->num_connected_devices;
     if (state == ProfilerSyncState::INIT) {
         profiler_state_manager->do_sync_on_close = true;
+        num_connected_devices.clear();
         constexpr int TOTAL_DEVICE_COUNT = 36;
         std::map<ChipId, bool> visited;
         for (int i = 0; i < TOTAL_DEVICE_COUNT; i++) {

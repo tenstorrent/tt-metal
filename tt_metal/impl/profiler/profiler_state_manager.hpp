@@ -83,6 +83,10 @@ public:
 
     bool do_sync_on_close{};
 
+    // Root device of each group of Ethernet-connected active devices, mapped to the size of the group. Rebuilt by
+    // ProfilerSync(INIT) and reused by ProfilerSync(CLOSE_DEVICE).
+    std::unordered_map<ChipId, int> num_connected_devices;
+
     std::unordered_set<ChipId> sync_set_devices;
 
     std::thread debug_dump_thread;
