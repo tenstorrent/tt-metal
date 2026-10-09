@@ -51,27 +51,27 @@ extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_init(h
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_init(hs::SemaphoreInit descriptor)
 {
-    return TT_OP_SEMINIT(descriptor.maximum, descriptor.initial, hal::to_underlying(descriptor.mask));
+    return TT_OP_SEMINIT(descriptor.maximum, descriptor.initial, descriptor.semaphores.mask());
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_post(hs::SemaphoreMask mask)
+extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_post(hs::Semaphore selector)
 {
-    return hs::SemaphorePost {mask}.operation();
+    return hs::SemaphorePost {selector}.operation();
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_post(hs::SemaphoreMask mask)
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_post(hs::Semaphore selector)
 {
-    return TT_OP_SEMPOST(hal::to_underlying(mask));
+    return TT_OP_SEMPOST((1u << hal::to_underlying(selector)));
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_get(hs::SemaphoreMask mask)
+extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_get(hs::Semaphore selector)
 {
-    return hs::SemaphoreGet {mask}.operation();
+    return hs::SemaphoreGet {selector}.operation();
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_get(hs::SemaphoreMask mask)
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_get(hs::Semaphore selector)
 {
-    return TT_OP_SEMGET(hal::to_underlying(mask));
+    return TT_OP_SEMGET((1u << hal::to_underlying(selector)));
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_stall_wait(hs::StallTarget targets, hs::StallCondition conditions)
@@ -85,15 +85,15 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_stall_
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_wait(
-    hs::StallTarget targets, hs::SemaphoreMask mask, hs::SemaphoreCondition conditions)
+    hs::StallTarget targets, hs::Semaphore selector, hs::SemaphoreCondition conditions)
 {
-    return hs::SemaphoreWait {targets, mask, conditions}.operation();
+    return hs::SemaphoreWait {targets, selector, conditions}.operation();
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaphore_wait(
-    hs::StallTarget targets, hs::SemaphoreMask mask, hs::SemaphoreCondition conditions)
+    hs::StallTarget targets, hs::Semaphore selector, hs::SemaphoreCondition conditions)
 {
-    return TT_OP_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
+    return TT_OP_SEMWAIT(hal::to_underlying(targets), (1u << hal::to_underlying(selector)), hal::to_underlying(conditions));
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_flush_tdma(hm::FlushScope scope)
@@ -139,13 +139,75 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_resour
 // Encoded words also work as immediate Tensix instructions.
 extern "C" __attribute__((noinline, used)) void issue_sync_descriptor()
 {
-    constexpr auto word = hs::SemaphoreWait {hs::StallTarget::Math, hs::SemaphoreMask::S1, hs::SemaphoreCondition::WhileZero}.operation();
+    constexpr auto word = hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S1, hs::SemaphoreCondition::WhileZero}.operation();
     TTI_INSN(word);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_issue_sync_descriptor()
 {
     TTI_SEMWAIT(64, 2, 1);
+}
+
+// The default path derives a Tensix mask from one or more semaphore indices.
+extern "C" __attribute__((noinline, used)) void issue_semaphore_selectors()
+{
+    hs::semaphore::get<hs::Semaphore::S1>();
+    hs::semaphore::get<hs::Semaphore::S1, hs::Semaphore::S3>();
+    hs::semaphore::post<hs::Semaphore::S0, hs::Semaphore::S7>();
+    hs::semaphore::init<5, 15, hs::Semaphore::S0, hs::Semaphore::S7>();
+    hs::wait::semaphore<hs::StallTarget::Math, hs::SemaphoreCondition::WhileZero, hs::Semaphore::S1, hs::Semaphore::S3>();
+    hs::semaphore::get<hs::Access::Tensix, hs::Semaphore::S1>();
+    hs::semaphore::post<hs::Access::Tensix, hs::Semaphore::S7>();
+}
+
+extern "C" __attribute__((noinline, used)) void reference_issue_semaphore_selectors()
+{
+    TTI_SEMGET(2);
+    TTI_SEMGET(10);
+    TTI_SEMPOST(129);
+    TTI_SEMINIT(15, 5, 129);
+    TTI_SEMWAIT(64, 10, 1);
+    TTI_SEMGET(2);
+    TTI_SEMPOST(128);
+}
+
+extern "C" __attribute__((noinline, used)) void issue_runtime_semaphore_selectors(hs::Semaphore first, hs::Semaphore second)
+{
+    hs::semaphore::get(first);
+    hs::semaphore::post({first, second});
+    hs::semaphore::init({first, second}, 5, 15);
+    hs::wait::semaphore(hs::StallTarget::Math, {first, second}, hs::SemaphoreCondition::WhileZero);
+    hs::semaphore::get<hs::Access::Tensix>(second);
+    hs::semaphore::post<hs::Access::Tensix>(second);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_issue_runtime_semaphore_selectors(hs::Semaphore first, hs::Semaphore second)
+{
+    const auto first_bit  = 1u << hal::to_underlying(first);
+    const auto second_bit = 1u << hal::to_underlying(second);
+    TT_SEMGET(first_bit);
+    TT_SEMPOST(first_bit | second_bit);
+    TT_SEMINIT(15, 5, first_bit | second_bit);
+    TT_SEMWAIT(64, first_bit | second_bit, 1);
+    TT_SEMGET(second_bit);
+    TT_SEMPOST(second_bit);
+}
+
+// Explicit MMIO access uses the same selector as an index, never as a mask.
+extern "C" __attribute__((noinline, used)) void issue_mmio_semaphore_selectors(hs::Semaphore selector)
+{
+    hs::semaphore::get<hs::Access::MMIO, hs::Semaphore::S1>();
+    hs::semaphore::post<hs::Access::MMIO, hs::Semaphore::S7>();
+    hs::semaphore::get<hs::Access::MMIO>(selector);
+    hs::semaphore::post<hs::Access::MMIO>(selector);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_issue_mmio_semaphore_selectors(hs::Semaphore selector)
+{
+    ckernel::semaphore_get(1);
+    ckernel::semaphore_post(7);
+    ckernel::semaphore_get(hal::to_underlying(selector));
+    ckernel::semaphore_post(hal::to_underlying(selector));
 }
 
 extern "C" __attribute__((noinline, used)) void issue_misc_descriptors()
@@ -179,12 +241,12 @@ extern "C" __attribute__((noinline, used)) void reference_issue_runtime_misc_des
 extern "C" void reject_invalid_runtime_descriptors()
 {
     (void)hs::MutexAcquire {static_cast<hs::Mutex>(1)}.operation();
-    (void)hs::SemaphorePost {hs::SemaphoreMask::None}.operation();
-    (void)hs::SemaphoreInit {hs::SemaphoreMask::S0, 16, 15}.operation();
-    (void)hs::SemaphoreInit {hs::SemaphoreMask::S0, 0, 16}.operation();
+    (void)hs::SemaphorePost {static_cast<hs::Semaphore>(8)}.operation();
+    (void)hs::SemaphoreInit {hs::Semaphore::S0, 16, 15}.operation();
+    (void)hs::SemaphoreInit {hs::Semaphore::S0, 0, 16}.operation();
     (void)hs::StallWait {static_cast<hs::StallTarget>(512), hs::StallCondition::MathIdle}.operation();
     (void)hs::StallWait {hs::StallTarget::Math, static_cast<hs::StallCondition>(8192)}.operation();
-    (void)hs::SemaphoreWait {hs::StallTarget::Math, hs::SemaphoreMask::S0, static_cast<hs::SemaphoreCondition>(0)}.operation();
+    (void)hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S0, static_cast<hs::SemaphoreCondition>(0)}.operation();
     (void)hm::FlushTdma {static_cast<hm::FlushScope>(16)}.operation();
     (void)hm::ResourceDeclaration {16, 0, 1}.operation();
     (void)hm::ResourceDeclaration {0, 512, 1}.operation();

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "llk_assert.h"
@@ -33,7 +34,13 @@ enum class Mutex : std::uint8_t
     M4 = 4
 };
 
-/** @brief Select one of the eight physical Tensix semaphores by index. */
+/**
+ * @brief Select one of the eight physical Tensix semaphores by index.
+ *
+ * Tensix operations build the required bitmask internally. For example,
+ * semaphore::get<Semaphore::S1, Semaphore::S3>() selects both atomically;
+ * the runtime form is semaphore::get({first, second}). MMIO uses the index.
+ */
 enum class Semaphore : std::uint8_t
 {
     S0 = 0,
@@ -44,21 +51,6 @@ enum class Semaphore : std::uint8_t
     S5 = 5,
     S6 = 6,
     S7 = 7
-};
-
-/** @brief Select one or more Tensix semaphores atomically. */
-enum class SemaphoreMask : std::uint8_t
-{
-    None = 0,
-    S0   = 1u << 0,
-    S1   = 1u << 1,
-    S2   = 1u << 2,
-    S3   = 1u << 3,
-    S4   = 1u << 4,
-    S5   = 1u << 5,
-    S6   = 1u << 6,
-    S7   = 1u << 7,
-    All  = 0xffu
 };
 
 /** @brief Select instruction classes blocked by a wait gate. */
@@ -107,16 +99,6 @@ enum class SemaphoreCondition : std::uint8_t
     WhileZero    = 1u << 0,
     WhileMaximum = 1u << 1
 };
-
-inline constexpr SemaphoreMask operator|(const SemaphoreMask lhs, const SemaphoreMask rhs)
-{
-    return static_cast<SemaphoreMask>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
-}
-
-inline constexpr SemaphoreMask operator&(const SemaphoreMask lhs, const SemaphoreMask rhs)
-{
-    return static_cast<SemaphoreMask>(static_cast<std::uint8_t>(lhs) & static_cast<std::uint8_t>(rhs));
-}
 
 inline constexpr StallTarget operator|(const StallTarget lhs, const StallTarget rhs)
 {
@@ -185,11 +167,6 @@ constexpr bool is_valid(const Semaphore semaphore)
     return hal::to_underlying(semaphore) < 8u;
 }
 
-constexpr bool is_valid(const SemaphoreMask mask)
-{
-    return hal::to_underlying(mask) != 0u;
-}
-
 constexpr bool is_valid(const StallTarget targets)
 {
     return hal::to_underlying(targets) <= hal::to_underlying(StallTarget::All);
@@ -209,6 +186,34 @@ constexpr bool is_valid(const SemaphoreCondition conditions)
 constexpr std::uint32_t semaphore_bit(const Semaphore semaphore)
 {
     return 1u << hal::to_underlying(semaphore);
+}
+
+// Accept a Semaphore or a braced list of Semaphores; retain only the encoded mask.
+class SemaphoreSet
+{
+public:
+    template <typename... Others>
+    constexpr SemaphoreSet(const Semaphore first, const Others... others) : mask_(0)
+    {
+        static_assert((std::is_same_v<Others, Semaphore> && ...), "Semaphore selections must contain only Semaphore values");
+        require_valid_operand(is_valid(first) && (is_valid(others) && ...), "Semaphore index must be in [0, 7]");
+        mask_ = semaphore_bit(first) | (0u | ... | semaphore_bit(others));
+    }
+
+    constexpr std::uint32_t mask() const
+    {
+        return mask_;
+    }
+
+private:
+    std::uint32_t mask_;
+};
+
+template <Semaphore First, Semaphore... Others>
+constexpr std::uint32_t semaphore_mask()
+{
+    static_assert(is_valid(First) && (is_valid(Others) && ...), "Semaphore index must be in [0, 7]");
+    return SemaphoreSet {First, Others...}.mask();
 }
 
 } // namespace detail
@@ -281,74 +286,66 @@ inline __attribute__((always_inline)) void release(const Mutex mutex)
 namespace semaphore
 {
 
-/** @brief Encode SEMINIT without issuing it. */
-template <SemaphoreMask Mask, std::uint32_t Initial, std::uint32_t Maximum>
+/** @brief Encode SEMINIT for the selected semaphores without issuing it. */
+template <std::uint32_t Initial, std::uint32_t Maximum, Semaphore First, Semaphore... Others>
 inline constexpr std::uint32_t init_operation()
 {
-    static_assert(detail::is_valid(Mask), "SEMINIT requires at least one semaphore");
     static_assert(Initial < 16u, "SEMINIT initial value must fit in four bits");
     static_assert(Maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    return TT_OP_SEMINIT(Maximum, Initial, hal::to_underlying(Mask));
+    return TT_OP_SEMINIT(Maximum, Initial, (detail::semaphore_mask<First, Others...>()));
 }
 
-/** @brief Encode a runtime-selected SEMINIT without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(const SemaphoreMask mask, const std::uint32_t initial, const std::uint32_t maximum)
+/** @brief Encode SEMINIT for a semaphore or braced list of semaphores without issuing it. */
+inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
+    const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
-    detail::require_valid_operand(detail::is_valid(mask), "SEMINIT requires at least one semaphore");
     detail::require_valid_operand(initial < 16u, "SEMINIT initial value must fit in four bits");
     detail::require_valid_operand(maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    return TT_OP_SEMINIT(maximum, initial, hal::to_underlying(mask));
+    return TT_OP_SEMINIT(maximum, initial, semaphores.mask());
 }
 
 /**
  * @brief Initialize compile-time-selected semaphores through Tensix.
  *
- * MMIO has no equivalent: only SEMINIT can assign both Value and Max.
+ * For example, init<0, 1, Semaphore::S1, Semaphore::S3>() initializes both
+ * semaphores with one instruction. MMIO has no equivalent to SEMINIT.
  */
-template <SemaphoreMask Mask, std::uint32_t Initial, std::uint32_t Maximum>
+template <std::uint32_t Initial, std::uint32_t Maximum, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void init()
 {
-    (void)init_operation<Mask, Initial, Maximum>();
-    TTI_SEMINIT(Maximum, Initial, hal::to_underlying(Mask));
+    TTI_INSN((init_operation<Initial, Maximum, First, Others...>()));
 }
 
-/** @brief Initialize runtime-selected semaphores through the Tensix instruction buffer. */
-inline __attribute__((always_inline)) void init(const SemaphoreMask mask, const std::uint32_t initial, const std::uint32_t maximum)
+/** @brief Initialize a semaphore or braced list of semaphores through Tensix. */
+inline __attribute__((always_inline)) void init(const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
-    LLK_ASSERT(detail::is_valid(mask), "SEMINIT requires at least one semaphore");
-    LLK_ASSERT(initial < 16u, "SEMINIT initial value must fit in four bits");
-    LLK_ASSERT(maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    TT_SEMINIT(maximum, initial, hal::to_underlying(mask));
+    TT_INSN(init_operation(semaphores, initial, maximum));
 }
 
-/** @brief Encode SEMPOST without issuing it. */
-template <SemaphoreMask Mask>
+/** @brief Encode SEMPOST for the selected semaphores without issuing it. */
+template <Semaphore First, Semaphore... Others>
 inline constexpr std::uint32_t post_operation()
 {
-    static_assert(detail::is_valid(Mask), "SEMPOST requires at least one semaphore");
-    return TT_OP_SEMPOST(hal::to_underlying(Mask));
+    return TT_OP_SEMPOST((detail::semaphore_mask<First, Others...>()));
 }
 
-/** @brief Encode a runtime-selected SEMPOST without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t post_operation(const SemaphoreMask mask)
+/** @brief Encode SEMPOST for a semaphore or braced list of semaphores without issuing it. */
+inline constexpr __attribute__((always_inline)) std::uint32_t post_operation(const detail::SemaphoreSet semaphores)
 {
-    detail::require_valid_operand(detail::is_valid(mask), "SEMPOST requires at least one semaphore");
-    return TT_OP_SEMPOST(hal::to_underlying(mask));
+    return TT_OP_SEMPOST(semaphores.mask());
 }
 
-/** @brief Increment compile-time-selected semaphores through Tensix. */
-template <SemaphoreMask Mask>
+/** @brief Increment compile-time-selected semaphores atomically through Tensix. */
+template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void post()
 {
-    (void)post_operation<Mask>();
-    TTI_SEMPOST(hal::to_underlying(Mask));
+    TTI_INSN((post_operation<First, Others...>()));
 }
 
-/** @brief Increment runtime-selected semaphores through Tensix. */
-inline __attribute__((always_inline)) void post(const SemaphoreMask mask)
+/** @brief Increment a semaphore or braced list of semaphores atomically through Tensix. */
+inline __attribute__((always_inline)) void post(const detail::SemaphoreSet semaphores)
 {
-    LLK_ASSERT(detail::is_valid(mask), "SEMPOST requires at least one semaphore");
-    TT_SEMPOST(hal::to_underlying(mask));
+    TT_INSN(post_operation(semaphores));
 }
 
 /** @brief Increment one compile-time-selected semaphore through the chosen access path. */
@@ -363,7 +360,7 @@ inline __attribute__((always_inline)) void post()
     }
     else
     {
-        TTI_SEMPOST(detail::semaphore_bit(S));
+        post<S>();
     }
 }
 
@@ -372,45 +369,41 @@ template <Access A>
 inline __attribute__((always_inline)) void post(const Semaphore semaphore)
 {
     static_assert(detail::is_valid(A), "Semaphore access must be MMIO or Tensix");
-    LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
+        LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
         ckernel::semaphore_post(hal::to_underlying(semaphore));
     }
     else
     {
-        TT_SEMPOST(detail::semaphore_bit(semaphore));
+        post(semaphore);
     }
 }
 
-/** @brief Encode SEMGET (atomic decrement) without issuing it. */
-template <SemaphoreMask Mask>
+/** @brief Encode SEMGET for the selected semaphores without issuing it. */
+template <Semaphore First, Semaphore... Others>
 inline constexpr std::uint32_t get_operation()
 {
-    static_assert(detail::is_valid(Mask), "SEMGET requires at least one semaphore");
-    return TT_OP_SEMGET(hal::to_underlying(Mask));
+    return TT_OP_SEMGET((detail::semaphore_mask<First, Others...>()));
 }
 
-/** @brief Encode a runtime-selected SEMGET without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const SemaphoreMask mask)
+/** @brief Encode SEMGET for a semaphore or braced list of semaphores without issuing it. */
+inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const detail::SemaphoreSet semaphores)
 {
-    detail::require_valid_operand(detail::is_valid(mask), "SEMGET requires at least one semaphore");
-    return TT_OP_SEMGET(hal::to_underlying(mask));
+    return TT_OP_SEMGET(semaphores.mask());
 }
 
-/** @brief Decrement compile-time-selected semaphores through Tensix. */
-template <SemaphoreMask Mask>
+/** @brief Decrement compile-time-selected semaphores atomically through Tensix. */
+template <Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void get()
 {
-    (void)get_operation<Mask>();
-    TTI_SEMGET(hal::to_underlying(Mask));
+    TTI_INSN((get_operation<First, Others...>()));
 }
 
-/** @brief Decrement runtime-selected semaphores through Tensix. */
-inline __attribute__((always_inline)) void get(const SemaphoreMask mask)
+/** @brief Decrement a semaphore or braced list of semaphores atomically through Tensix. */
+inline __attribute__((always_inline)) void get(const detail::SemaphoreSet semaphores)
 {
-    LLK_ASSERT(detail::is_valid(mask), "SEMGET requires at least one semaphore");
-    TT_SEMGET(hal::to_underlying(mask));
+    TT_INSN(get_operation(semaphores));
 }
 
 /** @brief Decrement one compile-time-selected semaphore through the chosen access path. */
@@ -425,7 +418,7 @@ inline __attribute__((always_inline)) void get()
     }
     else
     {
-        TTI_SEMGET(detail::semaphore_bit(S));
+        get<S>();
     }
 }
 
@@ -434,14 +427,14 @@ template <Access A>
 inline __attribute__((always_inline)) void get(const Semaphore semaphore)
 {
     static_assert(detail::is_valid(A), "Semaphore access must be MMIO or Tensix");
-    LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
+        LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
         ckernel::semaphore_get(hal::to_underlying(semaphore));
     }
     else
     {
-        TT_SEMGET(detail::semaphore_bit(semaphore));
+        get(semaphore);
     }
 }
 
@@ -498,41 +491,35 @@ inline __attribute__((always_inline)) void stall(const StallTarget targets, cons
     TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
 }
 
-/** @brief Encode SEMWAIT without issuing it. */
-template <StallTarget Targets, SemaphoreMask Mask, SemaphoreCondition Conditions>
+/** @brief Encode SEMWAIT for the selected semaphores without issuing it. */
+template <StallTarget Targets, SemaphoreCondition Conditions, Semaphore First, Semaphore... Others>
 inline constexpr std::uint32_t semaphore_operation()
 {
     static_assert(detail::is_valid(Targets), "SEMWAIT target mask must fit in nine bits");
-    static_assert(detail::is_valid(Mask), "SEMWAIT requires at least one semaphore");
     static_assert(detail::is_valid(Conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(hal::to_underlying(Targets), hal::to_underlying(Mask), hal::to_underlying(Conditions));
+    return TT_OP_SEMWAIT(hal::to_underlying(Targets), (detail::semaphore_mask<First, Others...>()), hal::to_underlying(Conditions));
 }
 
-/** @brief Encode a runtime-selected SEMWAIT without issuing it. */
+/** @brief Encode SEMWAIT for a semaphore or braced list of semaphores without issuing it. */
 inline constexpr __attribute__((always_inline)) std::uint32_t semaphore_operation(
-    const StallTarget targets, const SemaphoreMask mask, const SemaphoreCondition conditions)
+    const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
     detail::require_valid_operand(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
-    detail::require_valid_operand(detail::is_valid(mask), "SEMWAIT requires at least one semaphore");
     detail::require_valid_operand(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
+    return TT_OP_SEMWAIT(hal::to_underlying(targets), semaphores.mask(), hal::to_underlying(conditions));
 }
 
-/** @brief Install a compile-time SEMWAIT in the current thread's wait gate. */
-template <StallTarget Targets, SemaphoreMask Mask, SemaphoreCondition Conditions>
+/** @brief Install a compile-time SEMWAIT for the selected semaphores in the current thread's wait gate. */
+template <StallTarget Targets, SemaphoreCondition Conditions, Semaphore First, Semaphore... Others>
 inline __attribute__((always_inline)) void semaphore()
 {
-    (void)semaphore_operation<Targets, Mask, Conditions>();
-    TTI_SEMWAIT(hal::to_underlying(Targets), hal::to_underlying(Mask), hal::to_underlying(Conditions));
+    TTI_INSN((semaphore_operation<Targets, Conditions, First, Others...>()));
 }
 
-/** @brief Install a runtime SEMWAIT through the Tensix instruction buffer. */
-inline __attribute__((always_inline)) void semaphore(const StallTarget targets, const SemaphoreMask mask, const SemaphoreCondition conditions)
+/** @brief Install SEMWAIT for a semaphore or braced list of semaphores through Tensix. */
+inline __attribute__((always_inline)) void semaphore(const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
-    LLK_ASSERT(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
-    LLK_ASSERT(detail::is_valid(mask), "SEMWAIT requires at least one semaphore");
-    LLK_ASSERT(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    TT_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
+    TT_INSN(semaphore_operation(targets, semaphores, conditions));
 }
 
 } // namespace wait
@@ -565,35 +552,35 @@ struct MutexRelease
 /** @brief Encode SEMINIT without initializing the semaphores. */
 struct SemaphoreInit
 {
-    SemaphoreMask mask;
+    detail::SemaphoreSet semaphores;
     std::uint32_t initial;
     std::uint32_t maximum;
 
     constexpr std::uint32_t operation() const
     {
-        return semaphore::init_operation(mask, initial, maximum);
+        return semaphore::init_operation(semaphores, initial, maximum);
     }
 };
 
 /** @brief Encode SEMPOST without incrementing the semaphores. */
 struct SemaphorePost
 {
-    SemaphoreMask mask;
+    detail::SemaphoreSet semaphores;
 
     constexpr std::uint32_t operation() const
     {
-        return semaphore::post_operation(mask);
+        return semaphore::post_operation(semaphores);
     }
 };
 
 /** @brief Encode SEMGET without decrementing the semaphores. */
 struct SemaphoreGet
 {
-    SemaphoreMask mask;
+    detail::SemaphoreSet semaphores;
 
     constexpr std::uint32_t operation() const
     {
-        return semaphore::get_operation(mask);
+        return semaphore::get_operation(semaphores);
     }
 };
 
@@ -613,12 +600,12 @@ struct StallWait
 struct SemaphoreWait
 {
     StallTarget targets;
-    SemaphoreMask mask;
+    detail::SemaphoreSet semaphores;
     SemaphoreCondition conditions;
 
     constexpr std::uint32_t operation() const
     {
-        return wait::semaphore_operation(targets, mask, conditions);
+        return wait::semaphore_operation(targets, semaphores, conditions);
     }
 };
 
