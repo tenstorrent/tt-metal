@@ -19,7 +19,8 @@
  * @tparam reduce_dim: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam EN_32BIT_DEST: Set to true to use 32bit destination register mode
  * @tparam math_fidelity: Only works for AVG/SUM pool types,  0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls
- * precision of multiplication
+ * precision of multiplication. LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x),
+ * regardless of this value.
  * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path)
  * @param operandA: The input operand Data Flow Buffer identifier
  * @param operandB: The scaler input operand Data Flow Buffer identifier

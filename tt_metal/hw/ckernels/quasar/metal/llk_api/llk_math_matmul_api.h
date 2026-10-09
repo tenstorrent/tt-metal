@@ -16,7 +16,8 @@
 * @brief Initialize matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA
 
 * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when
-* math is in Fp32 format
+* math is in Fp32 format. LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x),
+* regardless of this value.
 * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
 * @param operandB: Logical dataflow buffer identifier for input 1 (-> SrcA)
 * @param ct_dim: number of tiles in the column dimension for a matrix multiply

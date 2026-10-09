@@ -74,9 +74,13 @@ inline constexpr bool is_int8_src_format(const DataFormat format) {
  * @brief Calls fn with the math fidelity to program for operands in these Src register formats.
  *
  * Integer operands have no mantissa slices to split across fidelity phases: every phase multiplies them in full and
- * adds the whole product to Dest again, so HiFi2/3/4 give two, three or four times the product. So int8 runs at LoFi.
+ * adds the whole product to Dest again, so HiFi2/3/4 give two, three or four times the product. So when both Src
+ * formats are 8-bit integers, LoFi is programmed; any other pair, mixed int8/float included, keeps the requested
+ * fidelity.
  *
  * @tparam math_fidelity: The requested math fidelity
+ * @param srca_format: SrcA register format
+ * @param srcb_format: SrcB register format
  * @param fn: Generic callable taking std::integral_constant<MathFidelity, F> for the fidelity F to program
  */
 template <MathFidelity math_fidelity, typename Fn>

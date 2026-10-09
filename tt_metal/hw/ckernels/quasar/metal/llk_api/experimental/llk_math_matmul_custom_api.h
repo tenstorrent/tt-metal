@@ -40,7 +40,8 @@ inline void with_no_mop_matmul_math_fidelity(const std::uint32_t operandA, const
  * Configures the ALU data-format state, then programs the matmul addrmods and records the replay buffer.
  * MOP BANK0 is left untouched, so a fused op may own it.
  *
- * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 controls precision of multiplication
+ * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 controls precision of multiplication.
+ * LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x), regardless of this value.
  * @tparam THROTTLE_LEVEL: Accepted for API parity with Wormhole/Blackhole; Quasar has no throttled MVMUL sequences, so
  * only 0 is valid
  * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
@@ -99,7 +100,8 @@ inline void llk_math_matmul_init_no_mop(
  * This function does not iterate over kt_dim, must iterate over kt_dim externally to this function.
  * Dest index is always assumed to start at 0 for this operation.
  *
- * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
+ * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication.
+ * LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x), regardless of this value.
  * @tparam THROTTLE_LEVEL: Accepted for API parity with Wormhole/Blackhole; Quasar has no throttled MVMUL sequences, so
  * only 0 is valid
  * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
@@ -142,7 +144,8 @@ inline void llk_math_matmul_no_mop(
  * Quasar LLK records at replay buffer slot 0, so an interleaved op overwrites this matmul's image and it
  * must be re-recorded here.
  *
- * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
+ * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication.
+ * LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x), regardless of this value.
  * @tparam THROTTLE_LEVEL: Accepted for API parity with Wormhole/Blackhole; Quasar has no throttled MVMUL sequences, so
  * only 0 is valid
  * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
