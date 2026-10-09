@@ -23,6 +23,14 @@ over the fabric into the same slot on every other device of the ring (fused writ
 boundary then sums the slots in slot order (bit-identical residual on every device), adds the residual and applies
 the RMSNorm (FP32 statistics, HiFi2). With fused_decode.config.DECODE_BOUNDARY_FUSED_SEND the sender runs inside the
 producing o_proj / MoE down op (sending_program), so the transfer starts as soon as the partial is complete.
+
+Receive-buffer reuse: each site's slots and semaphore are persistent and reused without a separate completion
+handshake. That is safe because the two sites strictly alternate (attn, moe, attn, ...): before device A can send
+into device B's "attn" slots again, A must have passed the "moe" boundary in between, which waits for B's MoE
+partial; B produces that partial only from the output of its previous "attn" boundary, i.e. after it reset the
+"attn" semaphore and consumed the slots. The same holds across tokens and for the LM-head candidate exchange
+(fused_decode/terminal.py TerminalExchange), whose next use needs every device's partials of the next token. A new
+use of a site must keep this alternation (no two sends to the same site without an all-device wait in between).
 """
 
 import struct

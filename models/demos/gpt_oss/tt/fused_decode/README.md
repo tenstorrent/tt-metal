@@ -65,3 +65,13 @@ use_fused = fused_decode_supported(mesh_device, mesh_config, hf_config, use_thro
 # QuietBox 2 (1x4 mesh), batch 1: decode runs on this path
 pytest models/demos/gpt_oss/demo/text_demo.py -k "1x4 and prefill_128"
 ```
+
+## Tests
+
+```bash
+# Host only (runs in CI): which configurations take the fused decode path
+pytest models/demos/gpt_oss/tests/unit/test_fused_decode_config.py
+
+# QuietBox 2 (Blackhole 1x4), ~45 s, skipped in CI: 2-layer fused decode vs the HuggingFace reference, 8 decode steps
+HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_fused_decode.py
+```

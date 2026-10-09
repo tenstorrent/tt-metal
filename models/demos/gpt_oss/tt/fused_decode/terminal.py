@@ -240,7 +240,8 @@ class DecodeTerminal:
 class TerminalExchange:
     """Top-k candidate merge + cross-device exchange fused into the LM-head op (module doc). Persistent state, all
     allocated at model construction on EXCHANGE_CORE (same addresses on every device): the writers' list buffer, this
-    device's payload, the receive slots (one per device) and the global receive semaphore."""
+    device's payload, the receive slots (one per device) and the global receive semaphore. They are reused every
+    token without a completion handshake: see "Receive-buffer reuse" in fused_decode/boundary.py."""
 
     LISTS_SEM, SEND_SEM = 1, 2  # program semaphores (0 is the fused boundary's)
 
