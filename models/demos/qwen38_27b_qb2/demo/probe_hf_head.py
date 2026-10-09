@@ -9,6 +9,20 @@ import time
 from pathlib import Path
 
 
+def report_json_default(value):
+    """Transformers loading diagnostics may use sets for missing/unexpected keys."""
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    raise TypeError(f"Unsupported reference report value: {type(value).__name__}")
+
+
+def save_report(output, report):
+    payload = json.dumps(report, indent=2, default=report_json_default, allow_nan=False) + "\n"
+    temporary = output / "progress.json.tmp"
+    temporary.write_text(payload)
+    temporary.replace(output / "progress.json")
+
+
 def main(args):
     import torch
     import transformers
@@ -45,9 +59,7 @@ def main(args):
     )
 
     def save():
-        temporary = args.output / "progress.json.tmp"
-        temporary.write_text(json.dumps(report, indent=2) + "\n")
-        temporary.replace(args.output / "progress.json")
+        save_report(args.output, report)
 
     save()
     try:

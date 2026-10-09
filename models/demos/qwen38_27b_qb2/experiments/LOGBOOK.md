@@ -1153,3 +1153,57 @@ No session connection is needed for that queue to continue.
   a deterministic gzip of the full audit. No raw private answer text was copied.
 
 [Completed head-control evidence](../galaxy-evidence/head-gpqa-v1/README.md).
+
+## Oct 9, 08:58-09:15 UTC: repaired diagnostics; decoder error localized and controls launched
+
+- The original post-CPU queue completed with two failed stages. Image transfer,
+  checksum and import succeeded, but Docker exposes the OCI manifest digest as
+  its image ID on this host. The checker incorrectly inspected the config digest.
+  Read-only inspection by the manifest digest confirms the descriptor/source
+  labels. Runtime/startup checks still need recovery; no image was deleted.
+- The HF reference loaded the checkpoint, then failed serializing empty sets in
+  Transformers loading metadata. The exception handler hit the same error and
+  left a stale loading report. Added deterministic set serialization and atomic
+  report writes, with three regression tests. The first isolated local test
+  fixture used pytest.raises with an incompatible positional signature; fixing
+  that temporary fixture produced three passes. Native preflight later passed
+  all 19 report/reference/follower tests.
+- Old followers stopped as designed after failed dependencies; systemd MainPID
+  was zero and terminal receipts were preserved. Launched a fresh CPU-only-model
+  reference and follower in v2 directories. CPU model inference finished eight
+  positions in about 34 seconds plus import/cleanup. Its host TTNN quantization
+  conversion nevertheless initialized UMD and discovered/started devices; the
+  saved log proves that hardware access despite the frozen legacy
+  `hardware_opened=false` field. Documented this explicitly. The device lock was
+  held throughout, and all model parameters/forwards were on CPU.
+- The reference loaded without missing, unexpected or mismatched keys. Head
+  BFP4/BFP8 weight-only RMS errors were 8.148%/0.532%, both matching all eight
+  top tokens. These short-prompt values are not GPQA score predictions.
+- The exact layer follower invocation `60840a4a755740689518e67aa1afc4e8`
+  completed all eight hardware steps and clean shutdown. Full logits differ
+  from HF by 20.1-70.3% RMS versus 0.60-0.83% for the device head on HF inputs.
+  All top-1 tokens agree. Initial prefill error accumulates through the decoder,
+  motivating a fidelity/weight split but not proving a kernel defect.
+- Source inspection confirms the installed HF full-attention output gate is
+  sigmoid, matching this implementation. The plan's swish label is not a reason
+  to change that operator. No causal recurrence/gating bug was established.
+- Added explicit unqualified decoder-control support to the diagnostic. G0
+  still verifies the original model source, mesh and baseline precision; control
+  validation permits only uniform BFP4/BFP8 decoder weights and HiFi2 while
+  preserving the head, state, KV and attention policy. Runtime receipts record
+  the actual candidate policy and deny inherited serving qualification.
+- The first control job stopped at import due to a missing helper module in
+  its frozen source snapshot. A first collector exposed the missing queue file;
+  the controller traceback and failed MainPID-zero service established startup
+  failure before hardware. Added the helper and its tests plus explicit import
+  preflight. The corrected bundle passed 34 tests with one hardware skip.
+- Started `qwen38-hf-controls-v2-20261009.service` at 09:14:25 UTC, observed PID
+  1433402 and invocation `79a488c86b8a4304b747388152292642`. It runs BFP4/HiFi2
+  then BFP8/HiFi2 sequentially under the shared device lock, stopping on failure
+  or unproven cleanup. Two-hour outer bound, 160 GiB, eight CPU quota. This is a
+  persistent numerical comparison; neither a new GPQA result nor a performance
+  claim. The original chunked-state and image-startup failures remain preserved
+  for recovery after the current accuracy priority.
+
+[Recovered reference and failures](../galaxy-evidence/hf-reference-recovery-v2/README.md),
+[persistent decoder controls](../galaxy-evidence/hf-decoder-controls-v2/README.md).

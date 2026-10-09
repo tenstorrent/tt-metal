@@ -1,9 +1,10 @@
 # Prepared decoder precision controls
 
-These configurations are prepared and validated by the policy loader, but have
-**not run on hardware, been queued, or changed the serving default**. They are
-controls for the numerical investigation after the queued HF layer comparison.
-There is no accuracy or throughput claim for either policy.
+These configurations were prepared and policy-validated at 08:50 UTC. After
+the completed HF layer comparison, they were launched as sequential diagnostic
+[hardware controls](../hf-decoder-controls-v2/README.md) at 09:14 UTC. They have
+not changed the serving default, and neither has an accuracy or throughput
+qualification. The validation receipt below is the original pre-launch record.
 
 Both retain the BFP8/HiFi2 head, FP32 recurrent state, BFP8 KV, BF16 activations,
 native recurrence and accurate-full-tile decode attention of the current head

@@ -20,6 +20,8 @@ def test_teacher_forced_hf_layer_diagnostic():
             for name in ("weights", "qualification", "precision", "reference", "output")
         }
     )
+    control = os.getenv("QWEN_HF_CONTROL_PRECISION")
+    args.control_precision = Path(control) if control else None
     main(args)
     report = json.loads((args.output / "progress.json").read_text())
     assert report["state"] == "completed" and report["cleanup_completed"]

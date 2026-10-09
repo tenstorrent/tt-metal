@@ -10,6 +10,26 @@ import time
 from pathlib import Path
 
 from models.demos.qwen38_27b_qb2.tests.reference_comparison import validate_teacher_forcing, vector_metrics
+from models.demos.qwen38_27b_qb2.tt.precision import ROLES, load_precision
+
+
+def validate_decoder_control(baseline, candidate):
+    """Diagnostic-only fidelity/weight controls cannot change state or attention math."""
+    allowed = {"config_id", "weight_groups", "compute_fidelities"}
+    if set(candidate) != set(baseline) or any(
+        candidate[key] != value for key, value in baseline.items() if key not in allowed
+    ):
+        raise ValueError("Decoder control must retain baseline state, cache and attention settings")
+    for key in ("weight_groups", "compute_fidelities"):
+        if candidate[key]["head"] != baseline[key]["head"]:
+            raise ValueError("Decoder control must retain the baseline head")
+    if (
+        len({candidate["weight_groups"][role] for role in ROLES}) != 1
+        or candidate["weight_groups"]["attention"] not in ("bfloat4_b", "bfloat8_b")
+        or any(candidate["compute_fidelities"][role] != "HiFi2" for role in ROLES)
+    ):
+        raise ValueError("Decoder control requires uniform BFP4 or BFP8 weights and HiFi2")
+    return candidate
 
 
 def main(args):
@@ -46,6 +66,24 @@ def main(args):
         source = Path(__file__).resolve().parents[1]
         os.environ["QWEN_PRECISION_CONFIG"] = str(args.precision.resolve())
         verify_qualified_source(qualification, source)
+        # G0 still authenticates the unchanged model source and baseline policy.
+        # An explicit control is a new unqualified experiment, never a substitute
+        # G0 receipt for serving or an inherited accuracy claim.
+        precision_path = args.precision
+        runtime_policy = load_precision(precision_path)
+        if runtime_policy != qualification["precision"]:
+            raise ValueError("Diagnostic baseline differs from its qualification")
+        control = getattr(args, "control_precision", None)
+        if control is not None:
+            runtime_policy = validate_decoder_control(runtime_policy, load_precision(control))
+            precision_path = control
+            os.environ["QWEN_PRECISION_CONFIG"] = str(control.resolve())
+            report.update(
+                diagnostic_control=True,
+                serving_qualified=False,
+                baseline_precision=qualification["precision"],
+                control_precision_sha256=hashlib.sha256(control.read_bytes()).hexdigest(),
+            )
         reference_report = json.loads((args.reference / "progress.json").read_text())
         reference_file = args.reference / "reference.pt"
         if (
@@ -75,7 +113,7 @@ def main(args):
             state="loading_model",
             qualification_sha256=hashlib.sha256(args.qualification.read_bytes()).hexdigest(),
             reference_sha256=reference_report["reference_tensor_sha256"],
-            precision=qualification["precision"],
+            precision=runtime_policy,
             model_source_sha256=qualification["source_sha256"],
             prompt_tokens=len(prompt),
         )
@@ -88,8 +126,8 @@ def main(args):
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
         if list(mesh.get_device_ids()) != [int(chip) for chip in groups[0].split(",")]:
             raise ValueError("Diagnostic TP4 group differs from the qualified physical group")
-        model = Qwen38Model(mesh, snapshot=args.weights, precision_config=args.precision, topology=ttnn.Topology.Linear)
-        if model.precision != qualification["precision"]:
+        model = Qwen38Model(mesh, snapshot=args.weights, precision_config=precision_path, topology=ttnn.Topology.Linear)
+        if model.precision != runtime_policy:
             raise ValueError("Diagnostic loaded a different precision policy")
         cache = model.allocate_cache(batch_size=1, capacity=((capacity + 31) // 32) * 32)
         table = model.upload(
@@ -206,4 +244,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("weights", "qualification", "precision", "reference", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--control-precision", type=Path)
     main(parser.parse_args())

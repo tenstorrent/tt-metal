@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T08:56:33.439783+00:00",
+  "generated_at": "2026-10-09T09:17:01.570983+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -24,13 +24,13 @@
     },
     {
       "path": "demo/probe_hf_head.py",
-      "bytes": 6887,
-      "sha256": "21e1a6a24e05e44558c3933aa1170a06838b8baddaeff7f54d0459a915c43343"
+      "bytes": 7284,
+      "sha256": "61403cd817689a506504f7f7752a8fb228aa6e8d8971a2f5c2d1742ad582abb8"
     },
     {
       "path": "demo/probe_hf_layers.py",
-      "bytes": 10280,
-      "sha256": "3a2f04ef7cde4f760ad0baaa9f0a628f36d5da6aaca0883b00595c72eab81235"
+      "bytes": 12442,
+      "sha256": "a307e38b8ee1bd1bb083409086a18feed98dfced915cd5d6bede07cce866cb41"
     },
     {
       "path": "demo/run_accuracy_followup.py",
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 88003,
-      "sha256": "1c10959f52efd3a1cd0a7884a63e085d022d3080388bb30593d89ca36170f1b9"
+      "bytes": 91937,
+      "sha256": "9fe68efb93dcb9c01ed730b559b4f9d3475e6f6749403aa6e08b20e9e7a12bc8"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 28397,
-      "sha256": "da57285cd8df048a939f57db821979861605697346991cb013c2c38234c92fef"
+      "bytes": 29256,
+      "sha256": "4be193225aa7261a4734bd7b7e3866fd1a23d61696d4ae267bbf22be77d40114"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1120,8 +1120,8 @@
     },
     {
       "path": "galaxy-evidence/decoder-precision-controls-v1/README.md",
-      "bytes": 3087,
-      "sha256": "28f977590ee3d94fecad51f2930ab8932b57842a7ec44f2c472e154aca70740b"
+      "bytes": 3180,
+      "sha256": "0d42e0056a01984b059f871e8de20e8f85ab0678ae2b885b655ad867f34e3bf8"
     },
     {
       "path": "galaxy-evidence/decoder-precision-controls-v1/capacity-estimate.json",
@@ -2389,6 +2389,46 @@
       "sha256": "3d0c223f87437d10b438d4a3fc08ce1c6cd22727040ace750c4f8af48be886a1"
     },
     {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/README.md",
+      "bytes": 2043,
+      "sha256": "2f4b46baa43e7f62f5814af1c951602e190357ae3a88378b275552947efa1a9e"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/controller.py.gz",
+      "bytes": 1821,
+      "sha256": "29d1bfe530a341ad26b889c47b3c0afda68889d6aefd2ef02a433eda93bfd6f6"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/launch.json",
+      "bytes": 2974,
+      "sha256": "f3258eaf5a6bdc5f8846dba3c362a5c6620b69922b521de821b548abed050a52"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "b11ec912f9c50be936e710d100784606e9c5baf2b1b833e83b135a32cf8f7c40"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/source-manifest.json",
+      "bytes": 21525,
+      "sha256": "d2178d1ae247f7b948767313d449e7bc3cdaf25fd28a321b61cd7105fdba127d"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/status-at-launch.json",
+      "bytes": 1030,
+      "sha256": "6af02d3453e782f7f28d0afd4a2a61732f7cd126810f5fc9d1400e742deeaea8"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/unit.xml.gz",
+      "bytes": 1196,
+      "sha256": "ac8a4b1a9e43099063b6d9a9b06dc5da4e7763fc2c55e874019784f03a5142f4"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/v1-startup-failure.log",
+      "bytes": 338,
+      "sha256": "d05e1c5ec7e0a93e7584090f41ac63caab5f65645d657587042f06143c40be6b"
+    },
+    {
       "path": "galaxy-evidence/hf-layer-reference-v1/README.md",
       "bytes": 3502,
       "sha256": "8a689722dd570ab95394f02ebc0cc0d503e72ff1ccc2540de4702a1954cb46a6"
@@ -2437,6 +2477,116 @@
       "path": "galaxy-evidence/hf-layer-reference-v1/unit.xml",
       "bytes": 5792,
       "sha256": "9f9b5a6d79ecd9c35f66b12e12872d86832cb39baab47017bb1323e9999084ee"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/README.md",
+      "bytes": 3694,
+      "sha256": "93b5991369c8e67813bb9213e2d34e38303b9c4565485c799104afa421fe4b84"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-controller.py.gz",
+      "bytes": 1465,
+      "sha256": "ea7e502909952923c79bbe891639154be8923c3c199ca1a5ee7c59510a3a2e47"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-reference.json",
+      "bytes": 2747,
+      "sha256": "30925629242a43175f528bd09cda4a3dfc18cf623b8709ff03c55bc7983f43c6"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-reference.log.gz",
+      "bytes": 1097,
+      "sha256": "ee19cc64199bd6b3b8691ce552fe576bd595d3560dc5d81f61a86cc112f083f5"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-status.json",
+      "bytes": 1057,
+      "sha256": "e742ab22ce6490439f6398a1aea5ff8c450903cca335aa2f395a26e1523d90ff"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/hardware.log.gz",
+      "bytes": 3490,
+      "sha256": "28dc010543562673b0403a0bb8e861f4f4c78d58e46f8d08017a577d02dbcd98"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/hardware.xml.gz",
+      "bytes": 316,
+      "sha256": "119c4da6171e2899429fc09750658ee0a231efd6cb9971ee8f826522df97d09c"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/launch.json",
+      "bytes": 4230,
+      "sha256": "057cac2f61cac3b21f433cb286fa540ae3cd2e5a8c0de16eddb86d7ce44c6ebd"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/layer-comparison.json.gz",
+      "bytes": 38638,
+      "sha256": "5e3bc254aaa0a3e0dd9b55cadc8fd90cf8f2dafd39c2c7e02c00d2fba4feb829"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/layer-queue.json",
+      "bytes": 22188,
+      "sha256": "58f4eb901fabb5f278f17db3242f984718af659fc7ad94a9e4891765396c1d85"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/layer-service.txt",
+      "bytes": 81,
+      "sha256": "0e7fb4d94584eacfda57909f1414e8488a4f125a09038dbdd69104a1e3a17d97"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/probe-hf-head.py.gz",
+      "bytes": 2654,
+      "sha256": "2e749af1a9c011daabe320c7d297373e67b3cb695703daf3b6d10211b4a0a62b"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/source-manifest.json",
+      "bytes": 20810,
+      "sha256": "4e8da9e84c5bf921ae11e70adbee7668f83ede1b0d37289d28e7007eb40b3c30"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/unit.xml.gz",
+      "bytes": 744,
+      "sha256": "a9aecb1d2ffe757a64113c87d80fc7c67f1d660f4ba7cd7552b399f7c74c878c"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-chunked-status.json",
+      "bytes": 21025,
+      "sha256": "72dc20b986ba0be4f05bfa9b9a8ed64d891954607e22dc2d6a76088438cf0569"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-cpu-failure.log.gz",
+      "bytes": 1123,
+      "sha256": "009f029fd970a37cd2c89b62d1d205c01223d097da88900f0099bc8c12ff75fb"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-cpu-status.json",
+      "bytes": 2197,
+      "sha256": "e6992b660b224b5a773bd829caab6f95481a6b7e7883b6e0525c5c052a5d196d"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-failure.log",
+      "bytes": 118,
+      "sha256": "2db3adc9b1a154b5ebb2e0d1b987ea8bedc8a35eeaee1614c725b7df8df00b0c"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-load.log",
+      "bytes": 89,
+      "sha256": "01986df33622266d3a7e80cc93e8a9e2726d8b9ba3cc41a3500db72a3b806110"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-status.json",
+      "bytes": 752,
+      "sha256": "eba851fa77977dc365eec6921029a5abf32f26f3a77bf22f5cde480e3c2bfaa1"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-layer-status.json",
+      "bytes": 21398,
+      "sha256": "62c6f053b210291020513faf2159be7b15563636e1c99d7143ee286bc0363e54"
+    },
+    {
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-startup-status.json",
+      "bytes": 694,
+      "sha256": "3ffbe58aa1578fa583dcfaee76ef841471a41c7c3c6b0c0d215951c9bcf98322"
     },
     {
       "path": "galaxy-evidence/image-build-v5/README.md",
@@ -4993,8 +5143,8 @@
     },
     {
       "path": "tests/test_hf_layer_reference.py",
-      "bytes": 1015,
-      "sha256": "5f3e9431a584feeb37f5ced8359e043d66ccfff224e0307df7b3e6a5f474c8b2"
+      "bytes": 1132,
+      "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
     },
     {
       "path": "tests/unit/test_accuracy_followup.py",
@@ -5017,9 +5167,19 @@
       "sha256": "e10f13dcf6d3cea4c676c490393e42a153ac51f7a985959ccda92390e8ebf149"
     },
     {
+      "path": "tests/unit/test_hf_decoder_control.py",
+      "bytes": 1966,
+      "sha256": "3eb3488e233fb468aa5268c054e35cbb9ca72d03aa967e502fc7805e1e22869f"
+    },
+    {
       "path": "tests/unit/test_hf_layer_followup.py",
       "bytes": 2065,
       "sha256": "00e2593b4af6b8582030306f5c22ed32031f0639d429b62f93f6b02ee0448e5b"
+    },
+    {
+      "path": "tests/unit/test_hf_reference_report.py",
+      "bytes": 1611,
+      "sha256": "a9e2bb596b8ade859ba7457bfd9e230dac8f1f666dd6f886379559427d3d647f"
     },
     {
       "path": "tests/unit/test_reference_comparison.py",

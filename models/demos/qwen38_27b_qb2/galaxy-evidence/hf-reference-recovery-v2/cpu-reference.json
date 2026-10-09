@@ -1,0 +1,105 @@
+{
+  "state": "completed",
+  "started_at": 1791536515.5509074,
+  "scope": "CPU BF16 HF hidden states and FP32 LM-head matmuls with host BFP4/BFP8 weight round trips",
+  "checkpoint": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+  "checkpoint_config_sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+  "qualification_sha256": "697e4e614652d5f6e6d7ce1b883aae0691e9a756ba6fbbd623848b4a41a637b7",
+  "source_sha256": "61403cd817689a506504f7f7752a8fb228aa6e8d8971a2f5c2d1742ad582abb8",
+  "torch_version": "2.11.0+cpu",
+  "transformers_version": "5.12.1",
+  "threads": 8,
+  "prompt_tokens": 63,
+  "requested_steps": 8,
+  "reference_steps": [
+    {
+      "step": 0,
+      "token": 1596,
+      "elapsed_s": 3.5944090876728296
+    },
+    {
+      "step": 1,
+      "token": 1144,
+      "elapsed_s": 1.0094736739993095
+    },
+    {
+      "step": 2,
+      "token": 4087,
+      "elapsed_s": 0.9733097492717206
+    },
+    {
+      "step": 3,
+      "token": 1156,
+      "elapsed_s": 0.9852740378119051
+    },
+    {
+      "step": 4,
+      "token": 25,
+      "elapsed_s": 0.9760465137660503
+    },
+    {
+      "step": 5,
+      "token": 328,
+      "elapsed_s": 0.9765035049058497
+    },
+    {
+      "step": 6,
+      "token": 814,
+      "elapsed_s": 0.9719827729277313
+    },
+    {
+      "step": 7,
+      "token": 20139,
+      "elapsed_s": 0.9828106150962412
+    }
+  ],
+  "head_formats": {
+    "bfloat4_b": {
+      "relative_logit_rms": 0.08148021996021271,
+      "mean_kl_from_reference": 0.0005240098689682782,
+      "top1_matches": 8,
+      "rows": 8,
+      "top20_overlap_per_row": [
+        19,
+        20,
+        19,
+        19,
+        20,
+        19,
+        18,
+        17
+      ],
+      "max_absolute_logit_error": 1.3607959747314453
+    },
+    "bfloat8_b": {
+      "relative_logit_rms": 0.00531914085149765,
+      "mean_kl_from_reference": 5.468675681186141e-07,
+      "top1_matches": 8,
+      "rows": 8,
+      "top20_overlap_per_row": [
+        20,
+        20,
+        19,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "max_absolute_logit_error": 0.08166360855102539
+    }
+  },
+  "hardware_opened": false,
+  "includes_lofi_device_math": false,
+  "is_gpqa_score": false,
+  "loading_info": {
+    "missing_keys": [],
+    "unexpected_keys": [],
+    "mismatched_keys": [],
+    "error_msgs": []
+  },
+  "loaded_at": 1791536516.0805035,
+  "reference_tensor_sha256": "6a27844742b8ca9caaad4e7236101a9e4b493098a6ace5bb99b2e46e2c7c1561",
+  "finished_at": 1791536549.2114694,
+  "interpretation": "Head-only weight sensitivity on a short public prompt; decoder weights are HF BF16. This excludes device LoFi/HiFi2 arithmetic and cannot predict a GPQA score or establish its failure cause."
+}

@@ -1,0 +1,33 @@
+{
+  "state": "completed",
+  "started_at": 1791536511.7107923,
+  "stages": [
+    {
+      "name": "hf-head-reference",
+      "state": "completed",
+      "started_at": 1791536511.7140837,
+      "command": [
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-layer-source-v2/models/demos/qwen38_27b_qb2/demo/probe_hf_head.py",
+        "--weights",
+        "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+        "--qualification",
+        "/home/ttuser/qwen38-artifacts-20261007/overnight-v2/native-g0/receipts/full-model.json",
+        "--output",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-head-reference-v2",
+        "--threads",
+        "8",
+        "--steps",
+        "8"
+      ],
+      "timeout_seconds": 2400,
+      "exit_code": 0,
+      "finished_at": 1791536554.1424572
+    }
+  ],
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "passed": true,
+  "finished_at": 1791536554.1424732
+}

@@ -1,0 +1,29 @@
+{
+  "state": "running",
+  "started_at": 1791537265.5524597,
+  "runs": [
+    {
+      "name": "bfp4-hifi2",
+      "state": "running",
+      "started_at": 1791537265.5633483,
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/models/demos/qwen38_27b_qb2/tests/test_hf_layer_reference.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=2400",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/hf-controls-v2/bfp4-hifi2/hardware.xml"
+      ],
+      "precision_file": "precision_accurate_decode_hifi2.json"
+    }
+  ],
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "is_gpqa_score": false,
+  "is_performance_measurement": false,
+  "updated_at": "2026-10-09T09:14:25Z"
+}

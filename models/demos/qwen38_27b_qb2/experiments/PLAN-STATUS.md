@@ -1,5 +1,17 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 09:15 UTC update: repaired the HF report writer's set-serialization failure
+and completed the CPU plus full TP4 layer comparison. Full-model logit RMS error
+is 20.1-70.3% over eight short teacher-forced positions; the isolated device head
+is within 0.60-0.83%. Top-1 matches all eight positions, so this is diagnostic
+evidence rather than a new eval result. BFP4/HiFi2 and BFP8/HiFi2 decoder controls
+are now persistent, with 34 native host tests passing. A missing helper stopped
+their first launch before hardware; the corrected v2 bundle includes it.
+The image imported but its config-ID lookup failed; runtime/startup and chunked
+followers remain unqualified and await recovery after accuracy work.
+[Reference results](../galaxy-evidence/hf-reference-recovery-v2/README.md),
+[decoder controls](../galaxy-evidence/hf-decoder-controls-v2/README.md).
+
 Oct 9 08:56 UTC update: head-control full GPQA completed **166/198 (83.84%)**
 in 51m43s, with one incorrect output-budget cutoff. The completion audit agrees;
 197 answers stopped naturally, including 31 incorrect answers. The native-head
