@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -c %s -o %t.o
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --enable-var-scope
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --check-prefix=ASSERT
 
