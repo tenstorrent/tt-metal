@@ -5,10 +5,38 @@
 #pragma once
 
 #include <optional>
+#include <reflect>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
+
+using ParamGroupOptions = std::unordered_map<std::string, float>;
+
+// Param group: model's parameters names plus the hyperparameters they are stepped with
+struct ParamGroup {
+    std::vector<std::string> params;
+    ParamGroupOptions options;
+};
+
+// The per-group options of an optimizer config
+template <typename Config>
+[[nodiscard]] ParamGroupOptions param_group_defaults(const Config& config) {
+    ParamGroupOptions defaults;
+    reflect::for_each(
+        [&](auto field) {
+            const auto& value = reflect::get<field>(config);
+            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, float>) {
+                defaults.emplace(reflect::member_name<field>(config), value);
+            }
+        },
+        config);
+    return defaults;
+}
 
 class OptimizerBase {
 public:
@@ -41,9 +69,45 @@ public:
     // earlier scheduler has already scaled ``get_lr()`` at construction.
     [[nodiscard]] float get_initial_lr();
 
+    // Value of hyperparameter in every param group, indexed like the groups.
+    [[nodiscard]] std::vector<float> get_group_options(const std::string& key) const;
+    // Sets hyperparameter for every param group, one value per group.
+    void set_group_options(const std::string& key, const std::vector<float>& values);
+
+    [[nodiscard]] virtual std::vector<float> get_group_lrs() const;
+    virtual void set_group_lrs(const std::vector<float>& lrs);
+
+    // Per-group LRs recorded the first time this is called. Schedulers read their base LRs from here so that several
+    // schedulers attached to the same optimizer share one base even after an earlier scheduler has already scaled the
+    // LRs at construction.
+    [[nodiscard]] virtual std::vector<float> get_initial_group_lrs();
+
     virtual void print_stats() const;
 
+    // Every optimizer has at least one group.
+    [[nodiscard]] const std::vector<ParamGroup>& get_param_groups() const;
+    [[nodiscard]] const ParamGroupOptions& get_defaults() const;
+
+    // Sets hyperparameter for a specific param group by key.
+    virtual void set_param_group_option(size_t group_idx, const std::string& key, float value);
+
 protected:
+    // State dict key of one param group entry: "param_groups.{group_idx}.{key}".
+    [[nodiscard]] static std::string param_group_key(size_t group_idx, const std::string& key);
+
+    // Fills every group's missing options from defaults and validates the groups: each option must
+    // be one of the default options' keys, and each param must exist and belong to at most one group. Params
+    // in no group are collected into a leading group that uses the defaults.
+    void init_param_groups(ParamGroupOptions defaults, std::vector<ParamGroup> groups);
+
+    std::vector<ParamGroup> m_param_groups;
+    ParamGroupOptions m_defaults;
+
+    // Param group state: num_param_groups and per group param_groups.{i}.{option}, param_groups.{i}.initial_lr and
+    // param_groups.{i}.params.
+    void save_param_groups(serialization::StateDict& dict) const;
+    void restore_param_groups(const serialization::StateDict& dict);
+
     // ``initial_lr`` is always serialized with the optimizer state dict
     // (mirroring PyTorch, where ``param_group["initial_lr"]`` rides along in
     // ``optimizer.state_dict()``) and is required on load. Concrete optimizers
@@ -55,6 +119,7 @@ protected:
 
 private:
     std::optional<float> m_initial_lr;
+    std::optional<std::vector<float>> m_initial_lrs;
 };
 
 }  // namespace ttml::optimizers
