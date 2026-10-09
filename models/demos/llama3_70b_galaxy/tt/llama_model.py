@@ -1053,6 +1053,27 @@ class TtTransformer(LightweightModule):
             )
             rot_mats = (rot_cos_slice, rot_sin_slice)
 
+        # Qwen long prefill on Wormhole (batch 1, no prefix): sequence-parallel residual stream over the mesh rows.
+        # Each row keeps one S/8 chunk of the residual between layers, runs the norms and residual adds on it, gathers
+        # the norm outputs along the sequence for attention / MLP, and reduce-scatters WO / FF2 along the sequence
+        # instead of all-reducing them. The full sequence is gathered back after the last layer.
+        rows = self.args.cluster_shape[0]
+        seq_parallel = (
+            mode == "prefill"
+            and self.args.is_qwen
+            and self.use_prefetcher
+            and not getattr(self.args, "is_blackhole", False)
+            and self.prefetcher_setup is not None
+            and batch_size == 1
+            and start_pos == 0
+            and x.shape[-2] > 8192
+            and x.shape[-2] % (rows * 32) == 0
+        )
+        if seq_parallel:
+            x_full = x
+            x = ttnn.mesh_partition(x_full, dim=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_full.deallocate(True)
+
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
@@ -1069,7 +1090,12 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                seq_parallel=seq_parallel,
             )
+        if seq_parallel:
+            x_local = x
+            x = self.tt_ccl.ring_all_gather_seq(x_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+            x_local.deallocate(True)
         # ttnn.deallocate(h)
         if mode == "decode" and self.use_prefetcher:
             ttnn.deallocate(garbage_tensor)

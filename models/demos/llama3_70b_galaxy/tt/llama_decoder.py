@@ -148,6 +148,7 @@ class TtTransformerBlock(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
@@ -178,6 +179,11 @@ class TtTransformerBlock(LightweightModule):
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
             h = x
+            if seq_parallel:
+                # x is this mesh row's S/8 chunk; attention needs the full sequence on every row.
+                attn_in_local = attn_in_sharded
+                attn_in_sharded = self.tt_ccl.ring_all_gather_seq(attn_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+                attn_in_local.deallocate(True)
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
@@ -199,11 +205,16 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx_tensor=chunk_start_idx_tensor,
             kv_cache=kv_cache,
             batch_size=batch_size,
+            seq_parallel=seq_parallel,
         )
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            if seq_parallel:
+                ff_in_local = ff_in_sharded
+                ff_in_sharded = self.tt_ccl.ring_all_gather_seq(ff_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+                ff_in_local.deallocate(True)
         if mode == "decode":
             if self.unfuse_res_add:
                 if self.args.use_prefetcher:
@@ -231,7 +242,7 @@ class TtTransformerBlock(LightweightModule):
                 attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size, seq_parallel=seq_parallel)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=res_dtype)
             if mode == "decode":

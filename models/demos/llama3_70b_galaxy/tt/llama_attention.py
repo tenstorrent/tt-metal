@@ -1163,6 +1163,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ):
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -1516,6 +1517,12 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
+        if seq_parallel:
+            # Sequence-parallel residual (llama_model.py): keep only this mesh row's S/8 chunk of the sum.
+            output_11SH_reduced = self.tt_ccl.ring_reduce_scatter_seq(output_11SH, ttnn.DRAM_MEMORY_CONFIG, "WO")
+            output_11SH.deallocate()
+            return output_11SH_reduced
+
         # Reduce-scatter
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
@@ -1541,6 +1548,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1553,6 +1561,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                seq_parallel=seq_parallel,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
