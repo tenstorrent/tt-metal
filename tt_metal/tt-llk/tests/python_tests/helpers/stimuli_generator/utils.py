@@ -846,3 +846,14 @@ def apply_log_uniform_magnitudes(
     values = signs * magnitudes
     values = torch.clamp(values, -max_magnitude, max_magnitude)
     return values.to(format_dict[cast_to_format])
+
+
+def overlay_values(
+    values: torch.Tensor, overlay: list, stride: int = 37
+) -> torch.Tensor:
+    """Write *overlay* into a copy of *values* at a stride coprime with the 16-wide face row,
+    so planted edge values spread across lanes and faces."""
+    flat = values.flatten().clone()
+    for i, value in enumerate(overlay):
+        flat[(i * stride) % flat.numel()] = value
+    return flat.reshape(values.shape)
