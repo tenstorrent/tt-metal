@@ -75,20 +75,16 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
     return MetalContext::instance(context_id).data_collector()->GetProgramSubDevice(device_id, runtime_id);
 }
 
-void RecordProgramMetadata(ContextId context_id, ProgramImpl& program) {
+void RecordProgramMetadata(ContextId context_id, ProgramImpl& program, std::span<const tt::ChipId> device_ids) {
     auto& data_collector = *MetalContext::instance(context_id).data_collector();
     if (!data_collector.IsProgramMetadataRecordingEnabled()) {
         return;
     }
-    data_collector.RecordProgramMetadata(program);
+    data_collector.RecordProgramMetadata(program, device_ids);
 }
 
 bool IsProgramMetadataRecordingEnabled(ContextId context_id) {
     return MetalContext::instance(context_id).data_collector()->IsProgramMetadataRecordingEnabled();
-}
-
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context_id, uint16_t runtime_id) {
-    return MetalContext::instance(context_id).data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
