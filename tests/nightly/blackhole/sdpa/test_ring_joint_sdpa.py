@@ -1703,6 +1703,7 @@ def run_ring_joint_sdpa_chunked(
     segmented_accumulation: bool = False,
     math_fidelity=None,
     kv_mean_offset: float = 0.0,
+    perf_call_hook=None,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1726,8 +1727,12 @@ def run_ring_joint_sdpa_chunked(
 
     nd_sharded_kv_cache=True uploads the K/V cache ND-sharded across DRAM banks, matching the
     production cache layout; the gather buffer stays interleaved, as in production.
+
+    perf_call_hook(config_id, call) (perf only, do_check=False) replaces the single op call per
+    chunk and Q/K config: the hook runs call() as often as it likes, e.g. to time warm repeats.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
+    assert perf_call_hook is None or (not do_check and num_iterations == 1), "perf_call_hook is perf-only"
 
     sp_size = mesh_config.sp_size
     if sp_size < 2:
@@ -1874,7 +1879,8 @@ def run_ring_joint_sdpa_chunked(
         # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
         if num_iterations == 1 and do_check:
-            if sliding_window_size is None and operator_sink is None:
+            # torch_sdpa_reference has no scale, so a model scale goes through the chunked reference.
+            if sliding_window_size is None and operator_sink is None and model.scale is None:
                 ref_full = torch_sdpa_reference(Q_full, K_full[..., :d_q], V_full, is_causal=True)
             else:
                 ref_full = torch.cat(
@@ -1884,6 +1890,7 @@ def run_ring_joint_sdpa_chunked(
                             K_full[:, :, :e, :d_q],
                             V_full[:, :, :e, :],
                             s,
+                            scale=model.scale,
                             sliding_window_size=sliding_window_size,
                             attention_sink=operator_sink,
                         )
@@ -2391,6 +2398,24 @@ def run_ring_joint_sdpa_chunked(
                         determinism_mismatch_marker = merge_device_mismatch_markers(
                             determinism_mismatch_marker, mismatch_marker
                         )
+                elif perf_call_hook is not None:
+                    perf_call_hook(
+                        config_id,
+                        lambda: run_chunk_call(
+                            config_id,
+                            program_config,
+                            0,
+                            i,
+                            s,
+                            e,
+                            tt_Q,
+                            tt_K,
+                            tt_V,
+                            persistent_output_buffer_k,
+                            persistent_output_buffer_v,
+                            kv_cache_batch_idx_arg,
+                        ),
+                    )
                 else:
                     tt_out = run_chunk_call(
                         config_id,
@@ -2865,6 +2890,8 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     halo_slots=None,
+    scale=None,
+    topology=None,
 ):
     """Numerically validate compact GQA sliding attention over a fixed, garbage-padded KV cache.
 
@@ -2923,7 +2950,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     k_full = fa_rand(batch_size, nhk, max_logical_n, d_k)
     v_full = fa_rand(batch_size, nhv, max_logical_n, d_v)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, topology=topology)
     mesh_device = runtime.mesh_device
     try:
         input_shard_dims = [None, None]
@@ -3053,6 +3080,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                         topology=runtime.topology,
                         worker_sub_device_id=runtime.worker_sub_device_id,
                         ccl_column=runtime.ccl_column,
+                        scale=scale,
                         kv_actual_isl=kv_actual_isl_arg,
                         sliding_window_size=sliding_window_size_arg,
                     )
@@ -3098,6 +3126,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                         natural_k,
                         natural_v,
                         kv_actual_isl,
+                        scale=scale,
                         sliding_window_size=sliding_window_size,
                     )
                     passed, pcc = comp_pcc(ref_out, out_valid_natural, pcc_threshold)
@@ -7843,6 +7872,330 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
     )
+
+
+# === GEMMA 4 SMALL-CHUNK GLOBAL SDPA SWEEP (#59846) ===
+# Request chunk sizes C (before CP sharding; each rank holds C / sp_size Q rows) and the prefixes each
+# chunk is measured at. Every C sees the same absolute prefixes plus its own final 256K chunk.
+GEMMA4_SWEEP_CHUNK_SIZES = (256, 512, 1024, 2048, 4096)
+GEMMA4_SWEEP_PREFIXES = (0, 16384, 65536, 131072, None)  # None: the final chunk of the 256K cache
+GEMMA4_SWEEP_Q_CHUNKS = (32, 64, 96, 128)
+GEMMA4_SWEEP_K_CHUNKS = (128, 256, 384, 512)
+GEMMA4_SWEEP_K_SPLITS = (1, 2, 3, 4)
+GEMMA4_SWEEP_OUT_ENV = "GEMMA4_SDPA_SWEEP_OUT"
+GEMMA4_SWEEP_REPEATS_ENV = "GEMMA4_SDPA_SWEEP_REPEATS"
+
+
+def gemma4_sweep_tunings(chunk_size):
+    """(q, k, max_k_splits, segmented) to sweep at this chunk, deduplicated on what the op will actually run."""
+    q_rows = chunk_size // MESH_CONFIG.sp_size
+    nhq = GEMMA4_CHUNKED_PERF_MODEL_CONFIGS["gemma4_global"].nhq
+    tunings, seen = [], set()
+    for q, k, k_splits, segmented in product(
+        GEMMA4_SWEEP_Q_CHUNKS, GEMMA4_SWEEP_K_CHUNKS, GEMMA4_SWEEP_K_SPLITS, (False, True)
+    ):
+        if q > q_rows:
+            continue
+        units = math.ceil(q_rows / q) * nhq
+        # Mirror ring_joint_sdpa_program_factory: bands are whole grid rows, at most 4 of them.
+        rows_per_split = math.ceil(units / MESH_CONFIG.sdpa_cols)
+        effective_splits = max(1, min(k_splits, MESH_CONFIG.grid_rows // rows_per_split, 4)) if k_splits > 1 else 1
+        if segmented and effective_splits == 1 and units > MESH_CONFIG.sdpa_cores:
+            continue  # The op refuses segmented accumulation with several Q chunks per core.
+        key = (q, k, effective_splits, segmented and effective_splits == 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        tunings.append((q, k, k_splits, segmented))
+    return tunings
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("prefix", GEMMA4_SWEEP_PREFIXES, ids=lambda p: "final" if p is None else f"prefix{p}")
+@pytest.mark.parametrize("chunk_size", GEMMA4_SWEEP_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+def test_ring_joint_attention_gemma4_global_chunk_sweep(chunk_size, prefix):
+    """Warm repeated device time and math utilization of Gemma 4 global attention for every swept tuning at one
+    (request chunk, prefix). Rows are appended as JSON lines to $GEMMA4_SDPA_SWEEP_OUT."""
+    import json
+    import statistics
+    import subprocess
+
+    if MESH_CONFIG.sp_size != 8 or "gemma4_global" not in GEMMA4_CHUNKED_PERF_MODEL_CONFIGS:
+        pytest.skip("The Gemma 4 sweep needs the 8x4 Blackhole Galaxy")
+    model = GEMMA4_CHUNKED_PERF_MODEL_CONFIGS["gemma4_global"]
+    out_path = os.environ.get(GEMMA4_SWEEP_OUT_ENV)
+    assert out_path, f"Set {GEMMA4_SWEEP_OUT_ENV} to the JSON-lines output file"
+    repeats = int(os.environ.get(GEMMA4_SWEEP_REPEATS_ENV, "6"))  # The first is a warm-up and is dropped.
+    n_chunks = model.total_seq // chunk_size
+    chunk_idx = n_chunks - 1 if prefix is None else prefix // chunk_size
+    production = ring_sdpa_chunk_sizes(
+        chunk_size // MESH_CONFIG.sp_size, sliding=False, num_heads=model.nhq, num_cores=MESH_CONFIG.sdpa_cores
+    )
+    revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    tunings = gemma4_sweep_tunings(chunk_size)
+    if production not in tunings:
+        tunings.append(production)
+    groups = {}
+    for q, k, k_splits, segmented in tunings:
+        groups.setdefault((k_splits, segmented), []).append((q, k))
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
+    rows = []
+    try:
+        for (k_splits, segmented), qk_configs in groups.items():
+            results = {}
+
+            def time_call(config_id, call):
+                durations = []
+                try:
+                    for _ in range(repeats):
+                        duration_ns, _ = profile_ring_joint_runtime_duration_ns(runtime.mesh_device, call)
+                        durations.append(duration_ns)
+                    results[config_id] = ("ok", durations, None)
+                except BaseException as exc:  # pytest.fail raises a BaseException
+                    if isinstance(exc, KeyboardInterrupt):
+                        raise
+                    results[config_id] = ("error", durations, f"{type(exc).__name__}: {str(exc)[:600]}")
+
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk_idx)}):
+                run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    total_seq=model.total_seq,
+                    qk_configs=qk_configs,
+                    persistent_buffer_mode="reuse_max",
+                    do_check=False,
+                    reuse_kv_buffer=True,
+                    use_compact_single_chunk_q=True,
+                    use_ring_mla=model.use_ring_mla,
+                    matmul_math_fidelity=model.matmul_math_fidelity,
+                    nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                    max_k_splits=k_splits,
+                    segmented_accumulation=segmented,
+                    runtime=runtime,
+                    perf_call_hook=time_call,
+                )
+
+            for q, k in qk_configs:
+                status, durations, error = results.get(get_test_case_id(model, q, k), ("missing", [], None))
+                warm = durations[1:] if len(durations) > 1 else durations
+                row = dict(
+                    revision=revision,
+                    mesh=f"{MESH_CONFIG.sp_size}x{MESH_CONFIG.tp_size}",
+                    sdpa_cores=MESH_CONFIG.sdpa_cores,
+                    chunk_size=chunk_size,
+                    q_rows_per_rank=chunk_size // MESH_CONFIG.sp_size,
+                    chunk_idx=chunk_idx,
+                    prefix=chunk_idx * chunk_size,
+                    final=prefix is None,
+                    q_chunk=q,
+                    k_chunk=k,
+                    max_k_splits=k_splits,
+                    segmented=segmented,
+                    production=(q, k, k_splits, segmented) == production,
+                    status=status,
+                    error=error,
+                    durations_ns=durations,
+                )
+                if status == "ok" and warm:
+                    median_ns = statistics.median(warm)
+                    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+                        MESH_CONFIG, model, chunk_size, chunk_idx, median_ns, MESH_CONFIG.sdpa_cores
+                    )
+                    row.update(
+                        median_us=median_ns / 1e3,
+                        min_us=min(warm) / 1e3,
+                        max_us=max(warm) / 1e3,
+                        util=utilization / get_matmul_peak_multiplier(model),
+                    )
+                    logger.info(
+                        f"sweep chunk{chunk_size} idx{chunk_idx} q{q} k{k} ksplit{k_splits} seg{int(segmented)}: "
+                        f"{row['median_us']:.1f} us [{row['min_us']:.1f}, {row['max_us']:.1f}], util {row['util']:.2f}%"
+                    )
+                else:
+                    logger.warning(
+                        f"sweep chunk{chunk_size} idx{chunk_idx} q{q} k{k} ksplit{k_splits}: {status} {error}"
+                    )
+                rows.append(row)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+        with open(out_path, "a") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+
+
+# Per chunk size: the fastest tuning on the final 256K chunk of test_ring_joint_attention_gemma4_global_chunk_sweep, and
+# production's (ring_sdpa_chunk_sizes). (chunk_size, q, k, max_k_splits, segmented)
+GEMMA4_SWEEP_ACCURACY_TUNINGS = [
+    (256, 32, 512, 4, False),
+    (256, 32, 256, 3, True),
+    (512, 64, 256, 4, False),
+    (512, 32, 256, 3, True),
+    (1024, 64, 384, 4, False),
+    (1024, 32, 256, 3, True),
+    (2048, 64, 384, 3, False),
+    (2048, 64, 256, 3, True),
+    (4096, 128, 256, 3, True),
+]
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Sweep follow-up - skip on CI")
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("position", ["first", "last"])
+@pytest.mark.parametrize(
+    "chunk_size,q_chunk_size,k_chunk_size,max_k_splits,segmented",
+    GEMMA4_SWEEP_ACCURACY_TUNINGS,
+    ids=[f"chunk{c}-q{q}-k{k}-ksplit{s}-{'seg' if g else 'unseg'}" for c, q, k, s, g in GEMMA4_SWEEP_ACCURACY_TUNINGS],
+)
+def test_ring_joint_attention_gemma4_global_chunk_sweep_accuracy(
+    chunk_size, q_chunk_size, k_chunk_size, max_k_splits, segmented, position
+):
+    """The sweep's selected global tunings against the CPU reference, as test_ring_joint_attention_gemma4_global_
+    segmented_accuracy checks production: packed K/V, LoFi, K/V rows sharing a mean direction, RMSE < 0.05. A 64K
+    sequence; the first chunk or the last (prefix 64K - C). K split and segmented accumulation must change the output.
+    """
+    total_seq = 65536
+    chunk_idx = 0 if position == "first" else total_seq // chunk_size - 1
+    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk_idx)}):
+        run_ring_joint_sdpa_chunked(
+            MESH_CONFIG,
+            replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+            chunk_size=chunk_size,
+            total_seq=total_seq,
+            qk_configs=[(q_chunk_size, k_chunk_size)],
+            use_ring_mla=True,
+            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            max_k_splits=max_k_splits,
+            segmented_accumulation=segmented,
+            kv_mean_offset=1.0,
+            rmse_threshold=0.05,
+        )
+
+
+# Sliding attention accepts only K chunk 128 and Q chunk 64/128 (op validation); the extra pairs record the rejection.
+GEMMA4_SWA_SWEEP_TUNINGS = ((32, 128), (64, 128), (128, 128), (64, 64), (128, 64), (128, 256))
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("case", ["accuracy", "perf_final"])
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", GEMMA4_SWA_SWEEP_TUNINGS, ids=lambda v: str(v))
+@pytest.mark.parametrize("chunk_size", GEMMA4_SWEEP_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+def test_ring_joint_attention_gemma4_swa_chunk_sweep(chunk_size, q_chunk_size, k_chunk_size, case, expect_error):
+    """Gemma 4 sliding-window attention at one (request chunk, Q/K tuning). accuracy: the first chunk (prefix 0),
+    the second, and one whose window lies wholly in the cached prefix, against the CPU reference on a production-style
+    oversized, garbage-padded cache; perf_final: warm device time on the final 256K chunk. Appends one JSON line to
+    $GEMMA4_SDPA_SWEEP_OUT, recording whether the op rejected the config, raised, or ran."""
+    import json
+    import statistics
+
+    if MESH_CONFIG.sp_size != 8 or "gemma4_swa" not in GEMMA4_CHUNKED_PERF_MODEL_CONFIGS:
+        pytest.skip("The Gemma 4 sweep needs the 8x4 Blackhole Galaxy")
+    model = replace(
+        GEMMA4_CHUNKED_PERF_MODEL_CONFIGS["gemma4_swa"], q_chunk_sizes=[q_chunk_size], k_chunk_sizes=[k_chunk_size]
+    )
+    out_path = os.environ.get(GEMMA4_SWEEP_OUT_ENV)
+    assert out_path, f"Set {GEMMA4_SWEEP_OUT_ENV} to the JSON-lines output file"
+    repeats = int(os.environ.get(GEMMA4_SWEEP_REPEATS_ENV, "6"))
+    q_rows = chunk_size // MESH_CONFIG.sp_size
+    row = dict(
+        chunk_size=chunk_size,
+        q_rows_per_rank=q_rows,
+        q_chunk=q_chunk_size,
+        k_chunk=k_chunk_size,
+        case=case,
+        production=(q_chunk_size, k_chunk_size) == ring_sdpa_chunk_sizes(q_rows, sliding=True)[:2],
+    )
+    # The cached case starts at least 4K tokens in, so its 1024-token window is wholly cached.
+    prefix_groups = (0, 1, max(2, 4096 // chunk_size))
+    if case == "accuracy":
+        row.update(prefixes=[groups * chunk_size for groups in prefix_groups])
+    else:
+        row.update(prefixes=[model.total_seq - chunk_size])
+
+    durations = []
+    accuracy_lines = []
+    sink = logger.add(
+        lambda message: accuracy_lines.append(message.record["message"]), filter=lambda r: "PCC=" in r["message"]
+    )
+    try:
+        if case == "accuracy":
+            if k_chunk_size != 128:
+                # The helper fixes K chunk 128; this pair's perf_final row records what the op does with it.
+                raise NotImplementedError("accuracy helper runs K chunk 128 only")
+            run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+                MESH_CONFIG,
+                batch_size=1,
+                expect_error=expect_error,
+                chunk_size_local=q_rows,
+                sliding_window_size=model.sliding_window_size,
+                local_q_heads=model.nhq,
+                local_kv_heads=model.nhk,
+                head_dim=model.d_q,
+                prefix_group_counts=prefix_groups,
+                q_chunk_size=q_chunk_size,
+                num_iterations=1,
+                # Diagnostic: GEMMA4_SWA_SWEEP_DEFAULT_SCALE=1 runs 1/sqrt(d) to separate scale-1.0 sharpness from the op.
+                scale=None if os.environ.get("GEMMA4_SWA_SWEEP_DEFAULT_SCALE") else model.scale,
+                # Gate on PCC only; RMSE is recorded. Scale 1.0 on random N(0, 1) inputs gives near-one-hot softmax,
+                # so bfp8 K rounding moves the argmax and inflates RMSE without saying much about the op.
+                rmse_threshold=None,
+                topology=model.topology,
+            )
+        else:
+
+            def time_call(config_id, call):
+                for _ in range(repeats):
+                    duration_ns, _ = profile_ring_joint_runtime_duration_ns(runtime.mesh_device, call)
+                    durations.append(duration_ns)
+
+            runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
+            try:
+                with mock.patch.dict(
+                    os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(model.total_seq // chunk_size - 1)}
+                ):
+                    run_ring_joint_sdpa_chunked(
+                        MESH_CONFIG,
+                        model,
+                        chunk_size=chunk_size,
+                        total_seq=model.total_seq,
+                        qk_configs=[(q_chunk_size, k_chunk_size)],
+                        persistent_buffer_mode="reuse_max",
+                        do_check=False,
+                        reuse_kv_buffer=True,
+                        use_compact_single_chunk_q=True,
+                        sliding_window_size=model.sliding_window_size,
+                        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                        runtime=runtime,
+                        perf_call_hook=time_call,
+                    )
+            finally:
+                close_ring_joint_sdpa_runtime(runtime)
+        row.update(status="ok")
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        message = f"{type(exc).__name__}: {exc}"
+        status = (
+            "not_run"
+            if isinstance(exc, NotImplementedError)
+            else "accuracy_fail"
+            if "accuracy failures" in message
+            else "op_error"
+        )
+        row.update(status=status, error=message[:1500])
+    finally:
+        logger.remove(sink)
+        row.update(accuracy=accuracy_lines)
+        warm = durations[1:] if len(durations) > 1 else durations
+        if warm:
+            row.update(durations_ns=durations, median_us=statistics.median(warm) / 1e3)
+        with open(out_path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    logger.info(f"swa sweep {row}")
 
 
 # Calibrated on the 8-chip single-ring CI target. Keep this separate from Minimax: GPT-OSS uses
