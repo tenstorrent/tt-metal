@@ -129,8 +129,15 @@ class Model:
         # speculative builds (pool ring rows for the spec runners): the prefill chunk trace also writes the drafter's taps (layers 37-39 stream means of the last 128 positions of every
         # user, tt/prefill_taps.py), which seed the drafter after the prefill instead of replaying the prompt tail through the verify trace. ``tap_n[user]`` = prompt length the stash holds.
         self.tap_n = {}
-        if self.pool.ring_rows >= 128 + 127 and taps_possible(self.layer_ids):
+        if (
+            self.pool.ring_rows >= 128 + 127
+            and taps_possible(self.layer_ids)
+            and os.environ.get("DSV41_SEED_FROM_PREFILL") != "0"
+        ):
             self.sink.taps = PrefillTaps(mesh_device, self.U)
+        log(
+            f"prefill drafter taps {'ON' if self.sink.taps is not None else 'OFF'} (ring rows {self.pool.ring_rows}, layers {len(self.layer_ids)})"
+        )
         self.sources, self.attns, self.built, self.step_groups, pls = {}, {}, [], {}, []
         sh = _Shards()
         pool = ThreadPoolExecutor(max_workers=2)
