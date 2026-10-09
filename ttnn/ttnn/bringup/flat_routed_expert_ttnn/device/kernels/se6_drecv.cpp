@@ -62,12 +62,23 @@ void kernel_main() {
     constexpr uint32_t mt = get_compile_time_arg_val(16);
     constexpr uint32_t pcd = get_compile_time_arg_val(17);
     constexpr uint32_t ht = get_compile_time_arg_val(18);
-    static_assert(hbuf <= 3);
-    const uint32_t gath_ids[3] = {
-        get_compile_time_arg_val(19), get_compile_time_arg_val(20), get_compile_time_arg_val(21)};
+    static_assert(hbuf <= 4);
+    const uint32_t gath_ids[4] = {
+        get_compile_time_arg_val(19),
+        get_compile_time_arg_val(20),
+        get_compile_time_arg_val(21),
+#ifdef SE_GATH3
+        SE_GATH3};  // buffer 3's GATH id (4 h buffers)
+#else
+        0};
+#endif
     constexpr uint32_t h_bytes = h_all_tiles * h_tile_bytes;
     constexpr uint32_t piece_bytes = h_bytes / h_pieces;
+#ifdef SE_LINK_DEPTH
+    constexpr uint32_t link_depth = SE_LINK_DEPTH;  // h pieces in flight to the successor (write ids 1..depth < 8)
+#else
     constexpr uint32_t link_depth = 3;
+#endif
 
     const uint32_t h_all = get_arg_val<uint32_t>(0);
     const uint32_t pxy = get_arg_val<uint32_t>(1), sxy = get_arg_val<uint32_t>(2), cxy = get_arg_val<uint32_t>(3);
@@ -123,7 +134,7 @@ void kernel_main() {
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
     volatile tt_l1_ptr uint32_t* harr = sem(harr_sem_id);
     volatile tt_l1_ptr uint32_t* hsfree = sem(hsfree_sem_id);
-    volatile tt_l1_ptr uint32_t* gath[3] = {sem(gath_ids[0]), sem(gath_ids[1]), sem(gath_ids[2])};
+    volatile tt_l1_ptr uint32_t* gath[4] = {sem(gath_ids[0]), sem(gath_ids[1]), sem(gath_ids[2]), sem(gath_ids[3])};
     volatile tt_l1_ptr uint32_t* done_sem = sem(done_sem_id);
     const uint64_t pred_free = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(hsfree_sem_id));
     const uint64_t succ_harr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(harr_sem_id));

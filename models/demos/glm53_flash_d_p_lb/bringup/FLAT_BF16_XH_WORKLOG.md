@@ -1,0 +1,50 @@
+# flat_routed_expert: bf16 x / bf16 h — perf work log (2026-10-09)
+
+Goal: find why bf16 x + h costs +57% at large M and speed it up (budget: 12 ideas), without regressing any of the four
+x / h regimes (bfp8/bfp8, bfp8 x + bf16 h, bf16 x + bfp8 h, bf16/bf16). Perf focus: bf16 both. All numbers: one chip,
+GLM shape (H 4096, I 2048, 36 bfp4 experts, capacity 8192), balanced routing, model call (indexed x, row-major y, fp32
+down), LoFi, us per expert (test_flat_balanced_sweep.py, RT-profiler device time).
+
+Baseline (before this log): bfp8/bfp8 M 128 / 256 / 512 / 2048: 40.9 / 50.6 / 73.5 / 275.4; bf16 x: 41.6 / 56.1 / 109.9 /
+433.6; bf16 both: 41.3 / 61.3 / 115.9 / 441.2; bfp8 x + bf16 h: did not fit L1 (allocator failure).
+
+## Diagnosis
+Profile at M 2048 (MIMO_FL_ZONES, WAITZ): with bf16 x the plan ran gate/up on **32 cores (NP 2)** instead of 64: the x
+ring sizes are tried 24 -> 16 -> 12 and the first that fits wins; at 24 slots only NP 2 fits the gate/up L1 budget with
+2 KB x tiles. Relays: tilize waits on super-block space (TZ_OUT 6.6k vs 1.6k cycles), reader waits on a full RM CB
+(XRD_FULL 4.8k vs 1.1k): back-pressure from the halved gate/up throughput.
+
+## Ideas
+1. Plan: with bf16 x pick the split with the most gate/up cores over all ring sizes (NP 1 at 16 slots).
+   Result: bf16 x 433.6 -> 374.5 at M 2048 (512: 109.9 -> 101.8); bf16 both 441 -> 482 (NP 1 moved the limit to the
+   h path; see 4). Kept (bf16 x only; bfp8 x plans unchanged).
+   Infra (not an idea): x_bf16 / h_bf16 became config / plan parameters (program key); the arena budget now subtracts
+   the static CBs, done words and relay scratch words (bf16 h no longer overflows L1: bfp8 x + bf16 h runs for the
+   first time); the gate/up h_local CB moved into the arena (frees 24 KB of the program-wide static CB region).
+2. bf16 h: 1.5-expert down weight ring (unpinned down schedule) so the row-major y out CB is not squeezed to ~1 row
+   tile (down packer waited 1.7k cycles per row tile on y space). Result: no change (483). The out CB stall was a
+   symptom. Kept (harmless, frees 92 KB on the down cores, used by 4).
+3. 13 (and 26) down chains instead of 7: 469 (-3%) / 839. Dropped.
+4. 64-row sub-blocks (mt 2) for bf16 h: h buffers 256 KB, 3 of them fit; gate/up one row pass per sub-block.
+   bf16 both 483 -> 388 at M 2048, 129 -> 104 at 512, 71 -> 57 at 256.
+   Diagnostic: x resident (no x movement) with mt 2 + bf16 h: bf16 x == bfp8 x (376 us) -> x delivery / gate/up bf16
+   unpack are not the limit; the down side is: unpack-bound down matmul (1 bf16 h tile + 5 bfp4 weight tiles per K
+   for 5 products: +33% per row) and the down cores still waiting for h (~40% of the sub-block).
+5. h pieces / chain link depth (16 or 64 pieces, 6 in flight): 390.7 / 400.1 / 419.0 vs 388. Dropped.
+6. rdown (readers compute 6, or 3, down columns as chain tails): 493.4 / 493.8. Dropped (the rdown path costs more
+   than it moves off the down cores at this shape).
+   Reference: 64-row sub-blocks with bfp8 h are no faster than with bf16 h (402 vs 388; bfp8 both 411 vs 275 at 128
+   rows): at mt 2 a per-sub-block fixed cost dominates, not the h bytes.
+7. 96-row sub-blocks (mt 3, 2 h buffers): 493. Dropped (two h buffers again).
+8. 4 h buffers for bf16 h (GATH3 = semaphore 3, unused on down cores): 388 -> 384. Kept (with 4).
+9. Gate/up fp32 full-sync DST for bf16 x with 128-row sub-blocks (one pass, x freed block by block; with row passes
+   a 16-slot bf16 x ring holds exactly one sub-block and the relays cannot prefetch): bf16 x + bfp8 h M 160 / 256 /
+   512 / 2048: 48.9 / 54.8 / 101.6 / 373.1 -> 44.2 / 49.7 / 91.4 / 366.5 (fixes the M 160 regression of 1). Kept
+   (plan: gu_full_sync = x_bf16 && the sub-block needs row passes). With 64-row sub-blocks: worse (401). Not used there.
+10. bf16 h (64-row sub-blocks): x ring 16 -> 32 slots: bf16 both 384 -> 374 at 2048, 102.9 -> 100.2 at 512. Kept.
+11. Coordinator GO as 2 multicast semaphore sets instead of 64 increments: 374 -> 371 (bf16 both), bfp8 unchanged.
+    Reverted (1% for a change in a synchronization path every regime uses).
+12. 96-row sub-blocks with 3 h buffers (1-expert down ring) + full-sync gate/up: 399.5 at 2048, worse at small M.
+    Dropped.
+Probe switches left in (env, inert by default): MIMO_FL_MT, MIMO_FL_DRING, MIMO_FL_DCH, MIMO_FL_HPIECES,
+MIMO_FL_LINK_DEPTH, MIMO_FL_RDOWN, MIMO_FL_PCD_R, MIMO_FL_GU_FULL_SYNC, MIMO_FL_WAITZ (+ GU_ACQ zone).
