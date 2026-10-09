@@ -60,7 +60,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-
 # Element width of the L1 payload for each format the streamer can drive. The
 # streamer used to hardcode 4 bytes/element (fp32/int32), which is what blocked
 # every Float16_b row: a 4-byte payload against a 2048-byte bf16 tile is refused
@@ -1974,7 +1973,9 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 @pytest.mark.parametrize(
-    "dest_acc", [DestAccumulation.No, DestAccumulation.Yes], ids=["dest_acc:No", "dest_acc:Yes"]
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=["dest_acc:No", "dest_acc:Yes"],
 )
 @pytest.mark.parametrize("mathop", [MathOperation.Expm1Cw], ids=lambda m: m.name)
 def test_causal_lift_fresh_cpp_bf16_in(mathop, dest_acc, fresh_cpp_impl):
@@ -1992,6 +1993,35 @@ def test_causal_lift_fresh_cpp_bf16_in(mathop, dest_acc, fresh_cpp_impl):
         [64, 64],
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+_EXPM1_CW_FP32_OVERFLOW_EDGE = [
+    88.5,
+    88.5999984741211,  # 0x42b13333: finite, but above the old 88.5 cutoff
+    88.72283172607422,  # 0x42b17217: last input with finite rounded expm1
+    88.72283935546875,  # 0x42b17218: first input whose rounded expm1 is +inf
+]
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_expm1_cw_fp32_overflow_edge(fresh_cpp_impl):
+    """Gate the interval that exhaustive bf16 input coverage cannot reach.
+
+    Float32 input and a 32-bit Dest are both required: bf16 jumps directly
+    from 88.5 to 89.0, so it cannot distinguish the old premature-overflow
+    cutoff from the actual fp32 round-to-nearest boundary.
+    """
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        MathOperation.Expm1Cw,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(values=_EXPM1_CW_FP32_OVERFLOW_EDGE),
         fresh_cpp_impl=fresh_cpp_impl,
     )
 

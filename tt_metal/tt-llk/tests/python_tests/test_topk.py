@@ -335,7 +335,9 @@ def test_topk_sfpu(
     )
 
     if exact_order is not None or os.getenv("TOPK_EXACT_UNIQUE") == "1":
-        src_A = make_unique_value_input(src_A, input_dimensions, exact_order or "ascending")
+        src_A = make_unique_value_input(
+            src_A, input_dimensions, exact_order or "ascending"
+        )
 
     golden_generator = get_golden_generator(TopKGolden)
     golden_tensor = golden_generator(
@@ -412,7 +414,8 @@ def test_topk_sfpu(
 
 
 @pytest.mark.parametrize(
-    "implementation,label", [(0, "handwritten"), (1, "typed_multiresult"), (2, "threaded_merge")]
+    "implementation,label",
+    [(0, "handwritten"), (1, "typed_multiresult"), (2, "threaded_merge")],
 )
 def test_topk_device_profile(perf_report, implementation: int, label: str):
     """Profile one 32x128 TopK SFPU body, excluding datacopy and handshakes."""
@@ -552,7 +555,9 @@ def _tie_rows(data_format, input_dimensions, pattern):
             return torch.full((per_row,), 1.5, dtype=torch.float32).to(dtype)
         if pattern == "few_levels":
             # Four levels: every top-K boundary falls inside a tie group.
-            return torch.randint(0, 4, (per_row,), generator=g).to(torch.float32).to(dtype)
+            return (
+                torch.randint(0, 4, (per_row,), generator=g).to(torch.float32).to(dtype)
+            )
         if pattern == "pairs":
             # Each value appears exactly twice, positions shuffled.
             base = torch.arange(per_row // 2, dtype=torch.float32).repeat(2)
@@ -573,7 +578,14 @@ def _special_rows(data_format, input_dimensions, pattern):
             torch.randperm(per_row, generator=g)
         ].to(dtype)
         if pattern == "inf_zero":
-            names = ["pos_inf", "neg_inf", "pos_zero", "neg_zero", "max_normal", "neg_max_normal"]
+            names = [
+                "pos_inf",
+                "neg_inf",
+                "pos_zero",
+                "neg_zero",
+                "max_normal",
+                "neg_max_normal",
+            ]
         elif pattern == "subnormal":
             names = ["pos_subnormal", "neg_subnormal", "pos_zero", "neg_zero"]
         elif pattern == "nan":
@@ -588,7 +600,16 @@ def _special_rows(data_format, input_dimensions, pattern):
     return values
 
 
-def _run_topk_raw(formats, input_dimensions, K, sort_direction, stable_sort, implementation, src_A, dest_acc):
+def _run_topk_raw(
+    formats,
+    input_dimensions,
+    K,
+    sort_direction,
+    stable_sort,
+    implementation,
+    src_A,
+    dest_acc,
+):
     """Run one TopK variant and return (result tensor in golden layout, prepared input)."""
     _, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -627,8 +648,13 @@ def _run_topk_raw(formats, input_dimensions, K, sort_direction, stable_sort, imp
         dest_acc=dest_acc,
         unpack_to_dest=False,
     )
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format])
-    return transform_result_tensor_to_right_form(res, formats, K, input_dimensions), prepared
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    return (
+        transform_result_tensor_to_right_form(res, formats, K, input_dimensions),
+        prepared,
+    )
 
 
 def _bits(t):
@@ -636,18 +662,21 @@ def _bits(t):
 
 
 def _first_bit_mismatch(a, b):
-    diff = (_bits(a) != _bits(b)).nonzero().flatten()
+    ab, bb = _bits(a).reshape(-1), _bits(b).reshape(-1)
+    diff = (ab != bb).nonzero().flatten()
     if diff.numel() == 0:
         return None
     i = int(diff[0])
-    return f"{diff.numel()} differing elements; first at {i}: {int(_bits(a)[i]) & 0xFFFF:#06x} vs {int(_bits(b)[i]) & 0xFFFF:#06x}"
+    return f"{diff.numel()} differing elements; first at {i}: {int(ab[i]) & 0xFFFF:#06x} vs {int(bb[i]) & 0xFFFF:#06x}"
 
 
-def _golden_value_check(res, golden, formats, input_dimensions, K, allow_signed_zero=False):
+def _golden_value_check(
+    res, golden, formats, input_dimensions, K, allow_signed_zero=False
+):
     """Values must match the golden bitwise (optionally treating +0/-0 alike)."""
     rv = get_value_tiles_from_topk_tensor(res, K, input_dimensions)
     gv = get_value_tiles_from_topk_tensor(golden, K, input_dimensions)
-    rb, gb = _bits(rv), _bits(gv)
+    rb, gb = _bits(rv).reshape(-1), _bits(gv).reshape(-1)
     if allow_signed_zero:
         zero = torch.tensor(0x7FFF, dtype=torch.int16)
         rz, gz = (rb & zero) == 0, (gb & zero) == 0
@@ -656,7 +685,46 @@ def _golden_value_check(res, golden, formats, input_dimensions, K, allow_signed_
     return _first_bit_mismatch(rb.view(rv.dtype), gb.view(gv.dtype))
 
 
-def _explicit_vs_hand(data_format, input_dimensions, K, direction, stable_sort, src_values, dest_acc=DestAccumulation.No):
+def _assert_fp16_inf_order_defect(res, golden, formats, input_dimensions, K, direction):
+    """Refuse to XFAIL anything except the measured inf/max-normal swap."""
+    rv = get_value_tiles_from_topk_tensor(res, K, input_dimensions)
+    gv = get_value_tiles_from_topk_tensor(golden, K, input_dimensions)
+    rb, gb = _bits(rv).reshape(-1), _bits(gv).reshape(-1)
+    # Signed zero is not part of this defect and is already licensed by the
+    # caller's golden-value comparison.
+    zero_mask = torch.tensor(0x7FFF, dtype=torch.int16)
+    rb = torch.where((rb & zero_mask) == 0, torch.zeros_like(rb), rb)
+    gb = torch.where((gb & zero_mask) == 0, torch.zeros_like(gb), gb)
+    diff = (rb != gb).nonzero().flatten()
+    assert (
+        diff.numel() == 2 * input_dimensions[0]
+    ), f"FP16 inf XFAIL shape changed: expected two swapped values per row, got {diff.numel()}"
+    expected = (
+        {0x7C00, 0x7BFF}
+        if direction == TopKSortDirection.Descending
+        else {0xFC00, 0xFBFF}
+    )
+    for observed, label in ((rb[diff], "device"), (gb[diff], "golden")):
+        values = [int(v) & 0xFFFF for v in observed]
+        assert set(values) == expected, (
+            f"FP16 inf XFAIL absorbed an unrelated {label} mismatch: "
+            f"expected only {sorted(expected)}, got {sorted(set(values))}"
+        )
+        for value in expected:
+            assert (
+                values.count(value) == input_dimensions[0]
+            ), f"FP16 inf XFAIL {label} multiplicity changed for {value:#06x}"
+
+
+def _explicit_vs_hand(
+    data_format,
+    input_dimensions,
+    K,
+    direction,
+    stable_sort,
+    src_values,
+    dest_acc=DestAccumulation.No,
+):
     formats = InputOutputFormat(data_format, data_format)
     src_A, _, _, _ = generate_stimuli(
         stimuli_format_A=data_format,
@@ -668,8 +736,12 @@ def _explicit_vs_hand(data_format, input_dimensions, K, direction, stable_sort, 
     golden = get_golden_generator(TopKGolden)(
         src_A, data_format, K, direction, input_dimensions=input_dimensions
     )
-    hand, prepared = _run_topk_raw(formats, input_dimensions, K, direction, stable_sort, 0, src_A, dest_acc)
-    explicit, _ = _run_topk_raw(formats, input_dimensions, K, direction, stable_sort, 2, src_A, dest_acc)
+    hand, prepared = _run_topk_raw(
+        formats, input_dimensions, K, direction, stable_sort, 0, src_A, dest_acc
+    )
+    explicit, _ = _run_topk_raw(
+        formats, input_dimensions, K, direction, stable_sort, 2, src_A, dest_acc
+    )
     return formats, hand, explicit, golden, prepared
 
 
@@ -677,56 +749,90 @@ _TIE_DIMS = [[32, 128], [32, 256], [32, 512]]
 
 
 @pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize("direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending])
+@pytest.mark.parametrize(
+    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
+)
 @pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
 @pytest.mark.parametrize("pattern", ["all_equal", "few_levels", "pairs"])
 @pytest.mark.parametrize("dims", _TIE_DIMS, ids=lambda d: f"{d[0]}x{d[1]}")
-def test_topk_explicit_ties(data_format, direction, stable_sort, pattern, dims, record_property):
+def test_topk_explicit_ties(
+    data_format, direction, stable_sort, pattern, dims, record_property
+):
     formats, hand, explicit, golden, prepared = _explicit_vs_hand(
-        data_format, dims, 32, direction, stable_sort, _tie_rows(data_format, dims, pattern)
+        data_format,
+        dims,
+        32,
+        direction,
+        stable_sort,
+        _tie_rows(data_format, dims, pattern),
     )
     mismatch = _first_bit_mismatch(explicit, hand)
     assert mismatch is None, f"explicit != handwritten: {mismatch}"
-    # Tie order may legitimately differ from the golden's stable order, but the
-    # selected value multiset may not, and each index must point at its value.
+    # Tie order may legitimately differ from the golden's stable order at this
+    # checkpoint: full stable TopK support was reverted.  Still gate the value
+    # multiset, index/value association, and explicit-vs-hand equivalence, and
+    # record exact stable ordering so a future implementation cannot hide it.
     assert _golden_value_check(explicit, golden, formats, dims, 32) is None
-    assert validate_topk_indices(explicit, golden, prepared, formats, dims, 32, stable_sort=False)
-    # Record (not gate) whether the hardware arms honour the stable golden.
+    assert validate_topk_indices(
+        explicit, golden, prepared, formats, dims, 32, stable_sort=False
+    )
     stable_exact = torch.equal(_bits(explicit), _bits(golden))
     record_property("stable_index_order_matches_golden", stable_exact)
-    print(f"TOPK_TIES pattern={pattern} dims={dims} stable={stable_sort} golden_index_order_exact={stable_exact}")
+    print(
+        f"TOPK_TIES pattern={pattern} dims={dims} stable={stable_sort} golden_index_order_exact={stable_exact}"
+    )
 
 
 @pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize("direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending])
+@pytest.mark.parametrize(
+    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
+)
 @pytest.mark.parametrize("pattern", ["inf_zero", "subnormal", "nan"])
 def test_topk_explicit_special_values(data_format, direction, pattern, record_property):
     dims = [32, 128]
     formats, hand, explicit, golden, prepared = _explicit_vs_hand(
-        data_format, dims, 32, direction, False, _special_rows(data_format, dims, pattern)
+        data_format,
+        dims,
+        32,
+        direction,
+        False,
+        _special_rows(data_format, dims, pattern),
     )
     mismatch = _first_bit_mismatch(explicit, hand)
     assert mismatch is None, f"explicit != handwritten: {mismatch}"
     # NaN has no golden ordering; subnormal handling is a hardware load-format
     # property shared by both arms. Record the golden comparison for both.
-    golden_mismatch = _golden_value_check(explicit, golden, formats, dims, 32, allow_signed_zero=True)
+    golden_mismatch = _golden_value_check(
+        explicit, golden, formats, dims, 32, allow_signed_zero=True
+    )
     record_property("golden_value_mismatch", str(golden_mismatch))
-    print(f"TOPK_SPECIAL pattern={pattern} fmt={data_format.name} dir={direction.name} golden_value_mismatch={golden_mismatch}")
+    print(
+        f"TOPK_SPECIAL pattern={pattern} fmt={data_format.name} dir={direction.name} golden_value_mismatch={golden_mismatch}"
+    )
     if pattern == "inf_zero":
         if data_format == DataFormat.Float16 and golden_mismatch is not None:
             # Measured on Blackhole for both arms: selection and indices are
             # correct and +/-inf keep their bits, but the shared SFPSWAP path
             # ranks +/-max-normal ahead of +/-inf for FP16 (BF16 is correct).
-            pytest.xfail(f"FP16 inf ranked below max-normal (shared by handwritten): {golden_mismatch}")
+            _assert_fp16_inf_order_defect(
+                explicit, golden, formats, dims, 32, direction
+            )
+            pytest.xfail(
+                f"FP16 inf ranked below max-normal (shared by handwritten): {golden_mismatch}"
+            )
         assert golden_mismatch is None, golden_mismatch
 
 
 @pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize("direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending])
+@pytest.mark.parametrize(
+    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
+)
 @pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
 @pytest.mark.parametrize("K", [32, 64])
 @pytest.mark.parametrize(
-    "dims", [[32, 256], [32, 512], [64, 256], [32, 1024]], ids=lambda d: f"{d[0]}x{d[1]}"
+    "dims",
+    [[32, 256], [32, 512], [64, 256], [32, 1024]],
+    ids=lambda d: f"{d[0]}x{d[1]}",
 )
 def test_topk_explicit_widths(data_format, direction, stable_sort, K, dims):
     if K * NUM_STAGES > dims[1] // NUM_STAGES:
@@ -751,12 +857,18 @@ def test_topk_explicit_widths(data_format, direction, stable_sort, K, dims):
         # topk_test.cpp packs one value tile and one index tile per row in the
         # final iteration and the merge clamps k to 32, so K>32 has no golden
         # layout here. The explicit/handwritten bitwise gate above still holds.
-        pytest.xfail(f"K={K} output layout unsupported by topk_test.cpp; golden={golden_mismatch}")
-    print(f"TOPK_WIDTH dims={dims} K={K} stable={stable_sort} fmt={data_format.name} dir={direction.name} golden={golden_mismatch}")
+        pytest.xfail(
+            f"K={K} output layout unsupported by topk_test.cpp; golden={golden_mismatch}"
+        )
+    print(
+        f"TOPK_WIDTH dims={dims} K={K} stable={stable_sort} fmt={data_format.name} dir={direction.name} golden={golden_mismatch}"
+    )
     assert golden_mismatch is None, f"explicit != golden: {golden_mismatch}"
 
 
-@pytest.mark.parametrize("direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending])
+@pytest.mark.parametrize(
+    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
+)
 @pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
 @pytest.mark.parametrize("dims", [[32, 128], [32, 256]], ids=lambda d: f"{d[0]}x{d[1]}")
 def test_topk_explicit_fp32_dest(direction, stable_sort, dims):
@@ -771,10 +883,18 @@ def test_topk_explicit_fp32_dest(direction, stable_sort, dims):
         ].to(dtype)
 
     formats, hand, explicit, golden, _ = _explicit_vs_hand(
-        data_format, dims, 32, direction, stable_sort, values, dest_acc=DestAccumulation.Yes
+        data_format,
+        dims,
+        32,
+        direction,
+        stable_sort,
+        values,
+        dest_acc=DestAccumulation.Yes,
     )
     mismatch = _first_bit_mismatch(explicit, hand)
     assert mismatch is None, f"explicit != handwritten: {mismatch}"
     golden_mismatch = _first_bit_mismatch(explicit, golden)
-    print(f"TOPK_FP32DEST dims={dims} stable={stable_sort} dir={direction.name} golden={golden_mismatch}")
+    print(
+        f"TOPK_FP32DEST dims={dims} stable={stable_sort} dir={direction.name} golden={golden_mismatch}"
+    )
     assert golden_mismatch is None, f"explicit != golden: {golden_mismatch}"

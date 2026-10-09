@@ -26,15 +26,15 @@ namespace ckernel::sfpu
 constexpr float CW_INV_LN2    = 1.4426950408889634f;
 constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
 constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
-// Largest argument whose exp(x)-1 is still a finite fp32: exp(88.5) = 2.82e38,
-// exp(88.7229) = FLT_MAX. Above this expm1(x) is +inf.
-constexpr float CW_EXPM1_MAX  = 88.5f;
+// Round-to-nearest changes from FLT_MAX to +inf between these adjacent fp32
+// inputs.  0x42b17217 is the last finite input; 0x42b17218 is the first whose
+// correctly rounded expm1 is +inf.
+constexpr float CW_EXPM1_OVERFLOW = 88.72283935546875f; // 0x42b17218
 
 // FULL_RANGE = false is the body ELU/CELU/SELU inline. Those callers overwrite
 // every x >= 0 lane, so they only consume x < 0, and their code is unchanged.
-// It is NOT a correct expm1 for x in (127.5*ln2, 88.5] = (88.376, 88.5]: k = 128
-// there and 2^k is not a finite fp32. FULL_RANGE = true is the standalone
-// expm1 (calculate_expm1_cw), correct on the whole line including NaN.
+// FULL_RANGE = true is the standalone expm1 (calculate_expm1_cw): it caps k at
+// 127 so 2^k remains finite, and handles the upper overflow band and NaN.
 template <bool FULL_RANGE = false>
 sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
@@ -49,19 +49,16 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     // where expm1 is +inf: -inf at x = 3.3e38, -3.2e21 at x = 1e10. Clamp the
     // ARGUMENT so the reduction stays in range, then state the tail analytically.
     const sfpi::vFloat x_in = x;
-    x                       = sfpi::min(x, CW_EXPM1_MAX);
+    x                       = sfpi::min(x, CW_EXPM1_OVERFLOW);
 
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     sfpi::vFloat tmp        = x * CW_INV_LN2 + c231;
     if constexpr (FULL_RANGE)
     {
-        // Cap k at 127. For x in (127.5*ln2, 88.5] round-nearest picks k = 128,
-        // 2^k is not a finite fp32, setexp writes the inf/NaN exponent field and
-        // (2^k - 1) + 2^k*h is inf - inf = NaN at x = 88.5. With k = 127 there,
-        // r reaches 0.4703, past the [-ln2/2, ln2/2] fit; the fits' error at that
-        // r is 2.3e-7 (fp32 arm) / 4.1e-6 (bf16 arm) relative -- under half a bf16
-        // ulp, and every x with k <= 127 is untouched. One min, no branch.
+        // Keep 2^k finite.  In the narrow upper band this extends r beyond the
+        // nominal reduction interval, but the existing polynomial remains well
+        // inside the operation's accuracy contract through the last finite input.
         tmp = sfpi::min(tmp, Converter::as_float(0x4B40007FU)); // c231 + 127
     }
     sfpi::vFloat k_f        = tmp - c231;
@@ -81,14 +78,14 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     constexpr int kC231Bias = 0x4B3FFF81;
     sfpi::vFloat two_k      = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
     sfpi::vFloat result     = (two_k - 1.0f) + two_k * h;
-    v_if (x_in > CW_EXPM1_MAX)
-    {
-        result = Converter::as_float(0x7F800000U); // +inf
-    }
-    v_endif;
     if constexpr (FULL_RANGE)
     {
-        // NaN in, NaN out (max/min above send a NaN to -87 or 88.5). Clear the sign
+        v_if (x_in >= CW_EXPM1_OVERFLOW)
+        {
+            result = Converter::as_float(0x7F800000U); // +inf
+        }
+        v_endif;
+        // NaN in, NaN out (max/min above send a NaN to a clamp endpoint). Clear the sign
         // with an integer AND -- SFPABS leaves a NaN's sign alone -- and one integer
         // compare: |bits| > 0x7F800000 holds for exactly the NaN patterns.
         v_if ((sfpi::as<sfpi::vInt>(x_raw) & 0x7FFFFFFF) > 0x7F800000)
