@@ -90,6 +90,13 @@ inline thread_local uint32_t pending_mask = 0;
 // Subset of pending_mask whose owner wrote out of the DFB over the NoC (DM only).
 inline thread_local uint32_t pending_write_barrier_mask = 0;
 }  // namespace dfb_drain
+#else
+// TEMPORARY (WH/BH debug only, revert before merge): same deferred-drain mask as Quasar, used to emulate the Quasar
+// drain on WH/BH so DFB credit imbalances hang here too.
+namespace dfb_drain {
+static_assert(NUM_CIRCULAR_BUFFERS <= 32, "dfb_drain mask holds one bit per CB");
+inline uint32_t pending_mask = 0;
+}  // namespace dfb_drain
 #endif
 
 class DataflowBuffer {
@@ -128,6 +135,11 @@ public:
 
     // Called by the firmware after kernel_main() returns (DFB_DRAIN_PENDING). For every DFB marked by a destructor,
     // waits for outstanding credits to drain (posted == acked) and, on DM, for writes out of the DFB to land.
+    static void drain_pending();
+#else
+    // TEMPORARY (WH/BH debug only, revert before merge): emulates the Quasar drain. The destructor marks the CB, and
+    // drain_pending() waits after kernel_main() for its occupancy (tiles_received - tiles_acked) to reach 0.
+    ~DataflowBuffer();
     static void drain_pending();
 #endif
 
@@ -502,6 +514,9 @@ private:
     // recorded on the original, and only the original drains.
     DataflowBuffer* drain_owner_ = this;
     bool has_outbound_writes_ = false;
+#else
+    // TEMPORARY (WH/BH debug only): mirrors the Quasar drain-owner rule; only the original object marks the CB.
+    DataflowBuffer* drain_owner_ = this;
 #endif
 };
 
@@ -565,6 +580,8 @@ inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
 #define DFB_DRAIN_PENDING() DataflowBuffer::drain_pending()
 #else
 #include "internal/tt-1xx/dataflow_buffer.inl"
+// TEMPORARY (WH/BH debug only, revert before merge).
+#define DFB_DRAIN_PENDING() DataflowBuffer::drain_pending()
 #endif
 
 #ifndef COMPILE_FOR_TRISC
