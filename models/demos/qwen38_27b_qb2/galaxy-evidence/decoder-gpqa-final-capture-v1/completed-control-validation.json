@@ -1,0 +1,20 @@
+{
+  "state": "completed_control_reader_passed",
+  "original_reader_sha256": "9d70dfe23a91d1dfd0ea108507277ff9da7dadf3f084fbaba143d940d0741157",
+  "validation_reader_sha256": "1c8b8eae8f25ae4b36b597b5f29b0daf5bd161164b979bc9c16d26bc593d60ee",
+  "path_and_invocation_adaptations": {
+    "accuracy-decoder-v1": "accuracy-head-v1",
+    "ecb6408f79414ed0974c6352f006bce5": "ff89c12d6a9b4feaa268d7eff48b4132",
+    "qwen38-decoder-gpqa-audit-v2-20261009.service": "qwen38-gpqa-completion-audit-v1-20261009.service",
+    "0213267c7b54413792a6882351321291": "7172e4b27dbd47868376e12d70fa2815",
+    "art/'decoder-gpqa-audit-v2'": "art/'gpqa-completion-audit-v1'",
+    "auditroot/'results/status.json'": "auditroot/'status.json'",
+    "auditroot/'results/audit.json'": "auditroot/'audit.json'"
+  },
+  "original_current_run_unchanged": true,
+  "hardware_opened": false,
+  "reference": "Completed head-only precision control; not the live all-BFP8 run",
+  "reproduced_correct": 166,
+  "total": 198,
+  "validated_artifact_count": 10
+}

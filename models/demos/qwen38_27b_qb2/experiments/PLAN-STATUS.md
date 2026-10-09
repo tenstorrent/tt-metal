@@ -1,5 +1,13 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 11:00 UTC update: the original BFP8 GPQA remains unchanged at 170 correct
+out of 196 completed, zero truncations and two requests still generating. A
+read-only persistent final-result capture now follows the existing independent
+audit. Its terminal reader reproduced the completed head control and validated
+all ten output artifacts. It will retain final score, cutoff/hash audit, timing
+percentiles and matched prior-control outcomes; no partial score is promoted.
+[Persistent final capture](../galaxy-evidence/decoder-gpqa-final-capture-v1/README.md).
+
 Oct 9 10:49 UTC update: BFP8 GPQA is still running, now 168/192 completed
 answers correct with no truncations. At 166/188 it became mathematically
 unable to reach the 177/198 gate. Per the user request it will finish unchanged

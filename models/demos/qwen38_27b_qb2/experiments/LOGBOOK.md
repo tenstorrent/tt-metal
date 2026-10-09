@@ -1412,3 +1412,32 @@ No session connection is needed for that queue to continue.
   was located in repository-root conftest.py.
 
 [Prepared reference controls](../galaxy-evidence/higher-precision-diagnostic-plan-v1/README.md).
+
+
+## Oct 9, 10:53-11:00 UTC: preserve full run and automate final capture
+
+- Classified the preceding turn as progress: completed BFP8 build evidence,
+  a persistent image-check follower, tested unqueued diagnostic policies and
+  publication at 8807adce8fb. The original evaluation was still verified live.
+- Honored the user's instruction to let the full run finish. Read the exact
+  service and recent server counters: the five remaining requests continued
+  generating at about 19-24 tok/s/user, with no waiting queue. Later progress
+  reached 170/196 and two outstanding, zero truncations. No restart, reset,
+  serving change, new inference request or new precision run was performed.
+- Added a persistent read-only final capture after the exact evaluation and
+  independent audit. It requires terminal services, clean owned-worker shutdown,
+  all 198 scored receipts, matching audit hashes and the same comparison input
+  and sampling protocol. It retains scores, cutoff audit, matched prior outcomes
+  and client timing distributions with explicit measurement boundaries.
+- Launch/preflight verified the current original invocation and state. The
+  capture service was observed alive as PID 1601319, invocation
+  75fb7d86dbbe47d9ad4af9985bac6014, waiting without opening devices. Limits are
+  one CPU, 512 MiB, nine-hour wait and ten-hour service lifetime; it survives
+  session disconnection. No remote helper/source from the original run changed.
+- Validated the terminal reader against the completed head-only control by
+  changing only path/identity constants in a separate in-memory copy. It
+  reproduced 166/198 and validated all ten generated JSON/gzip artifacts,
+  including source/result hashes and matching baseline protocol. This does not
+  create or modify an eval score, and is not the live BFP8 result.
+
+[Persistent result capture and validation](../galaxy-evidence/decoder-gpqa-final-capture-v1/README.md).

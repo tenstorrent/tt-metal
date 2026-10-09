@@ -1,0 +1,30 @@
+{
+  "state": "waiting",
+  "started_at": 1791543481.2061236,
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "mutates_original_run": false,
+  "changes_scores": false,
+  "updated_at": 1791543601.4956124,
+  "last_observation": {
+    "state": "waiting",
+    "services": {
+      "qwen38-accuracy-decoder-v1-20261009.service": {
+        "MainPID": "1449553",
+        "Result": "success",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "InvocationID": "ecb6408f79414ed0974c6352f006bce5"
+      }
+    },
+    "progress": {
+      "completed_samples": 196,
+      "selected_samples": 198,
+      "correct": 170,
+      "truncated_samples": 0,
+      "state": "running",
+      "updated_at": "2026-10-09T10:55:59.393508+00:00"
+    }
+  }
+}

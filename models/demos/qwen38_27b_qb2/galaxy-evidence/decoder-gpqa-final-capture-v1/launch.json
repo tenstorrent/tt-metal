@@ -1,0 +1,22 @@
+{
+  "created_at": 1791543481.1613767,
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-decoder-gpqa-capture-v1-20261009",
+    "--property=RuntimeMaxSec=10h",
+    "--property=TimeoutStopSec=20",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=512M",
+    "--property=CPUQuota=100%",
+    "--property=TasksMax=32",
+    "--property=UMask=0077",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-capture-source-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-capture-source-v1/run.log",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=PYTHONDONTWRITEBYTECODE=1",
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-capture-source-v1/controller.py"
+  ],
+  "original_run_unchanged": true
+}
