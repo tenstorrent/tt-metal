@@ -975,7 +975,8 @@ void kernel_main() {
 
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t local_expert_id = RE_EXPERT_FIRST; local_expert_id < experts_per_chip;
+         local_expert_id += RE_EXPERT_STEP) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the

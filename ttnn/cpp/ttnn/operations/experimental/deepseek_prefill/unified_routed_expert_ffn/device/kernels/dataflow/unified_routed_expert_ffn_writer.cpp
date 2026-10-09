@@ -225,7 +225,8 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t local_expert_id = RE_EXPERT_FIRST; local_expert_id < experts_per_chip;
+         local_expert_id += RE_EXPERT_STEP) {
         const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert

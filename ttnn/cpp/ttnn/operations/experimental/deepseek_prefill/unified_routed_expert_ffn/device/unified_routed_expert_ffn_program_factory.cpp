@@ -143,6 +143,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kCoreGridX;
     uint32_t GRID_Y = kCoreGridY;
+    // ROW_EXPERTS (stacked weights): each of the GRID_Y grid rows runs as an independent one-row instance over every
+    // GRID_Y-th local expert (row gy: experts gy, gy + GRID_Y, ...), each core reading its own weight slices. The
+    // default layout splits ONE expert's tokens over the rows, which leaves most rows idle when an expert has fewer
+    // than GRID_Y token tiles (the usual case for routed prefill), while a row's per-expert matmul work bounds time.
+    // Chosen from the dispatch capacity (op.m_tiles, part of the program hash): Laguna-S on p150x4 (64 local experts,
+    // ~10 * T / 256 tokens each) measured 48-layer prefill 1K 274 -> 211, 1.5K 314 -> 271, 2K 366 -> 340 ms, but
+    // 3K 455 -> 463 and 4K 569 -> 611 ms, where each row's M work outgrows the parallel win.
+    constexpr uint32_t kRowExpertsMaxMTiles = 64;
+    const bool row_experts = op.stacked_packed_weights && op.m_tiles <= kRowExpertsMaxMTiles;
+    const uint32_t M_ROWS = row_experts ? 1u : GRID_Y;  // grid rows one expert's tokens are split over
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -165,7 +175,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
     constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
-    uint32_t chunk_M_tiles = kMaxChunkMTiles;
+    uint32_t chunk_M_tiles = row_experts ? 4u : kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -178,9 +188,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
-    const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
+    const uint32_t per_core_M_max = chunk_M_tiles / M_ROWS;
     TT_FATAL(
-        per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
+        per_core_M_max * M_ROWS == chunk_M_tiles && per_core_M_max >= 1,
         "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
         chunk_M_tiles,
         GRID_Y);
@@ -404,7 +414,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
-    chunk_M_tiles = per_core_M * GRID_Y;
+    chunk_M_tiles = per_core_M * M_ROWS;
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
@@ -547,7 +557,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // fabric safety. Validate against a fabric-enabled run with concurrent CCL before
     // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
     // NoC-0 multicast.
-    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
+    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr && !row_experts;
     const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
@@ -803,6 +813,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     if (op.stacked_packed_weights) {
         reader_defines["STACKED_GATE_UP"] = "1";
     }
+    if (row_experts) {
+        reader_defines["ROW_EXPERTS"] = std::to_string(GRID_Y);
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -872,10 +885,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_ct_args,
-            op.stacked_packed_weights ? std::map<std::string, std::string>{{"STACKED_GATE_UP", "1"}}
-                                      : std::map<std::string, std::string>{}));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, [&] {
+            std::map<std::string, std::string> d;
+            if (op.stacked_packed_weights) {
+                d["STACKED_GATE_UP"] = "1";
+            }
+            if (row_experts) {
+                d["ROW_EXPERTS"] = std::to_string(GRID_Y);
+            }
+            return d;
+        }()));
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -961,6 +980,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["PACKER_L1_ACC"] = "1";
+    if (row_experts) {
+        compute_defines["ROW_EXPERTS"] = std::to_string(GRID_Y);
+    }
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
@@ -1015,7 +1037,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const auto& core = cores[idx];
         const uint32_t gy = idx / GRID_X;
         const uint32_t gx = idx % GRID_X;
-        const uint32_t my_mt = gy;
+        const uint32_t my_mt = row_experts ? 0u : gy;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
@@ -1040,12 +1062,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in1_sender_row = gx % GRID_Y;
         const uint32_t in0_sender_col = (gy + 1) % GRID_X;
         TT_FATAL(
-            !(gy == in1_sender_row && gx == in0_sender_col),
+            row_experts || !(gy == in1_sender_row && gx == in0_sender_col),
             "sender placement collision at ({}, {}): a core must not own both the weight and x DRAM read",
             gx,
             gy);
 
-        const bool is_in1_sender = (gy == in1_sender_row);
+        const bool is_in1_sender = row_experts || (gy == in1_sender_row);
         const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
@@ -1054,7 +1076,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // num_dests stays GRID_Y - 1.
         const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
         const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
-        const uint32_t in1_num_receivers = GRID_Y - 1;
+        const uint32_t in1_num_receivers = row_experts ? 0u : GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
         const uint32_t in1_mcast_nx_end = last_recv_noc.x;

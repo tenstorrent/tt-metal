@@ -27,7 +27,20 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
+#ifdef ROW_EXPERTS
+constexpr uint32_t kGridY = 1;  // ROW_EXPERTS: each grid row runs its own experts, a chunk is one row's per_core_M
+#else
 constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
+#endif
+// Expert loop of the three kernels: ROW_EXPERTS (= the grid row count) gives grid row gy the local experts gy,
+// gy + ROW_EXPERTS, ...; otherwise every core walks all of them.
+#ifdef ROW_EXPERTS
+#define RE_EXPERT_FIRST (static_cast<uint32_t>(get_absolute_logical_y()))
+#define RE_EXPERT_STEP (static_cast<uint32_t>(ROW_EXPERTS))
+#else
+#define RE_EXPERT_FIRST 0u
+#define RE_EXPERT_STEP 1u
+#endif
 
 // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
 // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
