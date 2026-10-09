@@ -30,25 +30,29 @@ using namespace ckernel::math;
 /**
  * @brief Issues the MVMUL stream for one Tile x Tile matrix multiply directly, bypassing the MOP.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @tparam ENABLE_2X_FORMAT: When true, replays the non-DI MXFP4_2x sequence (8 MVMULs per tile instead of 16).
+ * @param fidelity: Resolved source-format phase schedule, matching init.
  * @param reuse_a: True when SrcA is held across the reuse dimension (ct_dim >= rt_dim), so the closing MVMUL releases SrcA; otherwise it releases SrcB.
  * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args first this replays the buffer and addrmod slots it programmed.
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
-inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
+inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, const bool reuse_a)
 {
-    constexpr std::uint32_t FIDELITY_PHASES = math_fidelity_phases<MATH_FIDELITY_TYPE>();
-    constexpr std::uint32_t replay_buf_len  = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
+    constexpr std::uint32_t max_phases     = math_fidelity_phases<MATH_FIDELITY_TYPE>();
+    constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
     constexpr std::uint8_t tile_completion_addr_mod           = ADDR_MOD_5;
 
     // load_mode = 0 makes REPLAY issue replay_buffer[0 +: replay_buf_len] to Tensix instead of recording
-    // into it, which is what the MOP's LOOP_INSTR0 does. FIDELITY_PHASES is constexpr, so this unrolls.
-    for (std::uint32_t phase = 0; phase < FIDELITY_PHASES - 1; phase++)
+    // into it, which is what the MOP's LOOP_INSTR0 does. max_phases is constexpr, so this unrolls.
+    for (std::uint32_t phase = 1; phase < max_phases; phase++)
     {
+        if (phase >= fidelity.phase_count)
+        {
+            break;
+        }
         TTI_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
         // matmul_op: close this fidelity phase, rewind dest to the start of the tile, advance the fidelity counter.
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, fidelity_phase_completion_addr_mod, 0);
@@ -92,7 +96,8 @@ template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = fals
 inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+    const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
+    _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
     _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -114,8 +119,8 @@ inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const D
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
- * @param src_a_format: Effective SrcA register format (input 1), matching init.
- * @param src_b_format: Effective SrcB register format (input 0), matching init.
+ * @param src_a_format: Effective SrcA register format (input 1).
+ * @param src_b_format: Effective SrcB register format (input 0).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args and source formats before this function.
@@ -124,6 +129,7 @@ template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = fals
 inline void _llk_math_matmul_block_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
+    const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     // Matmul Block, reset the dest addr to 0 for fused kernels
     _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
 
@@ -135,7 +141,7 @@ inline void _llk_math_matmul_block_no_mop_(const DataFormat src_a_format, const 
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            _llk_math_matmul_run_no_mop_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(reuse_a);
+            _llk_math_matmul_run_no_mop_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, reuse_a);
 
             // Clear srcB or srcA at end of reuse (once per u block row)
             if (rut == (rut_dim - 1))
