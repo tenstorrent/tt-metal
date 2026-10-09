@@ -970,7 +970,9 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
 
     _PREFILL_2D_AUTO = os.environ.get("TT_LAGUNA_PREFILL_2D_AUTO", "1") == "1"
-    _L1_CB_BUDGET = 1400 * 1024
+    # CB bytes the 2D program may use: the serving process keeps persistent L1 buffers (decode state, traced
+    # prefill buffers) at the top of L1; 1400 KB clashed with them at server warmup
+    _L1_CB_BUDGET = int(os.environ.get("TT_LAGUNA_PREFILL_2D_L1_KB", "1100")) * 1024
 
     def _prefill_2d_pc(self, x, w, out_dtype=None, ck=None):
         """2D multicast program for a prefill linear over the full grid: per-core M/N blocks, the widest K block
