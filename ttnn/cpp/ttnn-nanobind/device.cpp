@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <new>
 #include <optional>
@@ -229,7 +230,17 @@ void device_module(nb::module_& m_device) {
             "__repr__",
             [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(static_cast<int>(*self)) + ")"; })
         .def(nb::self == nb::self)
-        .def(nb::self != nb::self);
+        .def(nb::self != nb::self)
+        .def("__hash__", [](const SubDeviceId& self) { return std::hash<SubDeviceId>{}(self); });
+
+    auto pySubDeviceManagerId = static_cast<nb::class_<SubDeviceManagerId>>(m_device.attr("SubDeviceManagerId"));
+    pySubDeviceManagerId
+        .def(
+            "__repr__",
+            [](const SubDeviceManagerId& self) { return "SubDeviceManagerId(" + std::to_string(*self) + ")"; })
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self)
+        .def("__hash__", [](const SubDeviceManagerId& self) { return std::hash<SubDeviceManagerId>{}(self); });
 
     m_device.def(
         "create_dispatch_core_config",
