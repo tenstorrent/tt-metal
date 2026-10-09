@@ -18,6 +18,7 @@ SETS = {  # name -> (path, arch); read-only inputs
     # full sweeps of fresh problems, added once their draws had served as clean tests (active learning)
     "wh_fresh1": (f"{WORK}/frozen/wh_fresh1_sweep.csv", "wh"),  # 59 swept draw-1 problems
     "wh_miss2": (f"{WORK}/frozen/wh_miss_draw2.csv", "wh"),  # draw-2 problems where v6 was > 3% slower than legacy
+    "wh_sharded": (f"{WORK}/frozen/wh_sharded_sweep.csv", "wh"),  # sharded-input problems of draws 2 and 3
 }
 KEY = ["problem_id", "origin", "config"]
 CAND = ("enumerated", "heuristic")

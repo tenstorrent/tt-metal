@@ -33,6 +33,7 @@ TERMS = {
     "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
     "mcrate": "multicast data moves at its own rate, falling with the receiver count (measured: one-to-all microbenchmark)",
     "corecc": "a core's DRAM read rate when other cores read DRAM concurrently (measured: 4-core interleaved reads)",
+    "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
 EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
@@ -43,7 +44,6 @@ EXPERIMENTAL = {
     "wburst": "DRAM writes congest with the bytes each writer has in flight per barrier (one subblock), like L1 read bursts",
     "mcovl": "the async multicast write overlaps the sender's next fetch; only the handshake is serial with it",
     "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
-    "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
