@@ -543,3 +543,30 @@ def test_convert_to_hwc_program_cache_rebinds_dram_and_l1(device):
 
     run_binding(ttnn.BufferType.DRAM, "DRAM")
     run_binding(ttnn.BufferType.L1, "L1")
+
+
+def _width_sharded_hwc_input(device, C, HW, buffer_type):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, (C, HW), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, shard_spec)
+    torch_input = torch.randn([1, 1, C, HW], dtype=torch.bfloat16)
+    return core_grid, ttnn.Tensor(
+        torch_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=mem_config
+    )
+
+
+# An explicit output config without a shard spec used to be dereferenced before any check ran.
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_convert_to_hwc_rejects_output_config_without_shard_spec(device, output_mem_config, expect_error):
+    _, input_tensor = _width_sharded_hwc_input(device, 4, 32, ttnn.BufferType.DRAM)
+    with expect_error(RuntimeError, "Output memory config must be height sharded with a shard spec"):
+        ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+
+
+# The kernels size the output from the input dtype, so a different output dtype returned garbage.
+def test_convert_to_hwc_rejects_dtype_change(device, expect_error):
+    core_grid, input_tensor = _width_sharded_hwc_input(device, 3, 128, ttnn.BufferType.L1)
+    output_shard_spec = ttnn.ShardSpec(core_grid, (128, 8), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    with expect_error(RuntimeError, "convert_to_hwc does not convert dtypes"):
+        ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.float32)
