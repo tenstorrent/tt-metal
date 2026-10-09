@@ -80,8 +80,9 @@ class TtMLA:
         ttnn.deallocate(a)
         return b
 
-    def _write_latent(self, x: ttnn.Tensor, start: int) -> None:
-        s = x.shape[-2]
+    def _write_latent(self, x: ttnn.Tensor, start: int, x_local: bool = False) -> None:
+        """x_local: x is this chip's S/n rows; the latent is computed on them and all-gathered (split layout order)."""
+        s = x.shape[-2] * (self.ndev if x_local else 1)
         lat = ttnn.linear(
             x,
             self.w_kva,
@@ -94,21 +95,33 @@ class TtMLA:
         ttnn.deallocate(lat)
         lb = ttnn.typecast(ln, ttnn.bfloat16, memory_config=MC)
         ttnn.deallocate(ln)
+        if x_local:
+            from models.demos.glm53_flash_d_p.tt.common import gather_rows
+
+            own = lb
+            lb = gather_rows(own)
+            ttnn.deallocate(own)
         lrm = ttnn.to_layout(lb, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
         ttnn.deallocate(lb)
         ttnn.experimental.slice_write(lrm, self.cache, [0, 0, start, 0], [1, 1, start + s, self.r], [1, 1, 1, 1])
         ttnn.deallocate(lrm)
 
     def __call__(
-        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, idx: ttnn.Tensor, start: int, split: bool = False
+        self,
+        x: ttnn.Tensor,
+        q_resid: ttnn.Tensor,
+        idx: ttnn.Tensor,
+        start: int,
+        split: bool = False,
+        x_local: bool = False,
     ) -> ttnn.Tensor:
         """x (attn_norm) [1, 1, S, H], q_resid [1, 1, S, 1536], both replicated bf16 TILE; idx this chip's
         [1, 1, S/4, 2176] uint32 ROW_MAJOR token ids (the indexer's output). Returns [1, 1, S, H] replicated bf16.
         split: q_resid and the output are this chip's S/4 rows (the split residual layout; no output gather).
         Writes the chunk's latent rows into the cache."""
-        s = x.shape[-2]
+        s = x.shape[-2] * (self.ndev if x_local else 1)
         assert start + s <= self.max_seq, f"chunk end {start + s} past max_seq {self.max_seq}"
-        self._write_latent(x, start)
+        self._write_latent(x, start, x_local)
 
         qr = q_resid if split else self._local_rows(q_resid)
         q = ttnn.experimental.minimal_matmul(  # 0.271 -> 0.228 ms (tests/test_matmul_tune.py), same error
