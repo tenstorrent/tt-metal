@@ -213,6 +213,9 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStreamService,
     D2DStreamServiceSender,
     D2DStreamServiceReceiver,
+    D2DStageGateDescriptor,
+    STAGE_GATE_FLAG_CLOSE_ON_TRANSIT,
+    STAGE_GATE_FLAG_BYPASS,
 )
 
 from ttnn._ttnn.counter_channel import (

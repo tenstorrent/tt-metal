@@ -77,6 +77,20 @@ constexpr uint32_t num_lanes = get_compile_time_arg_val(21);
 // unchanged otherwise), but the receiver no longer reads/writes the tensor itself —
 // the sender writes it directly over fabric — so no accessor is built.
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
+// Optional per-slot stage gate (block after the accessor args). num_stage_gates == 0
+// compiles it out. stage_gate_addr is this service core's num_stage_gates-word gate
+// array (one binary word per slot); the slot-id and gate_flags words are read from the
+// landed metadata blob at the given byte offsets. Values mirror ttnn::kStageGate* in
+// d2d_stream_service.hpp.
+constexpr uint32_t kStageGateCtBase = output_tensor_accessor_args.next_compile_time_args_offset();
+constexpr uint32_t num_stage_gates = get_compile_time_arg_val(kStageGateCtBase);
+constexpr uint32_t stage_gate_addr = get_compile_time_arg_val(kStageGateCtBase + 1);
+constexpr uint32_t stage_gate_slot_offset = get_compile_time_arg_val(kStageGateCtBase + 2);
+constexpr uint32_t stage_gate_flags_offset = get_compile_time_arg_val(kStageGateCtBase + 3);
+constexpr uint32_t kStageGateClosed = 0;
+constexpr uint32_t kStageGateOpen = 1;
+constexpr uint32_t kStageGateFlagCloseOnTransit = 1u << 0;
+constexpr uint32_t kStageGateFlagBypass = 1u << 31;
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -187,6 +201,40 @@ void kernel_main() {
         }
         if (terminated) {
             break;
+        }
+
+        // 1b. Optional stage gate. The landed metadata names the transfer's slot; hold the
+        //     transfer (data already in DRAM, workers not yet signalled) until that slot's
+        //     gate is OPEN. The KV manager opens it on copy-in completion; we close it here
+        //     when the transfer carries CloseOnTransit, BEFORE releasing the workers, so the
+        //     close is ordered ahead of everything downstream of this transfer (its compute,
+        //     its layer completion, and hence the next copy-in's open). Out-of-range slots
+        //     (shutdown / warm-up sentinels) and the Bypass flag pass ungated.
+        if constexpr (num_stage_gates > 0) {
+            invalidate_l1_cache();
+            volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+            const uint32_t slot = md[stage_gate_slot_offset / sizeof(uint32_t)];
+            const uint32_t flags = md[stage_gate_flags_offset / sizeof(uint32_t)];
+            if (slot < num_stage_gates && (flags & kStageGateFlagBypass) == 0) {
+                volatile tt_l1_ptr uint32_t* gate =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_gate_addr) + slot;
+                while (true) {
+                    invalidate_l1_cache();
+                    if (termination_semaphore[0] == 1) {
+                        terminated = true;
+                        break;
+                    }
+                    if (*gate == kStageGateOpen) {
+                        break;
+                    }
+                }
+                if (terminated) {
+                    break;
+                }
+                if (flags & kStageGateFlagCloseOnTransit) {
+                    *gate = kStageGateClosed;
+                }
+            }
         }
 
         // 2. Optional inline-metadata: the sender staged the blob in our vestigial

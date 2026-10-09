@@ -102,6 +102,24 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     return addrs;
 }
 
+// Allocate the stage-gate array (num_gates contiguous uint32 words, all
+// kStageGateClosed) on each coord's receiver service core.
+std::map<distributed::MeshCoordinate, DeviceAddr> allocate_stage_gate_words(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    uint32_t num_gates) {
+    auto& svc = tt::tt_metal::internal::service_core_manager();
+    std::vector<uint32_t> closed(num_gates, kStageGateClosed);
+    std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
+    for (const auto& [coord, core] : service_cores) {
+        auto* d = mesh->get_device(coord);
+        const DeviceAddr addr = svc.allocate_l1(d, core, num_gates * sizeof(uint32_t));
+        tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), closed);
+        addrs.emplace(coord, addr);
+    }
+    return addrs;
+}
+
 // Build the SocketConnection list: one connection per participating coord, wiring
 // sender coord (x, y) on its service core 1:1 to receiver coord (x, y) on its
 // service core. Both sides must build the IDENTICAL list (the MeshSocket handshake
@@ -462,6 +480,11 @@ struct D2DStreamServiceReceiver::Impl {
     std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> metadata_buffer;
     DeviceAddr metadata_l1_addr = 0;
 
+    // Optional stage gate: per-coord base of the num_gates-word gate array on the
+    // receiver service core. Empty when stage_gate.num_gates == 0.
+    D2DStageGateConfig stage_gate;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
+
     // Persistent receiver workload, launched once at create_pair.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> workload;
     bool launched = false;
@@ -673,6 +696,9 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
             for (const auto& [coord, addr] : impl_->consumed_counter_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
+            for (const auto& [coord, addr] : impl_->stage_gate_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
             for (const auto& [coord, addr] : impl_->link_grant_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
@@ -762,6 +788,69 @@ void D2DStreamServiceReceiver::release_fabric_links() {
     EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
+uint32_t D2DStreamServiceReceiver::get_num_stage_gates() const { return impl_->stage_gate.num_gates; }
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+DeviceAddr stage_gate_addr(
+    const D2DStageGateConfig& stage_gate,
+    const std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr>& stage_gate_addrs,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
+    uint32_t gate,
+    const char* fn) {
+    TT_FATAL(stage_gate.num_gates > 0, "D2DStreamServiceReceiver::{}: stage gate not configured", fn);
+    TT_FATAL(
+        gate < stage_gate.num_gates,
+        "D2DStreamServiceReceiver::{}: gate {} out of range (num_gates = {})",
+        fn,
+        gate,
+        stage_gate.num_gates);
+    auto it = stage_gate_addrs.find(coord);
+    TT_FATAL(it != stage_gate_addrs.end(), "D2DStreamServiceReceiver::{}: no stage gate at coord {}", fn, coord);
+    return it->second + (gate * sizeof(uint32_t));
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    const DeviceAddr base = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
+        impl_->stage_gate, impl_->stage_gate_addrs, coord, 0, "get_stage_gate_descriptor");
+    auto* mesh = impl_->mesh_device.get();
+    const CoreCoord logical = impl_->service_cores.at(coord);
+    const auto node = mesh->get_fabric_node_id(coord);
+    return D2DStageGateDescriptor{
+        .mesh_id = *node.mesh_id,
+        .chip_id = node.chip_id,
+        .service_core_logical = logical,
+        .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(logical),
+        .gate_base_addr = base,
+        .gate_stride_bytes = sizeof(uint32_t),
+        .num_gates = impl_->stage_gate.num_gates,
+    };
+}
+
+void D2DStreamServiceReceiver::set_stage_gate(
+    const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open) {
+    const DeviceAddr addr = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
+        impl_->stage_gate, impl_->stage_gate_addrs, coord, gate, "set_stage_gate");
+    std::vector<uint32_t> word{open ? kStageGateOpen : kStageGateClosed};
+    tt::tt_metal::detail::WriteToDeviceL1(
+        impl_->mesh_device->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), word);
+}
+
+bool D2DStreamServiceReceiver::is_stage_gate_open(
+    const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const {
+    const DeviceAddr addr = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
+        impl_->stage_gate, impl_->stage_gate_addrs, coord, gate, "is_stage_gate_open");
+    std::vector<uint32_t> word;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        impl_->mesh_device->get_device(coord),
+        impl_->service_cores.at(coord),
+        static_cast<uint32_t>(addr),
+        sizeof(uint32_t),
+        word);
+    return word.at(0) == kStageGateOpen;
+}
+
 // ===========================================================================
 // Persistent program builders
 // ===========================================================================
@@ -796,6 +885,8 @@ Program build_receiver_program(
     bool share_fabric_links,
     uint32_t link_grant_addr,
     uint32_t num_lanes,
+    const D2DStageGateConfig& stage_gate,
+    uint32_t stage_gate_addr,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
@@ -835,6 +926,11 @@ Program build_receiver_program(
         num_lanes,                     // [21] sender lanes = data-landed incs awaited per transfer
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+    // Stage-gate block, after the accessor args (at its next_compile_time_args_offset()).
+    ct_args.push_back(stage_gate.num_gates);
+    ct_args.push_back(stage_gate_addr);
+    ct_args.push_back(stage_gate.slot_id_offset_bytes);
+    ct_args.push_back(stage_gate.gate_flags_offset_bytes);
 
     auto kernel = CreateKernel(
         program,
@@ -1198,6 +1294,7 @@ struct ReceiverSideResources {
     std::optional<GlobalSemaphore> data_ready_sem;
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
     DeviceAddr metadata_l1_addr = 0;
+    std::map<distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
     std::unique_ptr<distributed::MeshWorkload> workload;
     // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
     std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
@@ -1226,6 +1323,24 @@ ReceiverSideResources build_receiver_side(
     auto termination_addrs = allocate_service_core_words(mesh, service_cores);
     auto consumed_counter_addrs = allocate_service_core_words(mesh, service_cores);
     auto link_grant_addrs = allocate_service_core_words(mesh, service_cores);
+
+    const auto& gate = cfg.stage_gate;
+    std::map<distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
+    if (gate.num_gates > 0) {
+        TT_FATAL(
+            common.metadata_enabled,
+            "D2DStreamService: stage_gate.num_gates > 0 requires metadata_size_bytes > 0 (the gate is selected by "
+            "the transfer's metadata)");
+        for (const uint32_t offset : {gate.slot_id_offset_bytes, gate.gate_flags_offset_bytes}) {
+            TT_FATAL(
+                offset % sizeof(uint32_t) == 0 && offset + sizeof(uint32_t) <= common.metadata_size_bytes,
+                "D2DStreamService: stage-gate metadata offset {} must be 4-byte aligned and within "
+                "metadata_size_bytes ({})",
+                offset,
+                common.metadata_size_bytes);
+        }
+        stage_gate_addrs = allocate_stage_gate_words(mesh, service_cores, gate.num_gates);
+    }
 
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(
         mesh.get(), CoreRangeSet(cfg.receiver_worker_cores), /*initial_value=*/0, BufferType::L1);
@@ -1304,6 +1419,8 @@ ReceiverSideResources build_receiver_side(
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,
                 num_lanes,
+                gate,
+                gate.num_gates > 0 ? static_cast<uint32_t>(stage_gate_addrs.at(coord)) : 0u,
                 receiver_node,
                 sender_node,
                 links.front()));
@@ -1327,6 +1444,7 @@ ReceiverSideResources build_receiver_side(
         .data_ready_sem = std::move(data_ready_sem),
         .metadata_buffer = std::move(metadata_buffer),
         .metadata_l1_addr = metadata_l1_addr,
+        .stage_gate_addrs = std::move(stage_gate_addrs),
         .workload = std::move(workload),
         .lease_wait_workload = std::move(lease_wait_workload),
         .lease_release_workload = std::move(lease_release_workload),
@@ -1418,6 +1536,8 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .metadata_size_bytes = common.metadata_size_bytes,
         .metadata_buffer = std::move(res.metadata_buffer),
         .metadata_l1_addr = res.metadata_l1_addr,
+        .stage_gate = cfg.stage_gate,
+        .stage_gate_addrs = std::move(res.stage_gate_addrs),
         .workload = std::move(res.workload),
         .launched = false,
         .lease_wait_workload = std::move(res.lease_wait_workload),
