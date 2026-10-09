@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -99,12 +100,19 @@ inline void _reshuffle_store_quad_(const std::uint32_t bank, const std::uint32_t
         quad_addr + RESHUFFLE_RIGHT_ODD /*dest_reg_addr*/);
 }
 
-// Keep the input loads ahead of the output loads: they separate the previous row's Dest stores from
-// a same-quad reload, which the scoreboard does not cover (tenstorrent/tt-metal#51345).
-inline void _calculate_reshuffle_rows_row_(const std::uint32_t in_row, const std::uint32_t out_row) {
-    const std::uint32_t in_addr = _reshuffle_quad_addr_(in_row);
+// Row ROW_IN_GROUP of the 4-row group at in_addr; byte ROW_IN_GROUP of idx_word is its target row.
+// A Dest reload needs one instruction between it and the store to the same slot, which the
+// scoreboard does not cover (tenstorrent/tt-metal#51345); the four stores alone put three between
+// each store and the next row's reload of that slot.
+template <std::uint32_t ROW_IN_GROUP>
+inline __attribute__((always_inline)) void _reshuffle_rows_row_(
+    const std::uint32_t in_addr, const std::uint32_t idx_word) {
+    const std::uint32_t out_row = (idx_word >> (8 * ROW_IN_GROUP)) & 0xFF;
+    if (out_row >= RESHUFFLE_TILE_ROWS) {
+        return;
+    }
     const std::uint32_t out_addr = RESHUFFLE_OUTPUT_TILE_OFFSET + _reshuffle_quad_addr_(out_row);
-    const std::uint32_t in_reg = RESHUFFLE_IN_BANK + (in_row & (RESHUFFLE_QUAD_ROWS - 1));
+    constexpr std::uint32_t in_reg = RESHUFFLE_IN_BANK + ROW_IN_GROUP;
     const std::uint32_t out_reg = RESHUFFLE_OUT_BANK + (out_row & (RESHUFFLE_QUAD_ROWS - 1));
 
     _reshuffle_load_quad_(RESHUFFLE_IN_BANK, in_addr);
@@ -124,20 +132,24 @@ inline void _calculate_reshuffle_rows_row_(const std::uint32_t in_row, const std
 /**
  * @brief Add each row i of tile idst into row mask[i] of tile idst+1; mask entries >= 32 are skipped.
  *
- * @param idx_addr: L1 address of the mask minus RESHUFFLE_MASK_HEADER_BYTES.
+ * @param idx_addr: L1 address of the mask minus RESHUFFLE_MASK_HEADER_BYTES; 4-byte aligned.
  * @note Once per tile (VectorMode::RC_custom); the caller must ensure idst+1 is a valid Dest tile.
  */
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_reshuffle_rows(const std::uint32_t idx_addr) {
-    volatile tt_l1_ptr std::uint8_t* mask =
-        reinterpret_cast<volatile tt_l1_ptr std::uint8_t*>(idx_addr + RESHUFFLE_MASK_HEADER_BYTES);
+    LLK_ASSERT((idx_addr & 0x3) == 0, "reshuffle_rows mask must be 4-byte aligned");
+    // One 32-bit word holds the targets of a 4-row group (little-endian, row 4g in the low byte).
+    volatile tt_l1_ptr std::uint32_t* mask =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(idx_addr + RESHUFFLE_MASK_HEADER_BYTES);
 
-    for (std::uint32_t in_row = 0; in_row < RESHUFFLE_TILE_ROWS; in_row++) {
-        const std::uint32_t out_row = static_cast<std::uint32_t>(mask[in_row]);
-        if (out_row >= RESHUFFLE_TILE_ROWS) {
-            continue;
-        }
-        _calculate_reshuffle_rows_row_(in_row, out_row);
+#pragma GCC unroll 0
+    for (std::uint32_t group = 0; group < RESHUFFLE_TILE_ROWS / RESHUFFLE_QUAD_ROWS; group++) {
+        const std::uint32_t idx_word = mask[group];
+        const std::uint32_t in_addr = _reshuffle_quad_addr_(group * RESHUFFLE_QUAD_ROWS);
+        _reshuffle_rows_row_<0>(in_addr, idx_word);
+        _reshuffle_rows_row_<1>(in_addr, idx_word);
+        _reshuffle_rows_row_<2>(in_addr, idx_word);
+        _reshuffle_rows_row_<3>(in_addr, idx_word);
     }
 }
 

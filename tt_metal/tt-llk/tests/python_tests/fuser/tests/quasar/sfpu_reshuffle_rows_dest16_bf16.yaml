@@ -1,5 +1,6 @@
 # reshuffle_rows with the fixed RESHUFFLE_ROWS_FUSER_MASK (the fuser cannot pass an L1 mask).
-# Half-integer stimuli keep every sum exact, hence atol/rtol 0.
+# Uniform stimuli make sums inexact, so atol/rtol 0 also checks the golden's per-row truncation
+# (SFPSTORE truncates into a 16-bit Dest).
 
 dest_acc: false
 
@@ -8,11 +9,12 @@ operands:
     dims: [32, 64]
     format: [Float16_b]
     stimuli:
-      include: [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]
+      include:
+        - [-2.0, 2.0]
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
-    atol: 0.0  # every partial sum is exact, so any lost, doubled or misplaced row must fail
+    atol: 0.0  # any lost, doubled or misplaced row, or a rounding store, must fail
     rtol: 0.0
 
 operations:
