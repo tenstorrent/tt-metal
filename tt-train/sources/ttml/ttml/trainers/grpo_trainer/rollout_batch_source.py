@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -55,6 +55,20 @@ def validate_rollout_batch(
         valid = lp[r, : len(c)]
         if not np.all(np.isfinite(valid)) or np.any(valid > 1e-3):
             raise RuntimeError(f"row {r}: invalid behavior log-probs (non-finite or > 0)")
+
+
+def pad_logprobs(completions: List[List[int]], token_logprobs: List[List[float]], width: int) -> np.ndarray:
+    """Pack ragged per-token log-probs into a zero-padded float32 [len(completions), width] array."""
+    if len(token_logprobs) != len(completions):
+        raise RuntimeError(f"{len(token_logprobs)} log-prob rows for {len(completions)} completions")
+    logprobs = np.zeros((len(completions), width), dtype=np.float32)
+    for r, (c, lp) in enumerate(zip(completions, token_logprobs)):
+        if len(lp) != len(c):
+            raise RuntimeError(f"row {r}: {len(lp)} log-probs for {len(c)} tokens")
+        if len(c) > width:
+            raise RuntimeError(f"row {r}: completion length {len(c)} > max_completion_length {width}")
+        logprobs[r, : len(c)] = lp
+    return logprobs
 
 
 def tokenize_prompts(dataset: Any, tokenizer: Any, num_prompts: int) -> Tuple[List[List[int]], Dict[str, list]]:
@@ -142,22 +156,29 @@ class InProcessRolloutBatchSource(RolloutBatchSource):
 def build_rollout_batch_source(
     config: Any,
     *,
-    sampler: RolloutSampler,
+    sampler: Optional[RolloutSampler],
+    mesh_device: Any,
     prompts: List[List[int]],
     extra_columns: Dict[str, list],
     batch_prompts: int,
     tokenizer: Any,
     reward_funcs: List[Callable[..., List[float]]],
 ) -> RolloutBatchSource:
+    common = dict(
+        prompts=prompts,
+        extra_columns=extra_columns,
+        batch_prompts=batch_prompts,
+        tokenizer=tokenizer,
+        reward_funcs=reward_funcs,
+        num_generations=config.num_generations,
+        max_completion_length=config.max_completion_length,
+    )
     if config.rollout_mode == "in_process":
-        return InProcessRolloutBatchSource(
-            sampler=sampler,
-            prompts=prompts,
-            extra_columns=extra_columns,
-            batch_prompts=batch_prompts,
-            tokenizer=tokenizer,
-            reward_funcs=reward_funcs,
-            num_generations=config.num_generations,
-            max_completion_length=config.max_completion_length,
+        return InProcessRolloutBatchSource(sampler=sampler, **common)
+    if config.rollout_mode == "remote_sync":
+        from .remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
+
+        return SyncRemoteRolloutBatchSource(
+            mesh_device=mesh_device, weight_sync_every=config.weight_sync_every, **common
         )
     raise ValueError(f"unsupported rollout_mode {config.rollout_mode!r}")
