@@ -36,6 +36,7 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -60,6 +61,16 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
+
+# tt_llk_perf lives in tools/python, outside the test tree, so it goes on sys.path before the helpers import it.
+# LLK_HOME wins when set, matching init_llk_home() further down.
+_TT_LLK_TOOLS_PYTHON = str(
+    Path(os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3])
+    / "tools"
+    / "python"
+)
+if _TT_LLK_TOOLS_PYTHON not in sys.path:
+    sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
@@ -213,6 +224,17 @@ def pytest_addoption(parser):
         help="Enables coverage *.info file generation for every test variant run",
     )
 
+    parser.addoption(
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
+        "PATH for each comparison made right after exactly one accuracy_contract "
+        "lookup in the same test, on a variant that ran with the dest_acc it names. "
+        "The exhaustive sweep skips tolerance cells before comparing, and under "
+        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
+        "and truncated at session start. Reporting only: it cannot change a verdict.",
+    )
     parser.addoption(
         "--ulp-emit",
         action="store_true",
@@ -489,9 +511,13 @@ def pytest_configure(config):
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        # Set in the workers too; only the file preparation below is master-only.
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        utils_module.prepare_ulp_measure_file()
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -661,13 +687,7 @@ def _select_tests_by_op(config, items):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    _select_tests_by_op(config, items)
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
-
+def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -702,6 +722,19 @@ def pytest_collection_modifyitems(config, items):
     logger.info(
         f"Executing {len(items)} variants as they were executed on runner {temp_runner_name} on run recorded to file {test_order_file}"
     )
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # Choose compile representatives only after other plugins apply selection filters.
+    result = yield
+    _select_tests_by_op(config, items)
+    _restore_test_order(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
+    return result
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -906,11 +939,39 @@ def pytest_runtest_teardown(item, nextitem):
         _reset_simulator_pending = True
 
 
+_worker_connected = False
+
+
+def _connect_worker_to_server(port: int) -> None:
+    """xdist worker on the RTL simulator: the controller owns the server, connect to it once."""
+    global _worker_connected
+    deadline = time.time() + ExalensServer.READY_TIMEOUT_S
+    while True:
+        try:
+            tt_exalens_init.init_ttexalens_remote(port=port)
+            break
+        except Exception as exc:
+            if time.time() > deadline:
+                raise
+            logger.info("waiting for the tt-exalens server ({})", exc)
+            time.sleep(5)
+    TestConfig.resolve_worker_tensix_location()
+    _worker_connected = True
+
+
 def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
 
     if _exalens_server is None:
+        if (
+            not _worker_connected
+            and hasattr(item.config, "workerinput")
+            and TestConfig.TEST_TARGET.run_simulator
+            and _SIMULATOR_PATH
+            and not _SIMULATOR_PATH.endswith(".so")
+        ):
+            _connect_worker_to_server(TestConfig.TEST_TARGET.simulator_port)
         return
 
     if not _exalens_server.running and not _exalens_server.ever_started:
@@ -935,6 +996,14 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    # Under xdist no test runs on the controller, so pytest_runtest_setup never starts the server here;
+    # bring it up now and let the workers connect in their own pytest_runtest_setup.
+    if (
+        _exalens_server is not None
+        and not _exalens_server.ever_started
+        and getattr(session.config.option, "numprocesses", None)
+    ):
+        _exalens_server.start()
 
 
 @pytest.fixture(scope="module", autouse=True)

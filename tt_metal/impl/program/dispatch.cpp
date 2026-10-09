@@ -666,7 +666,9 @@ uint32_t finalize_kernel_bins(
 }
 
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const uint32_t num_workers =
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
@@ -949,7 +951,7 @@ void generate_runtime_args_cmds_large_unicast(
         std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
         // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
         std::vector<std::vector<uint8_t>> core_payloads(num_in_chunk);
-        std::vector<tt::stl::Span<const uint8_t>> data_collection(num_in_chunk);
+        std::vector<ttsl::Span<const uint8_t>> data_collection(num_in_chunk);
 
         for (uint32_t k = 0; k < num_in_chunk; ++k) {
             const uint32_t i = offset_idx + k;
@@ -971,7 +973,7 @@ void generate_runtime_args_cmds_large_unicast(
                 }
                 offset += std::get<2>(data);
             }
-            data_collection[k] = tt::stl::Span<const uint8_t>(buf.data(), buf.size());
+            data_collection[k] = ttsl::Span<const uint8_t>(buf.data(), buf.size());
         }
 
         DeviceCommandCalculator calculator(metal_ctx);
