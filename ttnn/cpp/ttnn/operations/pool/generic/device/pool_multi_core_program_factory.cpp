@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include <cstdlib>
+#include <string>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
@@ -923,7 +925,8 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     const uint32_t scalar_bf16 = bf16_scalar >> 16;
     if (device_arch == tt::ARCH::BLACKHOLE && params.is_avg_pool && one_scalar_per_core &&
         params.data_format == tt::DataFormat::Float16_b && (scalar_bf16 & 0x7F) == 0 && (scalar_bf16 & 0x7F80) != 0 &&
-        (scalar_bf16 & 0x7F80) != 0x7F80 && math_fidelity > tt::tt_metal::MathFidelity::HiFi2) {
+        (scalar_bf16 & 0x7F80) != 0x7F80 && math_fidelity > tt::tt_metal::MathFidelity::HiFi2 &&
+        !(std::getenv("RC_ALT") != nullptr && std::string(std::getenv("RC_ALT")).rfind("POFF", 0) == 0)) {
         math_fidelity = tt::tt_metal::MathFidelity::HiFi2;
     }
 

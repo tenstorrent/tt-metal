@@ -100,6 +100,12 @@ void kernel_main() {
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
     constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
+#ifdef ARCH_BLACKHOLE
+    // A pack untilize runs the MOP of its init, so a narrower last chunk needs its own init or it writes past its pages.
+    constexpr bool narrower_last_chunk = partial_iter_output_tiles != max_tiles_per_iter;
+#else
+    constexpr bool narrower_last_chunk = false;
+#endif
 
     DataflowBuffer in_scalar_dfb_0(in_scalar_cb_id_0);
     DataflowBuffer in_scalar_dfb_1(in_scalar_cb_id_1);
@@ -183,7 +189,13 @@ void kernel_main() {
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed
                 if (last_c_block) {
+                    if constexpr (narrower_last_chunk) {
+                        PACK((llk_pack_untilize_init<partial_iter_output_tiles>(pre_tilize_cb_id)));
+                    }
                     pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
+                    if constexpr (narrower_last_chunk) {
+                        PACK((llk_pack_untilize_init<max_tiles_per_iter>(pre_tilize_cb_id)));
+                    }
                     pre_tilize_dfb.push_back(partial_iter_output_tiles);
                     tilize_stick_counter++;
                     tilize_stick_total++;
@@ -243,7 +255,13 @@ void kernel_main() {
             } else {
                 // ROW_MAJOR output: pack directly to output CB
                 if (last_c_block) {
+                    if constexpr (narrower_last_chunk) {
+                        PACK((llk_pack_untilize_init<partial_iter_output_tiles>(out_cb_id)));
+                    }
                     pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0);
+                    if constexpr (narrower_last_chunk) {
+                        PACK((llk_pack_untilize_init<max_tiles_per_iter>(out_cb_id)));
+                    }
                 } else {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
