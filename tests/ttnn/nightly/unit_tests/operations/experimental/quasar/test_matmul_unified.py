@@ -18,7 +18,7 @@ DM threads and buffering: on Quasar four reader threads take each C slice's K ch
 to a multiple of four with credit-only K chunks) and two writer threads take the compute threads' shares of C;
 Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight. When each
 core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
-columns, with one reader thread.
+columns, each reader thread multicasting its own K chunks.
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
@@ -838,23 +838,25 @@ def test_dm_threads_with_K_spill_and_packer_l1_acc(device):
 
 
 MULTICAST_GRIDS = [
-    # name, cores (columns, rows): one C slice per core, so A is multicast along each row of cores and B down
-    # each column (an operand with one core per row / column is read directly).
-    ("row_A_multicast", (4, 1)),
-    ("column_B_multicast", (1, 4)),
-    ("grid_A_and_B_multicast", (3, 2)),
+    # name, cores (columns, rows), K chunks: one C slice per core, so A is multicast along each row of cores and B
+    # down each column (an operand with one core per row / column is read directly).
+    ("row_A_multicast", (4, 1), 3),
+    ("column_B_multicast", (1, 4), 3),
+    ("grid_A_and_B_multicast", (3, 2), 3),
+    ("grid_A_and_B_multicast_long_K", (3, 2), 9),
 ]
 
 
-@pytest.mark.parametrize("name,grid", MULTICAST_GRIDS, ids=[g[0] for g in MULTICAST_GRIDS])
-def test_multicast(device, name, grid):
-    """Batch 2, ragged M / K / N, three 2-tile K chunks: the first core of each row reads the A slices and
-    multicasts them along the row, and the first core of each column does the same with B."""
+@pytest.mark.parametrize("name,grid,K_chunks", MULTICAST_GRIDS, ids=[g[0] for g in MULTICAST_GRIDS])
+def test_multicast(device, name, grid, K_chunks):
+    """Batch 2, ragged M / K / N, 2-tile K chunks: the first core of each row reads the A slices and multicasts
+    them along the row, and the first core of each column does the same with B. On Quasar each reader thread
+    multicasts its own K chunks; with 9 of them each thread multicasts several per C slice."""
     gx, gy = _grid(device)
     columns, rows = grid
     if columns > gx or rows > gy:
         pytest.skip(f"needs a {columns}x{rows} grid, device has {gx}x{gy}")
-    B, M, K, N = 2, rows * 2 * TILE - 7, 5 * TILE + 20, columns * 3 * TILE - 11
+    B, M, K, N = 2, rows * 2 * TILE - 7, (2 * K_chunks - 1) * TILE + 20, columns * 3 * TILE - 11
     torch.manual_seed(26)
     a, b = _randn(1, B, M, K), _randn(1, B, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
