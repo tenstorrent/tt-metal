@@ -2205,6 +2205,30 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 
 
 @dataclass
+class GENERALIZED_MOE_GATE_PERF_PATH(TemplateParameter):
+    """The gate path the generalized MoE gate perf kernel runs, ``ungrouped`` (the ttnn op) or ``grouped`` (the
+    DeepSeek gate); the token geometry is fixed and emitted here."""
+
+    gmg_path: str = "ungrouped"
+
+    def convert_to_cpp(self) -> str:
+        grouped = self.gmg_path == "grouped"
+        return "\n".join(
+            [
+                f"constexpr bool GMG_GROUPED = {str(grouped).lower()};",
+                "constexpr std::uint32_t GMG_TOPK = 8;",
+                "constexpr bool GMG_SOFTMAX = false;",
+                "constexpr bool GMG_RELOAD = false;",
+                "constexpr std::uint32_t GMG_EPS = 0x3f000000;  // 0.5f",
+                "constexpr std::uint32_t GMG_SCALE = 0x40200000;  // 2.5f",
+                "constexpr bool GMG_TRANSPOSE_OF_FACES = true;",
+                "constexpr std::uint32_t GMG_OUTPUT_TILES = 3;",
+                "constexpr bool ACC_TO_DEST = false;",
+            ]
+        )
+
+
+@dataclass
 class GATED_REDUCE_PARAMS(TemplateParameter):
     gate: str
     up: str
