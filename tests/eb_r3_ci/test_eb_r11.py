@@ -443,6 +443,11 @@ MUL_CFGS = [
     ("mul_bfp8_32x103424", [32, 103424], [32, 103424], "bfp8", "bf16", None, None, None),
     ("scale_128x3072", [1, 1, 128, 3072], 1.702, "bf16", None, None, None, None),
     ("scale_640x768", [1, 1, 640, 768], 1.702, "bf16", None, None, None, None),
+    # census of the multi-chip models: FPU multiplies outside the block section (block-float operand)
+    ("glx_prefill_mlp_128", [1, 1, 128, 3200], [1, 1, 128, 3200], "bfp8", "bfp8", "bfp8", "silu", None),  # llama_mlp.py:439
+    ("glx_prefill_mlp_2048", [1, 1, 2048, 3200], [1, 1, 2048, 3200], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("k3_mla_gate_640", [1, 1, 640, 2048], [1, 1, 640, 2048], "bfp8", "bf16", None, None, None),  # deepseek_v3_d_p mla.py:1507
+    ("kv_zero_bfp8", [8, 8, 128, 128], 0.0, "bfp8", None, None, None, None),  # QB2 generators' KV cache reset
 ]
 _DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, None: None}
 

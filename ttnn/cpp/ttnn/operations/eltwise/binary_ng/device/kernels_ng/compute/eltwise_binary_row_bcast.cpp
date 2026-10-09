@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#ifdef EB_R3_PER_TILE  // CI only
+#ifndef EB_R3_PER_FACE  // CI (ci16pt): ELWMUL per tile unless EB_R3_PER_FACE
 #define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
 #endif
 #include "api/compute/eltwise_binary.h"

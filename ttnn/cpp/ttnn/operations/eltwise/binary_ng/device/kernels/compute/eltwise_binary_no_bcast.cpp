@@ -12,10 +12,10 @@
 #define BINARY_NG_BLOCK_PACK 0
 #endif
 // Blackhole: the block section (BINARY_NG_BLOCK) hands each operand tile over whole, as its block unpack needs.
-#ifndef EB_R3_PER_TILE  // CI only
-#define EB_R3_PER_TILE 0
+#ifndef EB_R3_PER_FACE  // CI (ci16pt): ELWMUL per tile unless EB_R3_PER_FACE
+#define EB_R3_PER_FACE 0
 #endif
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_NG_BLOCK || (EB_R3_PER_TILE && BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL))
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_NG_BLOCK || (!EB_R3_PER_FACE && BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL))
 #define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
 #if BINARY_NG_BLOCK_PACK
