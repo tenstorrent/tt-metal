@@ -28,9 +28,12 @@ TERMS = {
     "call": "fixed cost per matmul_block call",
     "write": "output block write (BRISC, serialised with the in1 reader)",
     "epilogue": "bias add and SFPU activation per output tile",
+    "issue": "each page read costs the reader core a fixed issue time (per-core floor on a K block's read)",
 }
+EXPERIMENTAL = {}
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
-on = lambda t: t not in OFF
+EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
+on = lambda t: (t in EXTRA) if t in EXPERIMENTAL else (t not in OFF)
 
 TILE_BYTES = {"bf16": 2048, "bfp8": 1088, "bfp4": 576, "fp32": 4096}
 PHASES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
@@ -59,6 +62,7 @@ CONSTANTS = {
     "call": (30.0, "cycles per matmul_block call", "call"),
     "lat_write": (65.0, "cycles: one subblock of output page writes + barrier", "write"),
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
+    "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
 }
 # measured on the device, held fixed in the fit: name -> (value, source)
 PINNED = {
@@ -87,7 +91,7 @@ def geometry(d):
     Mrows = np.where(fuse, B * Mt, Mt)
     bloop = np.where(fuse, 1.0, B)  # outer batch loop on each core
     is2d, in0, in1, reuse = (fam == f for f in ("2d", "1d_in0", "1d_in1", "reuse"))
-    R2, C2 = np.ceil(Mt / pcM), np.ceil(Nt / pcN)
+    R2, C2 = np.ceil(Mrows / pcM), np.ceil(Nt / pcN)  # 2D: a fused batch stacks its rows
     P0, P1 = np.ceil(Nt / pcN), np.ceil(Mrows / pcM)
     grid = (d.grid_x * d.grid_y).fillna(d.cores).to_numpy(float)
     rblocks = B * np.ceil(Mt / pcM) * np.ceil(Nt / pcN)  # Reuse: whole (pcM x pcN) blocks spread over cores
@@ -158,24 +162,25 @@ def predict(g, p, parts=False):
     cg0 = 1 + b0 / (p["burst_KB"] * 1e3) if on("burst") else 1.0  # interleaved-L1 congestion
     cg1 = 1 + b1 / (p["burst_KB"] * 1e3) if on("burst") else 1.0
 
-    def fetch(nbytes, src, readers, eff, cg):
+    def fetch(nbytes, src, readers, eff, cg, tile):
         """one K block read by one core: all pages in flight, then a barrier; bandwidth shared by `readers` cores"""
         r = np.maximum(readers, 1)
+        floor = nbytes / tile * p["issue"] if on("issue") else 0.0
         if on("sat"):
             dr = np.maximum(p["lat_dram"] + nbytes / noc, nbytes * r / (dram * eff))
             l1 = np.maximum(p["lat_l1"] + nbytes / noc, nbytes * r * cg / l1bw)
         else:
             dr = p["lat_dram"] + nbytes / np.minimum(noc, dram * eff / r)
             l1 = p["lat_l1"] + nbytes / np.minimum(noc, l1bw / (r * cg))
-        return np.select([src == 0, src == 1], [dr, l1], 0.0)
+        return np.select([src == 0, src == 1], [np.maximum(dr, floor), np.maximum(l1, floor)], 0.0)
 
     def mcast(nbytes, rx):
         if not on("mcast"):
             return np.where(rx > 0, nbytes / noc, 0.0)
         return np.where(rx > 0, p["lat_mcast"] + rx * p["ack_rx"] + nbytes / noc, 0.0)
 
-    step0 = fetch(b0, g["src_a"], g["rd0"], ea, cg0) + mcast(b0, g["rx0"])  # in0 path (sender)
-    step1 = fetch(b1, g["src_b"], g["rd1"], eb, cg1) + mcast(b1, g["rx1"])  # in1 path (sender)
+    step0 = fetch(b0, g["src_a"], g["rd0"], ea, cg0, g["tb_a"]) + mcast(b0, g["rx0"])  # in0 path (sender)
+    step1 = fetch(b1, g["src_b"], g["rd1"], eb, cg1, g["tb_b"]) + mcast(b1, g["rx1"])  # in1 path (sender)
     da, db = g["rd0"] * b0 * (g["src_a"] == 0), g["rd1"] * b1 * (g["src_b"] == 0)  # chip DRAM bytes per K step
     la, lb = g["rd0"] * b0 * (g["src_a"] == 1), g["rd1"] * b1 * (g["src_b"] == 1)  # chip interleaved-L1 bytes
     chip = np.maximum((da + db) / dram, (la * cg0 + lb * cg1) / l1bw)

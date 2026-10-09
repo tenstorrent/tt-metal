@@ -1,5 +1,5 @@
 {
- "ablate": "full",
+ "ablate": "full+issue,r2fix",
  "sets": {
   "wh_designed": {
    "regret": 1.0618,

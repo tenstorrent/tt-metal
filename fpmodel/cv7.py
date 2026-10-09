@@ -19,7 +19,7 @@ for k, (v, _) in M.PINNED.items():
         fit.LO[k], fit.HI[k], M.PARAMS[k] = v * 0.999, v * 1.001, v
 from data import load, SETS, CAND, evaluate, rank_quality, gm
 
-tag = os.environ.get("ABLATE", "") or "full"
+tag = (os.environ.get("ABLATE", "") or "full") + ("+" + os.environ["EXTRA"] if os.environ.get("EXTRA") else "")
 d = M.annotate(load(list(SETS)))
 rows = {a: np.flatnonzero((d.arch_ == a).to_numpy()) for a in ("wh", "bh")}
 pred = np.full(len(d), np.nan)
