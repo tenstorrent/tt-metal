@@ -35,7 +35,7 @@ struct PackedWeightSpec {
     uint32_t K = 0;
     uint32_t N = 0;
     // The cores holding the weight's slabs, in row-major shard order.
-    CoreRangeSet cores;
+    tt::tt_metal::CoreRangeSet cores;
     // Partial width-sharded mode when > 1: the weight is cut into k_blocks x n_blocks blocks.
     uint32_t k_blocks = 1;
     // Batched (BatchedLinearDecode) mode when batch > 1: b_blocks x n_blocks grid of

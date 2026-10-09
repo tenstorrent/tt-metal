@@ -1367,7 +1367,7 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     // Phase 1: single CW ring only. Bidirectional (CCW on RISCV_0/NOC_1) is a straightforward
     // extension -- build a second RingWalk over the second half of the senders, allocate a
     // cb_in2_ccw, and instantiate a second reader kernel.
-    const RingWalk cw = build_ring_walk(device, /*sources=*/S_cores, /*hops=*/C_cores);
+    const RingWalk cw = build_ring_walk(device, /*sources=*/S_cores, /*computes=*/C_cores);
 
     // Kernels and CBs are placed on the walk's cores (S ∪ C) only. Cores that fall inside the
     // bounding box but neither shard nor compute get no kernel, no CB, and no L1 reservation.

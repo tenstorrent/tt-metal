@@ -69,7 +69,7 @@ inline RingWalk build_ring_walk(
         w.cores.push_back(c);
     }
     for (const auto& c : computes) {
-        if (src_id_of.find(c) == src_id_of.end()) {
+        if (!src_id_of.contains(c)) {
             w.cores.push_back(c);
         }
     }
@@ -88,7 +88,7 @@ inline RingWalk build_ring_walk(
         const auto& c = w.cores[p];
         const auto it = src_id_of.find(c);
         w.is_source[p] = it != src_id_of.end() ? 1u : 0u;
-        w.is_compute[p] = compute_set.count(c) ? 1u : 0u;
+        w.is_compute[p] = compute_set.contains(c) ? 1u : 0u;
         if (w.is_source[p]) {
             w.own_sender_id[p] = it->second;
         }
