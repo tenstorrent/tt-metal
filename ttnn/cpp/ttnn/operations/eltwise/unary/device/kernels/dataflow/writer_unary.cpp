@@ -62,31 +62,18 @@ void kernel_main() {
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
 #if SHARD_ROTATE
-    // DRAM-sharded: the reader's rotated page order, WRITE_BURST pages per flush.
-    constexpr uint32_t kWriteBurst = WRITE_BURST;
-    auto order = dram_shard::RotatedPages::from_args(3);
+    // DRAM-sharded: the reader's page order, WRITE_BURST pages per flush.
+    auto order = dram_shard::RotatedPages::from_args();
     dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
 #if WORK_QUEUE
-    // On the scheduler core, the writer answers requests whenever it would otherwise wait.
-    const bool is_scheduler = get_arg_val<uint32_t>(1) != 0;
-    dram_shard::Scheduler sched{
-        .num_workers = get_arg_val<uint32_t>(9),
-        .total_chunks = dram_shard::num_chunks(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(8)),
-        .coord_arg = dst_args.next_common_runtime_args_offset()};
-    if (is_scheduler) {
-        sched.start();
-    }
-    auto serve_until = [&](uint32_t cb_id, uint32_t n) {
-        while (is_scheduler && !cb_pages_available_at_front(cb_id, n)) {
-            sched.serve();
-        }
-    };
+    auto queue = dram_shard::QueueWriter::from_args(dst_args.next_common_runtime_args_offset());
 #endif
-    auto write_pages = [&](uint32_t count) {
+    auto write_chunk = [&](uint32_t first, uint32_t count) {
+        order.seek(first);
         for (uint32_t done = 0; done < count;) {
-            const uint32_t n = groups.next(count - done < kWriteBurst ? count - done : kWriteBurst);
+            const uint32_t n = groups.next(std::min(count - done, uint32_t{WRITE_BURST}));
 #if WORK_QUEUE
-            serve_until(cb_id_dst, n);
+            queue.serve_until([&] { return dfb_dst.pages_available_at_front(n); });
 #endif
             dfb_dst.wait_front(n);
             for (uint32_t k = 0; k < n; ++k) {
@@ -98,25 +85,9 @@ void kernel_main() {
         }
     };
 #if WORK_QUEUE
-    while (true) {
-        serve_until(dram_shard::kCbWriterChunk, 1);
-        cb_wait_front(dram_shard::kCbWriterChunk, 1);
-        auto* chunk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(dram_shard::kCbWriterChunk));
-        const uint32_t first = chunk[0];
-        const uint32_t count = chunk[1];
-        cb_pop_front(dram_shard::kCbWriterChunk, 1);
-        if (count == 0) {
-            break;
-        }
-        order.seek(first);
-        write_pages(count);
-    }
-    while (is_scheduler && !sched.finished()) {
-        sched.serve();
-    }
+    queue.for_each_chunk(write_chunk);
 #else
-    order.seek(start_id);
-    write_pages(num_pages);
+    write_chunk(start_id, num_pages);
 #endif
 #else
     for (uint32_t i = start_id; i < end_id; ++i) {

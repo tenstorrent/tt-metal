@@ -63,8 +63,7 @@ bool is_native_L1_sharding(
 
 namespace {
 
-// Ops whose SFPU work per tile outweighs the tile's DRAM transfer (exp, erf and log based). On small tensors a
-// deeper read only delays their first tiles, so they keep one page in flight.
+// Compute-bound ops (exp, erf, log based): on small tensors, deeper reads only delay their first tiles.
 bool is_heavy_op(const EltwiseUnaryWithParam& op) {
     switch (op.type()) {
         case UnaryOpType::ELU:
@@ -75,7 +74,7 @@ bool is_heavy_op(const EltwiseUnaryWithParam& op) {
         case UnaryOpType::LOGIT:
         case UnaryOpType::LOGSIGMOID:
         case UnaryOpType::XIELU: return true;
-        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) != 1.0f;  // 1 is the fast LUT variant
+        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) != 1.0f;  // 1: fast LUT
         default: return false;
     }
 }
@@ -86,7 +85,18 @@ DramShardPlan get_dram_shard_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,
-    uint32_t num_cores) {
+    uint32_t num_cores,
+    uint32_t num_dram_banks) {
+    // With few cores per bank, the plain order already saturates DRAM and bursts only add waiting. Blackhole p100a
+    // has ~16 cores per bank, Wormhole n300 ~5; any threshold from ~6 to 15 separates them.
+    constexpr uint32_t kMinCoresPerDramBank = 8;
+    // Below this the queue has too little to balance.
+    constexpr uint64_t kMinPagesPerCoreForQueue = 512;
+    // Chunk = 1/150 of a core's share: smaller loads the scheduler, larger leaves a tail.
+    constexpr uint64_t kChunksPerCore = 150;
+    constexpr uint32_t kReadBurst = 8;
+    constexpr uint32_t kWriteBurst = 2;
+
     using tt::tt_metal::BufferType;
     using tt::tt_metal::TensorMemoryLayout;
     auto is_dram_sharded = [](const tt::tt_metal::TensorSpec& s) {
@@ -94,10 +104,13 @@ DramShardPlan get_dram_shard_plan(
         return s.layout() == tt::tt_metal::Layout::TILE && mc.buffer_type() == BufferType::DRAM &&
                mc.memory_layout() != TensorMemoryLayout::INTERLEAVED && mc.shard_spec().has_value();
     };
-    if (!is_dram_sharded(input_spec) || !is_dram_sharded(output_spec) || op_chain.empty() || num_cores == 0 ||
+    if (op_chain.empty() || num_cores == 0 || num_cores < kMinCoresPerDramBank * num_dram_banks ||
+        !is_dram_sharded(input_spec) || !is_dram_sharded(output_spec) ||
         input_spec.memory_config().memory_layout() != output_spec.memory_config().memory_layout()) {
         return {};
     }
+
+    // Page order.
     const auto& shard = input_spec.memory_config().shard_spec()->shape;
     const auto& tile = input_spec.tile();
     if (shard != output_spec.memory_config().shard_spec()->shape || shard[0] % tile.get_height() != 0 ||
@@ -111,9 +124,10 @@ DramShardPlan get_dram_shard_plan(
     if (shard_height == 0 || shard_width == 0 || total_pages == 0 || row_pages % shard_width != 0) {
         return {};
     }
-    DramShardPlan plan{.flow = DramShardFlow::StaticBurst, .shard_width = shard_width, .row_pages = row_pages};
-    if (shard_width == row_pages) {
-        // Height shards: whole rows; the last one may be short.
+    DramShardPlan plan{.shard_width = shard_width, .row_pages = row_pages};
+    const bool height_shards = shard_width == row_pages;
+    if (height_shards) {
+        // Whole rows; the last shard may be short.
         const uint32_t shard_pages = shard_height * shard_width;
         plan.shard_stride = shard_pages;
         plan.num_shards = static_cast<uint32_t>((total_pages + shard_pages - 1) / shard_pages);
@@ -127,26 +141,25 @@ DramShardPlan get_dram_shard_plan(
         return {};  // block shards
     }
 
-    // Below this there is too little work per core for the queue to balance.
-    constexpr uint64_t kMinPagesPerCore = 512;
-    // Chunks are a fixed share of a core's pages: smaller ones load the scheduler, larger ones leave a tail.
-    constexpr uint64_t kChunksPerCore = 150;
+    // Flow.
     const uint64_t pages_per_core = total_pages / num_cores;
-    // Compute kernels that take their tile counts from the queue (dram_shard::for_each_chunk).
     const std::string_view kernel = utils::get_compute_kernel_path(op_chain[0].type(), input_spec.data_type());
-    const bool queue_kernel =
+    const bool queue_kernel =  // compute kernels that use dram_shard::for_each_chunk
         kernel == "eltwise_sfpu.cpp" || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
     const bool bf16 = input_spec.data_type() == DataType::BFLOAT16 && output_spec.data_type() == DataType::BFLOAT16;
-    if (pages_per_core < kMinPagesPerCore) {
-        if (std::any_of(op_chain.begin(), op_chain.end(), is_heavy_op)) {
-            // With one page in flight the rotation only helps height shards, whose plain page order stays in
-            // one bank; the plain order of width shards already crosses banks every shard row.
-            plan.flow = shard_width == row_pages ? DramShardFlow::StaticOnePage : DramShardFlow::None;
-        }
-    } else if (queue_kernel && bf16 && num_cores <= dram_shard::kMaxWorkers) {
+    if (pages_per_core < kMinPagesPerCoreForQueue && std::any_of(op_chain.begin(), op_chain.end(), is_heavy_op)) {
+        // One page in flight: rotation only helps height shards; width shards already cross banks every row.
+        plan.flow = height_shards ? DramShardFlow::StaticOnePage : DramShardFlow::None;
+        return plan;
+    }
+    plan.read_burst = kReadBurst;
+    plan.write_burst = kWriteBurst;
+    if (pages_per_core >= kMinPagesPerCoreForQueue && queue_kernel && bf16 && num_cores <= dram_shard::kMaxWorkers) {
         plan.flow = DramShardFlow::WorkQueue;
         plan.chunk_pages =
             static_cast<uint32_t>(std::clamp<uint64_t>((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, 8, 256));
+    } else {
+        plan.flow = DramShardFlow::StaticBurst;
     }
     return plan;
 }

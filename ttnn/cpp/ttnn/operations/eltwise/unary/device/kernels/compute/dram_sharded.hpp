@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute side of the DRAM-sharded work queue (../dataflow/dram_sharded.hpp).
+// DRAM-sharded unary, compute side: work queue (WORK_QUEUE).
 
 #pragma once
 
@@ -13,19 +13,19 @@
 
 namespace dram_shard {
 
-// Runs process(n) over this core's tiles: once with num_tiles, or with WORK_QUEUE once per chunk the reader
-// announces, until a count of 0. read_tile_value gives unpack, math and pack the same count.
+// Calls process(num_tiles), or with WORK_QUEUE process(count) for each chunk the reader announces, until count 0.
+// read_tile_value gives unpack, math and pack the same count.
 template <typename Process>
 ALWI void for_each_chunk(uint32_t num_tiles, Process process) {
 #if WORK_QUEUE
     while (true) {
         cb_wait_front(kCbComputeCount, 1);
-        const uint32_t n = read_tile_value(kCbComputeCount, 0, 0);
+        const uint32_t count = read_tile_value(kCbComputeCount, 0, 0);
         cb_pop_front(kCbComputeCount, 1);
-        if (n == 0) {
-            return;
+        if (count == 0) {
+            break;
         }
-        process(n);
+        process(count);
     }
 #else
     process(num_tiles);

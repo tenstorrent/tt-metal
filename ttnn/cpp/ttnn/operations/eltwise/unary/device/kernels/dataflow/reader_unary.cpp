@@ -59,15 +59,15 @@ void kernel_main() {
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_src).fifo_page_size;
 #if SHARD_ROTATE
-    // DRAM-sharded: rotated page order (dram_sharded.hpp), READ_BURST pages per barrier. Bursts ramp
-    // 1, 1, 2, 4, ... so the first tile reaches compute without waiting for a full burst.
-    constexpr uint32_t kReadBurst = READ_BURST;
-    auto order = dram_shard::RotatedPages::from_args(3);
+    // DRAM-sharded: rotated page order, READ_BURST pages per barrier. Bursts ramp 1, 1, 2, 4, ... so compute starts
+    // without waiting for a full burst.
+    auto order = dram_shard::RotatedPages::from_args();
     dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_src).fifo_num_pages};
     uint32_t burst = 1, next_burst = 1;
-    auto read_pages = [&](uint32_t count) {
+    auto read_chunk = [&](uint32_t first, uint32_t count) {
+        order.seek(first);
         for (uint32_t done = 0; done < count;) {
-            const uint32_t n = groups.next(count - done < burst ? count - done : burst);
+            const uint32_t n = groups.next(std::min(count - done, burst));
             dfb_src.reserve_back(n);
             for (uint32_t k = 0; k < n; ++k) {
                 noc.async_read(src, dfb_src, page_bytes, {.page_id = order.next()}, {.offset_bytes = k * page_bytes});
@@ -76,36 +76,13 @@ void kernel_main() {
             dfb_src.push_back(n);
             done += n;
             burst = next_burst;
-            next_burst = 2 * next_burst < kReadBurst ? 2 * next_burst : kReadBurst;
+            next_burst = std::min(2 * next_burst, uint32_t{READ_BURST});
         }
     };
 #if WORK_QUEUE
-    // Start on chunk worker_id; ask for the next chunk while reading the current one.
-    const uint32_t worker_id = get_arg_val<uint32_t>(1);
-    const uint32_t total_pages = get_arg_val<uint32_t>(2);
-    const uint32_t chunk_pages = get_arg_val<uint32_t>(8);
-    const uint32_t total_chunks = dram_shard::num_chunks(total_pages, chunk_pages);
-    dram_shard::Client client{
-        .request_addr =
-            dram_shard::noc_addr(get_arg_val<uint32_t>(9), get_write_ptr(dram_shard::kCbRequestTable) + 4 * worker_id)};
-    for (uint32_t chunk = worker_id; chunk != dram_shard::kDone; chunk = client.receive()) {
-        const bool asked = client.try_request();  // until the scheduler starts, ask after reading instead
-        if (chunk < total_chunks) {
-            const uint32_t first = chunk * chunk_pages;
-            const uint32_t count = total_pages - first < chunk_pages ? total_pages - first : chunk_pages;
-            dram_shard::announce(first, count);
-            order.seek(first);
-            read_pages(count);
-        }
-        if (!asked) {
-            client.request();
-        }
-    }
-    noc_async_write_barrier();  // flush the inline request writes
-    dram_shard::announce(0, 0);
+    dram_shard::QueueReader::from_args().for_each_chunk(read_chunk);
 #else
-    order.seek(start_id);
-    read_pages(num_pages);
+    read_chunk(start_id, num_pages);
 #endif
 #else
     for (uint32_t i = start_id; i < end_id; ++i) {
