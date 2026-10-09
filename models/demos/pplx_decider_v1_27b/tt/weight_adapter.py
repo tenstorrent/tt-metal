@@ -183,6 +183,8 @@ def build_embedding_weight(weight: torch.Tensor, policy: PrecisionPolicy) -> Laz
     return LazyWeight(source=weight, dtype=getattr(ttnn, policy.embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def build_readout_weight(weight: torch.Tensor, policy: PrecisionPolicy) -> LazyWeight:
-    """readout.safetensors ``weight`` [255, 5120] -> [5120, 255]."""
+def build_readout_weight(weight: torch.Tensor, policy: PrecisionPolicy, *, pad_to: int | None = None) -> LazyWeight:
+    """readout.safetensors ``weight`` [255, 5120] -> [5120, 255], or zero-padded to [5120, pad_to] columns."""
+    if pad_to is not None:
+        weight = torch.nn.functional.pad(weight, (0, 0, 0, pad_to - weight.shape[0]))
     return _linear(weight, policy.weight_dtype("readout"))
