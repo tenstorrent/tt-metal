@@ -4,13 +4,20 @@
 
 #pragma once
 
-#include <tt-metalium/device_types.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <memory>
 #include <span>
-#include <utility>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <vector>
 
 namespace tt::umd {
 class IoWindow;

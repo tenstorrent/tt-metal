@@ -4,17 +4,19 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <tuple>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <ostream>
 
 namespace tt::tt_metal {
+
+using DeviceAddr = std::uint64_t;
 
 class IDevice;
 class GlobalSemaphoreImpl;

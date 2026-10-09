@@ -5,6 +5,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/fmt.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/tensor/types.hpp"
 
