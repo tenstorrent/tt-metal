@@ -21,6 +21,8 @@ own permutations.
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
 import ttnn
@@ -113,37 +115,64 @@ def unpack_global_value_reference(packed_value: torch.Tensor) -> torch.Tensor:
     return packed_value.index_select(-1, inverse.to(packed_value.device))
 
 
-_DEVICE_INDEX_CACHE: dict[tuple, ttnn.Tensor] = {}
+_DEVICE_CONSTANT_CACHE: dict[tuple, ttnn.Tensor] = {}
 
 
-def _device_column_index(tensor: ttnn.Tensor, columns: torch.Tensor) -> ttnn.Tensor:
-    """Materialize and reuse a gather index matching the tensor except in width."""
-    shape = tuple(int(x) for x in tensor.shape)
-    cols = tuple(int(x) for x in columns.tolist())
-    key = (id(tensor.device()), shape[:-1], cols)
-    cached = _DEVICE_INDEX_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    index = torch.tensor(cols, dtype=torch.uint32).reshape(1, 1, 1, -1)
-    index = index.expand(*shape[:-1], len(cols)).contiguous()
-    cached = ttnn.from_torch(
-        index,
-        device=tensor.device(),
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(tensor.device()),
-    )
-    _DEVICE_INDEX_CACHE[key] = cached
+def _device_constant(device, key: tuple, build) -> ttnn.Tensor:
+    """Upload build() once per device and key, replicated across the mesh."""
+    key = (id(device), *key)
+    cached = _DEVICE_CONSTANT_CACHE.get(key)
+    if cached is None:
+        host, dtype = build()
+        cached = ttnn.from_torch(
+            host,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        _DEVICE_CONSTANT_CACHE[key] = cached
     return cached
 
 
+@functools.cache
+def _exact_matmul_config(arch):
+    return ttnn.init_device_compute_kernel_config(
+        arch, math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+
 def _gather_columns(tensor: ttnn.Tensor, columns: torch.Tensor, memory_config) -> ttnn.Tensor:
+    """tensor[..., columns]. A bfloat16 tensor is multiplied by a one-hot matrix instead of gathered: with HiFi4 and
+    fp32 accumulation that is exact, and it is far cheaper (61.8 us -> a few us for 128 columns at chunk 8192)."""
+    cols = tuple(int(x) for x in columns.tolist())
+    width = int(tensor.shape[-1])
+    if tensor.dtype == ttnn.bfloat16:
+
+        def one_hot():
+            matrix = torch.zeros(1, 1, width, len(cols), dtype=torch.bfloat16)
+            matrix[0, 0, columns, torch.arange(len(cols))] = 1
+            return matrix, ttnn.bfloat16
+
+        selector = _device_constant(tensor.device(), ("one_hot", width, cols), one_hot)
+        return ttnn.matmul(
+            tensor,
+            selector,
+            memory_config=memory_config,
+            compute_kernel_config=_exact_matmul_config(tensor.device().arch()),
+        )
+
+    shape = tuple(int(x) for x in tensor.shape)
+
+    def index():
+        host = torch.tensor(cols, dtype=torch.uint32).reshape(1, 1, 1, -1).expand(*shape[:-1], len(cols)).contiguous()
+        return host, ttnn.uint32
+
     return ttnn.gather(
         tensor,
         dim=-1,
-        index=_device_column_index(tensor, columns),
+        index=_device_constant(tensor.device(), ("index", shape[:-1], cols), index),
         memory_config=memory_config,
     )
 
