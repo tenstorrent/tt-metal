@@ -856,6 +856,8 @@ class OptimizedDecoder(LightweightModule):
         if qk == "0":
             return self._sdpa_pc
         qc, kc = (min(int(v), seq) for v in qk.split(","))
+        if seq % qc or seq % kc or qc % TILE or kc % TILE:
+            return self._sdpa_pc  # unpadded lengths (e.g. a 235-token direct prefill) keep q32/k128
         cache = self.__dict__.setdefault("_prefill_sdpa_pcs", {})
         if (qc, kc) not in cache:
             grid = self.device.compute_with_storage_grid_size()

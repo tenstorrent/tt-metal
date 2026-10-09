@@ -57,6 +57,7 @@ from .optimized_decoder import (
     _width_sharded_l1,
     weight_cache_key,
 )
+from . import moe_decode1
 from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
@@ -274,6 +275,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._route_rank_batch = _parse_binary_env("TT_LAGUNA_ROUTE_RANK_BATCH", False)
         self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
         self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", True)  # fused decode head split/concat
+        self._moe1_kernels = _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)  # batch-1 decode MoE generic_ops
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
@@ -355,6 +357,8 @@ class MultichipDecoder(OptimizedDecoder):
         if seq is not None and (pc.q_chunk_size > seq or pc.k_chunk_size > seq):
             # short buckets (32, 64 tokens): chunks no longer than the sequence
             qc, kc = min(pc.q_chunk_size, seq), min(pc.k_chunk_size, seq)
+            if qc % TILE or kc % TILE:
+                return {}
             cache = self.__dict__.setdefault("_prefill_chunked_sdpa_pcs", {})
             if (qc, kc) not in cache:
                 grid = self.device.compute_with_storage_grid_size()
@@ -1118,63 +1122,70 @@ class MultichipDecoder(OptimizedDecoder):
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
         down_sparsity = ttnn.to_layout(full_union, ttnn.ROW_MAJOR_LAYOUT) if tile_sparse else sparsity
         moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
-        otile = ttnn.Tile([TILE, TILE])
-        gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
-        # The down projection below reads only the experts active in its sparsity, which (without tile-sparse
-        # grouping) is this matmul's sparsity, whose rows are all computed. So the inactive experts' output need not
-        # be zero-filled first (~13.6 us per decode MoE layer for [64, 32, 2048]).
-        gu_kw = {} if tile_sparse or not getattr(self, "_gu_skip_zero_init", False) else {"zero_init_output": False}
-        gu = ttnn.sparse_matmul(
-            a,
-            self.w["exp_gate_up"],
-            sparsity=sparsity,
-            program_config=gu_pc,
-            compute_kernel_config=self._ck_moe,
-            memory_config=moe_mem,
-            output_tile=otile,
-            **gu_kw,
-        )
-        if tile_sparse:
-            # sparse_matmul orders output batches as A-batches then B-batches:
-            # [group, local_expert, row, channel]. Restore expert-major token
-            # order after the grouped gate/up projection. The down projection
-            # then follows the established full-T union path.
-            gu = ttnn.reshape(gu, (groups, LE, group, 2 * I))
-            gu = ttnn.permute(gu, (1, 0, 2, 3))
-            gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+        if T == 1 and getattr(self, "_moe1_kernels", False):
+            # one token: generic_op kernels that touch only the routed local experts (gate|up + SwiGLU + routing
+            # weight, then down + expert sum) instead of sparse matmuls and eltwise ops over all 64 experts
+            x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+            glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
+            routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
         else:
-            gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
-        gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
-        up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
-        if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
-            wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
-        else:
-            wv = ttnn.reshape(dense_local, (1, T, LE))
-            wv = ttnn.permute(wv, (0, 2, 1))
-            wv = ttnn.reshape(wv, (1, LE, T, 1))
-        # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
-        # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
-        # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
-        glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-        glu = ttnn.mul(glu, wv)
-        dn_pc = _sparse_pc(H, T, I)
-        weighted = ttnn.sparse_matmul(
-            glu,
-            self.w["exp_down"],
-            sparsity=down_sparsity,
-            is_input_a_sparse=True,
-            program_config=dn_pc,
-            compute_kernel_config=self._ck_moe,
-            memory_config=moe_mem,
-            output_tile=otile,
-        )  # [1, LE, T, H], already routing-weighted
-        if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
-            (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-                weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
+            otile = ttnn.Tile([TILE, TILE])
+            gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
+            # The down projection below reads only the experts active in its sparsity, which (without tile-sparse
+            # grouping) is this matmul's sparsity, whose rows are all computed. So the inactive experts' output need not
+            # be zero-filled first (~13.6 us per decode MoE layer for [64, 32, 2048]).
+            gu_kw = {} if tile_sparse or not getattr(self, "_gu_skip_zero_init", False) else {"zero_init_output": False}
+            gu = ttnn.sparse_matmul(
+                a,
+                self.w["exp_gate_up"],
+                sparsity=sparsity,
+                program_config=gu_pc,
+                compute_kernel_config=self._ck_moe,
+                memory_config=moe_mem,
+                output_tile=otile,
+                **gu_kw,
             )
-            routed_local = ttnn.reshape(reduced, (1, 1, T, H))
-        else:
-            routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
+            if tile_sparse:
+                # sparse_matmul orders output batches as A-batches then B-batches:
+                # [group, local_expert, row, channel]. Restore expert-major token
+                # order after the grouped gate/up projection. The down projection
+                # then follows the established full-T union path.
+                gu = ttnn.reshape(gu, (groups, LE, group, 2 * I))
+                gu = ttnn.permute(gu, (1, 0, 2, 3))
+                gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+            else:
+                gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+            gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
+            up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
+            if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
+                wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
+            else:
+                wv = ttnn.reshape(dense_local, (1, T, LE))
+                wv = ttnn.permute(wv, (0, 2, 1))
+                wv = ttnn.reshape(wv, (1, LE, T, 1))
+            # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
+            # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
+            # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
+            glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+            glu = ttnn.mul(glu, wv)
+            dn_pc = _sparse_pc(H, T, I)
+            weighted = ttnn.sparse_matmul(
+                glu,
+                self.w["exp_down"],
+                sparsity=down_sparsity,
+                is_input_a_sparse=True,
+                program_config=dn_pc,
+                compute_kernel_config=self._ck_moe,
+                memory_config=moe_mem,
+                output_tile=otile,
+            )  # [1, LE, T, H], already routing-weighted
+            if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
+                (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
+                )
+                routed_local = ttnn.reshape(reduced, (1, 1, T, H))
+            else:
+                routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
         keep = sharded and self._glu_out_sharded and T <= TILE
         shared_partial = self._glu_mlp(
             ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep
