@@ -51,3 +51,13 @@ jit-main, jit-pr, out_* (keep small logs/stills copied here).
   Old log moved to t301/run_pr_job211.log. Broker idle, fabric-check 212 passed. df / 52%, /var/tmp/fasth3 143G.
 - PR arm resubmitted as job 213 (-t 570, warm-ish cache). Next: check out_pr/run.log T301_EXIT; if 0 run cmp301.py per gen (see Attempt 3).
   If it times out again in compile, that is not mechanical: consider splitting into a compile-only warmup job.
+
+## Attempt 4 (2026-10-09 ~02:35 UTC): DONE
+- Job 210 (main 80b1cd689d0) and job 213 (PR df9e5ecaac6) both T301_EXIT=0 on blx01. PR build setup.rc=0 (C++ build check passed).
+- Warm gen #2 tables verbatim: results/tables_gen2.txt. Total 6.41 -> 6.24 s (-0.17). Stage1 -0.03, Stage2 -0.15,
+  Audio decode 0.00, VAE 0.00, Encoder +0.02. Expected ~-0.4 across S1+S2+Audio: only -0.18 measured (one sample).
+- cmp.txt (decoded mp4 frames main vs PR, different x264 settings): PCC 0.9983-0.9988, PSNR 38.0-39.6 dB, still
+  (results/still_main_vs_pr_gen2_f72.png) visually identical. Videos: results/{main,pr}_gen2.mp4 (untracked).
+- Cleanup: out_*, prev1, tmp deleted on blx01. KEPT for a possible repeat run: t301/pr build (6.8G), jit-main, jit-pr
+  (6G each). Delete with: git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t301/pr; rm -rf jit-*.
+- No run301/pytest process left on blx01 after the jobs.

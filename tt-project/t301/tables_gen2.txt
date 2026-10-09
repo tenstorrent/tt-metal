@@ -1,0 +1,50 @@
+=== main
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       ltx_av_fast_1920x1088_2.mp4                                 │
+│ Prompt       A red paper boat drifts across a still pond at dusk, ripp...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.45 s │
+│ Stage 1 denoise                                                 │ 2.11 s │
+│ Latent upsample                                                 │ 0.12 s │
+│ Stage 2 denoise                                                 │ 2.55 s │
+│ VAE decode                                                      │ 0.81 s │
+│ Audio decode                                                    │ 0.37 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 6.41 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
+=== pr
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       ltx_av_fast_1920x1088_2.mp4                                 │
+│ Prompt       A red paper boat drifts across a still pond at dusk, ripp...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.47 s │
+│ Stage 1 denoise                                                 │ 2.08 s │
+│ Latent upsample                                                 │ 0.12 s │
+│ Stage 2 denoise                                                 │ 2.40 s │
+│ VAE decode                                                      │ 0.81 s │
+│ Audio decode                                                    │ 0.37 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 6.24 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
+2026-10-09 02:10:40.066 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:819 - Total (compute): 46.4s | Output: ltx_av_fast_1920x1088_0.mp4
+2026-10-09 02:10:40.185 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_0.mp4
+2026-10-09 02:10:50.803 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:819 - Total (compute): 8.9s | Output: ltx_av_fast_1920x1088_1.mp4
+2026-10-09 02:10:50.920 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_1.mp4
+2026-10-09 02:10:59.101 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:819 - Total (compute): 6.4s | Output: ltx_av_fast_1920x1088_2.mp4
+2026-10-09 02:10:59.218 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_2.mp4
+2026-10-09 02:29:49.938 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:867 - Total (compute): 46.4s | Output: ltx_av_fast_1920x1088_0.mp4
+2026-10-09 02:29:50.055 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_0.mp4
+2026-10-09 02:30:00.278 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:867 - Total (compute): 8.7s | Output: ltx_av_fast_1920x1088_1.mp4
+2026-10-09 02:30:00.405 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_1.mp4
+2026-10-09 02:30:08.129 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:867 - Total (compute): 6.2s | Output: ltx_av_fast_1920x1088_2.mp4
+2026-10-09 02:30:08.261 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:179 - Saved video to: ltx_av_fast_1920x1088_2.mp4
