@@ -169,6 +169,7 @@ OP_SELECTED_SHAPES = {
     "short_k_cross": (1, 8, 4864, 256, 128, 0),
     "d256": (1, 8, 1024, 1024, 256, 0),
     "joint": (1, 4, 1000, 1000, 128, 77),
+    "d512_one_head": (1, 1, 2048, 2048, 512, 0),
 }
 
 
@@ -567,6 +568,37 @@ def check_chunked_trace(device, variant, starts, *, q_chunk=128, k_chunk=256):
         ttnn.release_trace(device, trace)
 
 
+def check_mixed_kv(device, variant, k_dtype, v_dtype, shape=(1, 4, 2, 500, 700, 96, 128, 256)):
+    """K and V stored in different formats (Qwen-VL vision: K BF16, V BFP8): V's circular buffer takes its own format."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=33), randn(b, nkv, sk, d, seed=34), randn(b, nkv, sk, d, seed=35)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        to_device(device, q),
+        to_device(device, k, k_dtype),
+        to_device(device, v, v_dtype),
+        is_causal=False,
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, stored(k, k_dtype), stored(v, v_dtype))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_joint_empty(device, variant):
+    """Zero-width joint tensors (FLUX.2 single-stream blocks): the dense result and an empty joint output."""
+    q, k, v = randn(1, 2, 600, 128, seed=36), randn(1, 2, 600, 128, seed=37), randn(1, 2, 600, 128, seed=38)
+    empty = [to_device(device, torch.zeros(1, 2, 0, 128)) for _ in range(3)]
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        *empty,
+        joint_strategy="rear",
+        program_config=program_config(device, 128, 256),
+        precision=VARIANTS[variant][0],
+    )
+    assert list(joint_out.shape) == [1, 2, 0, 128]
+    assert l2_pct(ttnn.to_torch(out), reference(q, k, v)) < L2_PCT_BOUND[variant]
+
+
 def fp32_dest_config(device):
     """The shared HiFi4 + FP32-dest config legacy callers pass (it selected the legacy kernels)."""
     return ttnn.init_device_compute_kernel_config(
@@ -621,6 +653,40 @@ def check_routing(device, case):
         )
         routed, recipe = run(program_config=program_config(device, 128, 256), compute_kernel_config=fp32), accurate
         explicit, expected, tolerance = run(program_config=chosen(), precision=recipe), chunked.expected(256), 0.0
+    elif case == "dense_d512":
+        # Gemma-4 global layers / SD VAEs: head dim 512 fits L1 only below the chooser's fitted range (Q128+ x K256+).
+        q, k, v = randn(1, 2, 640, 512, seed=86), randn(1, 1, 640, 512, seed=87), randn(1, 1, 640, 512, seed=88)
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=True, program_config=config, **extra
+        )
+        routed, recipe = run(program_config(device, 256, 512), compute_kernel_config=fp32), accurate
+        explicit, tolerance = run(chosen(), precision=recipe), 0.0
+        expected = reference(q, k, v, key_mask(640, 640, causal=True))
+    elif case == "dense_mixed_kv":
+        # Qwen-VL vision: K BF16, V BFP8.
+        q, k, v = randn(1, 2, 500, 96, seed=96), randn(1, 2, 500, 96, seed=97), randn(1, 2, 500, 96, seed=98)
+        tensors = [to_device(device, q), to_device(device, k), to_device(device, v, ttnn.bfloat8_b)]
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, program_config=config, **extra
+        )
+        routed, recipe = run(program_config(device, 256, 256), compute_kernel_config=fp32), accurate
+        explicit, tolerance = run(chosen(), precision=recipe), 0.0
+        expected = reference(q, k, stored(v, ttnn.bfloat8_b))
+    elif case == "joint_empty":
+        # FLUX.2 single-stream blocks: zero-width joint tensors run as a plain dense call; the joint output is empty.
+        q, k, v = randn(1, 2, 600, 128, seed=99), randn(1, 2, 600, 128, seed=100), randn(1, 2, 600, 128, seed=101)
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        empty = [to_device(device, torch.zeros(1, 2, 0, 128)) for _ in range(3)]
+        routed, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+            *tensors, *empty, joint_strategy="rear", program_config=program_config(device, 128, 512)
+        )
+        assert list(joint_out.shape) == [1, 2, 0, 128] and joint_out.dtype == ttnn.bfloat16
+        recipe, tolerance = standard, 0.0
+        explicit = ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, program_config=chosen(), precision=recipe
+        )
+        expected = reference(q, k, v)
     else:  # joint_bf16_dest / joint_fp32_dest
         recipe = accurate if case == "joint_fp32_dest" else standard
         q, k, v = randn(1, 2, 600, 128, seed=90), randn(1, 2, 600, 128, seed=91), randn(1, 2, 600, 128, seed=92)

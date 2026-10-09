@@ -14,6 +14,7 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     CAUSAL_SHAPES,
+    L2_PCT_BOUND,
     OP_SELECTED_SHAPES,
     SHAPES,
     VARIANTS,
@@ -27,16 +28,19 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_joint,
     check_key_range,
     check_legacy_arguments,
+    check_mixed_kv,
     check_mla,
     check_op_selected_blocking,
     check_routing,
     check_sink,
     check_windowed,
+    fp32_dest_config,
     MLA_SHAPES,
     inputs_for,
     l2_pct,
     program_config,
     randn,
+    reference,
     to_device,
 )
 
@@ -167,10 +171,54 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
         "chunked_tensor_start",
         "joint_bf16_dest",
         "joint_fp32_dest",
+        "dense_d512",
+        "dense_mixed_kv",
+        "joint_empty",
     ],
 )
 def test_sdpa_precision_routing(device, case):
     check_routing(device, case)
+
+
+# K and V in different formats: the fused reference-max path (K BFP8, V BF16) and the FP32-state path (K BF16, V BFP8).
+@pytest.mark.parametrize(
+    "variant, k_dtype, v_dtype",
+    [("standard", ttnn.bfloat8_b, ttnn.bfloat16), ("accurate", ttnn.bfloat16, ttnn.bfloat8_b)],
+    ids=["standard_kbfp8_vbf16", "accurate_kbf16_vbfp8"],
+)
+def test_sdpa_recipe_mixed_kv_dtypes(device, variant, k_dtype, v_dtype):
+    check_mixed_kv(device, variant, k_dtype, v_dtype)
+
+
+# Routed calls with L1 outputs back to back in one trace capture: the program hash sees the L1 the layout may use,
+# not the raw free L1, so the second call (with the first output still live) reuses the warm-up's program.
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_sdpa_recipe_trace_l1_outputs(device):
+    device.enable_program_cache()
+    q, k, v = randn(2, 4, 384, 64, seed=36), randn(2, 4, 384, 64, seed=37), randn(2, 4, 384, 64, seed=38)
+    tensors = [to_device(device, x) for x in (q, k, v)]
+    run = lambda: ttnn.transformer.scaled_dot_product_attention(
+        *tensors,
+        is_causal=False,
+        program_config=program_config(device, 128, 256),
+        compute_kernel_config=fp32_dest_config(device),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    warm = run()
+    expected = ttnn.to_torch(warm)
+    warm.deallocate()
+    entries = device.num_program_cache_entries()
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs = [run() for _ in range(3)]
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+        for output in outputs:
+            assert torch.equal(ttnn.to_torch(output), expected)
+    finally:
+        ttnn.release_trace(device, trace)
+    assert device.num_program_cache_entries() == entries
+    assert l2_pct(expected, reference(q, k, v)) < L2_PCT_BOUND["accurate"]
 
 
 @pytest.mark.parametrize(
