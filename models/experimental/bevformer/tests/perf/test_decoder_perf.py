@@ -20,6 +20,7 @@ import ttnn
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import (
     BEV_SHAPES,
+    assert_channels_close,
     build_reference_decoder,
     build_reg_branches,
     random_decoder_inputs,
@@ -32,11 +33,14 @@ from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionT
 
 
 def _check(torch_outputs, tt_outputs):
-    for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
-        tt_output = ttnn.to_torch(tt_output).float()
-        assert torch.isfinite(tt_output).all(), "non-finite values in the decoder output"
+    """``torch_outputs`` and ``tt_outputs`` are (layer outputs, refined points, box codes)."""
+    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
+    for tensor in tt_outputs:
+        assert torch.isfinite(tensor).all(), "non-finite values in the decoder outputs"
+    for torch_output, tt_output in zip(torch_outputs[:2], tt_outputs[:2], strict=True):
         for expected_layer, actual_layer in zip(torch_output, tt_output, strict=True):
             assert_pcc(expected_layer, actual_layer, 0.99)
+    assert_channels_close(torch_outputs[2], tt_outputs[2])
 
 
 @torch.no_grad()
@@ -51,7 +55,10 @@ def test_decoder_perf(device, reset_seeds):
     torch_model = build_reference_decoder()
     reg_branches = build_reg_branches()
     inputs = random_decoder_inputs(bev_shape, 1, seed=0)
-    torch_outputs = torch_model(**inputs, spatial_shapes=torch.tensor([bev_shape]), reg_branches=reg_branches)
+    outputs, points = torch_model(**inputs, spatial_shapes=torch.tensor([bev_shape]), reg_branches=reg_branches)
+    # The TT decoder also returns each layer's reg branch on its output.
+    box_codes = torch.stack([branch(out.permute(1, 0, 2)) for branch, out in zip(reg_branches, outputs)])
+    torch_outputs = (outputs, points, box_codes)
 
     tt_model = TtDetectionTransformerDecoder(create_decoder_parameters(torch_model, device), device, bev_shape)
     tt_reg_branches = create_reg_branch_parameters(reg_branches, device)
