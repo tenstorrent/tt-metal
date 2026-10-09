@@ -30,7 +30,13 @@ struct ResourceDeclaration
     std::uint16_t linger_time      = 1; // cycles the declaration lingers after issue
 
     /** @brief Encode the operation. */
-    constexpr std::uint32_t get_operation() const;
+    constexpr std::uint32_t operation() const;
+
+    /** @brief Encode the operation using the original accessor spelling. */
+    constexpr std::uint32_t get_operation() const
+    {
+        return operation();
+    }
 };
 
 // ---------------- TDMA engine ----------------
@@ -49,6 +55,14 @@ constexpr FlushScope operator|(const FlushScope lhs, const FlushScope rhs)
 {
     return static_cast<FlushScope>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
 }
+
+/** @brief Encode FLUSHDMA without draining the TDMA engine. */
+struct FlushTdma
+{
+    FlushScope scope = FlushScope::All;
+
+    constexpr std::uint32_t operation() const;
+};
 
 /**
  * @brief Encode a blocking drain of the TDMA engine or a subset of it (FLUSHDMA).
@@ -88,6 +102,15 @@ inline __attribute__((always_inline)) void reset_tdma()
     TTI_INSN(reset_tdma_operation());
 }
 
+/** @brief Encode RSTDMA without resetting the TDMA engine. */
+struct ResetTdma
+{
+    constexpr std::uint32_t operation() const
+    {
+        return reset_tdma_operation();
+    }
+};
+
 /**
  * @brief Encode the reserved TBUFCMD instruction.
  *
@@ -105,6 +128,15 @@ inline __attribute__((always_inline)) void tbuf_command()
     TTI_INSN(tbuf_command_operation());
 }
 
+/** @brief Encode TBUFCMD without issuing the reserved instruction. */
+struct TbufCommand
+{
+    constexpr std::uint32_t operation() const
+    {
+        return tbuf_command_operation();
+    }
+};
+
 // ---------------- Implementation ----------------
 
 namespace detail
@@ -113,6 +145,21 @@ namespace detail
 constexpr bool is_valid(const ResourceDeclaration declaration)
 {
     return declaration.instruction_class < 16u && declaration.resources < (1u << 9) && declaration.linger_time < (1u << 11);
+}
+
+constexpr bool is_valid(const FlushTdma flush)
+{
+    return static_cast<std::uint8_t>(flush.scope) < 16u;
+}
+
+constexpr bool is_valid(const ResetTdma)
+{
+    return true;
+}
+
+constexpr bool is_valid(const TbufCommand)
+{
+    return true;
 }
 
 constexpr void reject_invalid_constant(const bool valid)
@@ -130,6 +177,11 @@ inline __attribute__((always_inline)) void assert_valid(const ResourceDeclaratio
     LLK_ASSERT(declaration.resources < (1u << 9), "RESOURCEDECL resource mask is 9 bits");
     LLK_ASSERT(declaration.linger_time < (1u << 11), "RESOURCEDECL linger time is 11 bits");
 }
+
+inline __attribute__((always_inline)) void assert_valid(const FlushTdma flush)
+{
+    LLK_ASSERT(is_valid(flush), "TDMA flush selection is 4 bits");
+}
 #endif
 
 } // namespace detail
@@ -140,7 +192,7 @@ constexpr bool is_valid(const ResourceDeclaration declaration)
     return detail::is_valid(declaration);
 }
 
-inline constexpr __attribute__((always_inline)) std::uint32_t ResourceDeclaration::get_operation() const
+inline constexpr __attribute__((always_inline)) std::uint32_t ResourceDeclaration::operation() const
 {
     detail::reject_invalid_constant(detail::is_valid(*this));
 #ifdef ENABLE_LLK_ASSERT
@@ -152,20 +204,32 @@ inline constexpr __attribute__((always_inline)) std::uint32_t ResourceDeclaratio
     return TT_OP_RESOURCEDECL(linger_time, resources, instruction_class);
 }
 
+inline constexpr __attribute__((always_inline)) std::uint32_t FlushTdma::operation() const
+{
+    detail::reject_invalid_constant(detail::is_valid(*this));
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
+    {
+        detail::assert_valid(*this);
+    }
+#endif
+    return TT_OP_FLUSHDMA(static_cast<std::uint8_t>(scope));
+}
+
 /** @brief Issue a compile-time descriptor as one immediate instruction. */
 template <auto Operation>
 inline __attribute__((always_inline)) void run()
 {
     static_assert(detail::is_valid(Operation), "invalid descriptor");
-    constexpr std::uint32_t operation = Operation.get_operation();
+    constexpr std::uint32_t operation = Operation.operation();
     TTI_INSN(operation);
 }
 
 /** @brief Issue a runtime-selected descriptor. */
 template <typename Operation>
-inline __attribute__((always_inline)) void run(const Operation operation)
+inline __attribute__((always_inline)) void run(const Operation descriptor)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    ckernel::instrn_buffer[0] = descriptor.operation();
 }
 
 } // namespace hal::misc
