@@ -40,6 +40,8 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     // on cache miss and hit.
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor.dtype() == DataType::FLOAT32;
+    fp32_dest_acc_en = fp32_dest_acc_en || preserve_fp32_cache;
 
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -149,6 +151,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor.dtype() == DataType::FLOAT32;
+    fp32_dest_acc_en = fp32_dest_acc_en || preserve_fp32_cache;
 
     tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     std::uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
@@ -353,20 +357,28 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // ---- Compute (one KernelSpec per core group; per-group head count stays a CTA) ----
     const auto make_compute = [&](const KernelSpecName& id, std::uint32_t num_batched_heads_per_core_group) {
         auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-        // Metal 2.0 requires an explicit unpack_modes entry for a consumed Float32 DFB when
-        // enable_32_bit_dest (== fp32_dest_acc_en) is set, where legacy silently defaulted. The legacy
-        // op set no unpack_to_dest_mode at all (all Default), so mirror that as UnpackToSrc. The compute
-        // kernel consumes cache (c_0), input (c_1) and interm1 (c_25); interm carries Float32 exactly
-        // when fp32_dest_acc_en, cache/input only if their tensor dtype is FLOAT32.
+        compute_hw.enable_32_bit_dest = fp32_dest_acc_en;
+        // A FLOAT32 cache must unpack directly to the 32-bit destination; unpacking through
+        // SrcA/B truncates untouched values before the tile is written back. Preserve the
+        // legacy UnpackToSrc behavior for other cache dtypes when fp32_dest_acc_en is requested.
+        // The compute kernel consumes cache (c_0), input (c_1), and interm1 (c_25).
         if (fp32_dest_acc_en) {
             auto& um = compute_hw.unpack_modes;
             if (cache_data_format == tt::DataFormat::Float32) {
-                um.emplace(CACHE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+                um.emplace(
+                    CACHE_DFB,
+                    preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest
+                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
             }
             if (input_data_format == tt::DataFormat::Float32) {
-                um.emplace(INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+                um.emplace(
+                    INPUT_DFB,
+                    preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest
+                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
             }
-            um.emplace(INTERM1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            um.emplace(
+                INTERM1_DFB,
+                preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
         }
         return KernelSpec{
             .unique_id = id,
