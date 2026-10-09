@@ -726,8 +726,45 @@ def shrink_conv_case(case):
     return case
 
 
+def sdpa_seq_div():
+    return int(os.environ.get("SDXL_QSR_SDPA_SEQ_DIV", "1"))
+
+
+def shrink_sdpa_case(case):
+    """Apply SDXL_QSR_SDPA_SEQ_DIV / SDXL_QSR_SDPA_HEADS to an attention case: the query sequence (and the key/value
+    sequence for self-attention) is divided by n and the head count is capped; head_dim, chunk sizes and fidelity stay. For simulator bring-up only:
+    the functional simulator is roughly serial over flash-attention chunk pairs."""
+    n = sdpa_seq_div()
+    heads = int(os.environ.get("SDXL_QSR_SDPA_HEADS", "0"))
+    if case["op"] != "scaled_dot_product_attention" or (n == 1 and heads == 0):
+        return case
+    inputs = {k: dict(v) for k, v in case["inputs"].items()}
+    sq = inputs["query"]["shape"][2]
+    self_attn = inputs["key"]["shape"][2] == sq
+    new_sq = max(32, sq // n)
+    for name in ("query", "key", "value"):
+        shape = list(inputs[name]["shape"])
+        if name == "query" or self_attn:
+            shape[2] = new_sq
+        if heads:
+            shape[1] = min(shape[1], heads)
+        inputs[name]["shape"] = shape
+    params = dict(case["params"])
+    pc = params.get("program_config")
+    if pc:
+        pc = dict(pc)
+        pc["q_chunk_size"] = min(pc["q_chunk_size"], new_sq)
+        if self_attn:
+            pc["k_chunk_size"] = min(pc["k_chunk_size"], new_sq)
+        params["program_config"] = pc
+    outputs = [dict(o) for o in case["outputs"]]
+    outputs[0]["shape"] = list(inputs["query"]["shape"])
+    return dict(case, inputs=inputs, params=params, outputs=outputs)
+
+
 def run_case(device, case):
     case = shrink_conv_case(case)
+    case = shrink_sdpa_case(case)
     op = case["op"]
     params = case["params"]
     gen = torch.Generator().manual_seed(case.get("seed", 0))

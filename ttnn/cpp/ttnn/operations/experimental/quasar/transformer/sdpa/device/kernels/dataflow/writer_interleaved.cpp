@@ -18,6 +18,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dfb_registry.hpp"
 #include "windowed_mask_gen.hpp"
 
 void kernel_main() {
@@ -102,12 +103,20 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
+    // Kernel-scope DFB originals (static storage, see dfb_registry.hpp): helpers get non-draining copies
+    // through sdpa_dfb::view(); the only drains are sdpa_dfb::finish_all() at the end of this kernel.
+    DataflowBuffer& dfb_identity_scale = sdpa_dfb::original(dfb_identity_scale_in);
+    DataflowBuffer& dfb_col = sdpa_dfb::original(dfb_col_identity);
+    sdpa_dfb::original(dfb_out);
+#ifdef WRITER_PRODUCES_MASK
+    sdpa_dfb::original(dfb_mask_in);
+#endif
+
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-    DataflowBuffer dfb_col(dfb_col_identity);
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_identity_scale);
     generate_bcast_col_scalar(dfb_col, identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
@@ -158,7 +167,7 @@ void kernel_main() {
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
-            DataflowBuffer dfb_chunk_start(dfb_chunk_start_idx);
+            DataflowBuffer dfb_chunk_start = sdpa_dfb::view(dfb_chunk_start_idx);
             dfb_chunk_start.wait_front(1);
             auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_chunk_start.get_read_ptr());
             uint32_t chunk_start_idx = chunk_start_ptr[0];
@@ -258,4 +267,5 @@ void kernel_main() {
             }
         }
     }  // close phase
+    sdpa_dfb::finish_all();
 }

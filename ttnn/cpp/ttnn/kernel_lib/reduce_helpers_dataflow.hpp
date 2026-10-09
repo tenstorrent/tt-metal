@@ -60,6 +60,18 @@ FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
+ * @brief Same as prepare_reduce_scaler, writing through a caller-owned DataflowBuffer object.
+ *
+ * Use this when the consumer keeps the scaler entry for the rest of the program: on Quasar a DataflowBuffer
+ * object drains (waits for its entries to be consumed) when it is destroyed, so the id-only overload, which
+ * builds a temporary object, would block until the consumer pops the entry. @p dfb_id must be the id @p dfb
+ * was constructed from (it is still needed for the compile-time format / tile-shape deduction).
+ */
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_reduce_scaler(
+    DataflowBuffer& dfb, float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+
+/**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
  *
  * Computes the appropriate scaler value based on pool type, reduce dimension,
@@ -83,6 +95,14 @@ FORCE_INLINE void prepare_reduce_scaler(
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+
+/**
+ * @brief Same as calculate_and_prepare_reduce_scaler, writing through a caller-owned DataflowBuffer object
+ *        (see the DataflowBuffer& overload of prepare_reduce_scaler for when this matters on Quasar).
+ */
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(
+    DataflowBuffer& dfb, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 }  // namespace dataflow_kernel_lib
 

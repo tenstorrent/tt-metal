@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <cmath>
+#include <set>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -1451,7 +1452,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .dfb_spec_name = WINDOWED_K_RANGE,
             .accessor_name = "windowed_k_range",
             .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_reader"});
+        reader_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_reader"});
         reader_defines.insert({"USE_WINDOWED_NARROWING", "1"});
         reader_rta_names.push_back("cu_window_seqlens_eles");
         reader_rta_names.push_back("windowed_q_tok_offset");
@@ -1750,6 +1752,34 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         }
     }
 
+    // Per-core global-Q slice (same formula as the runtime-arg loop below). Cores whose slice is empty are left
+    // OUT of the work unit: the writer unconditionally produces the identity / column-scalar tiles and compute
+    // only consumes them while it has Q chunks, so on Quasar a core with global_q_count == 0 never balances
+    // its DFB credits and both the writer's finish() and the TRISC drain spin forever (seen with 20 Q chunks
+    // on a 32-core grid). Only cores with work run the kernels.
+    auto global_q_slice = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
+        uint32_t start = i * global_q_base_chunks_per_core +
+                         std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
+        uint32_t count =
+            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
+        if (start >= total_q_chunks) {
+            start = total_q_chunks;
+            count = 0;
+        } else if (start + count > total_q_chunks) {
+            count = total_q_chunks - start;
+        }
+        return {start, count};
+    };
+    std::set<CoreRange> cores_with_work_set;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        if (global_q_slice(i).second > 0) {
+            const CoreCoord c{i % grid_size.x, i / grid_size.x};
+            cores_with_work_set.insert(CoreRange(c, c));
+        }
+    }
+    const CoreRangeSet cores_with_work(cores_with_work_set);
+    TT_FATAL(cores_with_work.num_cores() > 0, "SDPA: no core has any Q chunk to process");
+
     ProgramSpec spec{
         .name = "sdpa_quasar",
         .kernels = {reader, writer, compute},
@@ -1757,7 +1787,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         .semaphores = sems,
         .scratchpads = scratchpads,
         .tensor_parameters = tensor_params,
-        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = core_grid}},
+        .work_units = {WorkUnitSpec{
+            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = cores_with_work}},
     };
 
     // ---- ProgramRunArgs ----
@@ -1773,15 +1804,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         NodeCoord node = {i % grid_size.x, i / grid_size.x};
 
         // Global Q scheduling per-core range: contiguous slice of the flat (B, NQH, q_num_chunks) space.
-        uint32_t global_q_start = i * global_q_base_chunks_per_core +
-                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
-        uint32_t global_q_count =
-            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
-        if (global_q_start >= total_q_chunks) {
-            global_q_start = total_q_chunks;
-            global_q_count = 0;
-        } else if (global_q_start + global_q_count > total_q_chunks) {
-            global_q_count = total_q_chunks - global_q_start;
+        const auto [global_q_start, global_q_count] = global_q_slice(i);
+        if (global_q_count == 0) {
+            continue;  // not in the work unit (see cores_with_work above)
         }
 
         AddRuntimeArgsForNode(

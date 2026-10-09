@@ -21,6 +21,7 @@
 // can be produced independently of the reader.
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dfb_registry.hpp"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
 #include <tt-metalium/constants.hpp>
@@ -41,7 +42,7 @@ inline void fill_diag_subtile_zeros(
     uint32_t col_end_idx) {
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
-    DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb = sdpa_dfb::view(dfb_id);
     uint32_t write_addr = dfb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
     for (uint32_t r = row_start_idx; r < row_end_idx; ++r) {
@@ -123,7 +124,7 @@ inline void generate_windowed_mask_for_q_chunk(
         k_num_chunks,
         tt::constants::TILE_HEIGHT);
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    DataflowBuffer dfb_mask(dfb_mask_in);
+    DataflowBuffer dfb_mask = sdpa_dfb::view(dfb_mask_in);
     uint32_t local_window_idx = start_window_idx;
     for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);

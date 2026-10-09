@@ -45,6 +45,13 @@ Grid handling in the op tests (`SDXL_QSR_GRID`):
   input grid. This checks the op works for the model's shapes on Quasar.
 * `captured`: exactly the traced configs (needs an 8x8 grid).
 
+Shrink knobs for simulator bring-up (the functional simulator is roughly serial over the work, so a
+full-size case can take many minutes): `SDXL_QSR_CONV_SPATIAL_DIV=n` divides the conv spatial size,
+`SDXL_QSR_SDPA_SEQ_DIV=n` divides the attention query sequence (and the key/value sequence for
+self-attention; chunk sizes are clamped), `SDXL_QSR_SDPA_HEADS=n` caps the number of heads (one Q chunk
+on one core with `SEQ_DIV=8 HEADS=1`). The shrunk shapes are only for bring-up; the recorded results below
+are full size unless stated.
+
 ## Porting an op
 
 1. `pytest tests/ops/test_<op>.py` lists the exact shapes / layouts / memory configs / kwargs
@@ -73,6 +80,8 @@ python models/demos/stable_diffusion_xl_base/quasar/tests/ops/generate_cases.py 
 | `test_slice.py -k 00_`, `test_reshape.py -k 00_` | pass |
 | `test_silu.py -k 00_` | `NotImplementedError` from `qsr` (op missing), as designed |
 | `test_linear.py -k 00_1x320` | with bfp8_b weights: `TT_FATAL ... Bfp8_b ... not supported on architecture quasar`; with bf16 weights: `TT_FATAL: DataMovementKernel is not supported on Quasar` (this `[1,320] x [320,1280] + bias + silu` shape with no program config lands in a legacy matmul factory) |
+| `test_move.py` (2), `test_unsqueeze.py` (4), `test_upsample.py` (2) | pass |
+| `test_scaled_dot_product_attention.py`, all 4 cases at full size on the 8x4 grid | pass (sim time: case 00 q=k=4096 386 s, 01 13 s, 02 52 s, 03 9 s) |
 
 ## Quasar-native sync notes (learned while porting)
 
@@ -86,6 +95,18 @@ python models/demos/stable_diffusion_xl_base/quasar/tests/ops/generate_cases.py 
   implicit sync for the same reason). Stage through a plain DFB and write the tensor with the accessor.
 * Reads whose result the same kernel must parse (the reshape page map) keep explicit credits; opt a single
   DFB out with `config_2xx->disable_dfb_implicit_sync_for = {dfb}` instead of disabling it for the kernel.
+* **`~DataflowBuffer()` drains on Quasar** (since upstream 18819a6cb52): only the object a DFB was first
+  constructed from drains, copies never do. Every SDPA helper used to build its own `DataflowBuffer` per
+  call, so each call ended in a drain waiting for the other thread (reader draining K before pushing Q,
+  writer draining the identity-scale tile compute keeps all kernel) and all four SDXL SDPA cases hung
+  (watcher: DMs `AAW`, unpack `UPMW` in the first QK matmul). Fix in
+  `transformer/sdpa/device/kernels/dfb_registry.hpp`: kernels create one original per DFB with
+  `sdpa_dfb::original(id)`, helpers take `sdpa_dfb::view(id)` (a non-draining copy), and the kernel ends with
+  the pops of the entries it kept fronted plus `sdpa_dfb::finish_all()`. The originals live in static
+  storage because ~20 of them on the stack overflowed the 4 KB TRISC local memory into the firmware TLS.
+  `kernel_lib/reduce_helpers_dataflow` gained `DataflowBuffer&` overloads for the same reason.
+* `TT_METAL_WATCHER` and `TT_METAL_DPRINT_CORES` cannot be on together on Quasar (pack TRISC firmware
+  too big); DPRINT needs `TT_METAL_INSPECTOR` enabled (the print server resolves the kernel ELF through it).
 
 ## Known gaps / notes
 

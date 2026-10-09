@@ -137,6 +137,13 @@ FORCE_INLINE void fill_each_face_row0_partial(
 
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
+    DataflowBuffer dfb(dfb_id);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(dfb, scaler_f, valid_reduce_dim_elements_in_tile);
+}
+
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_reduce_scaler(
+    DataflowBuffer& dfb, float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
@@ -157,8 +164,6 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     ASSERT(valid_reduce_dim_elements_in_tile > 0);
 
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
-
-    DataflowBuffer dfb(dfb_id);
 
     dfb.reserve_back(1);
     uint32_t write_addr = dfb.get_write_ptr();
@@ -213,6 +218,18 @@ template <
     ReduceDim reduce_dim,
     uint32_t reduce_factor>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile) {
+    DataflowBuffer dfb(dfb_id);
+    calculate_and_prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, reduce_factor>(
+        dfb, valid_reduce_dim_elements_in_tile);
+}
+
+template <
+    uint32_t dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t reduce_factor>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(
+    DataflowBuffer& dfb, uint32_t valid_reduce_dim_elements_in_tile) {
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
     //
@@ -238,7 +255,7 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     // -------------------------------------------------------------------------
     // 2. Fill the DFB with the computed scaler
     // -------------------------------------------------------------------------
-    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_reduce_dim_elements_in_tile);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(dfb, scaler_f, valid_reduce_dim_elements_in_tile);
 }
 
 }  // namespace dataflow_kernel_lib

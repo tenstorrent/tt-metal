@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "compute_common.hpp"
+#include "cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dfb_registry.hpp"
 #ifndef ARCH_QUASAR
 // The streaming compute path uses LLK primitives not available on Quasar (matmul_block_no_mop,
 // exp_packthread_tile, *_custom, mm_no_mop_*), so it is neither compiled nor selected there — Quasar
@@ -133,9 +134,27 @@ void kernel_main() {
 #endif
 
     uint32_t chunked_q_chunk_offset = 0;
-    DataflowBuffer dfb_chunk_start_idx_obj(dfb_chunk_start_idx);
-    DataflowBuffer dfb_identity_scale_in_obj(dfb_identity_scale_in);
-    DataflowBuffer dfb_mask_in_obj(dfb_mask_in);
+    // Kernel-scope DFB originals (static storage, see dfb_registry.hpp): every helper takes a non-draining copy
+    // through sdpa_dfb::view(); the only drains are sdpa_dfb::finish_all() at the end of this kernel.
+    DataflowBuffer& dfb_chunk_start_idx_obj = sdpa_dfb::original(dfb_chunk_start_idx);
+    DataflowBuffer& dfb_identity_scale_in_obj = sdpa_dfb::original(dfb_identity_scale_in);
+    DataflowBuffer& dfb_mask_in_obj = sdpa_dfb::original(dfb_mask_in);
+    DataflowBuffer& dfb_q_in_obj = sdpa_dfb::original(dfb_q_in);
+    DataflowBuffer& dfb_k_in_obj = sdpa_dfb::original(dfb_k_in);
+    DataflowBuffer& dfb_v_in_obj = sdpa_dfb::original(dfb_v_in);
+    DataflowBuffer& dfb_col_identity_obj = sdpa_dfb::original(dfb_col_identity);
+    DataflowBuffer& dfb_out_obj = sdpa_dfb::original(dfb_out);
+    DataflowBuffer& dfb_qk_im_obj = sdpa_dfb::original(dfb_qk_im);
+    DataflowBuffer& dfb_out_im_A_obj = sdpa_dfb::original(dfb_out_im_A);
+    DataflowBuffer& dfb_out_im_B_obj = sdpa_dfb::original(dfb_out_im_B);
+    DataflowBuffer& dfb_max_A_obj = sdpa_dfb::original(dfb_max_A);
+    DataflowBuffer& dfb_max_B_obj = sdpa_dfb::original(dfb_max_B);
+    DataflowBuffer& dfb_sum_A_obj = sdpa_dfb::original(dfb_sum_A);
+    DataflowBuffer& dfb_sum_B_obj = sdpa_dfb::original(dfb_sum_B);
+    DataflowBuffer& dfb_exp_max_diff_obj = sdpa_dfb::original(dfb_exp_max_diff);
+    DataflowBuffer& dfb_attention_sink_obj = sdpa_dfb::original(dfb_attention_sink);
+    DataflowBuffer& dfb_recip_scratch_obj = sdpa_dfb::original(dfb_recip_scratch);
+    DataflowBuffer& dfb_windowed_k_range_obj = sdpa_dfb::original(dfb_windowed_k_range);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_out);
     matmul_init(dfb_q_in, dfb_k_in);
     // Reset the Quasar pack-operand tracker so the first pack_reconfig_out re-points via pack_init
@@ -327,5 +346,19 @@ void kernel_main() {
                 lw_mask,
                 use_zigzag_balancing);
         }
+
+        // Release the entries this kernel kept fronted for its whole run (never popped on WH/BH). On Quasar
+        // the kernel-scope objects above drain at exit and need every posted entry consumed.
+        dfb_identity_scale_in_obj.wait_front(1);
+        dummy_unpack(dfb_identity_scale_in);
+        dfb_identity_scale_in_obj.pop_front(1);
+        dfb_col_identity_obj.wait_front(1);
+        dummy_unpack(dfb_col_identity);
+        dfb_col_identity_obj.pop_front(1);
+        if constexpr (use_lightweight_causal_mask) {
+            dummy_unpack(dfb_mask_in);
+            dfb_mask_in_obj.pop_front(2);
+        }
     }
+    sdpa_dfb::finish_all();
 }

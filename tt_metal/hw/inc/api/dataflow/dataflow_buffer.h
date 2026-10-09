@@ -18,7 +18,7 @@
 
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
 // TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #include "internal/prefetcher_pipe_init.h"
 #endif
 
@@ -97,7 +97,7 @@ public:
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
         if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
             experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
         }

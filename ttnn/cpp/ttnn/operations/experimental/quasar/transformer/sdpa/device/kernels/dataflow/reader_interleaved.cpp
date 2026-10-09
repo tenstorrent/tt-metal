@@ -17,6 +17,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "dataflow_common.hpp"
+#include "cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dfb_registry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
 // Fetch a KV chunk into L1 for forwarding. No DFB lifecycle — caller manages
@@ -221,7 +222,7 @@ void kernel_main() {
 #ifdef USE_WINDOWED_NARROWING
     constexpr auto dfb_id_windowed_k_range = dfb::windowed_k_range;
 #else
-    constexpr auto dfb_id_windowed_k_range = dfb::q_in;    // placeholder; narrowing path inactive
+    constexpr auto dfb_id_windowed_k_range = dfb::q_in;  // placeholder; narrowing path inactive
 #endif
 
     constexpr uint32_t q_tile_bytes = get_tile_size(dfb_q_in);
@@ -265,15 +266,19 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
-#ifdef KV_CHAIN
-    DataflowBuffer dfb_k(dfb_k_in);
-    DataflowBuffer dfb_v(dfb_v_in);
-#endif
+    // Kernel-scope DFB originals (static storage, see dfb_registry.hpp): helpers get non-draining copies
+    // through sdpa_dfb::view(); the only drains are sdpa_dfb::finish_all() at the end of this kernel.
+    [[maybe_unused]] DataflowBuffer& dfb_q = sdpa_dfb::original(dfb_q_in);
+    [[maybe_unused]] DataflowBuffer& dfb_k = sdpa_dfb::original(dfb_k_in);
+    [[maybe_unused]] DataflowBuffer& dfb_v = sdpa_dfb::original(dfb_v_in);
 #ifdef READER_PRODUCES_MASK
-    DataflowBuffer dfb_mask(dfb_mask_in);
+    DataflowBuffer& dfb_mask = sdpa_dfb::original(dfb_mask_in);
 #endif
 #ifdef USE_ATTENTION_SINK
-    DataflowBuffer dfb_attn_sink(dfb_attention_sink);
+    DataflowBuffer& dfb_attn_sink = sdpa_dfb::original(dfb_attention_sink);
+#endif
+#ifdef USE_WINDOWED_NARROWING
+    sdpa_dfb::original(dfb_id_windowed_k_range);
 #endif
 #ifdef IS_CHUNKED
     // Single-entry private scratchpad: the reader stages the page table here and indexes it via
@@ -286,7 +291,7 @@ void kernel_main() {
     // in this mode (legacy chunked passes the scalar offset through a runtime arg instead).
 #ifdef FLEXIBLE_CHUNKED
     {
-        DataflowBuffer dfb_chunk_compute(dfb_id_chunk_start_idx_compute);
+        DataflowBuffer dfb_chunk_compute = sdpa_dfb::view(dfb_id_chunk_start_idx_compute);
         dfb_chunk_compute.reserve_back(1);
         uint32_t chunk_start_write_ptr = dfb_chunk_compute.get_write_ptr();
         noc.async_read(chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
@@ -294,7 +299,7 @@ void kernel_main() {
         uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
         dfb_chunk_compute.push_back(1);
 
-        DataflowBuffer dfb_chunk_writer(dfb_id_chunk_start_idx_writer);
+        DataflowBuffer dfb_chunk_writer = sdpa_dfb::view(dfb_id_chunk_start_idx_writer);
         dfb_chunk_writer.reserve_back(1);
         uint32_t chunk_start_write_ptr_2 = dfb_chunk_writer.get_write_ptr();
         noc.async_read(chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr_2), 4, {.page_id = 0}, {});
@@ -447,7 +452,7 @@ void kernel_main() {
                     tt::constants::TILE_HEIGHT);
                 windowed_k_lo = range.k_lo;
                 windowed_k_hi = range.k_hi;
-                DataflowBuffer dfb_k_range(dfb_id_windowed_k_range);
+                DataflowBuffer dfb_k_range = sdpa_dfb::view(dfb_id_windowed_k_range);
                 dfb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_k_range.get_write_ptr());
@@ -850,4 +855,5 @@ void kernel_main() {
             }  // close k_chunk
         }  // close global_q_iter
     }  // close phase
+    sdpa_dfb::finish_all();
 }
