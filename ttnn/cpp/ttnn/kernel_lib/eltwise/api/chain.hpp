@@ -95,6 +95,10 @@
 
 namespace compute_kernel_lib {
 
+// Elements bind the caller's `::DataflowBuffer` objects; re-export the type so code that qualifies every
+// helper name (`compute_kernel_lib::DataflowBuffer`, `ckl::DataflowBuffer`) names the same class.
+using ::DataflowBuffer;
+
 // Buffer identities throughout the chain (the `cb_id` fields on InputSpec / OutputSpec,
 // `dfb`-named implementation accessors and ElemDesc fields, and the INVALID_DFB /
 // NO_PREV_DFB sentinels) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
