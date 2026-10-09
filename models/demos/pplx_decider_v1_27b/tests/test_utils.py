@@ -20,7 +20,9 @@ from models.demos.pplx_decider_v1_27b.reference import hf_reference as ref
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
 
-SEQ_LENS = [1, 31, 129, 1000, 2048, 8192]
+# Prefill buckets (bge_m3 style, person decision 2026-10-09): the app pads the prompt on the right to
+# the next bucket and reads the hidden state of the last real token. 8192 is the app max_length.
+SEQ_LENS = [128, 1024, 2048, 4096, 8192]
 GOLDEN_SEQ_LEN = 8192  # goldens are the HF stack over one real 8192-token prompt; shorter cases use its prefix
 DELTA_LAYERS = [0, 61]
 FULL_LAYERS = [3, 63]

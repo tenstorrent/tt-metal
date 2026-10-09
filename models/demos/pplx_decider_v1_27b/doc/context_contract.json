@@ -1,0 +1,63 @@
+{
+  "model": "perplexity-ai/pplx-decider-v1-27b",
+  "revision": "b01a5cbaca5391f73bd55103d4f27e8982cd5e60",
+  "stage": "1 functional layers (prefill only)",
+  "hardware": "1x Blackhole p150a, 8 DRAM banks, 31.83 GiB DRAM (measured: ttnn.get_memory_view)",
+  "hf_advertised_context": 262144,
+  "hf_advertised_context_source": "config.json text_config.max_position_embeddings",
+  "app_max_length": 8192,
+  "app_max_length_source": "snapshot source/src/autojev/model.py:180 (DecisionModel.prepare, truncation max_length=8192)",
+  "current_supported_context": 8192,
+  "limiting_reason": "app_contract",
+  "limiting_reason_detail": "Person-approved adapted contract (tt-ops runs/pplx-decider-v1-27b/notes.md): the classifier app never feeds more than 8192 tokens. This is NOT a device-DRAM limit. The plugin checker (check_context_contract.py) only accepts DRAM-limited reductions, so it reports this contract as a reduction; see notes.",
+  "app_contract_met": true,
+  "app_contract_evidence": "Every module and both decoder-layer kinds (layers 0, 61 linear_attention; 3, 63 full_attention) pass HF PCC >= 0.995 at S=8192 with real weights; min PCC over all cases 0.999897 (gated_deltanet L61 S8192). Log: artifacts/pplx_decider/logs/pytest_pcc_1b.log (124 passed, exit 0).",
+  "public_prefill_contract": {
+    "buckets": [128, 1024, 2048, 4096, 8192],
+    "rule": "The prompt is padded on the right to the next bucket; the classifier reads the hidden state of the last REAL token (index = real_length - 1).",
+    "why_right_padding_is_exact": "Both mixers are causal (causal SDPA; Gated DeltaNet conv and recurrence only look backwards), so right-pad tokens cannot change the hidden state of any real token (inferred from the layer math; end-to-end check of the last-real-token readout is a stage-6 item).",
+    "decision": "Person decision 2026-10-09 (orchestrator amendment). It replaces the functional-decoder plugin's arbitrary-logical-length requirement. The layer code itself still accepts any length 1..max_seq_len (chunks of 2048 plus a tail); only the buckets are tested and supported.",
+    "batch": 1,
+    "batch_gt_1_left_padding": "not implemented (HF zeroes left-pad rows inside Gated DeltaNet when batch > 1; the app's inference.py runs batch 1)"
+  },
+  "largest_tested_prefill_context": 8192,
+  "largest_tested_prefill_context_beyond_app": 16384,
+  "decode": "N/A: prefill-only classifier (Qwen3_5Model(..., use_cache=False).last_hidden_state[:, -1] -> readout); no KV cache across requests, no decode step.",
+  "largest_tested_decode_context": null,
+  "prefill_chunking": {
+    "physical_chunk": 2048,
+    "state_carried_on_device": "attention K/V in a request-local paged cache (pages of 32, identity page table, sized for max_seq_len); DeltaNet fp32 recurrent state [1,48,128,128] and the last 3 conv inputs",
+    "request_isolation_evidence": "tests/pcc/test_prefill_contract.py runs 8192 -> 128 -> 2048 -> 4096 on one loaded instance per kind; all PCC >= 0.99999; the repeated last request is bit-identical"
+  },
+  "beyond_app_probe": {
+    "command": "pytest models/demos/pplx_decider_v1_27b/tests/probe/test_context_probe.py -q -s",
+    "golden": "python -m models.demos.pplx_decider_v1_27b.reference.hf_reference --seq-len 16384 --layers 0 3 (exit 0, log artifacts/pplx_decider/logs/golden_stream_S16384.log)",
+    "results": [
+      {"layer": 0, "kind": "linear_attention", "seq_len": 8192, "chunks": 4, "pcc": 0.999993},
+      {"layer": 0, "kind": "linear_attention", "seq_len": 16384, "chunks": 8, "pcc": 0.999993},
+      {"layer": 3, "kind": "full_attention", "seq_len": 8192, "chunks": 4, "pcc": 0.999993},
+      {"layer": 3, "kind": "full_attention", "seq_len": 16384, "chunks": 8, "pcc": 0.999993}
+    ],
+    "log": "artifacts/pplx_decider/logs/context_probe.log, context_probe.jsonl (4 passed, exit 0)",
+    "note": "Evidence only. 16384 is not part of the supported contract; it shows the chunked per-layer path is not capped at 8192 by code or by per-layer DRAM."
+  },
+  "dram_evidence": {
+    "source": "ttnn.get_memory_view(device, DRAM) in tests/probe/test_context_probe.py; allocated = num_banks x total_bytes_allocated_per_bank",
+    "device_total_gib": 31.83,
+    "per_layer_after_setup_gib": {
+      "linear_attention_S8192": 0.464,
+      "linear_attention_S16384": 0.542,
+      "full_attention_S8192": 0.480,
+      "full_attention_S16384": 0.592
+    },
+    "per_layer_after_pass_output_held_gib": {
+      "linear_attention_S8192": 0.544,
+      "linear_attention_S16384": 0.700,
+      "full_attention_S8192": 0.559,
+      "full_attention_S16384": 0.749
+    },
+    "setup_includes": "BFP8 weights, BF16 norms, fp32 DeltaNet zero state and scan constants, the BF16 K/V cache sized for max_seq_len (full_attention), RoPE tables (full_attention) and the BF16 [1,S,5120] input",
+    "largest_free_block_per_bank_mib_after_pass": {"S8192": 3982, "S16384": 3952},
+    "full_model_projection_inferred": "64 layers at S=8192 with this per-layer policy: 48 x 0.386 + 16 x 0.402 GiB (setup minus the 80 MiB input) = 24.9 GiB, plus the 2.37 GiB BF16 embedding table = 27.2 GiB of 31.83 GiB, leaving about 4.6 GiB for activations. Transient peak inside a pass was not measured. At 262144 tokens the BF16 K/V caches alone would be 16 x 1 GiB, which does not fit with BFP8 weights. A BFP8 K/V cache with BFP4 MLP weights might fit; this is not tested."
+  }
+}

@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Chunked-prefill contract on one loaded layer instance (both kinds).
 
-Requests of decreasing / boundary-straddling lengths run back to back on the SAME instance, so
-stale K/V pages or DeltaNet state from a previous request would show up as a PCC drop:
-8192 (4 full chunks) -> 129 -> 2049 (one chunk + 1-token tail) -> 4129 (two chunks + 33 tail).
+Bucket-length requests run back to back on the SAME instance, so stale K/V pages or DeltaNet
+state from a previous request would show up as a PCC drop: 8192 (4 chunks of 2048) -> 128 (one
+short chunk that reuses pages and state slots the 8192 request filled) -> 2048 (exactly one chunk)
+-> 4096 (two chunks, cross-chunk carry).
 The last request is repeated and must be bit-identical (determinism).
 """
 
@@ -22,7 +23,7 @@ from models.demos.pplx_decider_v1_27b.tests.test_utils import (
     to_host,
 )
 
-REQUEST_LENGTHS = [8192, 129, 2049, 4129]
+REQUEST_LENGTHS = [8192, 128, 2048, 4096]
 
 
 @pytest.mark.timeout(1800)
