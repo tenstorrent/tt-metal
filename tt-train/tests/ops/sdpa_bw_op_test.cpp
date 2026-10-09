@@ -336,11 +336,10 @@ ttnn::Tensor groups_shared_matmul(
     const auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     const auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
-        throw std::invalid_argument(
-            fmt::format(
-                "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
-                query_tensor.logical_shape(),
-                kv_tensor.logical_shape()));
+        throw std::invalid_argument(fmt::format(
+            "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
+            query_tensor.logical_shape(),
+            kv_tensor.logical_shape()));
     }
     if (heads == groups) {
         // no broadcasting needed
@@ -513,6 +512,13 @@ struct SDPABackwardTestConfig {
     float fw_rtol = 3e-2F;
     std::string test_name = "SDPA Backward Test";
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    // Gated attention: forward returns Y = O * sigmoid(G) and backward also produces grad_gate.
+    bool use_gate = false;
+    // Gate logits G are drawn uniformly from [gate_min, gate_max]. Wide ranges saturate the
+    // sigmoid (s -> 0 or 1), which drives dG -> 0 and dO -> {0, dY}; gate_min == gate_max == 0
+    // gives s == 0.5 exactly.
+    float gate_min = -2.0F;
+    float gate_max = 2.0F;
 };
 
 void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
@@ -559,7 +565,12 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
+    // For AttentionMaskType::None the kernel attends everywhere, so the float and composite
+    // references must see an all-ones mask. Causal and Arbitrary both use the lower-triangular mask.
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
+    if (config.mask_type == ttml::metal::AttentionMaskType::None) {
+        attn_mask_tensor = xt::ones_like(attn_mask_tensor);
+    }
 
     const std::array<std::size_t, 4> grad_output_shape{B, qNH, S, vD};
     xt::xarray<float> grad_output_tensor =
@@ -574,17 +585,40 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto attn_mask = core::from_xtensor(attn_mask_tensor, device);
     const auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
+    // ========== Optional gate ==========
+    // Forward: Y = O * s with s = sigmoid(G), G shaped like grad_output (B, qNH, S, vD).
+    // Backward receives dY (grad_output) and Y (attn_output). The ungated references below are
+    // fed dO = dY * s, which is the gradient that reaches the attention block. The gate gradient
+    // is dG = dY * O * s * (1 - s). Use a different seed so G != dY (same shape, same seed would
+    // produce identical tensors and make the gate check vacuous).
+    const bool use_gate = config.use_gate;
+    xt::xarray<float> gate_sigmoid;
+    xt::xarray<float> effective_grad_output_tensor = grad_output_tensor;
+    std::optional<ttnn::Tensor> gate = std::nullopt;
+    auto effective_grad_output = grad_output;
+    if (use_gate) {
+        const xt::xarray<float> gate_tensor =
+            config.gate_min == config.gate_max ? xt::xarray<float>(xt::full_like(grad_output_tensor, config.gate_min))
+                                               : ttml::test_utils::make_uniform_xarray<float>(
+                                                     grad_output_shape, config.gate_min, config.gate_max, seed + 1U);
+        gate_sigmoid = 1.0F / (1.0F + xt::exp(-gate_tensor));
+        effective_grad_output_tensor = grad_output_tensor * gate_sigmoid;
+        gate = core::from_xtensor(gate_tensor, device);
+        effective_grad_output = core::from_xtensor(effective_grad_output_tensor, device);
+    }
+
     // ========== Pure Float Reference (Ground Truth) ==========
     auto float_gradients =
-        float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, attn_mask_tensor);
+        float_sdpa_backward(query_tensor, key_tensor, value_tensor, effective_grad_output_tensor, attn_mask_tensor);
     const auto& float_dQ = float_gradients[0];
     const auto& float_dK = float_gradients[1];
     const auto& float_dV = float_gradients[2];
     const auto& float_intermediates = float_gradients[3];
-    const auto& float_attn_output = float_gradients[4];
+    const auto& float_attn_output = float_gradients[4];  // ungated O
 
     // ========== Composite Implementation (uses ttnn ops) ==========
-    auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
+    auto composite_output =
+        composite_sdpa(query, key, value, effective_grad_output, attn_mask, /*return_intermediate=*/true);
     const auto composite_attn_output = /* attn_output */ composite_output[0];
     [[maybe_unused]] auto composite_lse = /* logsumexp */ composite_output[1];
     const auto dL_dQ = /* dL_dQ */ composite_output[2];
@@ -601,15 +635,16 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
         dropout_probability,
         /*return_intermediates=*/true,
-        /*gate=*/std::nullopt);
+        gate);
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
-    const auto kernel_attn_output = sdpa_fw_result[0].value();
+    const auto kernel_attn_output = sdpa_fw_result[0].value();  // Y when gated, O otherwise
     const auto kernel_intermediates = sdpa_fw_result[1].value();
 
     // ========== SDPA Backward Kernel (using forward kernel outputs) ==========
     // For Causal mask: both sdpa_bw_q and sdpa_bw_kv now support on-the-fly causal mask generation
     // For Arbitrary mask: pass the mask tensor
+    // When gated, pass the raw upstream dY and the gated forward output Y; the kernel applies the gate.
     const auto op_result = ttml::metal::sdpa_bw(
         grad_output,
         kernel_attn_output,
@@ -619,14 +654,21 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         kernel_intermediates,
         mask_type,
         mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
-        dropout_probability);
+        dropout_probability,
+        gate);
 
     // Convert forward kernel outputs for comparison
     const xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
     const xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
     const xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
 
-    const auto& [kernel_dQ, kernel_dK, kernel_dV] = op_result;
+    // The kernel forward output is gated; the float / composite references are not.
+    const xt::xarray<float> expected_float_attn_output =
+        use_gate ? xt::eval(float_attn_output * gate_sigmoid) : float_attn_output;
+    const xt::xarray<float> expected_composite_attn_output =
+        use_gate ? xt::eval(composite_attn_output_cpu * gate_sigmoid) : composite_attn_output_cpu;
+
+    const auto& [kernel_dQ, kernel_dK, kernel_dV, kernel_dGate] = op_result;
     const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(kernel_dQ);  // dL_dQ
     const xt::xarray<float> sdpa_bw_dK = core::to_xtensor(kernel_dK);  // dL_dK
     const xt::xarray<float> sdpa_bw_dV = core::to_xtensor(kernel_dV);  // dL_dV
@@ -659,10 +701,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // output don't propagate to dQ/dK/dV at the same magnitude, so the gradient checks
     // below stay on the tighter atol/rtol).
     const bool fw_attn_output_matches =
-        xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, fw_rtol, fw_atol);
+        xt::allclose(kernel_attn_output_cpu, expected_composite_attn_output, fw_rtol, fw_atol);
     // Kernel forward attn output vs FLOAT reference — the bf16-free check that tells us
     // whether the kernel is the outlier (vs composite which is also bf16).
-    const bool fw_attn_output_matches_float = xt::allclose(kernel_attn_output_cpu, float_attn_output, fw_rtol, fw_atol);
+    const bool fw_attn_output_matches_float =
+        xt::allclose(kernel_attn_output_cpu, expected_float_attn_output, fw_rtol, fw_atol);
     // Compare kernel intermediates (FP32 logsumexp) vs float reference (value at pos 0 only)
     const bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, fw_rtol, fw_atol);
 
@@ -681,6 +724,21 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     EXPECT_TRUE(kernel_dQ_matches_float) << "Kernel dQ vs Float mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dK_matches_float) << "Kernel dK vs Float mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dV_matches_float) << "Kernel dV vs Float mismatch in " << config.test_name;
+
+    // ========== Gate gradient ==========
+    if (use_gate) {
+        ASSERT_TRUE(kernel_dGate.has_value()) << "sdpa_bw must return grad_gate when a gate is passed";
+        const xt::xarray<float> sdpa_bw_dG = core::to_xtensor(kernel_dGate.value());
+        // dG = dY * O * s * (1 - s), with O the ungated float reference output.
+        const xt::xarray<float> float_dG =
+            grad_output_tensor * float_attn_output * gate_sigmoid * (1.0F - gate_sigmoid);
+        ASSERT_EQ(sdpa_bw_dG.shape(), float_dG.shape()) << "kernel_dG shape != float_dG shape";
+        EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dG))) << "kernel_dG contains NaN or Inf values";
+        EXPECT_TRUE(xt::allclose(sdpa_bw_dG, float_dG, rtol, atol))
+            << "Kernel dG vs Float mismatch in " << config.test_name;
+    } else {
+        EXPECT_FALSE(kernel_dGate.has_value()) << "sdpa_bw must not return grad_gate without a gate";
+    }
 
     // Note: Composite implementation (ttnn ops based) may have slightly larger numerical errors
     // for larger batch/sequence sizes due to accumulated precision loss in intermediate ops.
@@ -964,6 +1022,109 @@ TEST_F(SDPABackwardTest, DISABLED_DiffVDim_MultiBatch) {
     run_sdpa_backward_test(config);
 }
 
+// ========== Gated attention ==========
+// Forward: Y = (P @ V) * sigmoid(G). Backward receives dY and Y, gates dO = dY * sigmoid(G)
+// internally, hands the gated dO to the KV kernel, and additionally returns dG.
+//
+// Three things in the gate path can break, and the table below covers each of them once:
+//   * the Q kernel's gate helper and the dP matmul over vWt tiles per row: Dh_v 16 / 64 / 128
+//     give vWt 1 / 2 / 4, with Dh_v != Dh_qk in two rows so gate rows are sized by V, not Q;
+//   * row indexing of gate / grad_gate / gated dO: batch, head, GQA accumulation of several
+//     query heads' gated dO into one K/V head, and (nightly) balanced light/heavy row pairs;
+//   * the runtime-arg layout with (Arbitrary) and without (Causal / None) a DRAM mask.
+// Every row checks dQ / dK / dV against the ungated references fed dO = dY * sigmoid(G), and dG
+// against dY * O * s * (1 - s). The saturated-gate row reuses the first row's shape, so it hits
+// the program cache and only pays for the kernel run.
+
+class SDPABackwardGateTest : public ::testing::TestWithParam<SDPABackwardTestConfig> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(SDPABackwardGateTest, MatchesReference) {
+    run_sdpa_backward_test(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    GateShapes,
+    SDPABackwardGateTest,
+    ::testing::Values(
+        // Dh_v = 16 -> vWt = 1, Dh_v < Dh_qk, causal, standard (non-balanced) path.
+        SDPABackwardTestConfig{
+            .batch_size = 1U,
+            .sequence_length = 32U,
+            .query_dim = 64U,
+            .key_value_dim = 64U,
+            .value_dim = 32U,  // 2 heads * 16
+            .num_query_heads = 2U,
+            .num_kv_heads = 2U,
+            .test_name = "SmallV_Causal",
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .use_gate = true},
+        // Same shape as above (program-cache hit) with |G| up to 10: s -> 0 closes the gate (dO -> 0),
+        // s -> 1 opens it (dO -> dY), and dG -> 0 at both ends. Catches sign errors and NaNs in the
+        // (1 - s) path.
+        SDPABackwardTestConfig{
+            .batch_size = 1U,
+            .sequence_length = 32U,
+            .query_dim = 64U,
+            .key_value_dim = 64U,
+            .value_dim = 32U,  // 2 heads * 16
+            .num_query_heads = 2U,
+            .num_kv_heads = 2U,
+            .test_name = "SmallV_Causal_SaturatedGate",
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .use_gate = true,
+            .gate_min = -10.0F,
+            .gate_max = 10.0F},
+        // Dh_v = 64 -> vWt = 2. Three batches, a DRAM mask and GQA: gate / grad_gate / gated dO rows are
+        // indexed by global row across batches, the gate runtime args follow the mask args, and the KV
+        // kernel accumulates the gated dO of two query heads into each K/V head.
+        SDPABackwardTestConfig{
+            .batch_size = 3U,
+            .sequence_length = 64U,
+            .query_dim = 64U,
+            .key_value_dim = 64U,
+            .num_query_heads = 4U,
+            .num_kv_heads = 2U,
+            .test_name = "Arbitrary_GQA_3B",
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+            .use_gate = true},
+        // Dh_v = 128 -> vWt = 4 with Dh_qk = 32: the gate helper loops over four tiles per row and the dP
+        // matmul accumulates four gated dO tiles. No mask, so the gate helper is the only extra work
+        // between u_scaler and the K/V loop.
+        SDPABackwardTestConfig{
+            .batch_size = 1U,
+            .sequence_length = 64U,
+            .query_dim = 32U,
+            .key_value_dim = 32U,
+            .value_dim = 256U,  // 2 heads * 128
+            .num_query_heads = 2U,
+            .num_kv_heads = 2U,
+            .test_name = "LargeV_NoMask",
+            .mask_type = ttml::metal::AttentionMaskType::None,
+            .use_gate = true},
+        // Balanced-parallelism path combined with GQA: heavy and light rows of a pair belong to the same
+        // query head, and their gated dO feeds a K/V head shared with three other query heads.
+        SDPABackwardTestConfig{
+            .batch_size = 4U,
+            .sequence_length = 256U,
+            .query_dim = 64U,
+            .key_value_dim = 64U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 2U,
+            .test_name = "NIGHTLY_Balanced_GQA_Causal",
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .use_gate = true}),
+    [](const ::testing::TestParamInfo<SDPABackwardTestConfig>& info) { return info.param.test_name; });
+
 // ========== Negative Shape-Mismatch Tests ==========
 
 TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
@@ -982,14 +1143,7 @@ TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
     auto value = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(v_shape, -1.0F, 1.0F, seed), device);
 
     auto fw_result = metal::sdpa_fw(
-        query,
-        key,
-        value,
-        metal::AttentionMaskType::Causal,
-        std::nullopt,
-        0.0F,
-        /*return_intermediates=*/true,
-        /*gate=*/std::nullopt);
+        query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
     auto attn_output = fw_result[0].value();
     auto intermediates = fw_result[1].value();
 
@@ -1061,6 +1215,180 @@ TEST_F(SDPABackwardTest, Validation_RejectsFP32Inputs) {
         << "sdpa_bw should reject FP32 attn_output (input CBs are sized for BFLOAT16 tiles)";
 }
 
+TEST_F(SDPABackwardTest, Validation_RejectsMalformedGate) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    // Gate must have grad_output's shape (B, H, S, vE); here vE is doubled.
+    const std::array<std::size_t, 4> wrong_shape{1U, 1U, 32U, 64U};
+    const auto wrong_shape_gate =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(wrong_shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        std::nullopt,
+        0.0F,
+        wrong_shape_gate))
+        << "sdpa_bw should reject a gate whose shape differs from grad_output";
+
+    // Gate must be BFLOAT16 (gate CB pages are sized for BFLOAT16 tiles).
+    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
+    const auto fp32_gate = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        std::nullopt,
+        0.0F,
+        fp32_gate))
+        << "sdpa_bw should reject an FP32 gate";
+}
+
+TEST_F(SDPABackwardTest, Validation_RejectsRowMajorGate) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    // Gate must be TILE layout: the reader streams it tile by tile into the gate CB.
+    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
+    const auto row_major_gate = core::from_xtensor(
+        ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device, ttnn::Layout::ROW_MAJOR);
+    EXPECT_ANY_THROW(metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        std::nullopt,
+        0.0F,
+        row_major_gate))
+        << "sdpa_bw should reject a ROW_MAJOR gate";
+}
+
+TEST_F(SDPABackwardTest, Validation_AcceptsValidGateAndReturnsGradGate) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    // Positive control for the rejection tests above: a well-formed gate must be accepted and
+    // produce a grad_gate with grad_output's shape. Values are not checked here.
+    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
+    const auto gate = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+    const auto [dQ, dK, dV, dGate] = metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        std::nullopt,
+        0.0F,
+        gate);
+    ASSERT_TRUE(dGate.has_value()) << "sdpa_bw must return grad_gate when a gate is passed";
+    EXPECT_EQ(dGate->logical_shape(), in.grad_output.logical_shape());
+    EXPECT_EQ(dGate->dtype(), in.grad_output.dtype());
+}
+
+TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
+    // On a program-cache hit, override_runtime_arguments patches three gate-related addresses in the Q kernel:
+    // the gate input, the grad_gate output and the gated-dO buffer handed to the KV kernel. Run the gated
+    // backward twice at identical shapes with two different gates alive at the same time, so the second gate
+    // cannot land at the first gate's address. Every output of the second run is checked against references
+    // built from the second gate, so a stale address for any of the three buffers shows up as a mismatch.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    constexpr std::size_t B = 1U, H = 2U, S = 64U, D = 64U;
+    constexpr auto mask_type = metal::AttentionMaskType::Causal;
+    const std::array<std::size_t, 4> shape{B, H, S, D};
+    auto& rng = autograd::ctx().get_generator();
+    const uint32_t seed = rng();
+
+    auto q = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto k = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U), device);
+    auto v = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U), device);
+    auto dY = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 3U), device);
+    const xt::xarray<float> dY_host = core::to_xtensor(dY);
+
+    // The second gate is the first shifted by a constant, so both sigmoid(g) and sigmoid(g) * (1 - sigmoid(g))
+    // differ almost everywhere. (Negating the gate would not do: s(1 - s) is symmetric in g, so grad_gate would
+    // be identical for both gates.) Read both back so the host references use the bf16 values the device sees.
+    auto gate_a =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -4.0F, 4.0F, seed + 4U), device);
+    const xt::xarray<float> gate_a_host = core::to_xtensor(gate_a);
+    auto gate_b = core::from_xtensor(xt::eval(gate_a_host + 1.5F), device);
+    const xt::xarray<float> gate_b_host = core::to_xtensor(gate_b);
+    ASSERT_NE(gate_a.buffer()->address(), gate_b.buffer()->address())
+        << "Both gates must be alive at distinct device addresses for this test to mean anything";
+    const xt::xarray<float> s_b = 1.0F / (1.0F + xt::exp(-gate_b_host));
+
+    // Ungated forward gives O and the logsumexp; gated forwards give Y_a and Y_b for the two backward runs.
+    auto fw = metal::sdpa_fw(q, k, v, mask_type, std::nullopt, 0.0F, true);
+    const auto O = fw[0].value();
+    const auto lse = fw[1].value();
+    const xt::xarray<float> O_host = core::to_xtensor(O);
+    const auto Y_a = metal::sdpa_fw(q, k, v, mask_type, std::nullopt, 0.0F, true, gate_a)[0].value();
+    const auto Y_b = metal::sdpa_fw(q, k, v, mask_type, std::nullopt, 0.0F, true, gate_b)[0].value();
+
+    // Reference for the second run: the ungated backward fed dO = dY * sigmoid(gate_b). This also exercises
+    // the ungated Q and KV programs, so the cache counts below only see the gated Q program.
+    auto dO_b = core::from_xtensor(xt::eval(dY_host * s_b), device);
+    const auto [dQ_ref, dK_ref, dV_ref, dG_none] = metal::sdpa_bw(dO_b, O, q, k, v, lse, mask_type);
+    ASSERT_FALSE(dG_none.has_value());
+    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref);
+    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref);
+    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref);
+    const xt::xarray<float> dG_ref_host = dY_host * O_host * s_b * (1.0F - s_b);
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto [dQ_a, dK_a, dV_a, dG_a] = metal::sdpa_bw(dY, Y_a, q, k, v, lse, mask_type, std::nullopt, 0.0F, gate_a);
+    const auto entries_after_first = device->num_program_cache_entries();
+    // Guard against a vacuous test: the first gated run must actually populate the cache.
+    ASSERT_GT(entries_after_first, entries_before) << "program cache not populated by the first gated run";
+
+    const auto [dQ_b, dK_b, dV_b, dG_b] = metal::sdpa_bw(dY, Y_b, q, k, v, lse, mask_type, std::nullopt, 0.0F, gate_b);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << "second gated run at identical shapes compiled a new program instead of hitting the cache";
+    ASSERT_TRUE(dG_a.has_value());
+    ASSERT_TRUE(dG_b.has_value());
+
+    const xt::xarray<float> dQ_b_host = core::to_xtensor(dQ_b);
+    const xt::xarray<float> dK_b_host = core::to_xtensor(dK_b);
+    const xt::xarray<float> dV_b_host = core::to_xtensor(dV_b);
+    const xt::xarray<float> dG_b_host = core::to_xtensor(dG_b.value());
+
+    // The device applies sigmoid on the SFPU and the reference on the host, so allow a few bf16 ULP.
+    constexpr float atol = 1e-2F, rtol = 2e-2F;
+    EXPECT_TRUE(xt::allclose(dQ_b_host, dQ_ref_host, rtol, atol)) << "Cache-hit dQ does not match the second gate";
+    EXPECT_TRUE(xt::allclose(dK_b_host, dK_ref_host, rtol, atol))
+        << "Cache-hit dK does not match the second gate (stale gated-dO handoff buffer?)";
+    EXPECT_TRUE(xt::allclose(dV_b_host, dV_ref_host, rtol, atol))
+        << "Cache-hit dV does not match the second gate (stale gated-dO handoff buffer?)";
+    EXPECT_TRUE(xt::allclose(dG_b_host, dG_ref_host, 3e-2F, 3e-2F))
+        << "Cache-hit grad_gate does not match the second gate (stale gate or grad_gate address?)";
+
+    // And the second run must not have reproduced the first run's outputs.
+    EXPECT_FALSE(xt::allclose(dQ_b_host, core::to_xtensor(dQ_a), rtol, atol))
+        << "Cache-hit run reproduced the first gate's dQ: stale gate address";
+    EXPECT_FALSE(xt::allclose(dG_b_host, core::to_xtensor(dG_a.value()), rtol, atol))
+        << "Cache-hit run reproduced the first gate's grad_gate: stale gate address";
+}
+
 TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {
     using namespace ttml;
     const auto in = make_minimal_sdpa_bw_inputs();
@@ -1085,13 +1413,7 @@ TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {
     const auto bf16_intermediates =
         core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(interm_shape, -1.0F, 1.0F, 42U), device);
     EXPECT_ANY_THROW(metal::sdpa_bw(
-        in.grad_output,
-        in.attn_output,
-        in.query,
-        in.key,
-        in.value,
-        bf16_intermediates,
-        metal::AttentionMaskType::None))
+        in.grad_output, in.attn_output, in.query, in.key, in.value, bf16_intermediates, metal::AttentionMaskType::None))
         << "sdpa_bw should reject non-FP32 intermediates";
 }
 
@@ -1127,7 +1449,12 @@ TEST_F(SDPABackwardTest, Validation_RejectsPaddedQK) {
         core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(unaligned_shape, -1.0F, 1.0F, 43U), device);
 
     EXPECT_ANY_THROW(metal::sdpa_bw(
-        in.grad_output, in.attn_output, padded_query, padded_key, in.value, in.intermediates,
+        in.grad_output,
+        in.attn_output,
+        padded_query,
+        padded_key,
+        in.value,
+        in.intermediates,
         metal::AttentionMaskType::None))
         << "sdpa_bw should reject Q/K with non-tile-aligned head_dim";
 }
@@ -1204,15 +1531,14 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
         metal::AttentionMaskType::Causal,
         std::nullopt,
         0.0F,
-        /*return_intermediates=*/true,
-        /*gate=*/std::nullopt);
+        /*return_intermediates=*/true);
     const auto full_output = full_fw_result[0].value();
     const auto full_intermediates = full_fw_result[1].value();
 
     const auto full_output_cpu = core::to_xtensor(full_output);
     const auto full_lse_cpu = core::to_xtensor(full_intermediates);
 
-    auto [full_dQ, full_dK, full_dV] = metal::sdpa_bw(
+    auto [full_dQ, full_dK, full_dV, full_dGate] = metal::sdpa_bw(
         grad_output_tt,
         full_output,
         query_tt,
@@ -1276,14 +1602,7 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
             auto mask_type = (kv_pos == d) ? metal::AttentionMaskType::Causal : metal::AttentionMaskType::None;
 
             auto chunk_result = metal::sdpa_fw(
-                Q_d_tt,
-                K_chunk_tt,
-                V_chunk_tt,
-                mask_type,
-                std::nullopt,
-                0.0F,
-                /*return_intermediates=*/true,
-                /*gate=*/std::nullopt);
+                Q_d_tt, K_chunk_tt, V_chunk_tt, mask_type, std::nullopt, 0.0F, /*return_intermediates=*/true);
 
             auto chunk_output_cpu = core::to_xtensor(chunk_result[0].value());
             auto chunk_inter_cpu = core::to_xtensor(chunk_result[1].value());
@@ -1370,18 +1689,11 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
             // Recompute forward for intermediates (same as ring_attention_sdpa backward does)
             auto mask_type = (kv_pos == d) ? metal::AttentionMaskType::Causal : metal::AttentionMaskType::None;
             auto recomputed = metal::sdpa_fw(
-                Q_d_tt,
-                K_chunk_tt,
-                V_chunk_tt,
-                mask_type,
-                std::nullopt,
-                0.0F,
-                /*return_intermediates=*/true,
-                /*gate=*/std::nullopt);
+                Q_d_tt, K_chunk_tt, V_chunk_tt, mask_type, std::nullopt, 0.0F, /*return_intermediates=*/true);
             auto step_intermediates = recomputed[1].value();
             auto step_recomp_output = recomputed[0].value();
 
-            auto [chunk_dQ, chunk_dK, chunk_dV] = metal::sdpa_bw(
+            auto [chunk_dQ, chunk_dK, chunk_dV, chunk_dGate] = metal::sdpa_bw(
                 scaled_grad_tt,
                 step_recomp_output,
                 Q_d_tt,

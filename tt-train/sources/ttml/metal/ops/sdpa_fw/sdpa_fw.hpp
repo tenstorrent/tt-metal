@@ -17,6 +17,8 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const std::optional<ttnn::Tensor>& mask = std::nullopt,  // only used when mask_type == Arbitrary
     const float dropout_probability = 0.0F,
     const bool return_intermediates = false,
+    // Gate tensor for gated attention mechanism (optional). It contains pre-sigmoid values.
+    // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, Hq, S, Dv)
     const std::optional<ttnn::Tensor>& gate = std::nullopt);
 
 }  // namespace ttml::metal
