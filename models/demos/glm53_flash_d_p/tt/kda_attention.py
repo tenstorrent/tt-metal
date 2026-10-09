@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.glm53_flash_d_p.tt import mm_configs
 
 SP_AXIS, TP_AXIS = 0, 1
 
@@ -166,6 +167,14 @@ class _GlmKDA(ttKDA):
     def __init__(self, *args, decay_scale32, decay_bias32, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
         self.decay_scale32, self.decay_bias32 = decay_scale32, decay_bias32
+        # explicit projection schedules (tt/mm_configs.py; tests/test_matmul_tune.py at 2560 rows per chip): input
+        # projection minimal_matmul M4 K8 N4 (1.511 -> 1.260 ms, 91% of HiFi4), o_proj 2D multicast (0.504 -> 0.450 ms)
+        if mm_configs.ENABLED:
+            k_o, n_o = tuple(self.weights.output_projection.shape)[-2:]
+            self.input_projection_minimal_matmul_config = mm_configs.minimal_config(self.device, 4, 8, 4, 1, 4)
+            self.output_projection_program_config = mm_configs.mm2d(
+                self.device, self.active_seq_len_local, k_o, n_o, ttnn.float32, ttnn.bfloat16, ttnn.float32
+            )
         fid = kda_fidelity()
         if fid != ttnn.MathFidelity.HiFi4:  # ttKDA hard-codes HiFi4 for its projections and KDA ops
             arch = self.device.arch()
