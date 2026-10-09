@@ -120,7 +120,6 @@ struct KernelSpec {
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
-        // Can add more options here as needed
     };
     CompilerOptions compiler_options = {};
 
@@ -183,11 +182,6 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
-    // Additional program parameter binding types (coming soon):
-    //  - GlobalSemaphore bindings
-    //  - GlobalDataflowBuffer bindings
-    //  - MeshBuffer bindings
-
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
     //////////////////////////////////////////////////////////////////////////////
@@ -197,7 +191,6 @@ struct KernelSpec {
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
-    // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
