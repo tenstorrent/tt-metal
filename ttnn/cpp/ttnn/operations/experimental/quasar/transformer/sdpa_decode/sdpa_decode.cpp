@@ -134,7 +134,7 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
             program_config->compute_with_storage_grid_size.y,
             program_config->q_chunk_size,
             program_config->k_chunk_size,
-            program_config->max_cores_per_head_batch);
+            *program_config->max_cores_per_head_batch);
     }
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels

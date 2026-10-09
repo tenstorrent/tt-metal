@@ -612,7 +612,7 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     uint32_t num_q_heads = q_shape_unpadded[2];
     if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
-        const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
+        const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch.value_or(16);
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         const uint32_t q_heads_parallel_factor = num_groups / B;
