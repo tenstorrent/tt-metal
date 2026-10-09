@@ -14,11 +14,13 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    decay_projection_program_config,
+    l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
@@ -52,9 +54,14 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 @dataclass(frozen=True)
 class _ProjectedInputs:
     qkv: ttnn.Tensor
+    # The fused projection again; the decay's low-rank activations are its columns from decay_rank_offset.
     decay_rank: ttnn.Tensor
+    decay_rank_offset: int
     output_gate: ttnn.Tensor
+    output_gate_offset: int
+    # The fused projection again; beta's pre-sigmoid logits are its columns from beta_offset.
     beta: ttnn.Tensor
+    beta_offset: int
 
 
 @dataclass(frozen=True)
@@ -82,6 +89,10 @@ class ttKDA:
     local rows. Construct another instance for a different physical length;
     weights may be shared. Runtime ``actual_start`` changes chronology within
     the constructed graph without changing grouping or reading device values.
+
+    On geometries whose chunk terms and decay gate fit their L1 budgets (see config.py), those tensors live in L1
+    while the recurrence runs. Open the device with an L1_SMALL region, as the model's prefill tests do, so the CCL
+    semaphores allocated on the first call do not fragment L1 between warm-up and trace capture.
     """
 
     def __init__(
@@ -113,7 +124,9 @@ class ttKDA:
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
         self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
-        self._activate_decay = self._softplus_decay if config.gate_lower_bound is None else self._bounded_decay
+        # A bounded gate's projection already applies sigmoid(scale * (x @ W + bias)); chunk preparation applies the
+        # lower bound, so only the softplus gate needs a separate activation.
+        self._bounded_gate = config.gate_lower_bound is not None
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
         )
@@ -167,6 +180,19 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
+        decay_width = self.config.num_heads * self.config.head_k_dim
+        self.decay_program_config = decay_projection_program_config(
+            mesh_device.compute_with_storage_grid_size(),
+            self.active_seq_len_local,
+            self.config.head_k_dim,
+            decay_width,
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+        )
+        # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
+        self.decay_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
+        )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -184,6 +210,8 @@ class ttKDA:
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
             value_dim=self.config.head_v_dim,
+            # The bounded gate's lower-bound scale is applied by chunk preparation.
+            gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -323,44 +351,34 @@ class ttKDA:
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
-            decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
-            output_gate=_slice_width(
-                projected,
-                auxiliary_start + config.head_k_dim,
-                auxiliary_start + config.head_k_dim + config.v_dim,
-            ),
-            beta=_slice_width(
-                projected,
-                auxiliary_start + config.head_k_dim + config.v_dim,
-                auxiliary_start + config.head_k_dim + config.v_dim + config.num_heads,
-            ),
+            # The decay projection reads its low-rank columns in place.
+            decay_rank=projected,
+            decay_rank_offset=auxiliary_start,
+            # The gated norm reads its gate columns straight from the fused projection, which therefore
+            # stays allocated until the norm instead of only its gate slice.
+            output_gate=projected,
+            output_gate_offset=auxiliary_start + config.head_k_dim,
+            # Chunk preparation reads beta's logits in place and applies the sigmoid.
+            beta=projected,
+            beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
         )
 
-    def _compute_gates(
-        self,
-        *,
-        beta: ttnn.Tensor,
-        decay_rank: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Evaluate the decay and write gates consumed by the recurrence."""
+    def _compute_decay(self, projected: ttnn.Tensor, decay_rank_offset: int) -> ttnn.Tensor:
+        """Evaluate the decay gate consumed by the recurrence.
+
+        The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
+        """
         weights = self.weights
-        # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
-        beta_for_recurrence = ttnn.sigmoid(
-            ttnn.typecast(
-                beta,
-                KDA_BETA_DTYPE,
-                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            ),
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        )
         gate = ttnn.linear(
-            decay_rank,
+            projected,
             weights.decay_output_projection,
             bias=weights.decay_bias_flat,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.decay_program_config,
+            memory_config=self.decay_memory_config,
             compute_kernel_config=self.compute_config,
+            in0_column_offset=decay_rank_offset,
         )
-        return self._activate_decay(gate), beta_for_recurrence
+        return gate if self._bounded_gate else self._softplus_decay(gate)
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.multiply(
@@ -373,17 +391,11 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.multiply(
-            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
     def _kda_rms_norm(
         self,
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
+        output_gate_offset: int,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
@@ -396,6 +408,7 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
+            gate_column_offset=output_gate_offset,
         )
 
     def _project_output(
@@ -488,21 +501,20 @@ class ttKDA:
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
-        gate, beta = self._compute_gates(
-            beta=projected.beta,
-            decay_rank=projected.decay_rank,
-        )
+        gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
         result = self.recurrence(
             q=q,
             k=k,
             v=v,
             gate=gate,
-            beta=beta,
+            beta=projected.beta,
+            beta_logits_column_offset=projected.beta_offset,
             initial_state=state.recurrent,
             selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
             actual_end=actual_end,
+            release_gate=True,
         )
-        output = self._kda_rms_norm(result.output, projected.output_gate)
+        output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

@@ -1663,3 +1663,113 @@ def test_linear_batched_reuse_fused_bias_program_cache(device):
     )
     assert_with_pcc(torch.matmul(torch_a, torch_b) + torch_biases[0], ttnn.to_torch(out0), 0.9997)
     assert_with_pcc(torch.matmul(torch_a, torch_b) + torch_biases[1], ttnn.to_torch(out1), 0.9997)
+
+
+def _in0_column_window_config(
+    per_core_M, per_core_N, in0_block_w, activation=None, *, fuse_batch=True, transpose_mcast=False
+):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=transpose_mcast,
+        fused_activation=activation,
+        fuse_batch=fuse_batch,
+    )
+
+
+@pytest.mark.parametrize("in0_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("offset", [0, 96, 352, 384], ids=["offset0", "offset96", "offset352", "window-at-end"])
+def test_linear_in0_column_offset(device, offset, in0_memory_config):
+    """A column window of a wider activation must match the linear of the sliced window, bit for bit."""
+    M, K, N, width = 256, 128, 512, 512
+    torch.manual_seed(0)
+    wide = torch.randn(1, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    bias = torch.randn(1, N).bfloat16()
+    to_device = lambda t, memory_config=ttnn.DRAM_MEMORY_CONFIG: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_wide = to_device(wide, in0_memory_config)
+    tt_window = to_device(wide[..., offset : offset + K].contiguous())
+    tt_weight, tt_bias = to_device(weight), to_device(bias)
+    # Two K blocks, so the window also exercises the reader's step to the next block of a wide row.
+    config = _in0_column_window_config(2, 4, 2, ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID))
+    expected = ttnn.linear(tt_window, tt_weight, bias=tt_bias, program_config=config)
+    actual = ttnn.linear(tt_wide, tt_weight, bias=tt_bias, program_config=config, in0_column_offset=offset)
+    assert tuple(actual.shape) == (1, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
+@pytest.mark.parametrize(
+    "shape,width,offset,fuse_batch,transpose_mcast",
+    [
+        ((2, 1, 128), 384, 128, False, False),
+        ((2, 1, 128), 384, 256, True, False),
+        ((1, 1, 256), 500, 352, True, False),
+        ((1, 1, 256), 512, 96, True, True),
+    ],
+    ids=["batched", "batched-fused", "unaligned-a-width", "transpose-mcast"],
+)
+def test_linear_in0_column_offset_layouts(device, shape, width, offset, fuse_batch, transpose_mcast):
+    """Batched A (the in0 batch stride), A with a non-tile-aligned width, and a transposed multicast grid."""
+    K, N = 128, 256
+    batch, channels, M = shape
+    torch.manual_seed(0)
+    wide = torch.randn(batch, channels, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_window, tt_weight = (
+        to_device(wide),
+        to_device(wide[..., offset : offset + K].contiguous()),
+        to_device(weight),
+    )
+    # The 4x4 grid splits A's row tiles (per batch unless fused) and B's column tiles four ways.
+    row_tiles = (batch * channels * M if fuse_batch else M) // 32
+    config = _in0_column_window_config(
+        row_tiles // 4, N // 32 // 4, 2, fuse_batch=fuse_batch, transpose_mcast=transpose_mcast
+    )
+    expected = ttnn.linear(tt_window, tt_weight, program_config=config)
+    actual = ttnn.linear(tt_wide, tt_weight, program_config=config, in0_column_offset=offset)
+    assert tuple(actual.shape) == (batch, channels, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
+def test_linear_in0_column_offset_program_cache(device):
+    """The offset is part of the program: a second offset must not reuse the first offset's program."""
+    M, K, N, width = 128, 64, 256, 256
+    torch.manual_seed(0)
+    wide = torch.randn(1, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_weight = to_device(wide), to_device(weight)
+    config = _in0_column_window_config(1, 2, 2)
+    for offset in (0, 128, 0):
+        actual = ttnn.linear(tt_wide, tt_weight, program_config=config, in0_column_offset=offset)
+        expected = wide[..., offset : offset + K].float() @ weight.float()
+        assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
+
+
+@pytest.mark.parametrize(
+    "offset,program_config,transpose_a,message",
+    [
+        (48, "mcast2d", False, "tile-aligned window"),
+        (416, "mcast2d", False, "tile-aligned window"),
+        (0, "none", False, "requires a MatmulMultiCoreReuseMultiCastProgramConfig"),
+        (0, "mcast2d", True, "does not support transpose_a"),
+    ],
+    ids=["unaligned", "window-past-end", "no-program-config", "transpose-a"],
+)
+def test_linear_in0_column_offset_rejects_invalid_window(
+    device, expect_error, offset, program_config, transpose_a, message
+):
+    M, K, N, width = 64, 128, 64, 512
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    wide = to_device(torch.randn(1, M, width).bfloat16())
+    weight = to_device((torch.randn(K, N) * 0.1).bfloat16())
+    config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
+    with expect_error(RuntimeError, message):
+        ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
