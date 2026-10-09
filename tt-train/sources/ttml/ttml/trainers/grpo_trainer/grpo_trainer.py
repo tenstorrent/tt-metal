@@ -118,7 +118,10 @@ class RolloutBatch:
 
 
 class RolloutSampler(ABC):
-    """Abstract base for producers of :class:`RolloutBatch`."""
+    """Generates completions and their log-probs with updatable weights.
+
+    weight_version starts at 0. update_weights(weights, version) requires version > weight_version.
+    """
 
     @abstractmethod
     def generate(self, prompts: List[List[int]]) -> RolloutBatch:
@@ -126,6 +129,25 @@ class RolloutSampler(ABC):
         packaged (with per-token log pi_old and producer metadata) as a
         :class:`RolloutBatch`.
         """
+
+    @property
+    @abstractmethod
+    def weight_version(self) -> int:
+        ...
+
+    @abstractmethod
+    def update_weights(self, weights: Any, version: int) -> None:
+        ...
+
+    def close(self) -> None:
+        pass
+
+
+def check_new_weight_version(current: int, version: int) -> int:
+    version = int(version)
+    if version <= current:
+        raise ValueError(f"update_weights: version {version} must be > current weight_version {current}")
+    return version
 
 
 ROLLOUT_SOURCES = ("ttml", "ttt")
@@ -1635,8 +1657,7 @@ class GRPOTrainer:
                 self._optimize(batch, advantages_np)
                 self._apply_gradients()
                 self.global_step += 1
-                if hasattr(self.rollout_sampler, "set_weight_version"):
-                    self.rollout_sampler.set_weight_version(self.global_step)
+                self.rollout_sampler.update_weights(None, version=self.global_step)
                 self._publish_step_metrics()
 
         for cb in self.callbacks:
