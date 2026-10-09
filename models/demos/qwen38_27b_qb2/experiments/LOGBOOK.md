@@ -1441,3 +1441,13 @@ No session connection is needed for that queue to continue.
   create or modify an eval score, and is not the live BFP8 result.
 
 [Persistent result capture and validation](../galaxy-evidence/decoder-gpqa-final-capture-v1/README.md).
+
+
+- Publication correction, 11:05 UTC: a temporary index-refresh helper reused
+  its destination variable inside a file loop, writing the inventory JSON over
+  the new compressed validation-script copy instead of updating the index.
+  The hash check caught the stale logbook entry, but the orchestration failed
+  to stop the subsequent commit/push. Restored the exact compressed source,
+  corrected the inventory destination, and verified every tracked hash and
+  gzip payload before a separate correction commit. No host source, running
+  service, benchmark receipt or score was affected.

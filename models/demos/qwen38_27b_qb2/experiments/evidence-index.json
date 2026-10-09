@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T10:51:20.534117+00:00",
+  "generated_at": "2026-10-09T11:03:48.620057+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 105658,
-      "sha256": "7c35e9b38abc93c2bd57ba8bf056cda96699c8d69e4b1597e0421f3b1a58737a"
+      "bytes": 108176,
+      "sha256": "c3ec03c82c7888fa43695a4dfdb744c796b72c1cbedcab92985fab8ce7c6bd59"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -84,8 +84,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 33225,
-      "sha256": "6c7e0f0be7666057d9fca3ea9874cefcb76bfe704c94a7eaec3d4f266fdc42c8"
+      "bytes": 33786,
+      "sha256": "e52a04edaca5fd07df9ed4d09b3d5a5e16edb8ae2dce6448292fbeddb7cf8289"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1202,6 +1202,66 @@
       "path": "galaxy-evidence/decoder-g0-v1/service-at-g0-completion.txt",
       "bytes": 81,
       "sha256": "7059c62b3ffcc329ec0930315cf3429f5a2745d8e0134395039faccdf6fe7e33"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/README.md",
+      "bytes": 2953,
+      "sha256": "9a78a487c2c47dbf563dc3897c97f0ec623e3b5498f3ca266283985367375909"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/collect-decoder-gpqa-result-v1.py.gz",
+      "bytes": 3099,
+      "sha256": "f8d4ed048214548e093c89a35f06e8078ba67f74b4beb206c721aa1518ec378f"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/completed-control-validation.json",
+      "bytes": 1021,
+      "sha256": "4594e51b6779cbf7baa55087ac5a42fc39e7a5d14e866ab0a9d0948e2a683932"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/controller.py.gz",
+      "bytes": 1283,
+      "sha256": "5379f9228a0e17be771d53ec0a1b457f13bd13d0338c7a04e47439cf24b6243c"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/launch.json",
+      "bytes": 843,
+      "sha256": "4f593ea547fe54194a0e61a64e4c3d10931a5a25eba0a3d028f6c0825ee77381"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/preflight.json",
+      "bytes": 482,
+      "sha256": "c40fe008e23f65f61539a1979a57bc0deb74ce77323b5c8f2ac13fd9bcd0bc64"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/read_result.py.gz",
+      "bytes": 2458,
+      "sha256": "08c30818e785e96cc8a787037660e3d40f0455948ab02f645060b65742a93d5e"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/service-at-collection.txt",
+      "bytes": 81,
+      "sha256": "32c9ecf9697c02f7b46b56aebf5d0565a5a396cffd0aef728310fe7217b606b8"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/source-manifest.json",
+      "bytes": 178,
+      "sha256": "28421fb86f161384e56cbee35418aa9d7e71424f166d44d336e73a19630625ae"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/stage-final-capture-v1.py.gz",
+      "bytes": 1391,
+      "sha256": "9b6a8c33cbf825443485cb379c0056b092b5ce08bdf84bee9ad33156c6480079"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/status-at-collection.json",
+      "bytes": 792,
+      "sha256": "df1bc89b522390ef0340acc62fbd277ebc0d6ed6a526432fc66b64fde056f1f7"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/validate-final-capture-v1.py.gz",
+      "bytes": 1294,
+      "sha256": "203a59cf67e63da798c1c5855278e1408c06cdbf18f8b2c4919b6d79808e4974"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-progress-v1/README.md",
