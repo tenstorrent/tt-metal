@@ -9,7 +9,7 @@ Reference for two related dict formats:
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
-   [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
+   [`WeightBridge`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
    It is what the GRPO BoolQ example
    ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
@@ -271,4 +271,4 @@ End-to-end smoke tests:
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
-  [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).
+  [`ttml/trainers/grpo_trainer/remote_rollout/weight_bridge.py`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/weight_bridge.py).

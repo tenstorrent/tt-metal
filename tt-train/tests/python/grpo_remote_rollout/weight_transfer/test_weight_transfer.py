@@ -35,7 +35,7 @@ _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 import ttnn  # noqa: E402
 from transformers import AutoTokenizer  # noqa: E402
 
-from grpo_remote_rollout.utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 # Pin fabric FABRIC_2D before either rank opens a device (both ranks must match).
 pytestmark = pytest.mark.usefixtures("_set_fabric_2d")
@@ -75,8 +75,8 @@ def _ttml_side() -> None:
     from ttml.common.config import get_model_config
 
     from _completer_utils import close_device, load_device_config, open_device
-    from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient
-    from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
+    from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
+    from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
     from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -151,10 +151,13 @@ def _ttml_side() -> None:
 
 def _ttt_side() -> None:
     """Host one TttGenerationWorker over four [1, 1] submeshes + MPIRolloutServer."""
-    from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutServer
-    from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
-    from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
-    from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
+    from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutServer
+    from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
+    from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
+        bf16_attn_bfp8_mlp_optimizations,
+        llama_stop_and_pad,
+    )
+    from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
