@@ -204,55 +204,6 @@ class DSV41DeviceHead:
         best = v[:, :, 0].argmax(-1)
         return v[torch.arange(v.shape[0]), best, 1].long() + best * shard
 
-    def topk_candidates(self, logits, mesh_config, ccl, k, invT):
-        """Sampling candidates INSIDE the trace: per column (vocab slice) the k largest logits and their local ids, all-gathered over the mesh columns: fp32 [1,1,T,cols * 2k], per column c
-        the block [values (k) | local ids (k)] (ids < 16160 are exact in fp32), plus the per-column partition sum s_c = sum_v exp((l_v - max_c) * invT) (invT [1,1,T,1] = 1 / temperature of every
-        row, uploaded by the host) all-gathered to [1,1,T,cols]. The union of the per-column top-k contains the global top-k; with the exact partition function the host knows the exact
-        probability of every candidate and the mass of the rest of the vocabulary (tt/vllm_state.sample_exact)."""
-        vals, idx = ttnn.topk(logits, k=k, dim=-1, largest=True, sorted=True)
-        idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
-        vals = ttnn.typecast(vals, ttnn.float32)
-        mx = ttnn.slice(vals, [0, 0, 0, 0], [1, 1, vals.shape[2], 1])  # [1,1,T,1] column max (sorted descending)
-        e = ttnn.exp(ttnn.multiply(ttnn.subtract(logits, mx), invT))
-        sums = ttnn.sum(e, dim=-1, keepdim=True)
-        cat = ttnn.concat([vals, idxf], dim=-1)
-        return mesh_config.allgather(cat, ccl, axis=1, dim=3), mesh_config.allgather(sums, ccl, axis=1, dim=3)
-
-    def read_candidates(self, cand, sums, k):
-        """Host copy of ``topk_candidates``: -> (values [B, cols*k], global token ids [B, cols*k] long, partition sums [B, cols]), B rows in mesh-row order."""
-        rows, cols = tuple(self.md.shape)
-        shard = VOCAB // cols
-        devs = ttnn.get_device_tensors(ttnn.from_device(cand))
-        sdevs = ttnn.get_device_tensors(ttnn.from_device(sums))
-        t = torch.cat([ttnn.to_torch(devs[r * cols]).reshape(-1, cols, 2, k) for r in range(rows)]).float()
-        sm = torch.cat([ttnn.to_torch(sdevs[r * cols]).reshape(-1, cols) for r in range(rows)]).float()
-        ids = t[:, :, 1, :].long() + (torch.arange(cols) * shard).reshape(1, cols, 1)
-        return t[:, :, 0, :].reshape(t.shape[0], -1), ids.reshape(t.shape[0], -1), sm
-
-    def read_logits_row(self, logits, mesh_row, local_row):
-        """Full logits row [vocab] fp32 of user ``local_row`` of mesh row ``mesh_row`` (only the 8 devices of that row are read)."""
-        rows, cols = tuple(self.md.shape)
-        devs = ttnn.get_device_tensors(logits)
-        parts = [
-            ttnn.to_torch(ttnn.from_device(devs[mesh_row * cols + c])).reshape(-1, VOCAB // cols)[local_row].float()
-            for c in range(cols)
-        ]
-        return torch.cat(parts)
-
-    def read_logits_rows(self, logits, items):
-        """Full logits rows [vocab] fp32 for ``items`` [(mesh_row, local_row)]: only the 8 devices of every mesh row that is needed are read (once each; a whole-mesh read costs 4x the bytes)."""
-        rows, cols = tuple(self.md.shape)
-        devs = ttnn.get_device_tensors(logits)
-        cache = {}
-        out = []
-        for mr, lr in items:
-            if mr not in cache:
-                cache[mr] = [
-                    ttnn.to_torch(ttnn.from_device(devs[mr * cols + c])).reshape(-1, VOCAB // cols) for c in range(cols)
-                ]
-            out.append(torch.cat([cache[mr][c][lr].float() for c in range(cols)]))
-        return out
-
     def gather_logits(self, logits):
         """Host copy of the full logits [B, vocab] (diagnostics / PCC; the decode loop uses ``argmax``)."""
         rows, cols = tuple(self.md.shape)
