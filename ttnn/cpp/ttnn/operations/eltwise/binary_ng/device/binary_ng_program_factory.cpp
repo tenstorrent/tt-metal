@@ -1385,9 +1385,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole, sharded bf16 FPU ops without operand activations or broadcast: from 16 tiles per core a DEST section
-    // is unpacked with one call (BINARY_NG_BLOCK) and packed with one (BINARY_NG_BLOCK_PACK); from 6 tiles per core add
-    // and sub without a post activation take the unpack call alone.
+    // Blackhole, sharded bf16 FPU ops without operand activations or broadcast: a DEST section is unpacked with one
+    // call (BINARY_NG_BLOCK) and packed with one (BINARY_NG_BLOCK_PACK), from 16 tiles per core and for add and sub at
+    // any size.
     const bool block_kernel = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                               std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                               !has_operand_activations && num_tiles_per_cycle > 1 &&
@@ -1395,9 +1395,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                               a_data_format == tt::DataFormat::Float16_b &&
                               b_data_format == tt::DataFormat::Float16_b && c_data_format == tt::DataFormat::Float16_b;
     const uint32_t block_tiles = c_num_tiles_per_shard.value_or(0);
-    const bool block_pack = block_kernel && block_tiles >= 16;
-    const bool block_unpack_alone = block_kernel && !has_post_activations && block_tiles >= 6 &&
-                                    std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL;
+    const bool block_pack =
+        block_kernel &&
+        (block_tiles >= 16 || std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL);
     // Qwen3-32B's Galaxy decode residual adds, a bfp8_b a and a bf16 or bfp8_b b into bf16 or bfp8_b: the unpack call
     // alone from 4 tiles.
     const bool block_unpack_mixed =
@@ -1409,7 +1409,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         a_data_format == tt::DataFormat::Bfp8_b &&
         (b_data_format == tt::DataFormat::Float16_b || b_data_format == tt::DataFormat::Bfp8_b) &&
         (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b) && block_tiles >= 4;
-    if (block_pack || block_unpack_alone || block_unpack_mixed) {
+    if (block_pack || block_unpack_mixed) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
     if (block_pack) {
