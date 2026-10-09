@@ -496,7 +496,7 @@ RUNS = [
     ),
     (
         "v13",
-        "fresh/freshbh4_timed.csv",
+        "fresh/freshbh4_merged_timed.csv",
         "freshbh99001",
         "BH fresh random set 4 (seeds 99001-7), bh-30",
         "Out-of-sample on BH: picked on bh-30 with the frozen v13 BH constants (MultiCore candidate included).",
