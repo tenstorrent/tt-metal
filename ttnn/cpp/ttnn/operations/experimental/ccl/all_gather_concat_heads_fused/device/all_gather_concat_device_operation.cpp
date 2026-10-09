@@ -82,24 +82,45 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
 std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
-    // The heads are gathered along `dim` on `cluster_axis` and concatenated into [seq, 1, batch, heads * head_dim]:
-    // Replicate on the cluster axis. That reshape renumbers the output's dims, so a Shard any other axis still holds
-    // would name an input dim the output no longer has in that position: the output keeps the input's label then,
-    // rather than one this hook cannot vouch for, as it does when the helper has no honest gather label (nullopt,
-    // already reported). Returning {} would instead hand the framework the union over every tensor argument,
-    // `buffer_tensor` (caller-owned scratch outside the return value) and its stale label included.
+    // The input is [seq, users, heads (padded), head_dim]; the users are gathered along `dim` on `cluster_axis` and
+    // every head's head_dim block is concatenated into the width: output [seq, 1, users (padded to 32),
+    // num_heads * head_dim] (compute_output_specs; the llama3_70b_galaxy attention calls this with dim=1,
+    // cluster_axis=1 on an input that is also sharded along the other mesh axis). So the output carries the
+    // all_gather label (Replicate on the cluster axis, the input's placements elsewhere) renumbered to the output
+    // layout: Shard{0} stays Shard{0}, Shard{1} (users) becomes Shard{2}, Shard{2} (heads) becomes Shard{3} -- a
+    // device's heads are one contiguous block of the width -- and Replicate stays. A Shard of dim 3 (head_dim) would
+    // interleave within every head, which no output dim describes: the output keeps the input's label then, as it
+    // does when the helper has no honest gather label (nullopt, already reported). Returning {} would instead hand
+    // the framework the union over every tensor argument, `buffer_tensor` (caller-owned scratch outside the return
+    // value) and its stale label included.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));
     if (!output_topology.has_value()) {
         return {input_topology};
     }
+    const auto rank = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank());
+    ttnn::operations::ccl::common::TopologyPlacements placements;
+    placements.reserve(output_topology->placements().size());
     for (const auto& placement : output_topology->placements()) {
-        if (std::holds_alternative<Shard>(placement)) {
+        const auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            placements.push_back(placement);
+            continue;
+        }
+        const auto dim = ttnn::operations::ccl::common::normalize_tensor_dim(shard->dim, rank);
+        if (dim == 0u) {
+            placements.push_back(Shard{0});
+        } else if (dim == 1u) {
+            placements.push_back(Shard{2});
+        } else if (dim == 2u) {
+            placements.push_back(Shard{3});
+        } else {
             return {input_topology};
         }
     }
-    return {*output_topology};
+    return {tt::tt_metal::TensorTopology(
+        output_topology->distribution_shape(), std::move(placements), output_topology->mesh_coords())};
 }
 
 ttsl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
