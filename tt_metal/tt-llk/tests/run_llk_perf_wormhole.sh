@@ -5,11 +5,6 @@
 # Wormhole LLK perf runner, shared by the 5 wh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# Sharding: compile this shard's items (producer), then measure them (consumer) -- one invocation
-# each over the whole perf suite. --perf-splits cuts the suite into contiguous chunks of equal
-# estimated time, from the per-module costs in perf_split_costs.json (rebuild it with
-# perf_split_costs.py). Both passes must use the same split.
-#
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
 set -euo pipefail
 

@@ -36,7 +36,6 @@ import logging
 import os
 import re
 import signal
-import statistics
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -334,13 +333,13 @@ def pytest_addoption(parser):
         "--perf-splits",
         type=int,
         default=None,
-        help="Split the selected tests into this many shards of equal estimated time (perf runners).",
+        help="Number of perf shards.",
     )
     parser.addoption(
         "--perf-group",
         type=int,
         default=None,
-        help="1-based shard to run, with --perf-splits.",
+        help="1-based perf shard to run.",
     )
 
     parser.addoption(
@@ -731,42 +730,22 @@ def _select_tests_by_op(config, items):
 
 
 def _split_by_cost(config, items):
-    """Keep shard --perf-group of --perf-splits: contiguous chunks of equal estimated time.
-
-    A test weighs its module's cost (perf_split_costs.json) divided by the module's selected tests.
-    Weights are per module because tests of a module share ELFs: the test that compiles a shared ELF
-    depends on the order, so a per-test duration moves when the split changes. Contiguous chunks keep
-    a module's tests, and the ELFs they share, in one shard except at the chunk edges.
-    """
     splits, group = config.getoption("--perf-splits"), config.getoption("--perf-group")
     if not splits:
         return
-    if not 1 <= (group or 0) <= splits:
-        raise pytest.UsageError(f"--perf-group must be 1..{splits}, got {group}")
     costs_path = Path(__file__).resolve().parents[2] / "perf_split_costs.json"
-    costs = json.loads(costs_path.read_text()).get(
-        os.environ.get("CHIP_ARCH", "").lower(), {}
-    )
+    costs = json.loads(costs_path.read_text())[os.environ["CHIP_ARCH"].lower()]
     modules = [item.path.stem for item in items]
     count = collections.Counter(modules)
-    known = [c["cost_s"] / c["tests"] for c in costs.values() if c["tests"]]
-    default = statistics.median(known) if known else 1.0
-    weights = [
-        costs[m]["cost_s"] / count[m] if m in costs else default for m in modules
-    ]
+    weights = [costs.get(m, 1.0) / count[m] for m in modules]
     share = sum(weights) / splits
     selected, deselected, done = [], [], 0.0
     for item, weight in zip(items, weights):
         shard = min(int((done + weight / 2) / share), splits - 1) + 1
         (selected if shard == group else deselected).append(item)
         done += weight
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = selected
-    logger.info(
-        f"--perf-group {group}/{splits}: {len(selected)} of {len(selected) + len(deselected)} tests, "
-        f"~{share:.0f} s estimated per shard"
-    )
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
 
 
 def _restore_test_order(config, items):
