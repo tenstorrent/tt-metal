@@ -107,8 +107,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
+    auto row = [&]() __attribute__((always_inline)) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
@@ -116,6 +115,17 @@ inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
+    };
+    // Unrolled on a 16-bit DEST only: the 32-bit body measured slower unrolled as one 32-row call.
+    if constexpr (is_fp32_dest_acc_en) {
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
     }
 }
 
