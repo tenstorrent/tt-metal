@@ -58,6 +58,13 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // Fitted on dense trace timings of 7 short/medium-K DiT shapes x the recipes, FAST with BFP8 K/V, over Q128-512 x K32-512 (bh-38, 1x2 mesh, 16 back-to-back ops per trace).
 constexpr double kQFillDrain = 12.0;  // x c x q_tiles x d_tiles / 4, once per core
 constexpr double kKFill = 0.5;        // x bw x (first K block's tiles) x d_tiles / 4, once per Q chunk
+// With more batch/heads than cores there are no K/V-forwarding chains: every Q chunk reads its head's K/V from DRAM,
+// so the call's K/V traffic grows with the Q chunks per head and the block roofline (one core's stream) misses it.
+// Each core's share of all jobs' K/V blocks costs kKvReread x bw x k_tiles x d_tiles / 4. Fitted on one P150b
+// (ACCURATE, D64-D128, traced): bge_m3 B8 16 heads S512 with a mask is 0.455 ms at Q256/K512, 0.488 ms at Q128/K512
+// (the roofline alone picked Q128); B16 and 4 x 32 heads D128 S1024 stay at Q256/K512 (0.758, 1.786 ms; Q128 0.893,
+// 2.388 ms).
+constexpr double kKvReread = 0.5;
 struct BlockCostModel {
     double c;
     double ck;
@@ -209,7 +216,9 @@ using ProblemKey = std::tuple<
     bool,
     bool,
     uint32_t,
-    uint32_t>;
+    uint32_t,
+    bool,
+    bool>;
 
 ProblemKey key_of(const RecipeBlockingProblem& p) {
     return {
@@ -237,7 +246,9 @@ ProblemKey key_of(const RecipeBlockingProblem& p) {
         p.key_range,
         p.causal,
         p.sliding_window,
-        p.q_offset};
+        p.q_offset,
+        p.attention_sink,
+        p.k_rows_unaligned};
 }
 
 std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
@@ -347,6 +358,39 @@ RecipeL1Estimate recipe_l1_bytes(
     TT_THROW("Unknown SDPA recipe op");
 }
 
+bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles) {
+    // A program's RISC images, runtime args, semaphores and CB configs share one 70656 B kernel config buffer per core.
+    // Measured on one P150b (program bytes; BF16/BFP8 K/V; D64, D96, D128, D256; K128-K1024; Q128-Q544; with and
+    // without a joint segment, attention sink, K tail, attn_mask, causal / sliding-window / paged key range), only
+    // STANDARD's fused kernel comes near it. Each of these adds to its plain dense program (BFP8 Q256/K256: D64
+    // 67936 B, D128 66960 B, D96 69744 B; BF16 K/V ~2.1 KB less): an odd Q chunk of 7+ tiles (a single-row last group)
+    // 0.9-1.9 KB, a K tail 0.9 KB, a joint segment 2.2 KB (both 0.7 KB more with an odd Q chunk), an attention sink
+    // 2.5 KB, a key range with a sink 2.7 KB. Excluded, as measured over or within 20 B of the limit (worst: BFP8 D96
+    // Q224/K256 joint 73504 B; D64 72576 B; D128 Q224/K256 joint 71344 B, which op-chosen joint blocking hit):
+    // - an odd Q chunk of 7+ tiles with a joint segment, a sink or a K tail, or with a head dim of odd tile count
+    //   (one-tile PV subblocks: D96 BFP8 Q224 and Q288, K256 and K512, 69584-70640 B without features);
+    // - packed K/V with a head dim of odd tile count and a joint segment, a sink or a K tail (D96 BFP8 Q256/K256:
+    //   71840, 72272, 70656 B).
+    // The tightest admitted programs: BFP8 D64 Q256/K256 with a sink 70368 B (70384 B with a key range), BF16 D96
+    // Q256/K256 with a sink 70240 B, BFP8 D64 Q224/K256 dense 69728 B. FAST peaks at 68928 B (BFP8 Q224/K512 causal
+    // with a sink and window), BALANCED and ACCURATE at 64.1 KB. Ring and exp ring programs are not covered.
+    if ((p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) || p.policy.selection.recipe != Recipe::B) {
+        return true;
+    }
+    // An attn_mask or a one-tile QK subblock runs the unfused kernel, which pads an odd chunk and is far smaller.
+    const bool attn_mask = p.mask_page_bytes > 0 && !p.key_range;
+    if (attn_mask || recipe_subblock_width(k_tiles) < 2) {
+        return true;
+    }
+    const bool k_tail = p.k_rows_unaligned || (p.k_rows + p.joint_k_rows) % (k_tiles * kTile) != 0;
+    const bool feature = p.op == RecipeOp::Joint || p.attention_sink || k_tail;
+    const bool narrow_pv = (p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles) % 2 != 0;
+    if (q_tiles % 2 != 0 && q_tiles >= 7 && (feature || narrow_pv)) {
+        return false;
+    }
+    return !(narrow_pv && feature && p.policy.selection.kv_storage != KVStorage::BF16);
+}
+
 namespace {
 // Key-range work beyond the block roofline, fitted on one P150b (op time of 120 blockings, Q128-640 x K128-640:
 // causal 10 heads D128, 16 heads D64, 32/8 heads D128; sliding window 1024 with 10 heads D128 and 16/8 heads D256;
@@ -437,7 +481,8 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
         bool any_fit = false;
         for (auto ki = k_range.rbegin(); ki != k_range.rend(); ++ki) {  // ascending K
             const uint32_t kt = *ki;
-            if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles)) {
+            if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles) ||
+                (dense && !recipe_program_fits(p, qt, kt))) {
                 continue;
             }
             // Ring / exp ring round STANDARD's odd Q chunk up to the next even one (sdpa.cpp); the even
@@ -521,14 +566,21 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                     if (chain == 0 && p.max_cores_per_head_batch == 0) {
                         break;
                     }
+                    const uint32_t k_blocks = div_up(p.k_rows + p.joint_k_rows, k_chunk);
+                    const double reread =
+                        chain == 0 ? kKvReread * static_cast<double>(batch_heads) * jobs_per_head * k_blocks / cores *
+                                         block_cost_model(p.policy).bw * kt * p.d_tiles / 4.0
+                                   : 0.0;
                     admit(
                         chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain),
-                        div_up(p.k_rows + p.joint_k_rows, k_chunk),
+                        k_blocks,
                         p.grid,
                         RecipeL1Context{
                             .mask_page_bytes = p.mask_page_bytes,
                             .extra_bytes = p.extra_l1_bytes,
-                            .vd_tiles = p.vd_tiles});
+                            .vd_tiles = p.vd_tiles},
+                        std::nullopt,
+                        reread);
                     break;
                 }
                 case RecipeOp::Ring: {
@@ -743,6 +795,9 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (options && options->head_dim_v) {
         problem.vd_tiles = div_up(options->head_dim_v, kTile);
     }
+    problem.attention_sink = options && options->attention_sink.has_value();
+    problem.k_rows_unaligned = (key_range ? recipe_k_rows(k, *key_range) : k.logical_shape()[2]) % kTile != 0 ||
+                               (joint_k && joint_k->logical_shape()[2] % kTile != 0);
     const uint64_t free_l1 = free_l1_below_live_buffers(*device);
     problem.l1_bytes = free_l1 > reserved_l1_bytes ? free_l1 - reserved_l1_bytes : 0;
     problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
@@ -753,6 +808,12 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         problem.causal = key_range->causal;
         problem.sliding_window = key_range->sliding_window;
         problem.q_offset = key_range->q_offset;
+        if (key_range->q_offset_tensor) {
+            // The start is read on device (trace-safe chunked prefill), so one blocking serves every start: cost the
+            // latest one the K/V length allows, the most expensive (tt_transformers Q2048 at 6144 of 8192 keys:
+            // Q256/K512 3.97 ms, the choice for a start of 0 5.22 ms).
+            problem.q_offset = problem.k_rows > problem.q_rows ? problem.k_rows - problem.q_rows : 0;
+        }
     }
     if (options) {
         problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
@@ -800,8 +861,7 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     }
     // Explicit chunks, or a routed joint call's: kept when supported and they fit (a routed joint call's otherwise
     // chosen). Routed joint calls keep the caller's chunks: the chooser gains nothing measurable there (qwen_image
-    // 3.47 ms either way, Flux-style 1.55) and can pick an odd STANDARD Q chunk of 7+ tiles whose packed-K/V joint
-    // program overflows the kernel config buffer (71328 of 70656 B at Q224/K256).
+    // 3.47 ms either way, Flux-style 1.55).
     auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     if (!choice && chunks_are_hints && (problem.fixed_q_tiles != 0 || problem.fixed_k_tiles != 0)) {
         log_debug(
