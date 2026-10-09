@@ -63,6 +63,11 @@ SECTIONS
     . = ALIGN(128);
     *(.text.llk_zone.record)
     . = ALIGN(128);
+    /* INIT measurement build (LLK_PERF_INIT_ONLY): the helpers INIT calls, INIT's body, the zone around it; ahead of main
+       and the kernel, so no code outside INIT moves them (empty in every other build) */
+    *(.text.llk_init_callee)
+    *(.llk_init_body)
+    *(.llk_init_tramp)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
@@ -71,10 +76,13 @@ SECTIONS
   {
     /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees. */
     *(.text.run_kernel)
+    . = ALIGN(DEFINED(llk_text_tail_align) ? llk_text_tail_align : 1);
+    *(.text.run_kernel.tail)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
     *(.llk_init_text) /* out of line INIT blocks (perf.h), last so they move nothing */
+    *(.llk_quiet_text) /* the PACK_ISOLATE peers' hold (profiler.h quiet_wait), after them for the same reason */
   } > REGION_CODE
   .fini :
   {
@@ -141,6 +149,8 @@ SECTIONS
     *(.dynbss)
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
+    . = ALIGN(4);
+    *(.llk_quiet_data) /* profiler.h quiet peers, last so no other variable moves */
     . = ALIGN(4);
     __ldm_bss_end = .;
   } > REGION_DATA
