@@ -116,42 +116,8 @@ def _moe_view(moe, Tn, buffers):
     return mv, buffers
 
 
-def sample_block_ids(a, X, force, srows, cands, k, sample_fn, fetch_rows):
-    """Host half of the sampled verify round (in place on ``a`` [B, n], the device argmax of every block row): for every sampled row (``srows`` {row: (temperature, top_k, top_p, generator)})
-    draw the target's own sample s_j of block row j left to right, as far as the accept walk can reach: s_j == the draft of row j + 1 continues, anything else ends the row (that sample is the
-    residual / bonus token the plugin commits). A row with ``force`` 0 (first round of a request) verifies no draft: one sample. Committed tokens are always the target's own samples, so the output
-    law is exactly the non-speculative sampled law (the drafts are point masses: accept probability p_target(draft)). The walk advances in waves (block position j of every live row at once) so the
-    full-row fallbacks of a wave are read together (``fetch_rows(block row indices) -> full logits rows``). ``sample_fn`` = ``vllm_state.sample_many``. Returns (draws, full-row fallbacks).
-    """
-    cv, ci, cs = cands
-    n = a.shape[1]
-    draws = fallbacks = 0
-    live = {
-        r: (n - 1 if (force is None or float(force[r]) < 0) else 0) for r in srows
-    }  # row -> drafts it still verifies
-    for j in range(n):
-        if not live:
-            break
-        rs = sorted(live)
-        reqs = []
-        for r in rs:
-            temp, tk, tp, gen = srows[r]
-            g = r * n + j
-            reqs.append(
-                (cv[g], ci[g], cs[g], temp, tk, tp, float(torch.rand(1, generator=gen, dtype=torch.float64)), g)
-            )
-        toks, nfb = sample_fn(reqs, k, fetch_rows)
-        draws += len(rs)
-        fallbacks += nfb
-        for r, tok in zip(rs, toks):
-            a[r, j] = tok
-            if j >= live[r] or tok != int(X[r, j + 1]):
-                del live[r]
-    return draws, fallbacks
-
-
 class SpecRunner:
-    def __init__(self, model, k, max_pos=None, drafter=None, draft=True, Ub=None, cand_k=None):
+    def __init__(self, model, k, max_pos=None, drafter=None, draft=True, Ub=None):
         """``drafter``: an existing (root) drafter of a sibling runner (adaptive verification length): shared weights + rings, viewed for this block size."""
         assert (
             (0 if drafter is not None else 1) <= k <= BLOCK
@@ -264,7 +230,7 @@ class SpecRunner:
         self.dec.enable_sampling(model.mc, model.ccl)
         self.dec.draft_on = draft
         # in-trace sampling of every verify row (DSV41_INTRACE_SAMPLE=1): one sampler over the T = U * n block rows of a mesh row; params uploaded per round (``sample_cfg``), allocated before any trace
-        self.dec.samp = self.samp = model._make_sampler(self.T)
+        self.dec.samp = self.samp = model._make_sampler(self.T)  # (replayed by trace S of a sampled round only)
         self.sample_cfg = None  # None = greedy rows; else dict(temperature=[B], top_k=[B], top_p=[B], gens=[B generators] | one generator)
         if self.samp is not None and os.environ.get("DSV41_DEMO_SAMPLE"):
             t_, k_, p_ = os.environ["DSV41_DEMO_SAMPLE"].split(":")
@@ -272,12 +238,13 @@ class SpecRunner:
                 temperature=float(t_), top_k=int(k_), top_p=float(p_), gens=torch.Generator().manual_seed(1234)
             )
         self.tid = None
-        # sampled verify (adapter): the round split in two traces around a host sampling step (SpecDecoder.forward_verify / forward_tail); the persistent buffers are allocated here, before any trace
-        cand_k = int(os.environ.get("DSV41_SPEC_CAND_K", "0")) if cand_k is None else int(cand_k)
+        # sampled verify (adapter): a round with sampled rows replays three traces, A (verify block -> logits) | S (the in-trace sampler draws every block row) | B (accept / commit / draft over the
+        # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace
         self.pack_mono = self.pack_b = None
-        self.sampled, self.tid_a, self.tid_b, self.sample_stats = bool(cand_k), None, None, {"rows": 0, "fallback": 0}
+        self.sampled, self.tid_a, self.tid_s, self.tid_b = self.samp is not None, None, None, None
+        self.sample_stats = {"rows": 0}
         if self.sampled:
-            self.dec.alloc_sampled(cand_k)
+            self.dec.alloc_sampled()
         self.log = model.log
         model.log_dram("spec: after runner build (views + drafter)")
         self.log(f"spec runner built: k={k} n={n} T={self.T} rows/mesh-row ({time.time() - t0:.0f}s)")
@@ -326,24 +293,29 @@ class SpecRunner:
         self._ensure(base)
         self.dec.set_force(-1 if force is None else force)
         self._feed(X, base)
-        self._set_sample_params()
+        if self.sample_cfg is not None:
+            if not self.sampled:
+                raise ValueError("sampled rows need the in-trace sampler (DSV41_INTRACE_SAMPLE=1, the default)")
+            # sampled rows: verify | sample | accept-commit-draft, three replays and one synchronization (a round without sampled rows replays the single trace: the greedy fast path)
+            self._set_sample_params()
+            ttnn.execute_trace(self.md, self.tid_a, cq_id=0, blocking=False)
+            ttnn.execute_trace(self.md, self.tid_s, cq_id=0, blocking=False)
+            ttnn.execute_trace(self.md, self.tid_b, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.md)
+            self.sample_stats["rows"] += 1
+            return self._readback(self.pack_b)
         ttnn.execute_trace(self.md, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.md)
         return self._readback()
 
     def _set_sample_params(self):
-        """Per block row (user-major, ``n`` rows per user) sampling params of the in-trace sampler for the next replay: every row draws from its own request's distribution with its own uniform."""
-        if self.samp is None:
-            return
+        """Per block row (user-major, ``n`` rows per user) sampling params of the in-trace sampler for the next sampled round: every row draws from its own request's distribution with its own uniform
+        (``sample_cfg``: temperature / top_k / top_p [B] and ``gens`` (a generator per user, or one shared by all users)).
+        """
         from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
 
         n, B = self.n, self.B
         c = self.sample_cfg
-        if c is None:
-            self.samp.set_params(
-                torch.ones(B * n), torch.zeros(B * n), torch.ones(B * n), torch.zeros(B * n), torch.ones(B * n)
-            )
-            return
         rep = lambda x: [v for v in (list(x) if isinstance(x, (list, tuple)) else [x] * B) for _ in range(n)]
         g = c["gens"]
         gens = [x for x in g for _ in range(n)] if isinstance(g, (list, tuple)) else g
@@ -382,10 +354,11 @@ class SpecRunner:
             )
         if (
             self.sampled
-        ):  # compile pass of the two halves of the sampled round (creates their lazily built tensors before any trace exists)
+        ):  # compile pass of the three parts of the sampled round (creates their lazily built tensors before any trace exists)
             dec.set_force(self.n - 1)
             self._feed(X, base)
             dec.forward_verify()
+            dec.forward_sampler()
             dec.forward_tail()
             ttnn.synchronize_device(self.md)
             dec.restore_states(self.snaps)
@@ -402,6 +375,9 @@ class SpecRunner:
             self.tid_a = ttnn.begin_trace_capture(self.md, cq_id=0)
             dec.forward_verify()
             ttnn.end_trace_capture(self.md, self.tid_a, cq_id=0)
+            self.tid_s = ttnn.begin_trace_capture(self.md, cq_id=0)
+            dec.forward_sampler()
+            ttnn.end_trace_capture(self.md, self.tid_s, cq_id=0)
             self.tid_b = ttnn.begin_trace_capture(self.md, cq_id=0)
             dec.forward_tail()
             ttnn.end_trace_capture(self.md, self.tid_b, cq_id=0)
@@ -432,63 +408,10 @@ class SpecRunner:
             self.calibrate(X, base, reps)
 
     def release(self):
-        for name in ("tid", "tid_a", "tid_b"):
+        for name in ("tid", "tid_a", "tid_s", "tid_b"):
             if getattr(self, name, None) is not None:
                 ttnn.release_trace(self.md, getattr(self, name))
                 setattr(self, name, None)
-
-    def _read_a_greedy(self):
-        rows, cols = self.rows, self.cols
-        devs = ttnn.get_device_tensors(self.dec.a_greedy)
-        return torch.cat([ttnn.to_torch(ttnn.from_device(devs[r * cols])).reshape(-1) for r in range(rows)]).long()
-
-    def _read_candidates(self):
-        """Per block row (user-major, mesh-row-major): (values [rows*T, cols*k], global ids, partition sums [rows*T, cols]); only ONE device per mesh row is read (the gather made the columns identical)."""
-        head, k = self.m.head, self.dec.cand_k
-        rows, cols = self.rows, self.cols
-        shard = 129280 // cols
-        cd, sd = ttnn.get_device_tensors(self.dec.cand), ttnn.get_device_tensors(self.dec.cand_s)
-        t = torch.cat(
-            [ttnn.to_torch(ttnn.from_device(cd[r * cols])).reshape(-1, cols, 2, k) for r in range(rows)]
-        ).float()
-        sm = torch.cat([ttnn.to_torch(ttnn.from_device(sd[r * cols])).reshape(-1, cols) for r in range(rows)]).float()
-        ids = t[:, :, 1, :].long() + (torch.arange(cols) * shard).reshape(1, cols, 1)
-        return t[:, :, 0, :].reshape(t.shape[0], -1), ids.reshape(t.shape[0], -1), sm
-
-    def _round_sampled(self, X, base, force, srows, sample_fn):
-        """One round with SAMPLED rows (lossless speculative sampling for point-mass drafts). ``srows`` {runner row: (temperature, top_k, top_p, generator)}; ``sample_fn`` = tt/vllm_state.sample_exact.
-        Trace A verifies the block and returns every row's candidates + partition sums; the host draws the target's own sample s_j of the sampled rows left to right, only as far as the accept walk
-        reaches (s_j == draft d_{j+1} continues, anything else ends the row: that sample is the residual / bonus token); trace B accepts / commits / drafts over those ids (greedy rows: the device argmax).
-        """
-        B, n, T_loc = self.B, self.n, self.U * self.n
-        self._ensure(base)
-        self.dec.set_force(-1 if force is None else force)
-        self._feed(X, base)
-        inv = torch.ones(B * n)
-        for r, (temp, _, _, _) in srows.items():
-            inv[r * n : (r + 1) * n] = 1.0 / float(temp)
-        self.dec.set_invT(inv)
-        ttnn.execute_trace(self.md, self.tid_a, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.md)
-        a = self._read_a_greedy().reshape(B, n).clone()
-        cv, ci, cs = self._read_candidates()
-        head, k = self.m.head, self.dec.cand_k
-        fb = sample_block_ids(
-            a,
-            X,
-            force,
-            srows,
-            (cv, ci, cs),
-            k,
-            sample_fn,
-            lambda gs: head.read_logits_rows(self.dec.logits, [(g // T_loc, g % T_loc) for g in gs]),
-        )
-        self.sample_stats["rows"] += fb[0]
-        self.sample_stats["fallback"] += fb[1]
-        self.dec.set_a_in(a.reshape(-1))
-        ttnn.execute_trace(self.md, self.tid_b, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.md)
-        return self._readback(self.pack_b)
 
     # ---- hand-off: drafter seeding ----------------------------------------------------------------------------------------------
     def _capture_all(self, block_of, b0):

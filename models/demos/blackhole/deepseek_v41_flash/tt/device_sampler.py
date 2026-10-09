@@ -13,7 +13,11 @@ Algorithm (over the FULL vocabulary row, no top-k truncation of the candidates):
   top-p   : tau_p = largest tau >= tau_k with mass(s >= tau) >= top_p * mass(s >= tau_k)
   keep    : s >= tau_p;  draw = inverse CDF of e * keep in VOCABULARY order at u * total (per-column cumsum, 8 column totals gathered)
 Because the nucleus is a threshold set, no sort is needed; the draw in vocabulary order has the same distribution as the draw in sorted order. The only approximation is
-the resolution of the threshold search: tokens whose scaled logit lies within (range / J**levels) of the exact boundary may be kept or dropped wrongly.
+the resolution of the threshold search: tokens whose scaled logit lies within (range / J**levels) of the exact boundary may be kept or dropped wrongly. The top-k count search resolves one level more than the
+top-p mass search (``levels_k``): on a flat row the k-th and (k+1)-th largest scaled logits are closer than range / J**levels, which kept k + 1 tokens in ~20% of the cases (tests/test_device_sampler*.py).
+
+Execution: the sampler is its own trace (``DSV41Decoder.forward_sampler`` / ``SpecDecoder.forward_sampler``), replayed after the step trace only when a row of the step is sampled: the step trace itself
+stays greedy (``sample_global``), so greedy serving does not pay the ~3.8 ms (8 users per mesh row) - 9.5 ms (32 rows) of the sampler.
 """
 
 import torch
@@ -24,10 +28,13 @@ VOCAB = 129280
 
 
 class DSV41DeviceSampler:
-    def __init__(self, mesh_device, mesh_config, ccl, users_per_row, J=32, levels=4):
+    def __init__(self, mesh_device, mesh_config, ccl, users_per_row, J=32, levels=4, levels_k=None):
         self.md, self.mc, self.ccl = mesh_device, mesh_config, ccl
         rows, cols = tuple(mesh_device.shape)
         self.rows, self.cols, self.T, self.J, self.levels = rows, cols, users_per_row, J, levels
+        self.levels_k = (
+            levels if levels_k is None else levels_k
+        )  # the top-k count search resolves ties of a flat row: one more (cheap, count only) level than the top-p mass search
         self.shard = VOCAB // cols
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
         mk = lambda t, mapper=rep: ttnn.from_torch(
@@ -114,10 +121,10 @@ class DSV41DeviceSampler:
     def _v4(self, t):  # [1,1,T,1] -> [T,1,1,1]
         return ttnn.reshape(t, [self.T, 1, 1, 1])
 
-    def _search(self, s4, e4, lo, hi, target, use_mass):
+    def _search(self, s4, e4, lo, hi, target, use_mass, levels=None):
         """Largest threshold tau in [lo, hi) (grid refined ``levels`` times) with F(tau) >= target, F = count or mass of {s >= tau} over the whole vocabulary. lo / hi / target [1,1,T,1]."""
         T, J = self.T, self.J
-        for _ in range(self.levels):
+        for _ in range(levels or self.levels):
             width = ttnn.subtract(hi, lo)  # [1,1,T,1]
             taus = ttnn.add(ttnn.multiply(self._v4(width), self.frac), self._v4(lo))  # [T,J,1,1]
             m = ttnn.ge(s4, taus)  # [T,J,PR,32] 1.0 / 0.0
@@ -187,7 +194,7 @@ class DSV41DeviceSampler:
         hi0 = ttnn.add(ttnn.multiply(lo0, 0.0), 1e-3)  # a hair above the max so that the grid covers s = 0
         off_k = ttnn.eq(kk, 0.0)  # top-k off -> k = vocabulary
         k_eff = ttnn.add(ttnn.multiply(ttnn.subtract(1.0, off_k), kk), ttnn.multiply(off_k, float(VOCAB)))
-        tau_k = self._search(s4, e4, lo0, hi0, k_eff, use_mass=False)
+        tau_k = self._search(s4, e4, lo0, hi0, k_eff, use_mass=False, levels=self.levels_k)
         self._mark("search_k")
         if self.stop == "search_k":
             return tau_k
@@ -253,20 +260,27 @@ def sampling_rows(temperature, top_k, top_p, gens, B):
     greedy = ((t <= 0) | (k == 1)).float()
     invT = torch.where(t > 0, 1.0 / t.clamp(min=1e-6), torch.ones(B))
     if isinstance(gens, (list, tuple)):
-        u = torch.stack([torch.rand((), generator=gens[i % len(gens)]) for i in range(B)])
+        # one batched draw per distinct generator (a seeded request keeps its own stream, the unseeded rows share one): no per-row python loop of generator calls
+        u = torch.empty(B)
+        groups = {}
+        for i in range(B):
+            g = gens[i % len(gens)]
+            groups.setdefault(id(g), (g, []))[1].append(i)
+        for g, idx in groups.values():
+            u[torch.tensor(idx)] = torch.rand(len(idx), generator=g)
     else:
         u = torch.rand(B, generator=gens)
     return invT, k, p, u.clamp(max=1 - 1e-7), greedy
 
 
 # ---- CPU model of the device algorithm (tests/test_device_sampler_cpu.py; the device test compares the traced sampler with the exact reference) -------------------------------------------
-def emulate_keep_weights(logits, temperature, top_k=0, top_p=1.0, J=16, levels=3):
+def emulate_keep_weights(logits, temperature, top_k=0, top_p=1.0, J=16, levels=3, levels_k=None):
     """Weights e * keep [V] of one row, computed exactly like ``DSV41DeviceSampler.forward`` (fp32, k-ary threshold searches over the full vocabulary)."""
     l = logits.float()
     s = (l - l.max()) * (1.0 / float(temperature))
     e = torch.exp(s)
 
-    def search(lo, hi, target, use_mass):
+    def search(lo, hi, target, use_mass, levels=levels):
         for _ in range(levels):
             width = hi - lo
             taus = lo + width * (torch.arange(J, dtype=torch.float32) / J)
@@ -280,7 +294,7 @@ def emulate_keep_weights(logits, temperature, top_k=0, top_p=1.0, J=16, levels=3
 
     lo0, hi0 = s.min(), torch.tensor(1e-3)
     k_eff = float(top_k) if top_k and top_k > 0 else float(l.numel())
-    tau_k = search(lo0, hi0, k_eff, False)
+    tau_k = search(lo0, hi0, k_eff, False, levels if levels_k is None else levels_k)
     mass_k = (e * (s >= tau_k)).sum()
     tau_p = tau_k if float(top_p) >= 1.0 else search(tau_k, hi0, float(top_p) * mass_k, True)
     return e * (s >= tau_p)

@@ -179,17 +179,16 @@ class SpecDecoder(SpecVerifier):
         logits = ttnn.concat([self.head.forward(xs[c], pres[c]) for c in range(len(xs))], dim=2)
         return logits, taps, xs
 
-    # ---- sampled verify (adapter, tt/generator_vllm): the round split in two traces around a HOST sampling step -------------------------------------------------------------------
-    # Lossless speculative SAMPLING for point-mass drafts: the target's own sample s_j at every block position is drawn on the host (exact temperature / top-k / top-p sampler over the device's
-    # top-k candidates + partition function), the device accept rule is unchanged (draft d_{j+1} accepted iff it EQUALS s_j: probability p_target(d_{j+1}), and the committed tokens are always the
-    # target's own samples). ``forward_verify`` (trace A) = everything up to the head + candidates, ``forward_tail`` (trace B) = accept / commit / draft with ``a`` = the host-chosen ids.
-    def alloc_sampled(self, cand_k):
-        """Persistent buffers of the split round, allocated BEFORE any trace capture: invT [1,1,rows*T,1] (1 / temperature of every block row), the host-chosen ids ``a_in`` (uint32 [rows*T,1]) and the
-        hand-off ``hidden`` taps [1,1,rows*T,15360] bf16 from trace A to trace B."""
+    # ---- sampled verify (adapter, tt/generator_vllm): the round split in three traces around the sampler -----------------------------------------------------------------------
+    # Lossless speculative SAMPLING for point-mass drafts: the target's own sample s_j at every block position is drawn by the in-trace sampler (tt/device_sampler.py, every block row with its own
+    # uniform), the device accept rule is unchanged (draft d_{j+1} accepted iff it EQUALS s_j: probability p_target(d_{j+1}), and the committed tokens are always the target's own samples).
+    # ``forward_verify`` (trace A) = everything up to the head, ``forward_sampler`` (trace S) = the draw into ``a_in``, ``forward_tail`` (trace B) = accept / commit / draft over ``a_in``. A round
+    # without sampled rows replays the single trace ``forward`` (greedy: no sampler cost).
+    def alloc_sampled(self):
+        """Persistent buffers of the split round, allocated BEFORE any trace capture: the sampled ids ``a_in`` (uint32 [rows*T,1], written by trace S, read by trace B) and the hand-off ``hidden`` taps
+        [1,1,rows*T,15360] bf16 from trace A to trace B."""
         rows, cols = tuple(self.md.shape)
         T = self.U * self.n
-        self.cand_k = int(cand_k)
-        self.alloc_invT(T)
         mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
         self.a_in = ttnn.from_torch(
             torch.zeros(rows * T, 1, dtype=torch.int32),
@@ -208,26 +207,17 @@ class SpecDecoder(SpecVerifier):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(2, None), mesh_shape=(rows, cols)),
         )
 
-    def set_a_in(self, ids):
-        """ids [rows * T] torch (host-chosen token of every block row, mesh-row-major = user-major order)."""
-        rows, cols = tuple(self.md.shape)
-        host = ttnn.from_torch(
-            ids.reshape(-1, 1).to(torch.int32).contiguous(),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols)),
-        )
-        ttnn.copy_host_to_device_tensor(host, self.a_in)
-
     def forward_verify(self):
-        """Trace A of the split round: verify block -> logits -> greedy argmax + sampling candidates (top-k per vocab column + partition sums, ``invT``) + hidden taps into ``hidden_buf``."""
+        """Trace A of the split round: verify block -> logits (kept for trace S) + hidden taps into ``hidden_buf``."""
         logits, taps, x, xs, tokens = self._verify_body()
-        a = self.head.sample_global(logits, self.mesh_config, self.ccl)
-        self.a_greedy = a
-        self.cand, self.cand_s = self.head.topk_candidates(logits, self.mesh_config, self.ccl, self.cand_k, self.invT)
         ttnn.copy(self._hidden(taps, x, xs), self.hidden_buf)
-        self.logits = logits
-        return a
+        self.logits = logits  # (kept alive: the input of the sampler trace)
+        return logits
+
+    def forward_sampler(self):
+        """Trace S of the sampled round: every block row draws its own token over the logits of trace A (tt/device_sampler.py, per-row parameters uploaded before the round; greedy rows = exact argmax)
+        into ``a_in``, the ids of the accept rule of trace B."""
+        ttnn.copy(self.samp.forward(self.logits, self.samp.params), self.a_in)
 
     def forward_tail(self):
         """Trace B of the split round: accept (rule of ``forward``) over the host-chosen ids ``a_in``, commit, drafter. Same ``pack`` as ``forward``."""
@@ -303,12 +293,9 @@ class SpecDecoder(SpecVerifier):
                     self._dbg(f"layer {lid}", x)
             self._dbg_done = True
             logits = self.head.forward(x, pre)
-        if (
-            getattr(self, "samp", None) is not None
-        ):  # in-trace sampling: every block row draws its own token (tt/device_sampler.py); greedy rows = exact argmax
-            a = self.samp.forward(logits, self.samp.params)
-        else:
-            a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
+        a = self.head.sample_global(
+            logits, self.mesh_config, self.ccl
+        )  # [T,1] uint32 RM: argmax of every row (a round with sampled rows runs trace A / S / B instead)
         # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
         t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
         self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]

@@ -83,6 +83,7 @@ class DecodeBucket:
         assert 1 <= self.U < self.U_full, (self.U, self.U_full)
         t0 = time.time()
         self.trace_id = None
+        self.samp_trace = None
         self.last_logits = None
         self.rows_cat = None
         self._warm = False
@@ -268,6 +269,9 @@ class DecodeBucket:
         self.last_logits = self.dec.forward()
         ttnn.synchronize_device(self.m.md)
         self.dec.restore_states(snaps)
+        if self.samp is not None:  # compile pass of the bucket's sampler
+            self.dec.forward_sampler(self.last_logits)
+            ttnn.synchronize_device(self.m.md)
         self.set_loop_state(tokens, pos)
         self._warm = True
 
@@ -280,12 +284,22 @@ class DecodeBucket:
         ttnn.end_trace_capture(md, self.trace_id, cq_id=0)
         ttnn.synchronize_device(md)
         self.dec.restore_states(snaps)
+        if (
+            self.samp is not None
+        ):  # the bucket sampler's own trace (replayed after the step trace by a step with sampled rows)
+            self.samp_trace = ttnn.begin_trace_capture(md, cq_id=0)
+            self.dec.forward_sampler(self.last_logits)
+            ttnn.end_trace_capture(md, self.samp_trace, cq_id=0)
+            ttnn.synchronize_device(md)
         self.set_loop_state(tokens, pos)
 
     def release_trace(self):
         if self.trace_id is not None:
             ttnn.release_trace(self.m.md, self.trace_id)
             self.trace_id = None
+        if self.samp_trace is not None:
+            ttnn.release_trace(self.m.md, self.samp_trace)
+            self.samp_trace = None
 
     # ---- one step -----------------------------------------------------------------------------------------------------------------------
     def step(self, tokens, pos, phys, reload_inputs=True, enable_trace=True, invT=None, samp=None):
@@ -312,11 +326,16 @@ class DecodeBucket:
             self.dec.set_invT(invT)
         if samp is not None and self.samp is not None:
             self.samp.set_params(*samp)
+        sampled = samp is not None and self.samp is not None
         if enable_trace:
             check_trace_allocations(m.md, self.trace_id, f"decode bucket B'={self.B}")
             ttnn.execute_trace(m.md, self.trace_id, cq_id=0, blocking=False)
+            if sampled:  # the sampled tokens replace the greedy ones the step wrote
+                ttnn.execute_trace(m.md, self.samp_trace, cq_id=0, blocking=False)
         else:
             self.last_logits = self.dec.forward()
+            if sampled:
+                self.dec.forward_sampler(self.last_logits)
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         out = torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
         t3 = time.perf_counter()

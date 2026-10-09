@@ -162,6 +162,10 @@ class FakeModel:
     def __init__(self, B, use_indexer=False, max_ctx=4096):
         self.B, self.use_indexer, self.max_ctx, self.num_pages = B, use_indexer, max_ctx, 100
         self.timing = {}
+        self.samp = None  # the in-trace sampler (a stand-in object enables sampled requests)
+        self.sink = SimpleNamespace(taps=None)  # no prefill taps: a fresh-row step stays a plain step
+        self.tap_n = {}
+        self.samp_calls = []  # the ``samp`` argument of every decode step
         self.pool = SimpleNamespace(dtype="bf16", released=[], release=lambda p: self.pool.released.append(p))
         self.args = SimpleNamespace(vocab_size=VOCAB)
         self.log = []
@@ -193,8 +197,9 @@ class FakeModel:
                 logits[b, int(first[b])] = 1.0
         return first, logits if want_logits else None
 
-    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True):
+    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True, samp=None):
         self.log.append(("decode", tokens.clone(), current_pos.clone()))
+        self.samp_calls.append(samp)
         out = (tokens + 1) % 7
         self.last = torch.zeros(self.B, VOCAB)
         self.last[torch.arange(self.B), out] = 1.0
@@ -423,6 +428,9 @@ class FakeSpec:
         self.d_final = torch.zeros(B, 5, dtype=torch.long)
         self.dev_first = torch.zeros(B, dtype=torch.long)
         self.rounds = []
+        self.samp = None  # the in-trace sampler of the verify trace (a stand-in object enables sampled rows)
+        self.sample_cfg = None
+        self.cfgs = []  # ``sample_cfg`` seen by every round
 
     def release(self):
         self.released += 1
@@ -433,6 +441,7 @@ class FakeSpec:
         self.d_final = torch.stack([(first + j + 1) % 7 for j in range(5)], dim=1)
 
     def _round(self, X, base, force):
+        self.cfgs.append(self.sample_cfg)
         self.rounds.append(("round", X.clone(), base.clone(), force.clone()))
         a = (X + 1) % 7
         m = torch.zeros(self.B, dtype=torch.long)
@@ -856,7 +865,8 @@ class FakeBucketModel(FakeInterleaveModel):
     def decode_filler(self):
         return self._f
 
-    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True):
+    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True, samp=None):
+        self.samp_calls.append(samp)
         self.bucket_log.append((Ub, tokens.clone(), current_pos.clone(), phys.clone()))
         out = (tokens + 1) % 7
         self.last = torch.zeros(len(tokens), VOCAB)
@@ -1055,63 +1065,52 @@ def _target_probs(full, T, top_p):
 
 @pytest.mark.parametrize("cfg", [(1.0, 0.95), (1.0, 1.0), (0.7, 0.9)])
 def test_sampled_speculative_rounds_have_the_non_speculative_law(cfg):
-    """Lossless speculative sampling for point-mass drafts (SpecRunner.sampled): the first two generated tokens of a chain whose next-token law depends on the previous token, produced by
-    verify rounds with arbitrary (here partly wrong) drafts, are distributed like the sequential samples. Compared with the sampling noise floor of two sequential runs.
+    """Lossless speculative sampling for point-mass drafts (SpecRunner trace A | S | B): every block row draws its own token with the in-trace sampler (emulated here: ``emulate_keep_weights`` /
+    ``emulate_draw`` with an independent uniform per row), a draft is accepted iff it EQUALS the draw of the row before it, the committed tokens are the draws up to and including the first mismatch.
+    The first two generated tokens of a chain whose next-token law depends on the previous token, produced by verify rounds with arbitrary (here partly wrong) drafts, are distributed like the
+    sequential samples. Compared with the sampling noise floor of two sequential runs.
     """
-    from models.demos.blackhole.deepseek_v41_flash.tt import spec_model
+    from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import emulate_draw, emulate_keep_weights
 
     T, top_p = cfg
     torch.manual_seed(11)
     table = torch.randn(6, 8 * 200) * 4.0
-    n, N = 3, 5000
+    n, N = 3, 4000
     t0 = 3
     gen = torch.Generator().manual_seed(5)
     gen2 = torch.Generator().manual_seed(6)
+    wcache = {}
+
+    def draw(prev, g):  # one draw of the in-trace sampler for the row that follows token ``prev``
+        k_ = int(prev) % table.shape[0]
+        if k_ not in wcache:
+            wcache[k_] = emulate_keep_weights(table[k_], T, 0, top_p, 16, 3, 4)
+        return int(emulate_draw(wcache[k_], float(torch.rand(1, generator=g, dtype=torch.float64))))
 
     def draw_seq(g):  # sequential reference
-        out = []
-        prev = t0
+        out, prev = [], t0
         for _ in range(2):
-            full = _bigram_logits(table, prev)
-            v, ids, sums = _cand(full, T=T)
-            u = float(torch.rand(1, generator=g, dtype=torch.float64))
-            tok, _ = VS.sample_exact(v, ids, sums, 16, T, -1, top_p, u, lambda: full)
-            out.append(tok)
-            prev = tok
+            prev = draw(prev, g)
+            out.append(prev)
         return tuple(out)
 
     def draw_spec(g):
         got, prev = [], t0
         while len(got) < 2:
-            drafts = []
-            d = prev
+            drafts, d = [], prev
             for _ in range(n - 1):  # drafts follow the argmax chain, one in three is wrong
                 d = (
-                    int(torch.argmax(_bigram_logits(table, d)))
+                    int(torch.argmax(table[int(d) % table.shape[0]]))
                     if torch.rand(1, generator=g) > 0.33
                     else int(torch.randint(0, 1600, (1,), generator=g))
                 )
                 drafts.append(d)
-            X = torch.tensor([[prev] + drafts])
-            cands = [_cand(_bigram_logits(table, X[0, j]), T=T) for j in range(n)]
-            cv = torch.stack([c[0] for c in cands])
-            ci = torch.stack([c[1] for c in cands])
-            cs = torch.stack([c[2] for c in cands])
-            a = torch.zeros(1, n, dtype=torch.long)
-            spec_model.sample_block_ids(
-                a,
-                X,
-                torch.tensor([-1.0]),
-                {0: (T, -1, top_p, g)},
-                (cv, ci, cs),
-                16,
-                VS.sample_many,
-                lambda gs: [_bigram_logits(table, X[0, gg]) for gg in gs],
-            )
+            X = [prev] + drafts
+            a = [draw(X[j], g) for j in range(n)]  # every block row draws (rows after the first mismatch are discarded)
             m = 0
-            while m < n - 1 and int(a[0, m]) == int(X[0, m + 1]):
+            while m < n - 1 and a[m] == X[m + 1]:
                 m += 1
-            got += [int(a[0, j]) for j in range(m + 1)]
+            got += a[: m + 1]
             prev = got[-1]
         return tuple(got[:2])
 
@@ -1126,3 +1125,134 @@ def test_sampled_speculative_rounds_have_the_non_speculative_law(cfg):
     tv = lambda p, q: 0.5 * sum(abs(p.get(k_, 0) - q.get(k_, 0)) for k_ in set(p) | set(q))
     floor = tv(ref1, ref2)
     assert tv(spec, ref1) < max(0.06, 2.0 * floor), (tv(spec, ref1), floor)
+
+
+# ---- in-trace sampling: the adapter hands the per-request parameters and uniforms to the sampler of the trace --------------------------------------
+def _sp(temps, ks=None, ps=None, seeds=None):
+    n = 8
+    pad = lambda x, v: (list(x) + [v] * n)[:n]
+    return SimpleNamespace(
+        temperature=pad(temps, 0.0),
+        top_k=pad(ks or [], -1),
+        top_p=pad(ps or [], 1.0),
+        seed=pad(seeds or [], None),
+        enable_log_probs=[False] * n,
+    )
+
+
+def _plain_step(gen, firsts, sp, slots=(0, 1)):
+    tok = torch.zeros(8, 1, dtype=torch.int32)
+    pos = torch.full((8,), -1)
+    for s in slots:
+        tok[s, 0], pos[s] = int(firsts[s]), 3
+    return gen.decode_forward(tok, pos, sampling_params=sp)
+
+
+def test_plain_decode_passes_per_row_sampling_params_only_for_sampled_steps(interleave_gen):
+    gen, m = interleave_gen
+    m.samp = object()  # the in-trace sampler exists
+    toks = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 3], empty_slots=[0, 1], sampling_params=GREEDY)
+    firsts = {0: int(first[0]), 1: int(first[1])}
+    # an all-greedy step: no sampling parameters (the step replays the step trace only, no sampler)
+    _plain_step(gen, firsts, GREEDY)
+    assert m.samp_calls[-1] is None
+    # slot 0 sampled (T 0.8, top_k 20, top_p 0.9), slot 1 greedy (T 0)
+    _plain_step(gen, firsts, _sp([0.8, 0.0], [20, -1], [0.9, 1.0], [123, None]))
+    invT, k, p, u, greedy = m.samp_calls[-1]
+    r0, r1 = gen.slots.physical(0), gen.slots.physical(1)
+    assert (
+        len(invT) == gen.B
+        and abs(float(invT[r0]) - 1 / 0.8) < 1e-6
+        and float(k[r0]) == 20
+        and abs(float(p[r0]) - 0.9) < 1e-6
+    )
+    assert float(greedy[r0]) == 0.0 and float(greedy[r1]) == 1.0
+    assert 0.0 <= float(u[r0]) < 1.0
+    assert int((greedy == 1.0).sum()) == gen.B - 1  # padding rows are greedy
+    _plain_step(gen, firsts, GREEDY)
+    assert m.samp_calls[-1] is None
+
+
+def test_a_seeded_request_draws_the_same_uniforms_whatever_its_slot():
+    def run(slot):
+        os.environ["DSV41_VLLM_INTERLEAVE"] = "1"
+        os.environ["DSV41_VLLM_CHUNK"] = "512"
+        try:
+            B = VS.padded_batch(8)
+            m = FakeInterleaveModel(B, use_indexer=True)
+            m.samp = object()
+            gen = DeepseekV41ForCausalLM(
+                SimpleNamespace(m=m, prefill_chunk=None, auto_chunk=lambda max_len: 256), 8, 4096
+            )
+        finally:
+            os.environ.pop("DSV41_VLLM_INTERLEAVE")
+            os.environ.pop("DSV41_VLLM_CHUNK")
+        sp = _sp([0.7] * 8, [-1] * 8, [0.95] * 8, [77] * 8)
+        first = gen.prefill_forward(
+            torch.tensor([[1, 2, 3]], dtype=torch.int32), prompt_lens=[3], empty_slots=[slot], sampling_params=sp
+        )
+        us = []
+        for _ in range(3):
+            _plain_step(gen, {slot: int(first[0])}, sp, slots=(slot,))
+            us.append(float(m.samp_calls[-1][3][gen.slots.physical(slot)]))
+        return us
+
+    a, b = run(0), run(5)
+    assert a == b and len(set(a)) == 3 and all(0.0 <= x < 1.0 for x in a)
+
+
+def test_sampled_decode_without_the_in_trace_sampler_fails_loudly(interleave_gen, expect_error):
+    gen, m = interleave_gen  # m.samp is None
+    first = gen.prefill_forward(
+        torch.tensor([[1, 2, 3]], dtype=torch.int32), prompt_lens=[3], empty_slots=[0], sampling_params=GREEDY
+    )
+    with expect_error(ValueError, "in-trace sampler"):
+        _plain_step(gen, {0: int(first[0])}, _sp([0.8]), slots=(0,))
+
+
+def test_spec_verify_passes_sampled_rows_to_the_runner_and_leaves_greedy_rows_alone():
+    gen, m, spec = make_spec(8, 3)
+    spec.samp = object()
+    toks = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 2], empty_slots=[0, 1], sampling_params=GREEDY)
+    f0, f1 = int(first[0]), int(first[1])
+    X = torch.zeros(8, 4, dtype=torch.int32)
+    X[0] = torch.tensor([f0, (f0 + 1) % 7, (f0 + 2) % 7, (f0 + 3) % 7])
+    X[1] = torch.tensor([f1, -1, -1, -1])
+    pos = torch.full((8, 4), -1)
+    pos[0], pos[1, 0] = torch.arange(3, 7), 2
+    nv = torch.tensor([3, 0, 0, 0, 0, 0, 0, 0], dtype=torch.int32)
+    kw = dict(num_valid_drafts=nv, accepted_counts=torch.ones(8, dtype=torch.int32), spec_mode="argmax_ids")
+    gen.decode_forward(X, pos, sampling_params=GREEDY, **kw)
+    assert spec.cfgs[-1] is None  # greedy round: no sampling configuration
+    r0, r1 = gen.slots.physical(0), gen.slots.physical(1)
+    own = gen.gens[r0] = torch.Generator().manual_seed(5)
+    gen.decode_forward(X, pos, sampling_params=_sp([0.7, 0.0], [-1, -1], [0.9, 1.0], [5, None]), **kw)
+    c = spec.cfgs[-1]
+    assert len(c["temperature"]) == gen.B and c["temperature"][r0] == 0.7 and c["top_p"][r0] == 0.9
+    assert c["temperature"][r1] == 0.0 and sum(1 for t in c["temperature"] if t > 0) == 1
+    assert (
+        c["gens"][r0] is own and c["gens"][r1] is gen.rng and spec.sample_cfg is None
+    )  # (the seeded request's own generator)
+    assert gen.spec_stats["sampled_rows"] == 1
+
+
+def test_sampled_spec_verify_without_the_in_trace_sampler_fails_loudly(expect_error):
+    gen, m, spec = make_spec(8, 3)
+    first = gen.prefill_forward(
+        torch.tensor([[1, 2, 3, 0]], dtype=torch.int32), prompt_lens=[3], empty_slots=[0], sampling_params=GREEDY
+    )
+    X = torch.zeros(8, 4, dtype=torch.int32)
+    X[0] = torch.tensor([int(first[0]), -1, -1, -1])
+    pos = torch.full((8, 4), -1)
+    pos[0, 0] = 3
+    with expect_error(ValueError, "in-trace sampler"):
+        gen.decode_forward(
+            X,
+            pos,
+            sampling_params=_sp([0.7]),
+            num_valid_drafts=torch.zeros(8, dtype=torch.int32),
+            accepted_counts=torch.ones(8, dtype=torch.int32),
+            spec_mode="argmax_ids",
+        )

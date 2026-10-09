@@ -14,7 +14,7 @@ import torch
 from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import emulate_draw, emulate_keep_weights
 
 V = 1600
-J, LEVELS = 16, 3
+J, LEVELS, LEVELS_K = 16, 3, 4  # the production sampler: tt/dsv41_model.Model._make_sampler
 
 
 def exact_probs(full, T, tk, tp):
@@ -48,7 +48,7 @@ def test_kept_set_is_the_exact_support_up_to_the_boundary_band(scale, cfg):
     full = torch.randn(V) * scale
     T, tk, tp = cfg
     ex = exact_probs(full, T, tk, tp) > 0
-    got = emulate_keep_weights(full, T, tk, tp, J, LEVELS) > 0
+    got = emulate_keep_weights(full, T, tk, tp, J, LEVELS, LEVELS_K) > 0
     diff = ex ^ got
     if diff.any():  # every wrongly kept / dropped token lies within the search resolution of the boundary
         s = (full - full.max()) / T
@@ -65,7 +65,7 @@ def test_distribution_of_the_vocabulary_order_draw_matches_the_exact_sampler(sca
     full = torch.randn(V) * scale
     T, tk, tp = cfg
     ref = exact_probs(full, T, tk, tp)
-    w = emulate_keep_weights(full, T, tk, tp, J, LEVELS)
+    w = emulate_keep_weights(full, T, tk, tp, J, LEVELS, LEVELS_K)
     N = 200000
     u = torch.rand(N, generator=torch.Generator().manual_seed(9), dtype=torch.float64)
     emp = torch.bincount(emulate_draw(w, u), minlength=V).double() / N
@@ -77,5 +77,19 @@ def test_distribution_of_the_vocabulary_order_draw_matches_the_exact_sampler(sca
 def test_greedy_rows_are_the_exact_argmax_and_top_k_one_is_a_point_mass():
     torch.manual_seed(2)
     full = torch.randn(V) * 3
-    w = emulate_keep_weights(full, 1.0, 1, 1.0, J, LEVELS)
+    w = emulate_keep_weights(full, 1.0, 1, 1.0, J, LEVELS, LEVELS_K)
     assert int((w > 0).sum()) >= 1 and int(emulate_draw(w, 0.37)) == int(full.argmax())
+
+
+def test_a_flat_vocabulary_row_keeps_exactly_top_k_tokens_with_the_extra_count_level():
+    """Flat rows (a real vocabulary, logits within a small band): the k-th and (k+1)-th largest scaled logits are closer than the resolution of a 3-level count search (range / 16**3), so the
+    kept set had k + 1 tokens in ~20% of the (row, k) cases, i.e. one token of mass 1 / k too much (device test: Kolmogorov deviation 0.044 at k = 20). The top-k search resolves one more level
+    (``levels_k`` 4): exactly k tokens in every case here."""
+    V_ = 129280
+    wrong3 = wrong4 = 0
+    for seed in range(6):
+        row = torch.randn(V_, generator=torch.Generator().manual_seed(seed)) * 0.05
+        for k in (5, 20, 50):
+            wrong3 += int((emulate_keep_weights(row, 0.6, k, 1.0, J, LEVELS, 3) > 0).sum()) != k
+            wrong4 += int((emulate_keep_weights(row, 0.6, k, 1.0, J, LEVELS, LEVELS_K) > 0).sum()) != k
+    assert wrong4 == 0 and wrong3 >= 1, (wrong3, wrong4)
