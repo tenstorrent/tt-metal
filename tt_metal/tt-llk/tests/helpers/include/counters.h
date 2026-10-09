@@ -14,6 +14,7 @@
 // Counter inventory, register map and register primitives are shared with the metal profiler. On Quasar
 // bank_regs() defaults to the TRISC-local window, so every thread reaches the block of its own NEO.
 #include <array>
+#include <type_traits>
 
 #include "perf_counters/hw.h"
 #include "perf_counters/inventory.h"
