@@ -37,7 +37,8 @@ enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 // filtered by `recipe_geometry_rejection`; this range only bounds the search to where the cost
 // model is fitted: Q from 128 rows and K from 256 to 512 rows (shorter only when the whole
 // sequence is shorter). Smaller blocks are overhead-dominated and K > 512 is not yet measured;
-// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E).
+// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E). When nothing in
+// this range fits L1 (large head dims), the search extends down to one-tile chunks.
 inline constexpr uint32_t kRecipeSearchMinQTiles = 4;
 inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
@@ -59,9 +60,10 @@ inline bool recipe_geometry_supported(
 
 // Schedule facts that change the circular-buffer layout.
 struct RecipeL1Context {
-    uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
-    uint32_t extra_bytes = 0;          // dense key ranges: control pages, template tile, scratch; the sink page
-    uint32_t vd_tiles = 0;             // dense MLA: V / output head dim in tiles (0: d_tiles)
+    uint32_t mask_page_bytes = 0;        // dense: attn_mask tile bytes (0 = no mask)
+    uint32_t extra_bytes = 0;            // dense key ranges: control pages, template tile, scratch; the sink page
+    uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
+    std::optional<KVStorage> v_storage;  // V's storage when it differs from K's (nullopt: K's)
 };
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
@@ -99,7 +101,8 @@ struct RecipeBlockingProblem {
     uint32_t joint_k_rows = 0;
     uint32_t ring_size = 1;
     uint32_t d_tiles = 4;
-    uint32_t vd_tiles = 0;  // dense MLA: V / output head dim in tiles (0: d_tiles)
+    uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
+    std::optional<KVStorage> v_storage;  // dense/joint: V's storage when it differs from K's (nullopt: K's)
     // Dense/joint: the grid the op may use. Ring: the SDPA worker grid. Exp ring: the program
     // config grid including the fabric MUX column (the chooser may narrow its width).
     CoreCoord grid{1, 1};
@@ -168,7 +171,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     uint64_t reserved_l1_bytes = 0,
     const RecipeKeyRange* key_range = nullptr,
     const RecipeDenseOptions* options = nullptr,
-    bool chunks_are_hints = false);
+    bool chunks_are_hints = false,
+    std::optional<KVStorage> v_storage = std::nullopt);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_recipe.hpp"
+#include "sdpa_recipe_blocking.hpp"
 
 #include <algorithm>
 #include <array>
@@ -32,10 +33,13 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
         case SDPAPrecision::FAST: recipe = Recipe::E; break;
         default: TT_THROW("Unknown SDPA precision recipe");
     }
-    const auto storage = kv_type == DataType::BFLOAT4_B   ? KVStorage::BFP4
-                         : kv_type == DataType::BFLOAT8_B ? KVStorage::BFP8
-                                                          : KVStorage::BF16;
-    return {recipe, storage};
+    return {recipe, recipe_kv_storage(kv_type)};
+}
+
+KVStorage recipe_kv_storage(DataType dtype) {
+    return dtype == DataType::BFLOAT4_B   ? KVStorage::BFP4
+           : dtype == DataType::BFLOAT8_B ? KVStorage::BFP8
+                                          : KVStorage::BF16;
 }
 
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
@@ -119,7 +123,8 @@ ProgramDescriptor recipe_compute_program(
     uint32_t k_tiles,
     uint32_t d_tiles,
     std::optional<float> scale,
-    uint32_t vd_tiles) {
+    uint32_t vd_tiles,
+    std::optional<KVStorage> v_storage) {
     TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     // V, the numerator state and the output are vd tiles wide; Q and K d tiles (MLA: vd < d).
     const uint32_t vd = vd_tiles ? vd_tiles : d_tiles;
@@ -132,7 +137,14 @@ ProgramDescriptor recipe_compute_program(
                          : policy.selection.kv_storage == KVStorage::BFP8 ? DataType::BFLOAT8_B
                                                                           : DataType::BFLOAT4_B;
     const auto kv_format = datatype_to_dataformat_converter(kv_type);
-    const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
+    auto tile_bytes = [](KVStorage storage) -> uint32_t {
+        return storage == KVStorage::BF16 ? 2048 : storage == KVStorage::BFP8 ? 1088 : 576;
+    };
+    const uint32_t kv_bytes = tile_bytes(policy.selection.kv_storage);
+    const auto v_kind = v_storage.value_or(policy.selection.kv_storage);
+    const auto v_format = v_kind == KVStorage::BF16   ? tt::DataFormat::Float16_b
+                          : v_kind == KVStorage::BFP8 ? tt::DataFormat::Bfp8_b
+                                                      : tt::DataFormat::Bfp4_b;
     // STANDARD and FAST (the reference-max recipes) run every K chunk after a Q chunk's first on the
     // fused chunk (recipe_fused_chunk.hpp). It needs QK subblocks at least two tiles wide: the one-wide LoFi
     // matmul reuses its other operand, which the m_ref inner step does not support.
@@ -154,7 +166,7 @@ ProgramDescriptor recipe_compute_program(
     // Q-row buffers scale with the Q chunk; K/V depths and per-row state do not change.
     add_cb(0, 2 * q_tiles * d_tiles, 2048, tt::DataFormat::Float16_b);
     add_cb(1, k_tiles * d_tiles * (fp32 ? 1 : 2), kv_bytes, kv_format);
-    add_cb(2, k_tiles * vd * (fp32 ? 1 : 2), kv_bytes, kv_format);
+    add_cb(2, k_tiles * vd * (fp32 ? 1 : 2), tile_bytes(v_kind), v_format);
     add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(5, 1, state_bytes, state_format);
@@ -273,14 +285,13 @@ static uint64_t recipe_free_l1(IDevice& device) {
     return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
-// Reject a recipe CB layout that cannot fit the device's free L1 (a fused layout first falls back to the
-// unfused kernel).
-static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
+// Reject a recipe CB layout that cannot fit the `available` L1 (a fused layout first falls back to the unfused
+// kernel).
+static void check_recipe_l1_fit(ProgramDescriptor& program, uint64_t available, uint32_t q_chunk, uint32_t k_chunk) {
     uint64_t bytes = 0;
     for (const auto& cb : program.cbs) {
         bytes += cb.total_size;
     }
-    const uint64_t available = recipe_free_l1(device);
     if (bytes > available) {
         bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines, q_chunk / 32);
     }
@@ -483,7 +494,8 @@ static ProgramDescriptor recipe_program(
     const MemoryConfig& output_memory_config,
     const RecipeKeyRange& key_range,
     const RecipeDenseOptions& options,
-    const std::vector<Tensor>& outputs) {
+    const std::vector<Tensor>& outputs,
+    uint64_t l1_budget) {
     const bool keyed = key_range.active();
     const bool paged = key_range.page_table.has_value();
     const auto& [q, k, v] = segments.front();
@@ -572,9 +584,17 @@ static ProgramDescriptor recipe_program(
         TT_FATAL(
             !paged || block_rows % 32 == 0, "SDPA recipe paged K/V blocks must be tile multiples, got {}", block_rows);
         TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
+        // V may be stored differently from K (Qwen-VL vision: K BF16, V BFP8): CB 2 takes V's format.
         TT_FATAL(
-            sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == kv_type,
-            "SDPA input types do not match the selected recipe");
+            sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == v.dtype() &&
+                (sv.dtype() == DataType::BFLOAT16 || sv.dtype() == DataType::BFLOAT8_B ||
+                 sv.dtype() == DataType::BFLOAT4_B),
+            "SDPA input types do not match the selected recipe: Q {} (BF16), K {} ({}), V {} (BF16, BFP8 or BFP4, the "
+            "same in every segment)",
+            sq.dtype(),
+            sk.dtype(),
+            kv_type,
+            sv.dtype());
         q_length += sq.padded_shape()[2];
         k_length += paged ? k_rows : sk.padded_shape()[2];
     }
@@ -667,7 +687,10 @@ static ProgramDescriptor recipe_program(
     const auto& output = outputs.front();
     const uint32_t compute_q_tiles =
         recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value() || keyed, keyed);
-    auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale, vd_tiles);
+    auto program = recipe_compute_program(
+        policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale, vd_tiles, recipe_kv_storage(v.dtype()));
+    // The layout's L1 choices (mask CB depth, fused CBs) see at most the hashed budget (SDPARecipeParams::l1_budget).
+    const uint64_t available = std::min(recipe_free_l1(*q.device()), l1_budget);
     // QK row-group height the compute consumes the mask in: FP32 recipes single rows, paired BF16 recipes row pairs.
     const uint32_t mask_group_rows = policy.fp32_destination ? 1 : 2;
     if (attn_mask || keyed) {
@@ -683,7 +706,6 @@ static ProgramDescriptor recipe_program(
         for (const auto& cb : program.cbs) {
             used += cb.total_size;
         }
-        const uint64_t available = recipe_free_l1(*q.device());
         const uint32_t groups = used + 2 * group_bytes <= available ? 2 : 1;
         program.cbs.push_back(CBDescriptor{
             .total_size = groups * group_bytes,
@@ -726,7 +748,7 @@ static ProgramDescriptor recipe_program(
             defines.emplace_back("SDPA_RECIPE_SINK_BF16", "1");
         }
     }
-    check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
+    check_recipe_l1_fit(program, available, q_chunk, k_chunk);
     if (k_length % k_chunk != 0 || k_rows % 32 != 0 || joint_k_rows % 32 != 0) {
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k_rows));
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
@@ -1009,8 +1031,11 @@ struct SDPARecipeParams {
     std::vector<std::pair<ttnn::MeshCoordinateRange, std::array<uint32_t, 2>>> q_slab_starts;
     uint32_t head_dim_v = 0;
     bool output_concat_heads = false;
-    // Free L1 below the live L1 buffers at the call: the mask CB depth and the fused CBs depend on it.
-    uint64_t free_l1 = 0;
+    // The L1 the program's layout may use (the mask CB depth and the fused CBs depend on it): the free L1 below the
+    // live L1 buffers at the call, less the outputs' share, capped at the layout's full size (recipe_l1_budget), so
+    // calls with room to spare share one program whatever else is live in L1 (back-to-back calls with L1 outputs in
+    // one trace capture).
+    uint64_t l1_budget = 0;
 };
 
 struct SDPARecipeInputs {
@@ -1063,7 +1088,8 @@ struct SDPARecipeOperation {
                 attrs.output_memory_config,
                 key_range,
                 options,
-                outputs);
+                outputs,
+                attrs.l1_budget);
         }
 
         // Everything but the buffer addresses is in the program hash.
@@ -1218,7 +1244,7 @@ struct SDPARecipeOperation {
             attrs.q_slab_rows,
             attrs.head_dim_v,
             attrs.output_concat_heads,
-            attrs.free_l1,
+            attrs.l1_budget,
             inputs.v.buffer() == inputs.k.buffer());
         for (const auto& [devices, starts] : attrs.q_slab_starts) {
             ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(devices, starts[0], starts[1]));
@@ -1254,6 +1280,44 @@ struct SDPARecipeOperation {
     }
 };
 }  // namespace
+
+// SDPARecipeParams::l1_budget. The cap is the blocking chooser's preferred layout (recipe_l1_bytes: double-buffered
+// mask groups and the fused CBs), which is never below the layout recipe_program builds.
+static uint64_t recipe_l1_budget(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options) {
+    const auto& [q, k, v] = segments.front();
+    const auto& qs = q.padded_shape();
+    const uint32_t d_tiles = qs[3] / 32;
+    const uint32_t vd_tiles = options.head_dim_v ? options.head_dim_v / 32 : d_tiles;
+    uint64_t outputs = 0;
+    for (const auto& segment : segments) {
+        const uint32_t rows = key_range.q_slab_rows ? 2 * key_range.q_slab_rows : segment[0].padded_shape()[2];
+        outputs +=
+            recipe_output_l1_bytes(q, uint64_t{qs[0]} * qs[1] * (rows / 32) * vd_tiles, 2048, output_memory_config);
+    }
+    const uint64_t free_l1 = recipe_free_l1(*q.device());
+    const uint64_t budget = free_l1 > outputs ? free_l1 - outputs : 0;
+    const uint32_t q_tiles = program_config ? program_config->q_chunk_size / 32 : 8;
+    const uint32_t k_tiles = program_config ? program_config->k_chunk_size / 32 : 16;
+    const auto op = segments.size() == 2 ? RecipeOp::Joint : RecipeOp::Dense;
+    if (qs[3] % 32 != 0 || !recipe_geometry_supported(op, policy, q_tiles, k_tiles, d_tiles)) {
+        return budget;  // recipe_program rejects the call
+    }
+    const RecipeL1Context context{
+        .mask_page_bytes = attn_mask            ? attn_mask->buffer()->page_size()
+                           : key_range.active() ? kRecipeKeyMaskPage
+                                                : 0,
+        .extra_bytes = recipe_key_range_extra_bytes(key_range) + recipe_dense_options_extra_bytes(options),
+        .vd_tiles = options.head_dim_v ? vd_tiles : 0,
+        .v_storage = recipe_kv_storage(v.dtype())};
+    return std::min(budget, recipe_l1_bytes(op, policy, q_tiles, k_tiles, d_tiles, context).preferred);
+}
 
 static std::vector<Tensor> run_recipe_segments(
     const std::vector<std::array<Tensor, 3>>& segments,
@@ -1294,7 +1358,8 @@ static std::vector<Tensor> run_recipe_segments(
             .q_slab_starts = key_range.q_slab_starts,
             .head_dim_v = options.head_dim_v,
             .output_concat_heads = options.output_concat_heads,
-            .free_l1 = recipe_free_l1(*q.device())},
+            .l1_budget = recipe_l1_budget(
+                segments, policy, program_config, attn_mask, output_memory_config, key_range, options)},
         inputs);
 }
 
