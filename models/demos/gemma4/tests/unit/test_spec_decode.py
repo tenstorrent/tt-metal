@@ -3389,7 +3389,6 @@ def test_fused_pli_single_device_four_replays(mesh_device, reset_seeds, monkeypa
     monkeypatch.setenv("GEMMA4_SPEC_TRACE", "1")
     monkeypatch.delenv("GEMMA4_PLI", raising=False)
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "3")
-    monkeypatch.setenv("GEMMA4_PV_SDPA_FP32", "0")
     max_seq_len, block_size = 1024, 64
     paged = PagedAttentionConfig(block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size))
     generator, kv_cache, tokenizer = Gemma4Generator.from_pretrained(

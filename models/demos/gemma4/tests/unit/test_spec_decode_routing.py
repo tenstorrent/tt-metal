@@ -84,6 +84,24 @@ def test_batched_dispatch_follows_trace(trace, expect_error):
         assert seen == [False]
 
 
+@pytest.mark.parametrize("trace", [True, False])
+def test_batched_reseed_warns_on_both_paths(monkeypatch, trace, expect_error):
+    from models.demos.gemma4.tt import spec_decode
+
+    warnings = []
+    monkeypatch.setattr(spec_decode, "logger", SimpleNamespace(warning=warnings.append))
+    decoder = _decoder(pli=False, trace=trace)
+    decoder._fused_reseed = True
+    decoder._generate_fused_traced_batched = lambda *args: ([[7]], [[0]])
+    decoder._seed_batched = _reached_host_loop
+    if trace:
+        decoder.generate_batched([1], [0], 1, 64)
+    else:
+        with expect_error(RuntimeError, "host loop reached"):
+            decoder.generate_batched([1], [0], 1, 64)
+    assert any("GEMMA4_SPEC_FUSED_RESEED" in message for message in warnings)
+
+
 def test_batched_traced_host_pli_rejected_before_device_work(expect_error):
     decoder = _decoder(pli=True, device_pli=False)
     decoder._fused_reseed = False

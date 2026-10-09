@@ -1006,7 +1006,7 @@ class SpeculativeDecoder:
             "S_k": h["S_k"],
         }
 
-    def _pv_call(self, dev, P, tokens=None, pli_stacked=None):
+    def _pv_call(self, dev, P, tokens=None):
         kv_write_idxs = None
         if os.environ.get("GEMMA4_PV_FALLBACK_WRITE") == "1":
             # Debug bisect: per-position write positions for the fallback loop
@@ -1035,7 +1035,6 @@ class SpeculativeDecoder:
             # full-width flat table's unwritten tail diluted softmax.
             page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
             token_ids_host=None if device_pli else tokens,
-            pli_stacked=None if device_pli else pli_stacked,
             pli_on_device=device_pli,
         )
 
@@ -1118,8 +1117,8 @@ class SpeculativeDecoder:
         """Batched verify. Returns (logits_host [B,vocab], hidden_device [1,1,B,h])."""
         if self._use_trace and self.target_has_pli:
             raise NotImplementedError(
-                "Traced host PLI verification requires persistent buffers; disable GEMMA4_SPEC_TRACE "
-                "until traced host PLI support is enabled"
+                "Traced verification passes no per-layer inputs; disable GEMMA4_SPEC_TRACE for this "
+                "path (the fused routes compute PLI on device)"
             )
         # Packed-query verify: all K+1 candidates in one batch=1 pass (positions
         # packed into the query-heads dim, loop-free staging KV write).
@@ -2687,9 +2686,9 @@ class SpeculativeDecoder:
             outs, accepts = [[] for _ in anchor_tokens], [[] for _ in anchor_tokens]
             self._metrics_finish()
             return outs, accepts
+        if self._fused_reseed:
+            logger.warning("GEMMA4_SPEC_FUSED_RESEED=1 has no effect: batched speculative decoding only shift-seeds")
         if self._use_trace:
-            if self._fused_reseed:
-                logger.warning("GEMMA4_SPEC_FUSED_RESEED=1 has no effect: the batched fused body only shift-seeds")
             return self._generate_fused_traced_batched(anchor_tokens, anchor_positions, max_new_tokens, max_seq_len)
         if self.target_has_pli and self._pli_dev_host:
             self.target.init_pli_device_weights()
