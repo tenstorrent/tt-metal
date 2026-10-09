@@ -86,11 +86,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         _llk_unpack_A_uninit_<BroadcastType::NONE>();
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif
