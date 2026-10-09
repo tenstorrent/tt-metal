@@ -14,7 +14,8 @@ Description:
     Reads base-firmware state once and reports port and link state, retrain, CRC and FEC counts, the firmware
     signature and, on Blackhole, ERR_STAT, the TX resend and RX drop totals and the raw eth firmware mailbox messages.
     The heartbeat is read on every core first and compared after a single 100 ms wait; one that has not moved is
-    reported Down, as a warning.
+    reported Down, as a warning. On Blackhole, a core base firmware released to metal reads Released instead unless a
+    fabric router is running its main loop there, since nothing else writes the heartbeat on such a core.
     A link that is down on a port expected to be up is an error. Counters are reported but never flagged.
     Cores running eth firmware older than UMD supports show raw values only, with no checks.
 
@@ -91,6 +92,10 @@ class EthCore(ABC):
     def decode(self, row: EthCoreCheckData, words: dict[int, int]) -> None:
         """Fills the row from the words read and logs the checks."""
 
+    def released(self, words: dict[int, int]) -> bool:
+        """True when base FW gave the core to metal and nothing is expected to write the heartbeat."""
+        return False
+
     def get_results(self) -> EthCoreCheckData:
         """Get and log all ethernet core status results."""
         row = EthCoreCheckData()
@@ -113,8 +118,12 @@ class EthCore(ABC):
             return row
         self.decode(row, words)
         if self.first_heartbeat is not None and row.port_status != "Unsupported FW":
-            row.heartbeat = "Down" if words[self.HEARTBEAT] == self.first_heartbeat else "Up"
-            if row.heartbeat == "Down":
+            if words[self.HEARTBEAT] != self.first_heartbeat:
+                row.heartbeat = "Up"
+            elif self.released(words):
+                row.heartbeat = "Released"
+            else:
+                row.heartbeat = "Down"
                 log_warning_location(self.location, "Eth heartbeat is down")
         return row
 
@@ -187,7 +196,8 @@ class BlackholeEthCore(EthCore):
     BOOT_RESULTS = 0x7CC00  # boot_results_t (1 KB), then the eth FW mailboxes (64 B)
     BOOT_RESULTS_WORDS = 272
     PORT_STATUS = 0x7CC04
-    HEARTBEAT = 0x7CC70  # heartbeat[0]: base FW (0xABCD) and fabric router (0xDCBA)
+    HEARTBEAT = 0x7CC70  # heartbeat[0]: base FW loop (0xABCD) and the fabric router's main loop (0xDCBA)
+    METAL_HEARTBEAT = 0x7CC74  # heartbeat[1]: metal's context switch writes 0xDCBA0000 | (heartbeat[0] + 1)
     RETRAIN_COUNT = 0x7CE00
     RX_LINK_UP = 0x7CE04  # snapshot, up only when it equals 1
     # The counters below are u64, low word first.
@@ -210,6 +220,11 @@ class BlackholeEthCore(EthCore):
     QUEUE_COUNTERS_MIN_ETH_FW_VERSION = (1, 5, 0)
 
     PORT_STATUS_NAMES = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
+
+    def released(self, words: dict[int, int]) -> bool:
+        # After RELEASE_CORE, metal's idle loop and waits mirror heartbeat[0] into heartbeat[1] and leave
+        # heartbeat[0] to a router's main loop (aerisc_context_switch, blackhole/eth_fw_api.h).
+        return words[self.METAL_HEARTBEAT] == 0xDCBA0000 | ((words[self.HEARTBEAT] + 1) & 0xFFFF)
 
     def decode(self, row: EthCoreCheckData, words: dict[int, int]) -> None:
         row.mailbox_host = words[self.MAILBOX]
