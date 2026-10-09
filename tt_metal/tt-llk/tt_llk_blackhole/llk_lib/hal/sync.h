@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "cfg.h"
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/helpers.h"
@@ -109,34 +108,6 @@ enum class SemaphoreCondition : std::uint8_t
     WhileMaximum = 1u << 1
 };
 
-/** @brief Select one of the four STREAM_ID_SYNC thread-CFG entries. */
-enum class StreamSlot : std::uint8_t
-{
-    S0,
-    S1,
-    S2,
-    S3
-};
-
-/** @brief Select the STREAMWAIT threshold source. */
-enum class StreamTarget : std::uint8_t
-{
-    Phase,
-    MessagesReceived
-};
-
-/**
- * @brief Identify one tile-local NoC overlay stream.
- *
- * The hardware stream index is six bits: group supplies the upper three bits,
- * and number supplies the lower three bits.
- */
-struct StreamId
-{
-    std::uint8_t group;
-    std::uint8_t number;
-};
-
 inline constexpr SemaphoreMask operator|(const SemaphoreMask lhs, const SemaphoreMask rhs)
 {
     return static_cast<SemaphoreMask>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
@@ -179,9 +150,6 @@ inline constexpr SemaphoreCondition operator&(const SemaphoreCondition lhs, cons
 
 namespace detail
 {
-inline constexpr std::uint32_t STREAM_TARGET_LOW_BITS = 10;
-inline constexpr std::uint32_t STREAM_TARGET_LOW_MASK = (1u << STREAM_TARGET_LOW_BITS) - 1u;
-
 inline __attribute__((always_inline)) void assert_operand(const bool valid, [[maybe_unused]] const char* message)
 {
     LLK_ASSERT(valid, message);
@@ -238,36 +206,10 @@ constexpr bool is_valid(const SemaphoreCondition conditions)
     return encoded != 0u && encoded <= 0x3u;
 }
 
-constexpr bool is_valid(const StreamSlot slot)
-{
-    return hal::to_underlying(slot) < 4u;
-}
-
-constexpr bool is_valid(const StreamTarget target)
-{
-    return target == StreamTarget::Phase || target == StreamTarget::MessagesReceived;
-}
-
-constexpr bool is_valid(const StreamId stream)
-{
-    return stream.group < 8u && stream.number < 8u;
-}
-
-constexpr std::uint32_t encode(const StreamId stream)
-{
-    return (static_cast<std::uint32_t>(stream.group) << 3) | stream.number;
-}
-
 constexpr std::uint32_t semaphore_bit(const Semaphore semaphore)
 {
     return 1u << hal::to_underlying(semaphore);
 }
-
-template <StreamSlot Slot>
-inline constexpr cfg::Sec stream_section = static_cast<cfg::Sec>(hal::to_underlying(Slot));
-
-template <StreamTarget Target>
-inline constexpr std::uint32_t max_stream_target = Target == StreamTarget::Phase ? ((1u << 20) - 1u) : ((1u << 17) - 1u);
 
 } // namespace detail
 
@@ -593,174 +535,6 @@ inline __attribute__((always_inline)) void semaphore(const StallTarget targets, 
     TT_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
 }
 
-/** @brief Program one STREAM_ID_SYNC slot with a compile-time NoC stream ID. */
-template <StreamSlot Slot, std::uint32_t Group, std::uint32_t Stream>
-inline __attribute__((always_inline)) void configure_stream()
-{
-    static_assert(detail::is_valid(Slot), "STREAMWAIT slot must be in [0, 3]");
-    static_assert(Group < 8u, "NoC stream group must fit in three bits");
-    static_assert(Stream < 8u, "NoC stream number must fit in three bits");
-    constexpr std::uint32_t stream_id = (Group << 3) | Stream;
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, detail::stream_section<Slot>, stream_id>();
-}
-
-/** @brief Program one runtime-selected STREAM_ID_SYNC slot and NoC stream ID. */
-inline __attribute__((always_inline)) void configure_stream(const StreamSlot slot, const StreamId stream)
-{
-    LLK_ASSERT(detail::is_valid(slot), "STREAMWAIT slot must be in [0, 3]");
-    LLK_ASSERT(detail::is_valid(stream), "NoC stream group and number must each fit in three bits");
-    const std::uint32_t stream_id = detail::encode(stream);
-    switch (slot)
-    {
-        case StreamSlot::S0:
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, cfg::Sec::S0>(stream_id);
-            break;
-        case StreamSlot::S1:
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, cfg::Sec::S1>(stream_id);
-            break;
-        case StreamSlot::S2:
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, cfg::Sec::S2>(stream_id);
-            break;
-        case StreamSlot::S3:
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, cfg::Sec::S3>(stream_id);
-            break;
-        default:
-            LLK_ASSERT(false, "STREAMWAIT slot must be in [0, 3]");
-            break;
-    }
-}
-
-/**
- * @brief Program one compile-time-selected STREAM_ID_SYNC slot from a structured NoC stream ID.
- *
- * @tparam Slot: Thread-private selector entry, values = <S0/S1/S2/S3>.
- * @param stream_id: Tile-local stream group and number, each in [0, 7].
- */
-template <StreamSlot Slot>
-inline __attribute__((always_inline)) void configure_stream(const StreamId stream_id)
-{
-    static_assert(detail::is_valid(Slot), "STREAMWAIT slot must be in [0, 3]");
-    LLK_ASSERT(detail::is_valid(stream_id), "NoC stream group and number must each fit in three bits");
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamIdSync::BankSel, detail::stream_section<Slot>>(detail::encode(stream_id));
-}
-
-/** @brief Program the high bits of a compile-time STREAMWAIT threshold. */
-template <StreamTarget Target, std::uint32_t FullTarget>
-inline __attribute__((always_inline)) void configure_stream_target()
-{
-    static_assert(detail::is_valid(Target), "STREAMWAIT target must be Phase or MessagesReceived");
-    static_assert(FullTarget <= detail::max_stream_target<Target>, "STREAMWAIT target exceeds the selected counter width");
-    if constexpr (Target == StreamTarget::Phase)
-    {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val, cfg::Sec::S0, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
-    }
-    else
-    {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val, cfg::Sec::S0, (FullTarget >> detail::STREAM_TARGET_LOW_BITS)>();
-    }
-}
-
-/** @brief Program the high bits of a runtime STREAMWAIT threshold. */
-inline __attribute__((always_inline)) void configure_stream_target(const StreamTarget target, const std::uint32_t full_target)
-{
-    LLK_ASSERT(detail::is_valid(target), "STREAMWAIT target must be Phase or MessagesReceived");
-    LLK_ASSERT(
-        (target == StreamTarget::Phase && full_target <= detail::max_stream_target<StreamTarget::Phase>) ||
-            (target == StreamTarget::MessagesReceived && full_target <= detail::max_stream_target<StreamTarget::MessagesReceived>),
-        "STREAMWAIT target exceeds the selected counter width");
-    if (target == StreamTarget::Phase)
-    {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitPhaseHi::Val, cfg::Sec::S0>(full_target >> detail::STREAM_TARGET_LOW_BITS);
-    }
-    else
-    {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::StreamwaitNumMsgsHi::Val, cfg::Sec::S0>(full_target >> detail::STREAM_TARGET_LOW_BITS);
-    }
-}
-
-/** @brief Encode one raw STREAMWAIT without issuing it. */
-template <StallTarget Targets, StreamSlot Slot, StreamTarget Target, std::uint32_t TargetLow>
-inline constexpr std::uint32_t stream_operation()
-{
-    static_assert(detail::is_valid(Targets), "STREAMWAIT target mask must fit in nine bits");
-    static_assert(detail::is_valid(Slot), "STREAMWAIT slot must be in [0, 3]");
-    static_assert(detail::is_valid(Target), "STREAMWAIT target must be Phase or MessagesReceived");
-    static_assert(TargetLow <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    return TT_OP_STREAMWAIT(hal::to_underlying(Targets), TargetLow, hal::to_underlying(Target), hal::to_underlying(Slot));
-}
-
-/** @brief Encode a runtime-selected raw STREAMWAIT without issuing it. */
-inline constexpr __attribute__((always_inline)) std::uint32_t stream_operation(
-    const StallTarget targets, const StreamSlot slot, const StreamTarget target, const std::uint32_t target_low)
-{
-    detail::require_valid_operand(detail::is_valid(targets), "STREAMWAIT target mask must fit in nine bits");
-    detail::require_valid_operand(detail::is_valid(slot), "STREAMWAIT slot must be in [0, 3]");
-    detail::require_valid_operand(detail::is_valid(target), "STREAMWAIT target must be Phase or MessagesReceived");
-    detail::require_valid_operand(target_low <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    return TT_OP_STREAMWAIT(hal::to_underlying(targets), target_low, hal::to_underlying(target), hal::to_underlying(slot));
-}
-
-/**
- * @brief Install one raw compile-time STREAMWAIT.
- *
- * Configure the selected STREAM_ID_SYNC slot and the chosen target-high field
- * before calling this one-instruction form.
- */
-template <StallTarget Targets, StreamSlot Slot, StreamTarget Target, std::uint32_t TargetLow>
-inline __attribute__((always_inline)) void stream()
-{
-    (void)stream_operation<Targets, Slot, Target, TargetLow>();
-    TTI_STREAMWAIT(hal::to_underlying(Targets), TargetLow, hal::to_underlying(Target), hal::to_underlying(Slot));
-}
-
-/** @brief Install one raw runtime STREAMWAIT through the Tensix instruction buffer. */
-inline __attribute__((always_inline)) void stream(const StallTarget targets, const StreamSlot slot, const StreamTarget target, const std::uint32_t target_low)
-{
-    LLK_ASSERT(detail::is_valid(targets), "STREAMWAIT target mask must fit in nine bits");
-    LLK_ASSERT(detail::is_valid(slot), "STREAMWAIT slot must be in [0, 3]");
-    LLK_ASSERT(detail::is_valid(target), "STREAMWAIT target must be Phase or MessagesReceived");
-    LLK_ASSERT(target_low <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    TT_STREAMWAIT(hal::to_underlying(targets), target_low, hal::to_underlying(target), hal::to_underlying(slot));
-}
-
-/** @brief Configure a stream and full compile-time threshold, then install STREAMWAIT. */
-template <StallTarget Targets, StreamSlot Slot, std::uint32_t Group, std::uint32_t Stream, StreamTarget Target, std::uint32_t FullTarget>
-inline __attribute__((always_inline)) void configure_and_wait_stream()
-{
-    configure_stream<Slot, Group, Stream>();
-    configure_stream_target<Target, FullTarget>();
-    stall<StallTarget::Sync, StallCondition::ConfigUnitIdle>();
-    stream<Targets, Slot, Target, FullTarget & detail::STREAM_TARGET_LOW_MASK>();
-}
-
-/**
- * @brief Configure a structured stream ID and full compile-time threshold, then install STREAMWAIT.
- *
- * @tparam Targets: Instruction classes to block while the stream condition is unmet.
- * @tparam Slot: Thread-private selector entry, values = <S0/S1/S2/S3>.
- * @tparam Target: Counter to compare, values = <Phase/MessagesReceived>.
- * @tparam FullTarget: Complete phase or message-count threshold.
- * @param stream_id: Tile-local stream group and number, each in [0, 7].
- */
-template <StallTarget Targets, StreamSlot Slot, StreamTarget Target, std::uint32_t FullTarget>
-inline __attribute__((always_inline)) void configure_and_wait_stream(const StreamId stream_id)
-{
-    configure_stream<Slot>(stream_id);
-    configure_stream_target<Target, FullTarget>();
-    stall<StallTarget::Sync, StallCondition::ConfigUnitIdle>();
-    stream<Targets, Slot, Target, FullTarget & detail::STREAM_TARGET_LOW_MASK>();
-}
-
-/** @brief Configure a stream and full runtime threshold, then install STREAMWAIT. */
-inline __attribute__((always_inline)) void configure_and_wait_stream(
-    const StallTarget targets, const StreamSlot slot, const StreamId stream_id, const StreamTarget target, const std::uint32_t full_target)
-{
-    configure_stream(slot, stream_id);
-    configure_stream_target(target, full_target);
-    stall(StallTarget::Sync, StallCondition::ConfigUnitIdle);
-    stream(targets, slot, target, full_target & detail::STREAM_TARGET_LOW_MASK);
-}
-
 } // namespace wait
 
 // Descriptors encode one Tensix instruction. operation() is usable in constant
@@ -847,21 +621,5 @@ struct SemaphoreWait
         return wait::semaphore_operation(targets, mask, conditions);
     }
 };
-
-/** @brief Encode raw STREAMWAIT without configuring a stream or installing a wait gate. */
-struct StreamWait
-{
-    StallTarget targets;
-    StreamSlot slot;
-    StreamTarget target;
-    std::uint32_t target_low;
-
-    constexpr std::uint32_t operation() const
-    {
-        return wait::stream_operation(targets, slot, target, target_low);
-    }
-};
-
-inline constexpr bool supports_stream_wait = true;
 
 } // namespace hal::sync
