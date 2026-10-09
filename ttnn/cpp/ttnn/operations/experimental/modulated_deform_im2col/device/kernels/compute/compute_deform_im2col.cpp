@@ -5,12 +5,14 @@
 // Compute of the modulated deformable im2col.
 //
 // Per block of 32 output rows it first computes the block's sampling geometry on
-// the SFPU, in fp32, for all kernel positions at once: the reader hands in one
-// tile each of the y and x offsets, the mask, and the kernel window's base
-// coordinates, laid out [row, kernel position], and gets back the corners' top
-// left (y0, x0) as int32 tiles and the four masked bilinear weights as bfloat16
-// tiles, in the same layout. The geometry of the next block is computed before
-// this block's corners are combined, so the reader has it as soon as it needs it.
+// the SFPU, in fp32, for all kernel positions at once, in [row, kernel position]
+// tiles: from the y and x offsets, the mask, each row's window origin and each
+// position's kernel offset it returns the top-left corner's page within its
+// image, y0 * W_in + x0, as int32, and the four corners' weights as bfloat16:
+// the bilinear weights times the mask, and zero for a corner outside the input,
+// so the reader needs no bounds of its own. The next block's geometry is
+// computed before this block's corners are combined, so the reader has it as
+// soon as it needs it.
 //
 // For each (block, kernel position) the reader then lands the four corners as
 // one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3],
@@ -28,6 +30,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rounding.h"
 #include "api/compute/eltwise_unary/typecast.h"
@@ -48,24 +51,52 @@ constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(6);
 constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(7);
 constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(8);
+constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(9);
+// fp32 bits of the input height and width, and of each less one.
+constexpr uint32_t IN_H_FP32 = get_compile_time_arg_val(10);
+constexpr uint32_t IN_H_LESS_ONE_FP32 = get_compile_time_arg_val(11);
+constexpr uint32_t IN_W_FP32 = get_compile_time_arg_val(12);
+constexpr uint32_t IN_W_LESS_ONE_FP32 = get_compile_time_arg_val(13);
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 
-// Tiles of geom_in_cb, in the reader's order.
+// Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in the reader's order.
 constexpr uint32_t IN_DY = 0;
 constexpr uint32_t IN_DX = 1;
 constexpr uint32_t IN_MASK = 2;
-constexpr uint32_t IN_BASE_Y = 3;
-constexpr uint32_t IN_BASE_X = 4;
+constexpr uint32_t IN_ORIGIN_Y = 3;
+constexpr uint32_t IN_ORIGIN_X = 4;
 constexpr uint32_t GEOM_IN_TILES = 5;
+constexpr uint32_t KERNEL_Y = 0;
+constexpr uint32_t KERNEL_X = 1;
 
+constexpr uint32_t FP32_ZERO = 0x00000000u;
 constexpr uint32_t FP32_ONE = 0x3F800000u;
+constexpr uint32_t FP32_MINUS_ONE = 0xBF800000u;
 
 namespace {
 
-// y = base_y + dy, x = base_x + dx; (y0, x0) = floor; the weights are the products of
-// (1 - ly or ly) and (1 - lx or lx) with the mask, ly = y - y0 and lx = x - x0. All eight
-// dest tiles are live at once, which full-sync dest holds in fp32.
+inline void copy_values(uint32_t from, uint32_t to) {
+    copy_dest_values_init();
+    copy_dest_values<DataFormat::Float32>(from, to);
+}
+
+// dst = (lo <= dst < hi), as 1.0 or 0.0; scratch is overwritten.
+inline void in_range(uint32_t dst, uint32_t scratch, uint32_t lo_fp32, uint32_t hi_fp32) {
+    copy_values(dst, scratch);
+    unary_ge_tile_init();
+    unary_ge_tile(dst, lo_fp32);
+    unary_lt_tile_init();
+    unary_lt_tile(scratch, hi_fp32);
+    mul_binary_tile_init();
+    mul_binary_tile(dst, scratch, dst);
+}
+
+// Sample point (y, x) = origin + kernel offset + offset; (y0, x0) = floor; ly = y - y0 and
+// lx = x - x0. Per axis the near weight is (1 - l) and the far one l, each zeroed where its
+// corner row or column lies outside the input; a corner's weight is the product of its two
+// axis weights and the mask. Eight dest tiles are live at once, which full-sync dest holds
+// in fp32.
 void compute_geometry(CircularBuffer& geom_in_cb, CircularBuffer& index_cb, CircularBuffer& weight_cb) {
     geom_in_cb.wait_front(GEOM_IN_TILES);
     reconfig_data_format_srca(geom_in_cb_index);
@@ -73,58 +104,80 @@ void compute_geometry(CircularBuffer& geom_in_cb, CircularBuffer& index_cb, Circ
 
     tile_regs_acquire();
     copy_tile(geom_in_cb_index, IN_DY, 0);
-    copy_tile(geom_in_cb_index, IN_BASE_Y, 1);
-    copy_tile(geom_in_cb_index, IN_DX, 2);
-    copy_tile(geom_in_cb_index, IN_BASE_X, 3);
-    copy_tile(geom_in_cb_index, IN_MASK, 4);
+    copy_tile(geom_in_cb_index, IN_ORIGIN_Y, 1);
+    copy_tile(geom_in_cb_index, IN_DX, 3);
+    copy_tile(geom_in_cb_index, IN_ORIGIN_X, 4);
+    copy_tile(geom_in_cb_index, IN_MASK, 6);
+    copy_tile(geom_kernel_cb_index, KERNEL_Y, 2);
+    copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
 
     add_binary_tile_init();
-    add_binary_tile(0, 1, 0);  // y
-    add_binary_tile(2, 3, 2);  // x
-    copy_dest_values_init();
-    copy_dest_values<DataFormat::Float32>(0, 1);
-    copy_dest_values<DataFormat::Float32>(2, 3);
+    add_binary_tile(0, 1, 0);
+    add_binary_tile(0, 2, 0);  // y
+    add_binary_tile(3, 4, 3);
+    add_binary_tile(3, 5, 3);  // x
+    copy_values(0, 1);
+    copy_values(3, 4);
     rounding_op_tile_init();
     floor_tile(1);  // y0
-    floor_tile(3);  // x0
+    floor_tile(4);  // x0
     sub_binary_tile_init();
     sub_binary_tile(0, 1, 0);  // ly
-    sub_binary_tile(2, 3, 2);  // lx
+    sub_binary_tile(3, 4, 3);  // lx
 
-    copy_dest_values_init();
-    copy_dest_values<DataFormat::Float32>(0, 5);
-    copy_dest_values<DataFormat::Float32>(2, 6);
+    // The top-left corner's page in its image.
+    copy_values(1, 2);
     binop_with_scalar_tile_init();
-    rsub_unary_tile(5, FP32_ONE);  // hy
-    rsub_unary_tile(6, FP32_ONE);  // hx
+    mul_unary_tile(2, IN_W_FP32);
+    add_binary_tile_init();
+    add_binary_tile(2, 4, 2);
 
+    // Rows: y0 inside the input weighs (1 - ly), y0 + 1 inside weighs ly.
+    copy_values(1, 5);
+    in_range(5, 7, FP32_ZERO, IN_H_FP32);
+    copy_values(0, 7);
+    binop_with_scalar_tile_init();
+    rsub_unary_tile(7, FP32_ONE);
     mul_binary_tile_init();
-    mul_binary_tile(5, 4, 5);  // hy * mask
-    mul_binary_tile(0, 4, 4);  // ly * mask
-    mul_binary_tile(5, 6, 7);  // corner 0: hy * hx * mask
-    mul_binary_tile(4, 6, 6);  // corner 2: ly * hx * mask
-    mul_binary_tile(5, 2, 5);  // corner 1: hy * lx * mask
-    mul_binary_tile(4, 2, 4);  // corner 3: ly * lx * mask
+    mul_binary_tile(7, 5, 7);  // near row weight
+    in_range(1, 5, FP32_MINUS_ONE, IN_H_LESS_ONE_FP32);
+    mul_binary_tile(0, 1, 0);  // far row weight
+
+    // Columns, the same way.
+    copy_values(4, 5);
+    in_range(5, 1, FP32_ZERO, IN_W_FP32);
+    copy_values(3, 1);
+    binop_with_scalar_tile_init();
+    rsub_unary_tile(1, FP32_ONE);
+    mul_binary_tile_init();
+    mul_binary_tile(1, 5, 1);  // near column weight
+    in_range(4, 5, FP32_MINUS_ONE, IN_W_LESS_ONE_FP32);
+    mul_binary_tile(3, 4, 3);  // far column weight
+
+    mul_binary_tile(7, 6, 7);  // near row * mask
+    mul_binary_tile(0, 6, 0);  // far row * mask
+    mul_binary_tile(7, 1, 4);  // corner 0
+    mul_binary_tile(7, 3, 7);  // corner 1
+    mul_binary_tile(0, 1, 1);  // corner 2
+    mul_binary_tile(0, 3, 0);  // corner 3
 
     typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
-    typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(1);
-    typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(3);
+    typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(2);
     tile_regs_commit();
     geom_in_cb.pop_front(GEOM_IN_TILES);
 
-    index_cb.reserve_back(2);
+    index_cb.reserve_back(1);
     weight_cb.reserve_back(CORNERS);
     tile_regs_wait();
     pack_reconfig_data_format(geom_index_cb_index);
-    pack_tile(1, geom_index_cb_index);
-    pack_tile(3, geom_index_cb_index);
+    pack_tile(2, geom_index_cb_index);
     pack_reconfig_data_format(geom_weight_cb_index);
-    pack_tile(7, geom_weight_cb_index);
-    pack_tile(5, geom_weight_cb_index);
-    pack_tile(6, geom_weight_cb_index);
     pack_tile(4, geom_weight_cb_index);
+    pack_tile(7, geom_weight_cb_index);
+    pack_tile(1, geom_weight_cb_index);
+    pack_tile(0, geom_weight_cb_index);
     tile_regs_release();
-    index_cb.push_back(2);
+    index_cb.push_back(1);
     weight_cb.push_back(CORNERS);
 }
 
@@ -141,6 +194,8 @@ void kernel_main() {
     CircularBuffer geom_in_cb(geom_in_cb_index);
     CircularBuffer index_cb(geom_index_cb_index);
     CircularBuffer weight_cb(geom_weight_cb_index);
+    // Written once by the reader and kept for every block.
+    CircularBuffer(geom_kernel_cb_index).wait_front(2);
 
     if (num_blocks > 0) {
         compute_geometry(geom_in_cb, index_cb, weight_cb);

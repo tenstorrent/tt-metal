@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <string>
 
@@ -62,6 +63,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     constexpr uint8_t geom_in_cb = tt::CBIndex::c_5;
     constexpr uint8_t geom_index_cb = tt::CBIndex::c_6;
     constexpr uint8_t geom_weight_cb = tt::CBIndex::c_7;
+    constexpr uint8_t geom_kernel_cb = tt::CBIndex::c_8;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
     constexpr uint32_t CORNERS = 4;
 
@@ -87,12 +89,15 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     // One scalar tile per corner, two positions deep.
     push_cb(scalar_tile_cb, 2 * CORNERS, tile_nbytes);
     push_cb(output_tile_cb, 2 * channel_tiles, tile_nbytes);
-    // A block's geometry, [row, kernel position] tiles: the reader's offsets, mask and base
-    // coordinates in fp32, and compute's corner indices (int32) and weights, two blocks deep so
-    // compute hands over the next block's while the reader works on this one.
+    // A block's geometry, [row, kernel position] tiles: the reader's offsets, mask and window
+    // origins in fp32, and compute's corner pages (int32) and weights, two blocks deep so compute
+    // hands over the next block's while the reader works on this one. The kernel offsets are one
+    // pair of fp32 tiles for the whole run.
     constexpr uint32_t GEOM_IN_TILES = 5;
-    push_cb(geom_in_cb, GEOM_IN_TILES, tt::tile_size(tt::DataFormat::Float32), tt::DataFormat::Float32);
-    push_cb(geom_index_cb, 2 * 2, tt::tile_size(tt::DataFormat::Int32), tt::DataFormat::Int32);
+    const uint32_t fp32_tile_nbytes = tt::tile_size(tt::DataFormat::Float32);
+    push_cb(geom_in_cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
+    push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
+    push_cb(geom_index_cb, 2, tt::tile_size(tt::DataFormat::Int32), tt::DataFormat::Int32);
     push_cb(geom_weight_cb, 2 * CORNERS, tile_nbytes);
 
     KernelDescriptor::CompileTimeArgs reader_ct{
@@ -120,6 +125,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         geom_in_cb,
         geom_index_cb,
         geom_weight_cb,
+        geom_kernel_cb,
     };
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*offset.buffer()).append_to(reader_ct);
@@ -145,7 +151,12 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         tiled_block_cb,
         geom_in_cb,
         geom_index_cb,
-        geom_weight_cb};
+        geom_weight_cb,
+        geom_kernel_cb,
+        std::bit_cast<uint32_t>(static_cast<float>(s.in_h)),
+        std::bit_cast<uint32_t>(static_cast<float>(s.in_h) - 1.0f),
+        std::bit_cast<uint32_t>(static_cast<float>(s.in_w)),
+        std::bit_cast<uint32_t>(static_cast<float>(s.in_w) - 1.0f)};
     // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
     // its fp32 inputs unpack straight to dest, as srcA would round them to TF32.
     ComputeConfigDescriptor compute_config{};
@@ -153,6 +164,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     compute_config.dst_full_sync_en = true;
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
+    compute_config.unpack_to_dest_mode[geom_kernel_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_desc.config = compute_config;
 
     KernelDescriptor::CompileTimeArgs writer_ct{output_tile_cb, channel_tiles, s.kernel_positions, tile_nbytes};

@@ -5,27 +5,26 @@
 // Reader of the modulated deformable im2col.
 //
 // Per block of 32 output rows (pixels) it stages the rows' offsets and masks and
-// hands compute one tile each of the y and x offsets, the mask, and the kernel
-// window's base coordinates, laid out [row, kernel position]. Compute returns
-// every sample's top-left corner (y0, x0) and its four masked bilinear weights
-// in the same layout. For each kernel position the reader then hands compute
-// the four corners as one row-major block, 32 rows of
+// hands compute one tile each of the y and x offsets, the mask and the rows'
+// window origins, laid out [row, kernel position]; the kernel offsets of the
+// positions it hands over once. Compute returns every sample's top-left corner
+// page within its image and its four weights, zero for a corner outside the
+// input, in the same layout. For each kernel position the reader then hands
+// compute the four corners as one row-major block, 32 rows of
 // [corner 0 | corner 1 | corner 2 | corner 3] C-wide input sticks, landed by the
 // NoC reads themselves, plus one scalar tile per corner whose column 0 holds the
 // row's weight. Compute tilizes the block and sums the four corners times their
 // scalars, which is the masked bilinear sample.
 //
-// The geometry runs on compute because the data-movement RISC-Vs have no FPU.
-// The reader only moves bits: a bfloat16 widens to fp32 by a shift. Offsets
-// saturate at +-OFFSET_CLAMP pixels, which keeps every coordinate inside int32
-// and puts a non-finite offset outside the input. The next block's geometry is
-// handed over before this block's corners are read, so compute works on it while
-// the reader waits on the NoC.
+// The geometry runs on compute because the data-movement RISC-Vs have no FPU;
+// the reader only moves bits. Offsets saturate at +-OFFSET_CLAMP pixels, which
+// keeps every coordinate exact in fp32 and puts a non-finite offset outside the
+// input. The next block's geometry is handed over before this block's corners
+// are read, so compute works on it while the reader waits on the NoC.
 //
-// A corner is read only when it lies inside the input and its weight is
-// nonzero. Every other row, and every row past the block's end, is zeroed
-// rather than skipped: a stale NaN or Inf times a zero scalar would still be
-// NaN.
+// A corner is read only when its weight is nonzero. Every other row, and every
+// row past the block's end, is zeroed rather than skipped: a stale NaN or Inf
+// times a zero scalar would still be NaN.
 
 #include <cstdint>
 
@@ -61,8 +60,9 @@ constexpr uint32_t OFFSET_CLAMP = get_compile_time_arg_val(20);
 constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(21);
 constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(22);
 constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(23);
+constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(24);
 
-constexpr auto input_args = TensorAccessorArgs<24>();
+constexpr auto input_args = TensorAccessorArgs<25>();
 constexpr auto offset_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto mask_args = TensorAccessorArgs<offset_args.next_compile_time_args_offset()>();
 
@@ -72,13 +72,16 @@ constexpr uint32_t CORNERS = 4;
 constexpr uint32_t STICK_NBYTES = C * sizeof(uint16_t);  // the C channels read per corner
 constexpr uint32_t BLOCK_ROW_NBYTES = CORNERS * STICK_NBYTES;
 
-// Tiles of geom_in_cb, in compute's order: fp32 [row, kernel position].
+// Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in compute's order: fp32
+// [row, kernel position].
 constexpr uint32_t IN_DY = 0;
 constexpr uint32_t IN_DX = 1;
 constexpr uint32_t IN_MASK = 2;
-constexpr uint32_t IN_BASE_Y = 3;
-constexpr uint32_t IN_BASE_X = 4;
+constexpr uint32_t IN_ORIGIN_Y = 3;
+constexpr uint32_t IN_ORIGIN_X = 4;
 constexpr uint32_t GEOM_IN_TILES = 5;
+constexpr uint32_t KERNEL_Y = 0;
+constexpr uint32_t KERNEL_X = 1;
 constexpr uint32_t FP32_TILE_NBYTES = 32 * 32 * sizeof(uint32_t);
 constexpr uint32_t BF16_TILE_NBYTES = 32 * 32 * sizeof(uint16_t);
 
@@ -123,8 +126,6 @@ inline void zero_stick(uint32_t l1_addr) {
     }
 }
 
-inline bool inside(int32_t index, int32_t extent) { return index >= 0 && index < extent; }
-
 inline uint32_t valid_rows_of(uint32_t block, uint32_t num_rows) {
     const uint32_t row0 = block * TILE_ROWS;
     return num_rows - row0 < TILE_ROWS ? num_rows - row0 : TILE_ROWS;
@@ -159,10 +160,25 @@ void kernel_main() {
     mask_arena_cb.reserve_back(TILE_ROWS);
     const uint32_t mask_l1 = mask_arena_cb.get_write_ptr();
 
-    // b * IN_H per row, the row's image in batch-wide input rows: of the block being read, and of
-    // the block whose geometry is being staged.
-    int32_t batch_row[TILE_ROWS];
-    int32_t staged_batch_row[TILE_ROWS];
+    {
+        CircularBuffer geom_kernel_cb(geom_kernel_cb_index);
+        geom_kernel_cb.reserve_back(2);
+        const uint32_t kernel_l1 = geom_kernel_cb.get_write_ptr();
+        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
+                CoreLocalMem<volatile uint32_t> ky(kernel_l1 + KERNEL_Y * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> kx(kernel_l1 + KERNEL_X * FP32_TILE_NBYTES + element);
+                ky[0] = int_to_fp32(static_cast<int32_t>(kk / KERNEL_W) * DILATION_H);
+                kx[0] = int_to_fp32(static_cast<int32_t>(kk % KERNEL_W) * DILATION_W);
+            }
+        }
+        geom_kernel_cb.push_back(2);
+    }
+
+    // First page of each row's image: of the block being read, and of the block being staged.
+    uint32_t image_page[TILE_ROWS];
+    uint32_t staged_image_page[TILE_ROWS];
 
     // Stages a block's offsets and masks and hands compute its geometry tiles.
     auto stage_geometry = [&](uint32_t block) {
@@ -183,25 +199,19 @@ void kernel_main() {
         uint32_t h_o = (row0 / OUT_W) % OUT_H;
         uint32_t w_o = row0 % OUT_W;
         for (uint32_t r = 0; r < valid_rows; ++r) {
-            staged_batch_row[r] = static_cast<int32_t>(b) * IN_H;
-            const int32_t base_y = static_cast<int32_t>(h_o) * STRIDE_H - PAD_H;
-            const int32_t base_x = static_cast<int32_t>(w_o) * STRIDE_W - PAD_W;
+            staged_image_page[r] = b * static_cast<uint32_t>(IN_H * IN_W);
+            const uint32_t origin_y = int_to_fp32(static_cast<int32_t>(h_o) * STRIDE_H - PAD_H);
+            const uint32_t origin_x = int_to_fp32(static_cast<int32_t>(w_o) * STRIDE_W - PAD_W);
             CoreLocalMem<volatile uint16_t> off(offset_l1 + r * offset_page_nbytes);
             CoreLocalMem<volatile uint16_t> msk(mask_l1 + r * mask_page_nbytes);
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
                 const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
-                const int32_t k_y = static_cast<int32_t>(kk / KERNEL_W) * DILATION_H;
-                const int32_t k_x = static_cast<int32_t>(kk % KERNEL_W) * DILATION_W;
-                CoreLocalMem<volatile uint32_t> dy(geom_l1 + IN_DY * FP32_TILE_NBYTES + element);
-                CoreLocalMem<volatile uint32_t> dx(geom_l1 + IN_DX * FP32_TILE_NBYTES + element);
-                CoreLocalMem<volatile uint32_t> m(geom_l1 + IN_MASK * FP32_TILE_NBYTES + element);
-                CoreLocalMem<volatile uint32_t> by(geom_l1 + IN_BASE_Y * FP32_TILE_NBYTES + element);
-                CoreLocalMem<volatile uint32_t> bx(geom_l1 + IN_BASE_X * FP32_TILE_NBYTES + element);
-                dy[0] = offset_to_fp32(off[2 * kk]);
-                dx[0] = offset_to_fp32(off[2 * kk + 1]);
-                m[0] = static_cast<uint32_t>(msk[kk]) << 16;
-                by[0] = int_to_fp32(base_y + k_y);
-                bx[0] = int_to_fp32(base_x + k_x);
+                CoreLocalMem<volatile uint32_t> dst(geom_l1 + element);
+                dst[IN_DY * FP32_TILE_NBYTES / sizeof(uint32_t)] = offset_to_fp32(off[2 * kk]);
+                dst[IN_DX * FP32_TILE_NBYTES / sizeof(uint32_t)] = offset_to_fp32(off[2 * kk + 1]);
+                dst[IN_MASK * FP32_TILE_NBYTES / sizeof(uint32_t)] = static_cast<uint32_t>(msk[kk]) << 16;
+                dst[IN_ORIGIN_Y * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_y;
+                dst[IN_ORIGIN_X * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_x;
             }
             if (++w_o == OUT_W) {
                 w_o = 0;
@@ -218,16 +228,15 @@ void kernel_main() {
         stage_geometry(start_block);
     }
 
-    uint32_t y0[TILE_ROWS];
-    uint32_t x0[TILE_ROWS];
-    uint16_t weight[CORNERS][TILE_ROWS];  // zero for a corner outside the input
+    uint32_t page[TILE_ROWS];
+    uint16_t weight[CORNERS][TILE_ROWS];
 
     for (uint32_t block = start_block; block < start_block + num_blocks; ++block) {
         const uint32_t valid_rows = valid_rows_of(block, num_rows);
         for (uint32_t r = 0; r < valid_rows; ++r) {
-            batch_row[r] = staged_batch_row[r];
+            image_page[r] = staged_image_page[r];
         }
-        index_cb.wait_front(2);
+        index_cb.wait_front(1);
         weight_cb.wait_front(CORNERS);
         const uint32_t index_l1 = index_cb.get_read_ptr();
         const uint32_t weight_l1 = weight_cb.get_read_ptr();
@@ -236,59 +245,43 @@ void kernel_main() {
         }
 
         for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
-            for (uint32_t r = 0; r < valid_rows; ++r) {
+            // Only column 0 of each row is read by the column broadcast.
+            scalar_tile_cb.reserve_back(CORNERS);
+            const uint32_t scalar_l1 = scalar_tile_cb.get_write_ptr();
+            for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                 const uint32_t element = tile_element(r, kk);
-                CoreLocalMem<volatile uint32_t> y0_tile(index_l1);
-                CoreLocalMem<volatile uint32_t> x0_tile(index_l1 + FP32_TILE_NBYTES);
-                y0[r] = y0_tile[element];
-                x0[r] = x0_tile[element];
-                const int32_t y = static_cast<int32_t>(y0[r]);
-                const int32_t x = static_cast<int32_t>(x0[r]);
-                const bool in_input[CORNERS] = {
-                    inside(y, IN_H) && inside(x, IN_W),
-                    inside(y, IN_H) && inside(x + 1, IN_W),
-                    inside(y + 1, IN_H) && inside(x, IN_W),
-                    inside(y + 1, IN_H) && inside(x + 1, IN_W)};
+                CoreLocalMem<volatile uint32_t> index(index_l1);
+                page[r] = image_page[r] + index[element];
                 for (uint32_t c = 0; c < CORNERS; ++c) {
                     CoreLocalMem<volatile uint16_t> w(weight_l1 + c * BF16_TILE_NBYTES);
-                    weight[c][r] = in_input[c] ? w[element] : 0;
+                    CoreLocalMem<volatile uint16_t> lane(
+                        scalar_l1 + c * BF16_TILE_NBYTES + tile_element(r, 0) * sizeof(uint16_t));
+                    weight[c][r] = r < valid_rows ? w[element] : 0;
+                    lane[0] = weight[c][r];
                 }
             }
+            scalar_tile_cb.push_back(CORNERS);
 
             corner_block_cb.reserve_back(CORNERS * CHANNEL_TILES);
             const uint32_t block_l1 = corner_block_cb.get_write_ptr();
             for (uint32_t c = 0; c < CORNERS; ++c) {
-                const int32_t dy = c >> 1;
-                const int32_t dx = c & 1;
+                const uint32_t corner_page_offset = (c >> 1) * IN_W + (c & 1);
                 for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                     const uint32_t dst_l1 = block_l1 + r * BLOCK_ROW_NBYTES + c * STICK_NBYTES;
-                    // The page index below is valid only for a corner inside the input.
-                    if (r >= valid_rows || weight[c][r] == 0) {
+                    // A zero weight also marks a corner outside the input, whose page is not one.
+                    if (weight[c][r] == 0) {
                         zero_stick(dst_l1);
                         continue;
                     }
-                    const int32_t row = batch_row[r] + static_cast<int32_t>(y0[r]) + dy;
-                    const uint32_t x = static_cast<uint32_t>(static_cast<int32_t>(x0[r]) + dx);
-                    const uint32_t page = static_cast<uint32_t>(row) * IN_W + x;
                     CoreLocalMem<uint32_t> dst(dst_l1);
-                    noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = page}, {.offset_bytes = 0});
+                    noc.async_read(
+                        input_acc, dst, STICK_NBYTES, {.page_id = page[r] + corner_page_offset}, {.offset_bytes = 0});
                 }
             }
             noc.async_read_barrier();
             corner_block_cb.push_back(CORNERS * CHANNEL_TILES);
-
-            // Only column 0 of each row is read by the column broadcast.
-            for (uint32_t c = 0; c < CORNERS; ++c) {
-                scalar_tile_cb.reserve_back(1);
-                const uint32_t scalar_l1 = scalar_tile_cb.get_write_ptr();
-                for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                    CoreLocalMem<volatile uint16_t> lane(scalar_l1 + tile_element(r, 0) * sizeof(uint16_t));
-                    lane[0] = r < valid_rows ? weight[c][r] : 0;
-                }
-                scalar_tile_cb.push_back(1);
-            }
         }
-        index_cb.pop_front(2);
+        index_cb.pop_front(1);
         weight_cb.pop_front(CORNERS);
     }
 }
