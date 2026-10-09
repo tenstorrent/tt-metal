@@ -65,13 +65,8 @@ inline void calculate_typecast_fp32_to_uint16() {
     // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
     // 0 | ...  |                   |     |                  | [v] L16 |
 
-    // SFPLOADMACRO operand encoding: operand0 = (macro_select << 2) | (VD & 3) and the
-    // trailing operand = VD >> 2, so the hardware reconstructs the value-register index
-    // VD = (trailing << 2) | (operand0 & 3) -- a 3-bit index spanning LREG0..LREG7 -- while
-    // operand0[3:2] selects which armed macro fires. Here VD is 0/1 and macro_select 0, so
-    // the mask/shift are no-ops, but the same idiom addresses VD >= 4 elsewhere (e.g.
-    // calculate_typecast_uint32_to_fp32 fires macro 2 with VD = LREG7).
-    // Two rows per trip, so the macro words are compile-time constants at any row count.
+    // SFPLOADMACRO takes (macro_select << 2) | (VD & 3) and VD >> 2 in the address field, so one idiom reaches LREG0
+    // to LREG7. Two rows per trip, so the macro words are compile-time constants at any row count.
 #pragma GCC unroll 8
     for (int d = 0; d + 1 < ITERATIONS; d += 2) {
         TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, p_sfpu::LREG0 >> 2);

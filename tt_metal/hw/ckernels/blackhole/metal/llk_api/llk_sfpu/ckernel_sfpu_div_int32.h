@@ -76,8 +76,8 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::dst_reg++;
     }
 #else
-    // SFPLOADMACRO schedule of the sfpi body above: 25 issues per row instead of 26, and two of the four MAD
-    // latency stalls filled by moving SFPPUSHC and SFPPOPC; float(in1) is kept in L7.
+    // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC and SFPPOPC sit in MAD latency slots and float(in1)
+    // stays in L7.
     const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
     lltt::record<lltt::Exec>(0, 26);
     div_int32_lm_row(in0, in1, out);

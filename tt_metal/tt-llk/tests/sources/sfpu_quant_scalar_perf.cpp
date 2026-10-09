@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LLK SFPU quantization perf kernel: quant, requant and dequant (QUANT_OP 0, 1, 2) with a per-tensor scale as a DEST
-// tile (QUANT_SCALE_FORM 0, two copied tiles) or loaded once by the init (QUANT_SCALE_FORM 1, one copied tile);
-// QUANT_ZP_BITS and QUANT_SCALE_BITS are the zero point and the scale as fp32 bits.
+// Quant, requant and dequant (QUANT_OP 0, 1, 2) with a per-tensor scale as a DEST tile (QUANT_SCALE_FORM 0) or
+// loaded once by the init (QUANT_SCALE_FORM 1); QUANT_ZP_BITS and QUANT_SCALE_BITS are fp32 bits.
 
 #include <algorithm>
 #include <cstdint>

@@ -325,7 +325,7 @@ sfpi_inline void apply_unary_int_comp<SfpuType::unary_eq>(sfpi::vInt& v, int sca
     v_endif;
 }
 
-// The ordered scalar compares are evaluated on the sign bit, as in #58193 (@ldjurovicTT): no condition codes per row.
+// The ordered scalar compares read the sign bit of an integer expression, so no row needs condition codes.
 sfpi_inline sfpi::vInt _int_sign_bit_(const sfpi::vInt x)
 {
     return sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 31);

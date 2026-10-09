@@ -339,8 +339,8 @@ sfpi_inline void calculate_remainder_int32(
         sfpi::dst_reg++;
     }
 #else
-    // SFPLOADMACRO schedule of calculate_remainder_int32_body: 56 issues per row instead of 57.
-    // Pace-independent: no scheduled op shares data, lane flags or a sub-unit with the issue after it.
+    // SFPLOADMACRO schedule of calculate_remainder_int32_body; no scheduled op shares data, lane flags or a sub-unit
+    // with the issue after it, so the result does not depend on the issue pace.
     const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
     lltt::record<lltt::Exec>(0, 32);
     remainder_int32_lm_head(in0, in1);
@@ -439,8 +439,8 @@ sfpi_inline void calculate_remainder_uint32(
         sfpi::dst_reg++;
     }
 #else
-    // SFPLOADMACRO schedule of calculate_remainder_uint32_body: 62 issues per row instead of 65.
-    // Pace-independent: no scheduled op shares data, lane flags or a sub-unit with the issue after it.
+    // SFPLOADMACRO schedule of calculate_remainder_uint32_body; no scheduled op shares data, lane flags or a sub-unit
+    // with the issue after it, so the result does not depend on the issue pace.
     const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
     lltt::record<lltt::Exec>(0, 32);
     remainder_uint32_lm_head(in0, in1);

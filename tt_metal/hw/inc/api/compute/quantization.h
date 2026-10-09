@@ -523,8 +523,8 @@ ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
 
 // clang-format off
 /**
- * Inits of the per-tensor forms: the zero point and the scale of the Op, both as fp32 bits. To be called once at the
- * beginning of a kernel; each pairs with the tile call of the same name.
+ * Inits of the per-tensor forms: the zero point and the scale of the Op, both as fp32 bits. The scale stays in an
+ * SFPU register, so no other SFPU op may run between the init and the tile calls of the same name.
  *
  * | Argument   | Description                                   | Data type | Valid range | Required |
  * |------------|-----------------------------------------------|-----------|-------------|----------|

@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Perf for the SFPU quantization kernels (quant, requant, dequant) with a per-tensor scale, in the two
-LLK forms of the scale: ``tile`` (a DEST tile the body loads per row) and ``scalar`` (loaded once by
-the init). Formats follow the ttnn ops, in a 32-bit Dest.
+Perf of SFPU quant, requant and dequant with a per-tensor scale: ``tile`` (a DEST tile loaded per row)
+and ``scalar`` (loaded once by the init), in the ttnn formats and a 32-bit Dest.
 """
 
 import pytest

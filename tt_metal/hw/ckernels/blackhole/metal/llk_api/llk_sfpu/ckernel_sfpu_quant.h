@@ -376,8 +376,8 @@ void dequant_init(const uint zero_point) {
     }
 }
 
-// Per-tensor (scalar scale) forms: the scale goes into LREG1 once at init, next to the zero point in LREG2, and the
-// calculate_* bodies with SCALAR_SCALE skip the per-row scale load. The replay bodies read LREG1 in both forms.
+// Per-tensor (scalar scale) forms: the init leaves the scale in LREG1 next to the zero point in LREG2 and the
+// SCALAR_SCALE bodies skip the per-row scale load, so no other SFPU op may write LREG1 before their tile calls.
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
@@ -450,8 +450,8 @@ template <
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
     // 255]). Operand B is scaling factor (fp32; with SCALAR_SCALE the LREG1 constant from the init). LREG2 holds
-    // the zero-point constant (fp32) loaded by
-    // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
+    // the zero-point constant (fp32) loaded by _init_requant_int32_. Output is int32 scaled to int8 range
+    // (sign-magnitude or 2's-complement).
     //
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_requant_int32_<APPROXIMATION_MODE,

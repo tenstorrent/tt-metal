@@ -180,8 +180,8 @@ sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_i
         sfpi::dst_reg++;
     }
 #else
-    // SFPLOADMACRO schedule of calculate_fmod_int32_body: 49 issues per row instead of 51.
-    // Pace-independent: no scheduled op shares data, lane flags or a sub-unit with the issue after it.
+    // SFPLOADMACRO schedule of calculate_fmod_int32_body; no scheduled op shares data, lane flags or a sub-unit
+    // with the issue after it, so the result does not depend on the issue pace.
     const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
     lltt::record<lltt::Exec>(0, 32);
     fmod_int32_lm_head(in0, in1);

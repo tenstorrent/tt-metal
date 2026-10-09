@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SFPU quantization tests (quant, requant, dequant) with a per-tensor scale, in the two LLK forms of
-the scale (see perf_sfpu_quant_scalar.py), bit for bit against one host reference: whole-number
-results (``exact``) and fractions, ties and both saturation ends. Int32 buffers are two's complement.
+SFPU quant, requant and dequant with a per-tensor scale in both LLK forms of the scale, bit for bit
+against one host reference over whole-number results, fractions, ties and both saturation ends.
 """
 
 import struct

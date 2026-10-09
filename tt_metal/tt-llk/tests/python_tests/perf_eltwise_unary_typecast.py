@@ -51,13 +51,13 @@ from helpers.test_variant_parameters import (
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
 # including the paths re-introduced by issue #46751.
 #
-# dest_acc is the production setting EXCEPT for the two 16-bit Dest rows marked below
+# dest_acc is the production setting except in the two 16-bit Dest rows marked below
 # (ttnn.typecast forces dest_acc=Yes for 32-bit outputs); their 32-bit Dest rows follow.
 _TYPECAST_PERF_CASES = [
     # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
     # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
-    # uint16_to_fp32, 16-bit Dest -- NOT production-reachable (Float32 out -> dest_acc=Yes).
+    # uint16_to_fp32, 16-bit Dest: not reachable from ttnn (Float32 out forces dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
     # uint16_to_fp32, 32-bit Dest: the production setting.
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.Yes),
@@ -65,7 +65,7 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
     # Exact uint32 -> fp32 conversion with a three-cycle SFPLOADMACRO pipeline.
     (DataFormat.UInt32, DataFormat.Float32, DestAccumulation.Yes),
-    # uint16_to_uint32, 16-bit Dest -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
+    # uint16_to_uint32, 16-bit Dest: not reachable from ttnn (UInt32 out forces dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
     # uint16_to_uint32, 32-bit Dest: the production setting.
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.Yes),
