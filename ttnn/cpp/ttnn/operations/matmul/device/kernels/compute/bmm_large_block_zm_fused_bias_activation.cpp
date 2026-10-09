@@ -231,6 +231,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = static_cast<bool>(get_compile_time_arg_val(18));
@@ -507,7 +512,8 @@ void kernel_main() {
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -573,7 +579,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
-                if constexpr (num_blocks_w_dim > 1) {
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
@@ -623,7 +629,7 @@ void kernel_main() {
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
     // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
+    if constexpr (!bias_per_group && num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
 #endif

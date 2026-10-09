@@ -65,21 +65,21 @@ enum llk_intf_counter_id {
 
 // Legacy(slow) LLK Interface
 inline void llk_reg_write(uint64_t addr, uint64_t data) {
-    LLK_INTF_WRITE(addr, data);
+    __builtin_riscv_ttrocc_llk_intf_write(addr, data);
     asm volatile("fence" : : : "memory");
 }
 
 inline uint64_t llk_reg_read(uint64_t addr) {
-    uint64_t data = LLK_INTF_READ(addr);
+    uint64_t data = __builtin_riscv_ttrocc_llk_intf_read(addr);
     asm volatile("fence" : : : "memory");
     return data;
 }
 
 // New (fast) LLK Interface
-inline void fast_llk_reg_write(uint64_t addr, uint64_t data) { LLK_INTF_WRITE(addr, data); }
+inline void fast_llk_reg_write(uint64_t addr, uint64_t data) { __builtin_riscv_ttrocc_llk_intf_write(addr, data); }
 
 inline uint64_t fast_llk_reg_read(uint64_t addr) {
-    uint64_t data = LLK_INTF_READ(addr);
+    uint64_t data = __builtin_riscv_ttrocc_llk_intf_read(addr);
     return data;
 }
 

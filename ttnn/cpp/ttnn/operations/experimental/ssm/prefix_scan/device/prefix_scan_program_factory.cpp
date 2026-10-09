@@ -82,6 +82,8 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
 
     // Shard-backed output CB last - buffer address may be high in L1
     const uint32_t cb_out_id = tt::CBIndex::c_16;
+    const bool partial_row = (total_tiles_per_row % num_tiles_in_chunk) != 0;
+    const uint32_t cb_tilize_scratch_id = tt::CBIndex::c_30;
 
     std::vector<uint32_t> reader_compile_time_args = {
         cb_a_in_id, cb_bx_in_id, cb_h_in_id, input_tile_size, intermediary_row_size};
@@ -98,7 +100,9 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
         cb_h_id,
         cb_tilize_out_id,
         cb_out_id,
-        cb_h_acc_id};
+        cb_h_acc_id,
+        cb_tilize_scratch_id,
+        static_cast<uint32_t>(partial_row)};
 
     auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
     std::vector<CoreCoord> cores = grid_to_cores(
@@ -182,6 +186,17 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_h_in_id),
             .data_format = intermediary_format,
             .page_size = intermediary_row_size}}}});
+
+    // Tail chunk is shorter than 32 tiles; tilize still writes 32.
+    if (partial_row) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_tiles_in_chunk * input_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_tilize_scratch_id),
+                .data_format = input_format,
+                .page_size = input_tile_size}}}});
+    }
 
     // Shard-backed output CB last - buffer address may be high in L1.
     desc.cbs.push_back(CBDescriptor{

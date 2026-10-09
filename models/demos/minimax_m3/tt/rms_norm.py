@@ -22,6 +22,7 @@ from torch import nn
 
 import ttnn
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, get_default_num_links
 
 from .residual import use_distributed_norm
@@ -74,6 +75,7 @@ class RMSNorm(nn.Module):
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=None,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if self.is_distributed:
             # rms_norm_post_all_gather requires the gain to match the input width (emb/tp), so re-shard

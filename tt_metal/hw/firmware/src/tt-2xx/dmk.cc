@@ -18,6 +18,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
+#include "internal/tt-2xx/quasar/semaphore_cached_pool.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -108,18 +109,14 @@ std::uint32_t _start() {
         DeviceZoneScopedMainChildN("DM-KERNEL");
         EARLY_RETURN_FOR_DEBUG
 
-        WAYPOINT("K");
-#ifdef TT_DM_CACHED_SEM_STUBS
-        // When the kernel binds DM_LOCAL_CACHED semaphores: seed their
-        // pool rows once per program, and restore them on the way out.
+        // Seed the pool rows of the kernel's DM_LOCAL_CACHED semaphores once per program, and
+        // restore them on the way out. No-op when the kernel binds none.
         sem_internal::init_dm_local_cached<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(
             sem_internal::kCachedSemaphores);
-#endif
+        WAYPOINT("K");
         kernel_main();
-#ifdef TT_DM_CACHED_SEM_STUBS
-        sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
-#endif
         WAYPOINT("KD");
+        sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
         // DFBs stays trivially copyable.
         RECORD_DFB_REGION_CLEAR();

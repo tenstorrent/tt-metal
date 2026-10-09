@@ -22,6 +22,12 @@
 //   Phase 2 (REDUCE_ROW, per row-tile): each tile's element [0][0] ends up holding the extreme
 //            over that whole 32x32 tile (the per-tile multi-axis reduction result).
 // Reading [0][0] of every tile yields one independent multi-axis result per tile.
+//
+// REDUCE_ORDER (MAX/MIN only) also runs the passes row-then-column and column-row-column under the same
+// single init, so a column reduce that follows a row reduce is covered too: the column MAX/MIN path
+// replays a window recorded by the init (a row path that wrote replay slots would clobber it), and the manual
+// column paths (UInt16, signed Int32, every format under DISABLE_SFPLOADMACRO) expect the opposite SFPSWAP
+// direction from the row path, so they must set it themselves.
 
 #include <algorithm>
 #include <cstdint>
@@ -75,6 +81,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
+// Which chain of passes to run under the one shared init. Mirrors ReduceOrder in helpers/llk_params.py.
+constexpr int REDUCE_ORDER_COL_ROW     = 0; // column, row          -- the multi-axis lowering (ttir.max dim=[1,2])
+constexpr int REDUCE_ORDER_ROW_COL     = 1; // row, column          -- a column reduce AFTER a row reduce (MAX/MIN only)
+constexpr int REDUCE_ORDER_COL_ROW_COL = 2; // column, row, column  -- both transitions in one kernel (MAX/MIN only)
+
+static_assert(REDUCE_ORDER >= REDUCE_ORDER_COL_ROW && REDUCE_ORDER <= REDUCE_ORDER_COL_ROW_COL, "unhandled REDUCE_ORDER");
+// Only MAX/MIN leave each tile's extreme at [0][0] whatever the order; a SUM/AVG chain is only meaningful
+// column-then-row.
+static_assert(
+    REDUCE_ORDER == REDUCE_ORDER_COL_ROW || POOL_TYPE == ckernel::PoolType::MAX || POOL_TYPE == ckernel::PoolType::MIN,
+    "row->col REDUCE_ORDERs are MAX/MIN only");
+
+constexpr bool COL_BEFORE_ROW = (REDUCE_ORDER == REDUCE_ORDER_COL_ROW || REDUCE_ORDER == REDUCE_ORDER_COL_ROW_COL);
+constexpr bool COL_AFTER_ROW  = (REDUCE_ORDER == REDUCE_ORDER_ROW_COL || REDUCE_ORDER == REDUCE_ORDER_COL_ROW_COL);
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -86,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    // Row reduction (phase 2) needs every tile resident in dest at once, so the whole block is a
+    // Row reduction needs every tile resident in dest at once, so the whole block is a
     // single dest section (NUM_BLOCKS == 1 is enforced by the Python harness).
     const std::uint32_t num_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
 
@@ -107,29 +128,45 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tile, formats.math, formats.math);
     }
 
-    // Phase 1: column reduce each tile (REDUCE_COL). Leaves each col-tile's 32 per-column extremes
-    // in its row 0.
-    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    // Column reduce each tile (REDUCE_COL): leaves each tile's 32 per-column results in its row 0.
+    auto column_reduce_all_tiles = [&]()
     {
-        _llk_math_eltwise_sfpu_start_(tile);
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            _llk_math_eltwise_sfpu_start_(tile);
+            ckernel::sfpu::calculate_reduce<
+                POOL_TYPE,
+                ckernel::ReduceDim::REDUCE_COL,
+                static_cast<DataFormat>(formats.math),
+                is_fp32_dest_acc_en,
+                static_cast<DataFormat>(formats.pack_dst)>();
+        }
+    };
+
+    // Row reduce the whole column of row-tiles (REDUCE_ROW): each row's result lands in its column 0.
+    auto row_reduce_block = [&]()
+    {
+        _llk_math_eltwise_sfpu_start_(0);
         ckernel::sfpu::calculate_reduce<
             POOL_TYPE,
-            ckernel::ReduceDim::REDUCE_COL,
+            ckernel::ReduceDim::REDUCE_ROW,
             static_cast<DataFormat>(formats.math),
             is_fp32_dest_acc_en,
-            static_cast<DataFormat>(formats.pack_dst)>();
-    }
+            static_cast<DataFormat>(formats.pack_dst)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+    };
 
-    // Phase 2: row reduce each row-tile (REDUCE_ROW). Reduces every tile's rows so each tile's
-    // element [0][0] holds the extreme over its (already column-reduced) row 0, i.e. the extreme
-    // over the whole 32x32 tile.
-    _llk_math_eltwise_sfpu_start_(0);
-    ckernel::sfpu::calculate_reduce<
-        POOL_TYPE,
-        ckernel::ReduceDim::REDUCE_ROW,
-        static_cast<DataFormat>(formats.math),
-        is_fp32_dest_acc_en,
-        static_cast<DataFormat>(formats.pack_dst)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+    // REDUCE_ORDER picks the chain (all under the one init above). A column reduce AFTER a row reduce guards
+    // the column path's replay window and its SFPSWAP direction against whatever the row path leaves behind.
+    // For MAX/MIN every order leaves each tile's extreme at its element [0][0].
+    if constexpr (COL_BEFORE_ROW)
+    {
+        column_reduce_all_tiles();
+    }
+    row_reduce_block();
+    if constexpr (COL_AFTER_ROW)
+    {
+        column_reduce_all_tiles();
+    }
 
     _llk_math_eltwise_sfpu_done_();
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -21,7 +21,9 @@ Blackhole automatically.
 
 Persistent inputs and boundary outputs use DRAM. Prefill inputs share storage
 only when their tensor specs and mesh topologies match. Decode inputs follow the
-same rule; changing the decode variant reloads all host inputs. In particular,
+same rule. A caller that changes the decode variant must explicitly request
+`reload_inputs=True`. A page-table-only reload preserves device token and
+position state. In particular,
 all compatible decode modes share the token buffer used for sampler feedback.
 Decode outputs share within one output mode, separately from prefill outputs.
 These groups also keep buffers from different sub-device manager domains apart.

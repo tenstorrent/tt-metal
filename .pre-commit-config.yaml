@@ -138,6 +138,14 @@ repos:
       files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
 - repo: local
   hooks:
+    - id: lint-pipeline-cmds
+      name: Pipeline cmd blocks stop at the first failed test command
+      entry: python3 .github/scripts/utils/lint_pipeline_cmds.py
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
+- repo: local
+  hooks:
     - id: triage-type-check
       name: tt-triage type checks
       entry: tools/triage/run_type_checks.sh
@@ -165,6 +173,20 @@ repos:
       language: system
       # All three architectures: the check is lexical and needs no per-arch tables.
       files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
+    - id: llk-instr-encoding-args
+      name: "llk: STALLWAIT/SEMWAIT argument roles and instruction-scoped constants"
+      entry: python3 tt_metal/tt-llk/infra/check_instr_encoding_args.py
+      language: system
+      # Zero findings in both trees, so no baseline. A change to the checker, to its lexer
+      # (check_mutex_balance.py) or to a ckernel*_ops.h instruction-definition header rescans
+      # every header.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
+          tt_metal/hw/ckernels/[^/]+/metal/.*\.h|
+          tt_metal/tt-llk/infra/check_instr_encoding_args\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py
+        )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
       entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py

@@ -7,8 +7,8 @@
 #include "api/compute/common_globals.h"
 
 // ckernel_sfpu_situ_glu.h builds on _sfpu_softcap_ and sfpi::approx_recip, neither of which
-// has a Wormhole counterpart, so the API is Blackhole only.
-#if defined(ARCH_BLACKHOLE)
+// has a Wormhole counterpart, so the API is Blackhole and Quasar only.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_situ_glu.h"
@@ -64,4 +64,4 @@ ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfp
 
 }  // namespace ckernel
 
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
