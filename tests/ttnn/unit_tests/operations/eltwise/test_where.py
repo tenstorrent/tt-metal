@@ -7,6 +7,7 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_equal
+from models.common.utility_functions import is_wormhole_b0
 
 
 def torch_equal_nan(a, b):
@@ -632,6 +633,8 @@ def test_div_edgcase(device):
 
 
 def test_addcdiv_edgcase(device):
+    if is_wormhole_b0():
+        pytest.xfail("On Wormhole the SFPU store narrows the NaN that SFPMAD makes for 0/0 into inf")
     # Hardcoded input tensors
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
