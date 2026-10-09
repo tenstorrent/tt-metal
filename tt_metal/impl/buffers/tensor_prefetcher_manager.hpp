@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -108,14 +109,22 @@ public:
 
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
-    // has the dispatcher write the new value into every DRAM core's signal slot
-    // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
+    // has the dispatcher write the new value into every DRAM core's CQ fence slot
+    // (ordered after prior CQ work), and queues a WAIT_SIGNAL request so each kernel
     // blocks until that value is observed. Must be called synchronously on the
     // host thread that enqueues the data writes (after them, before the dependent
     // prefetch request). `cq` must belong to this manager's mesh device, and its id
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
+
+    // DRISC L1 address of op signal `signal_id`'s slot, uniform across every sender core of every device.
+    uint32_t signal_address(uint32_t signal_id);
+
+    // Queue a WAIT_SIGNAL on op signal `signal_id`'s slot to every sender of every device. The count it
+    // waits for is assigned when worker_loop takes the request, so a wait captured into a trace waits for
+    // a new count on each replay. Capture-vs-send contract as queue().
+    void queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq);
 
     void stop();
 
@@ -139,12 +148,14 @@ private:
     struct Request {
         // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
         // the header names that sender's target state, and its layout slots that sender's slab
-        // base. STOP / WAIT_CQ carry one
+        // base. STOP / WAIT_SIGNAL carry one
         // shared page and leave target_sender_indices empty to broadcast to every provisioned
         // sender.
         std::vector<std::vector<uint8_t>> sender_pages;
         std::vector<MeshCoordinate> target_devices;
         std::vector<uint32_t> target_sender_indices;
+        // Set on a wait on op signal s, which carries no page until worker_loop builds its WAIT_SIGNAL.
+        std::optional<uint32_t> op_signal;
     };
 
     struct MpfeWeights {
@@ -183,6 +194,12 @@ private:
     };
 
     void worker_loop();
+    // One WAIT_SIGNAL page on signal slot `slot_index` for `wait_value`.
+    std::vector<uint8_t> wait_signal_page(uint32_t slot_index, uint32_t wait_value) const;
+    // Index in the signal slot table of op signal `signal_id`, which `api_name`'s caller passed in.
+    static uint32_t op_signal_slot(uint32_t signal_id, std::string_view api_name);
+    // DRISC L1 address of signal slot `slot_index`, uniform across every sender core of every device.
+    uint32_t signal_slot_addr(uint32_t slot_index) const;
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
     void record_drain_target(
@@ -209,6 +226,11 @@ private:
     // table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const RequestTarget& target, const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
+    // TT_FATAL unless `trace_capture_cq`, which `api_name`'s caller passed in, is null or of this mesh device.
+    void validate_trace_capture_cq(const MeshCommandQueue* trace_capture_cq, std::string_view api_name) const;
+    // Capture `requests` into the trace `trace_capture_cq` is recording, if it is, else hand them to the
+    // worker, in order and without interleaving with any other call's requests.
+    void send_or_capture(std::vector<Request> requests, MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
@@ -225,18 +247,19 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
-    // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
-    // across all sender cores. Carved at the front of the kernel working region.
-    uint32_t cq_signal_l1_addr_ = 0;
+    // Base (local DRISC L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots,
+    // then kTensorPrefetcherNumSignals op signal slots. Uniform across all sender cores of every device,
+    // carved at the front of the kernel working region.
+    uint32_t signal_slots_l1_addr_ = 0;
     // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
     // uniform across all sender cores.
     uint32_t selector_scratch_l1_addr_ = 0;
     // Distance between consecutive signal slots. The slots hold one uint32 each but are
-    // spaced a full L1 alignment apart: each is the destination of its own dispatcher
+    // spaced a full L1 alignment apart: each CQ fence slot is the destination of its own dispatcher
     // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
     // apart, every slot but the first would be misaligned and its write would go nowhere,
-    // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
-    uint32_t cq_signal_slot_stride_ = 0;
+    // leaving the kernel spinning on a WAIT_SIGNAL that is never satisfied.
+    uint32_t signal_slot_stride_ = 0;
     // A pipe stop must drain on one sender: the address of its config page on that sender, which the
     // DRAIN request carries, and the DRISC L1 range that address lies in. The range expiring means the
     // pipe is gone and its memory may already hold something else, so stop skips it rather than read
@@ -252,8 +275,11 @@ private:
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
-    // write and the WAIT_CQ request value.
+    // write and the WAIT_SIGNAL request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
+    // Waits on each op signal handed to the worker since start, i.e. the count the latest of them waits
+    // for. Zeroed by start, as the slots are, before the worker starts; only worker_loop touches it after.
+    std::array<uint32_t, experimental::kTensorPrefetcherNumSignals> op_signal_waits_{};
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
