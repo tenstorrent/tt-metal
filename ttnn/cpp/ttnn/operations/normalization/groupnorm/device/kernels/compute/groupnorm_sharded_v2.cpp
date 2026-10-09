@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
 
 #include <cstdint>
 
