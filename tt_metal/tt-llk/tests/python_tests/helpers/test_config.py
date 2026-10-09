@@ -1238,13 +1238,14 @@ class TestConfig:
             self.profiler_build == ProfilerBuild.Yes
             and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             and (not TestConfig.TEST_TARGET.run_simulator or os.environ.get("LLK_SIM_BARRIER") == "1")  # experiment
+            and os.environ.get("LLK_NO_BARRIER") != "1"  # experiment
         )
 
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
         ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
         """
-        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
+        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes or os.environ.get("LLK_NO_PIN") == "1":
             return ""
         return '#include "kernel_placement.h"\n'
 
@@ -1412,6 +1413,20 @@ class TestConfig:
         if TestConfig.TEST_TARGET.run_simulator:
             OPTIONS_COMPILE += "-DLLK_SIMULATOR "
         OPTIONS_COMPILE += "-DLLK_BRISC_OLD_POLL " if os.environ.get("LLK_BRISC_OLD_POLL") == "1" else ""  # experiment
+        # experiments (p58v2-versim): code moves and undo switches for the #58068 fixes
+        if int(os.environ.get("LLK_FN_NOPS", "0")):  # N never executed nops before every function
+            OPTIONS_COMPILE += f"-fpatchable-function-entry={int(os.environ['LLK_FN_NOPS'])},{int(os.environ['LLK_FN_NOPS'])} "
+        if int(os.environ.get("LLK_ZONE_RESERVE_NOPS", "0")):  # zone_reserve grows by N nops
+            OPTIONS_COMPILE += f"-DLLK_ZONE_RESERVE_NOPS={int(os.environ['LLK_ZONE_RESERVE_NOPS'])} "
+        if int(os.environ.get("LLK_ISO_SETTLE", "0")):  # measured thread waits N nops before an isolate zone
+            OPTIONS_COMPILE += f"-DLLK_ISO_SETTLE={int(os.environ['LLK_ISO_SETTLE'])} "
+        if int(os.environ.get("LLK_RELEASE_GAP", "0")):  # N nops between the BRISC release stores
+            OPTIONS_COMPILE += f"-DLLK_RELEASE_GAP={int(os.environ['LLK_RELEASE_GAP'])} "
+        if int(os.environ.get("LLK_SERVE_PRE", "0")):  # N nops more in the BRISC pre-release wait
+            OPTIONS_COMPILE += f"-DLLK_SERVE_PRE={int(os.environ['LLK_SERVE_PRE'])} "
+        if os.environ.get("LLK_NO_QUIET") == "1":  # undo 52412ea8e67: PACK_ISOLATE peers do not wait
+            OPTIONS_COMPILE += "-DLLK_NO_QUIET "
+        OPTIONS_COMPILE += f"-DLLK_TRISC_BP_OFF={int(os.environ.get('LLK_TRISC_BP_OFF', '0'))} "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
@@ -1487,7 +1502,12 @@ class TestConfig:
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
                     f"{perf_cnt_flag}"
-                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
+                    + (  # experiment: LLK_BRISC_FN_NOPS=N moves every BRISC function by N never executed nops
+                        f"-fpatchable-function-entry={int(os.environ['LLK_BRISC_FN_NOPS'])},{int(os.environ['LLK_BRISC_FN_NOPS'])} "
+                        if int(os.environ.get("LLK_BRISC_FN_NOPS", "0"))
+                        else ""
+                    )
+                    + f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
                 logger.trace(compile_command)
@@ -1951,6 +1971,8 @@ class TestConfig:
         threads = TestConfig.LAYOUT_THREADS.get(
             getattr(self, "current_run_type", None), ()
         )
+        if os.environ.get("LLK_NO_PADS") == "1":  # experiment
+            threads = ()
         if not threads:
             return variant_dir / "elf"
         from .perf import layout
@@ -1959,7 +1981,14 @@ class TestConfig:
         key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
         choice = variant_dir / "layout" / f"{key}.json"
         try:
-            pads = {t: tuple(v) for t, v in json.loads(choice.read_text()).items()}
+            if os.environ.get("LLK_FORCE_PADS"):  # experiment: "math:P,Z;unpack:P,Z" replaces the modelled choice
+                pads = {t: (0, 0) for t in threads}
+                for item in os.environ["LLK_FORCE_PADS"].split(";"):
+                    t, pz = item.split(":")
+                    if t in threads:
+                        pads[t] = tuple(int(v) for v in pz.split(","))
+            else:
+                pads = {t: tuple(v) for t, v in json.loads(choice.read_text()).items()}
         except (
             OSError,
             ValueError,

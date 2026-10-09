@@ -571,6 +571,9 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 // A peer of the pack thread in PACK_ISOLATE, at its TILE_LOOP zone: holds its epilogue until pack is done (profiler.h).
 constexpr bool holds_quiet(PerfRunType run_type, bool tile_loop)
 {
+#if defined(LLK_NO_QUIET) // experiment: undo 52412ea8e67
+    return false;
+#endif
     return tile_loop && run_type == PerfRunType::PACK_ISOLATE && !is_measured_thread(run_type);
 }
 
@@ -650,6 +653,16 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+#if defined(LLK_ISO_SETTLE) && LLK_ISO_SETTLE > 0
+        // Experiment: the measured thread of a single thread run type waits N nops before its TILE_LOOP zone opens.
+        if constexpr (LOOP_PAD && is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE))
+        {
+            for (std::uint32_t i = 0; i < LLK_ISO_SETTLE; ++i)
+            {
+                asm volatile("nop");
+            }
+        }
+#endif
 #if defined(LLK_DBG_BARRIER)
         if constexpr (holds_quiet(RUN_TYPE, LOOP_PAD)) // after the entry release: the level the pack thread flips when done
         {

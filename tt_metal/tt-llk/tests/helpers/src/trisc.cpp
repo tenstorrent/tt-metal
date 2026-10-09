@@ -110,7 +110,7 @@ int main(void)
 
         ckernel::fence_compiler();
 
-#if defined(LLK_DBG_BARRIER) && defined(LLK_PROFILER) && defined(LLK_PERF_RUN_TYPE_PACK_ISOLATE) && defined(LLK_TRISC_PACK)
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PROFILER) && defined(LLK_PERF_RUN_TYPE_PACK_ISOLATE) && defined(LLK_TRISC_PACK) && !defined(LLK_NO_QUIET)
         llk_barrier::detail::flip(llk_barrier::RELEASE_SEM); // release the peers held at their TILE_LOOP end (profiler.h)
 #endif
         ckernel::tensix_sync();

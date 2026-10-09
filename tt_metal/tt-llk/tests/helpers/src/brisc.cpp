@@ -88,6 +88,20 @@ constexpr std::uint32_t RELEASE_ALL     = (1U << 0) | (1U << 10) | (1U << 20);
 static_assert(REQ == 1U << 31 && READ_VALID == 1U << 30 && REG_STATUS == 0, "serve() tests REQ and READ_VALID by sign");
 static_assert(DBG_CNTL_1 == DBG_CNTL_0 + 4 && DBG_STATUS_0 == DBG_CNTL_0 + 8 && DBG_STATUS_1 == DBG_CNTL_0 + 12 && PC_BUF_OVERRIDE == DBG_CNTL_0 + 16);
 
+// experiments (p58v2-versim): LLK_RELEASE_GAP nops between the release stores, LLK_SERVE_PRE more pre-release wait passes
+#define LLK_XSTR_(x) #x
+#define LLK_XSTR(x)  LLK_XSTR_(x)
+#if defined(LLK_RELEASE_GAP)
+#define LLK_GAP_ASM ".rept " LLK_XSTR(LLK_RELEASE_GAP) "\n\tnop\n\t.endr\n\t"
+#else
+#define LLK_GAP_ASM ""
+#endif
+#if defined(LLK_SERVE_PRE)
+#define LLK_SERVE_PRE_N LLK_XSTR(LLK_SERVE_PRE)
+#else
+#define LLK_SERVE_PRE_N "0"
+#endif
+
 // Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
 // Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
 __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
@@ -162,10 +176,10 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t" // all parked on their hold read: nothing below depends on data
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
-        "li    a4, 512\n"
+        "li    a4, 512 + LLK_SERVE_PRE_N\n"
         "15:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
-        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
         "j     1b\n"
         "40:\n\t" // INIT entry park: as above, then unpack, math and pack released %[stagger] spins apart
         "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n"
@@ -250,6 +264,14 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+#if defined(LLK_TRISC_BP_OFF) && LLK_TRISC_BP_OFF
+    // Experiment: set the TRISC branch predictor disable bits to the mask (bit 0 = TRISC0) every boot; they persist.
+    {
+        volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
+        cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] =
+            (cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] & ~DISABLE_RISC_BP_Disable_trisc_MASK) | (LLK_TRISC_BP_OFF << DISABLE_RISC_BP_Disable_trisc_SHAMT);
+    }
+#endif
 
     std::uint32_t counter = 0;
 
