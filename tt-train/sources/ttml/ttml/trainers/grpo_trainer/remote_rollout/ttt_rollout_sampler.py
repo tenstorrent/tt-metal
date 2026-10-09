@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Data-parallel tt-transformers generation worker: owns a [1, N] mesh, splits it into
+"""Data-parallel tt-transformers rollout sampler: owns a [1, N] mesh, splits it into
 N [1, 1] submeshes, and runs prefill/decode concurrently across one model per submesh
 via a single Generator (data_parallel == N).
 
@@ -16,6 +16,7 @@ import os
 import time
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 import ttnn
 from huggingface_hub import snapshot_download
@@ -25,11 +26,18 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
+from ..grpo_trainer import RolloutBatch, RolloutSampler, check_new_weight_version
+from ..rollout_batch_source import validate_rollout_batch
+
 OptimizationsFn = Callable[[int, str], Any]
 
 
-class TttGenerationWorker:
-    """Owns the caller's already-open [1, N] mesh (never closes it) and its submeshes."""
+class TTTRolloutSampler(RolloutSampler):
+    """tt-transformers rollout sampler; its log-probs come from tt-transformers' on-device sampling.
+
+    Uses the caller's already-open [1, N] mesh (never closes it) and owns its submeshes.
+    Boots with the HF weights of ``model_source`` at weight_version 0.
+    """
 
     def __init__(
         self,
@@ -42,35 +50,39 @@ class TttGenerationWorker:
         optimizations: OptimizationsFn,
         stop_token_ids: Sequence[int],
         pad_token_id: int,
+        completions_per_prompt: int,
+        max_completion_length: int,
         temperature: float = 1.0,
-        top_k: int = 0,
+        top_k: int = 32,
         top_p: float = 1.0,
         seed: Optional[int] = None,
         paged_block_size: int = 32,
         min_num_blocks: int = 1024,
-        dummy_weights: bool = True,
+        dummy_weights: bool = False,
     ) -> None:
         self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
         self._pad_token_id: int = int(pad_token_id)
+        self._completions_per_prompt: int = int(completions_per_prompt)
+        self._max_completion_length: int = int(max_completion_length)
+        self._weight_version: int = 0
 
         # one [1,1] submesh per device of the parent mesh
         self._data_parallel: int = mesh_device.get_num_devices()
         self.submeshes: List[Any] = create_submeshes(mesh_device, self._data_parallel)
-        assert (
-            len(self.submeshes) == self._data_parallel
-        ), f"expected {self._data_parallel} submeshes, got {len(self.submeshes)}"
+        if len(self.submeshes) != self._data_parallel:
+            raise RuntimeError(f"expected {self._data_parallel} submeshes, got {len(self.submeshes)}")
 
-        # max_batch_size is per-submesh; the global batch spans all submeshes
+        # max_batch_size is per-submesh; one call serves max_batch_size slots on every submesh
         self._max_batch_size_per_dp: int = int(max_batch_size)
-        self._global_batch_size: int = self._max_batch_size_per_dp * self._data_parallel
+        self._slots_per_call: int = self._max_batch_size_per_dp * self._data_parallel
 
         os.environ["HF_MODEL"] = model_source  # ModelArgs reads HF_MODEL from env
         if not dummy_weights and not os.path.isdir(model_source):
             # ModelArgs reads the HF config with local_files_only=True under CI. CI does not have
             # every model available locally, so download it as needed.
-            print(f"[TttGenerationWorker] Downloading HuggingFace snapshot for {model_source}")
+            print(f"[TTTRolloutSampler] Downloading HuggingFace snapshot for {model_source}")
             snapshot_download(
                 repo_id=model_source,
                 allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
@@ -86,7 +98,7 @@ class TttGenerationWorker:
 
         # global page table; decode_forward chunks it per submesh
         base = torch.arange(max_num_blocks, dtype=torch.int32).repeat(self._data_parallel)
-        self.page_table = base.reshape(self._global_batch_size, blocks_per_user)
+        self.page_table = base.reshape(self._slots_per_call, blocks_per_user)
 
         # one model per submesh, reusing one host state_dict (DP copies, not shards)
         self.model_args: List[Any] = []
@@ -101,7 +113,7 @@ class TttGenerationWorker:
                 optimizations=lambda ma: optimizations(ma.n_layers, ma.model_name),
                 max_seq_len=max_seq_len,
                 cache_hf=True,
-                dummy_weights=dummy_weights,  # fast boot; first update_weights() installs real weights
+                dummy_weights=dummy_weights,
             )
             model_args.lm_head_dtype = ttnn.bfloat16
             model_args.ccl_dtype = ttnn.bfloat16
@@ -130,13 +142,14 @@ class TttGenerationWorker:
 
         # baked into each submesh's decode trace at first capture, so pin once
         for model in self.models:
-            assert model.sampling is not None, (
-                "TttGenerationWorker requires on-device sampling support, but model.sampling "
-                "is None for this configuration (vocab_size / mesh shape combination unsupported)."
-            )
+            if model.sampling is None:
+                raise RuntimeError(
+                    "TTTRolloutSampler requires on-device sampling support, but model.sampling "
+                    "is None for this configuration (vocab_size / mesh shape combination unsupported)."
+                )
         # Per-slot lists (not scalars): scalar SamplingParams fields are padded
         # to the greedy default on non-slot-0 requests by scatter_sampling_params_to_slots.
-        n = self._global_batch_size
+        n = self._slots_per_call
         self._sampling_params = SamplingParams(
             temperature=[float(temperature)] * n,
             top_k=[int(top_k)] * n,
@@ -157,7 +170,32 @@ class TttGenerationWorker:
         )
         self._sampling_warmed_up = False
 
-    def generate(
+    @property
+    def weight_version(self) -> int:
+        return self._weight_version
+
+    def generate(self, prompts: List[List[int]]) -> RolloutBatch:
+        """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call."""
+        version = self._weight_version
+        g, W = self._completions_per_prompt, self._max_completion_length
+        prompts_x = [list(p) for p in prompts for _ in range(g)]
+        completions: List[List[int]] = []
+        token_logprobs: List[List[float]] = []
+        for start in range(0, len(prompts_x), self._slots_per_call):
+            c, lp = self.generate_and_get_log_probs(prompts_x[start : start + self._slots_per_call], max_new_tokens=W)
+            completions.extend(c)
+            token_logprobs.extend(lp)
+
+        logprobs = np.zeros((len(prompts_x), W), dtype=np.float32)
+        for r, (c, lp) in enumerate(zip(completions, token_logprobs)):
+            if len(lp) != len(c):
+                raise RuntimeError(f"row {r}: {len(lp)} log-probs for {len(c)} tokens")
+            logprobs[r, : len(c)] = lp
+        batch = RolloutBatch(weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs)
+        validate_rollout_batch(batch, num_prompts=len(prompts), num_generations=g, max_completion_length=W)
+        return batch
+
+    def generate_tokens(
         self,
         prompts: List[List[int]],
         *,
@@ -166,7 +204,7 @@ class TttGenerationWorker:
         stop_at_eos: bool = True,
     ) -> List[List[int]]:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
-        batch is padded to the global size; sampling params were baked into
+        batch is padded to slots_per_call; sampling params were baked into
         ``self._sampling_params`` at construction and cannot vary per call."""
         completions, _ = self._generate_impl(
             prompts,
@@ -185,7 +223,7 @@ class TttGenerationWorker:
         enable_trace: bool = True,
         stop_at_eos: bool = True,
     ) -> Tuple[List[List[int]], List[List[float]]]:
-        """Same as :meth:`generate`, but also returns per-token sampled log-probs
+        """Same as :meth:`generate_tokens`, but also returns per-token sampled log-probs
         (post temperature/top_k/top_p) aligned 1:1 with completion tokens.
 
         Returns:
@@ -200,11 +238,12 @@ class TttGenerationWorker:
             stop_at_eos=stop_at_eos,
             collect_logprobs=True,
         )
-        assert logprobs is not None, "collect_logprobs=True must return log-probs"
+        if logprobs is None:
+            raise RuntimeError("collect_logprobs=True must return log-probs")
         return completions, logprobs
 
     def _warm_up_sampling(self, prompts: List[List[int]], *, max_new_tokens: int, stop_at_eos: bool) -> None:
-        """Run one untraced generate with the worker's sampling params before the first trace capture.
+        """Run one untraced generate with the sampler's sampling params before the first trace capture.
 
         Generator.warmup_model_prefill only warms log-prob sampling at batch size 1, so capturing a
         trace for the full batch with log-probs enabled would otherwise hit uncompiled programs.
@@ -227,11 +266,11 @@ class TttGenerationWorker:
         stop_at_eos: bool,
         collect_logprobs: bool,
     ) -> Tuple[List[List[int]], Optional[List[List[float]]]]:
-        """Shared prefill + decode driver behind :meth:`generate` and
+        """Shared prefill + decode driver behind :meth:`generate_tokens` and
         :meth:`generate_and_get_log_probs`. When ``collect_logprobs`` is True, also
         collects per-token sampled log-probs into a parallel list-of-lists sized to
         match ``completions`` slot-for-slot; when False, returns ``None`` for the
-        log-probs to keep the perf profile of the classic ``generate()`` path.
+        log-probs.
         """
         if max_new_tokens == 0:
             empty_completions: List[List[int]] = [[] for _ in prompts]
@@ -244,11 +283,11 @@ class TttGenerationWorker:
         _t_total = time.perf_counter()
 
         prompts, prompt_lens, active_batch_size = self._prepare_prompt_batch(prompts, max_new_tokens)
-        batch_size = len(prompts)  # == self._global_batch_size
+        batch_size = len(prompts)  # == self._slots_per_call
         max_prompt_len = max(prompt_lens)
         print(
-            f"[TttGenerationWorker] generate() start: data_parallel={self._data_parallel}, "
-            f"active_batch_size={active_batch_size}, global_batch_size={batch_size}, "
+            f"[TTTRolloutSampler] generate() start: data_parallel={self._data_parallel}, "
+            f"active_batch_size={active_batch_size}, slots_per_call={batch_size}, "
             f"max_prompt_len={max_prompt_len}, max_new_tokens={max_new_tokens}, "
             f"enable_trace={enable_trace}, collect_logprobs={collect_logprobs}",
         )
@@ -260,7 +299,7 @@ class TttGenerationWorker:
 
         self._reset_kv_cache()
 
-        # On-device sampling -> prefill returns (tokens, log_probs); tokens is [global_batch, 1].
+        # On-device sampling -> prefill returns (tokens, log_probs); tokens is [slots_per_call, 1].
         _t_prefill = time.perf_counter()
         prefill_out = self.generator.prefill_forward_text(
             input_tokens_prefill_pt,
@@ -276,13 +315,13 @@ class TttGenerationWorker:
         if collect_logprobs:
             if not isinstance(prefill_out, tuple) or len(prefill_out) < 2 or prefill_out[1] is None:
                 raise RuntimeError(
-                    "TttGenerationWorker: collect_logprobs=True requires on-device sampling to emit log-probs; "
+                    "TTTRolloutSampler: collect_logprobs=True requires on-device sampling to emit log-probs; "
                     "prefill_forward_text did not return a log-probs tensor. Check the model's sampling config."
                 )
             lp_prefill = prefill_out[1]
             if not isinstance(lp_prefill, torch.Tensor):
                 raise RuntimeError(
-                    "TttGenerationWorker: prefill log-probs are not a torch.Tensor "
+                    "TTTRolloutSampler: prefill log-probs are not a torch.Tensor "
                     f"(got {type(lp_prefill).__name__}); the top-k LogProbsResult path is not supported here. "
                     "Configure sampling with top_k=0 and top_p=1.0 to get scalar per-token log-probs."
                 )
@@ -290,7 +329,7 @@ class TttGenerationWorker:
         _prefill_s = time.perf_counter() - _t_prefill
         prefill_real_tokens = sum(prompt_lens[:active_batch_size])
         print(
-            f"[TttGenerationWorker] generate(): prefill done in {_prefill_s:.2f}s "
+            f"[TTTRolloutSampler] generate(): prefill done in {_prefill_s:.2f}s "
             f"({batch_size} users, {prefill_real_tokens} real prompt tokens)",
         )
 
@@ -324,7 +363,7 @@ class TttGenerationWorker:
 
         if all(user_done) or max_new_tokens <= 1:
             print(
-                f"[TttGenerationWorker] generate() done (no decode loop): "
+                f"[TTTRolloutSampler] generate() done (no decode loop): "
                 f"total={time.perf_counter() - _t_total:.2f}s",
             )
             return (
@@ -355,7 +394,7 @@ class TttGenerationWorker:
                 if collect_logprobs:
                     if not isinstance(lp_t, torch.Tensor):
                         raise RuntimeError(
-                            "TttGenerationWorker: decode log-probs are not a torch.Tensor "
+                            "TTTRolloutSampler: decode log-probs are not a torch.Tensor "
                             f"(got {type(lp_t).__name__ if lp_t is not None else 'None'}); "
                             "the top-k LogProbsResult path is not supported here."
                         )
@@ -395,7 +434,7 @@ class TttGenerationWorker:
         decode_active_tokens = sum(len(c) for c in completions[:active_batch_size])
         overall_tok_s = (decode_active_tokens / total_s) if total_s > 0 else 0.0
         print(
-            f"[TttGenerationWorker] generate() done: total={total_s:.2f}s "
+            f"[TTTRolloutSampler] generate() done: total={total_s:.2f}s "
             f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s over {steps_executed} steps), "
             f"completion_tokens={decode_active_tokens} -> {overall_tok_s:.1f} tok/s overall",
         )
@@ -404,14 +443,21 @@ class TttGenerationWorker:
             logprobs[:active_batch_size] if logprobs is not None else None,
         )
 
-    def update_weights(self, per_submesh: List[dict]) -> None:
-        """Apply one received HF-keyed weight dict per submesh (order matches
-        ``self.submeshes`` / the bridge's replication targets)."""
-        assert len(per_submesh) == len(
-            self.models
-        ), f"update_weights got {len(per_submesh)} dicts but worker has {len(self.models)} submeshes"
-        for model, hf_dict in zip(self.models, per_submesh):
+    def update_weights(self, weights: List[dict], version: int) -> None:
+        """Apply one HF-keyed weight dict per submesh (order matches ``self.submeshes`` /
+        the bridge's replication targets) and set ``weight_version`` to ``version``."""
+        version = check_new_weight_version(self._weight_version, version)
+        if len(weights) != len(self.models):
+            raise RuntimeError(f"update_weights got {len(weights)} dicts but sampler has {len(self.models)} submeshes")
+        for model, hf_dict in zip(self.models, weights):
             model.update_weights(hf_dict)
+        self._weight_version = version
+
+    def close(self) -> None:
+        """Drop the generator, models and KV caches (and their traces); the mesh stays open."""
+        self.generator = None
+        self.models = []
+        self.tt_kv_cache = []
 
     def _reset_kv_cache(self) -> None:
         for model in self.models:
@@ -424,39 +470,44 @@ class TttGenerationWorker:
     def _prepare_prompt_batch(
         self, prompts: List[List[int]], max_new_tokens: int
     ) -> tuple[List[List[int]], List[int], int]:
-        assert max_new_tokens >= 0, "max_new_tokens must be non-negative"
+        """Check one call's prompts and pad the batch to slots_per_call with 1-token pad prompts.
+
+        Raises ValueError if a prompt doesn't fit: prompts are never truncated. Returns the
+        padded prompts, their lengths, and the number of real prompts.
+        """
+        if max_new_tokens < 0:
+            raise ValueError(f"max_new_tokens must be non-negative, got {max_new_tokens}")
 
         active_batch_size = len(prompts)
-        assert 0 < active_batch_size <= self._global_batch_size, (
-            f"generate() got {active_batch_size} prompts but worker global batch is "
-            f"{self._global_batch_size} (data_parallel={self._data_parallel} x "
-            f"max_batch_size={self._max_batch_size_per_dp})"
-        )
+        if not 0 < active_batch_size <= self._slots_per_call:
+            raise ValueError(
+                f"got {active_batch_size} prompts; one call serves 1..{self._slots_per_call} "
+                f"(data_parallel={self._data_parallel} x max_batch_size={self._max_batch_size_per_dp})"
+            )
 
         normalized_prompts = [[int(tok) for tok in prompt] for prompt in prompts]
         prompt_lens = [len(p) for p in normalized_prompts]
-        assert min(prompt_lens) > 0, "empty prompts are not supported"
+        if min(prompt_lens) == 0:
+            raise ValueError("empty prompts are not supported")
 
-        max_prefill_len = self.model_args[0].max_seq_len - max_new_tokens
-        assert (
-            max_prefill_len > 0
-        ), f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({self.model_args[0].max_seq_len})"
+        max_seq_len = self.model_args[0].max_seq_len
+        max_prompt_len = max_seq_len - max_new_tokens
+        if max_prompt_len <= 0:
+            raise ValueError(f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({max_seq_len})")
+        too_long = [i for i, n in enumerate(prompt_lens) if n > max_prompt_len]
+        if too_long:
+            raise ValueError(
+                f"{len(too_long)} prompt(s) longer than {max_prompt_len} tokens (max_seq_len - max_new_tokens), "
+                f"first at index {too_long[0]} with {prompt_lens[too_long[0]]} tokens"
+            )
 
-        if max(prompt_lens) > max_prefill_len:
-            normalized_prompts = [p[-max_prefill_len:] for p in normalized_prompts]
-            prompt_lens = [len(p) for p in normalized_prompts]
+        if max(prompt_lens) + max_new_tokens > self._paged_cache_max_seq_len:
+            raise ValueError(
+                f"prompt prefill tokens ({max(prompt_lens)}) + decode tokens ({max_new_tokens}) "
+                f"must be <= paged-cache capacity ({self._paged_cache_max_seq_len})"
+            )
 
-        max_prompt_len = max(prompt_lens)
-        assert max_prompt_len + max_new_tokens <= self._paged_cache_max_seq_len, (
-            f"prompt prefill tokens ({max_prompt_len}) + decode tokens ({max_new_tokens}) "
-            f"must be <= paged-cache capacity ({self._paged_cache_max_seq_len})"
-        )
-
-        # Pad to the global batch so every submesh's slots are filled.
-        if active_batch_size < self._global_batch_size:
-            filler_prompt = [int(self._pad_token_id)]
-            pad_slots = self._global_batch_size - active_batch_size
-            normalized_prompts.extend([filler_prompt] * pad_slots)
-            prompt_lens.extend([1] * pad_slots)
-
+        pad_slots = self._slots_per_call - active_batch_size
+        normalized_prompts.extend([[int(self._pad_token_id)]] * pad_slots)
+        prompt_lens.extend([1] * pad_slots)
         return normalized_prompts, prompt_lens, active_batch_size
