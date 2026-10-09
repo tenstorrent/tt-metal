@@ -588,3 +588,40 @@ def test_update_cache_decode_non_tile_batch(num_users, num_heads, cache_idx, dev
     expected = cache.clone()
     expected[:, :, cache_idx, :] = update[0].permute(1, 0, 2)
     assert torch.equal(ttnn.to_torch(cache_tt), expected)
+
+
+@pytest.mark.parametrize("num_heads", [8, 24, 64])
+@pytest.mark.parametrize("cache_len,update_idx", [(512, 0), (1024, 0), (1024, 128)])
+def test_fill_cache_crosses_head_boundary(num_heads, cache_len, update_idx, device):
+    """Interleaved prefill must jump to the next cache head across core ranges."""
+    seq_len, head_dim = 512, 64
+    cache = torch.full((1, num_heads, cache_len, head_dim), -1.0, dtype=torch.bfloat16)
+    heads = torch.arange(num_heads, dtype=torch.float32).view(1, num_heads, 1, 1)
+    tiles = torch.arange(seq_len // 32, dtype=torch.float32).repeat_interleave(32).view(1, 1, seq_len, 1)
+    update = (heads * 16 + tiles + 1).expand(1, num_heads, seq_len, head_dim).to(torch.bfloat16).contiguous()
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.fill_cache(cache_tt, update_tt, 0, update_idx=update_idx)
+
+    expected = cache.clone()
+    expected[:, :, update_idx : update_idx + seq_len, :] = update
+    assert torch.equal(ttnn.to_torch(cache_tt), expected)
+
+
+def test_fill_cache_cross_head_program_cache_hits(device):
+    """A cached multi-head program must refresh the destination start page."""
+    num_heads, seq_len, cache_len, head_dim = 8, 512, 1024, 64
+    cache = torch.full((1, num_heads, cache_len, head_dim), -1.0, dtype=torch.bfloat16)
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+
+    for update_idx, value in ((0, 2.0), (512, 3.0)):
+        update = torch.full((1, num_heads, seq_len, head_dim), value, dtype=torch.bfloat16)
+        update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.fill_cache(cache_tt, update_tt, 0, update_idx=update_idx)
+        expected[:, :, update_idx : update_idx + seq_len, :] = update
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+
+    assert device.num_program_cache_entries() - entries_before == 1

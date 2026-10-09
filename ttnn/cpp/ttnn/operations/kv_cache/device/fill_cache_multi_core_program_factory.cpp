@@ -114,16 +114,15 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     std::uint32_t single_tile_size = tt::tile_size(data_format);
 
-    // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
-    // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
-    // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within
-    // reader/writer
+    // Input work is laid out head-major. A core can cross a head boundary, so the
+    // writer must jump to the next cache head when the input sequence wraps.
     std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
-    // Wt is the only shape-derived geometry create_program_artifacts still needs directly; the
-    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids, shared
-    // with override_runtime_arguments.
+    // The per-core destination start page depends on batch_idx and update_idx; the
+    // geometry below is fixed by tensor shape and remains valid on program-cache hits.
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
+    const std::uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    const std::uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] / TILE_HEIGHT * Wt;
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -204,18 +203,17 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    // ---- Writer (donor Metal 2.0 fork; its interface: dfb::out CONSUMER, tensor::dst, num_pages/start_id) ----
+    // ---- Writer: copy each sequence tile to its own cache head. ----
     const KernelSpec writer{
         .unique_id = WRITER,
-        // Reuse the existing cross-family donor Metal 2.0 fork (shared-kernel rung 1): bind it, adopt
-        // its interface (dfb::out CONSUMER, tensor::dst, named RTAs num_pages + start_id).
         .source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp",
+            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/"
+            "writer_fill_cache_interleaved_start_id.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"num_blocks", "Wt", "input_Ht", "cache_HtWt", "seq_tile_start", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -242,7 +240,12 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"num_pages", num_blocks_per_core * Wt}, {"start_id", cache_start_id}});
+            {{"num_blocks", num_blocks_per_core},
+             {"Wt", Wt},
+             {"input_Ht", input_Ht},
+             {"cache_HtWt", cache_HtWt},
+             {"seq_tile_start", num_blocks_written % input_Ht},
+             {"start_id", cache_start_id}});
         num_blocks_written += num_blocks_per_core;
     }
 
