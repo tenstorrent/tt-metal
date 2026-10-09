@@ -15,6 +15,29 @@ from this catalog.
 
 
 PERF_TEST_SCHEMAS = {
+    "perf_csa_index_remap": {
+        "version": 1,
+        "columns": [
+            "csa_row_offset",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "perf_stage",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_csa_index_remap": "perf_csa_index_remap"},
+    },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
         "columns": [
