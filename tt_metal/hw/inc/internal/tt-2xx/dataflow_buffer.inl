@@ -684,7 +684,7 @@ inline void DataflowBuffer::commit_implicit_write() {
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
 template <NocOptions opts, typename Src>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -713,7 +713,7 @@ Noc::async_read(
 }
 
 template <NocOptions opts, typename Dst>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,

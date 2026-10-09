@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file addrgen_state.h
- * @brief Side-generic address generator helpers, and save/restore of one side's walk
- *
  * An address generator has two independent sides, source and destination, with identical loop/bank registers (they
  * share only the MISC register: one bank shift, one bank order field per side). These helpers take the side as a
  * template argument so a walk can be programmed, popped, saved and restored on either.
@@ -13,10 +10,8 @@
  * Save/restore lets more walks than there are address-generator sides share them. A walk is what software programmed
  * (AddrgenProgram) plus how far the hardware has advanced it (AddrgenPosition). Hardware moves only the position
  * registers -- BANK_CURRENT, INNER_ADDRESS, OUTER_ADDRESS -- so a save reads back just those three
- * (save_position_addrgen); the program is the caller's to keep, as it wrote it. restore_addrgen writes both into any
- * side of any address generator, which then continues the walk exactly where it stopped. This is the address-generator
- * part of the HW team's command-buffer context-switch table ("Qsr cmd buffers"). FACE_SIZE is not part of the program:
- * callers that program it must restore it themselves.
+ * (save_position_addrgen). The caller keeps the program. restore_addrgen writes both into any
+ * side of any address generator, which then continues the walk exactly where it stopped.
  */
 
 #pragma once

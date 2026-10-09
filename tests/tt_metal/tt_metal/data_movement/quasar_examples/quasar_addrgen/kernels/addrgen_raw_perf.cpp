@@ -15,9 +15,9 @@
 //   5 push_issue  - DEST_ADDR + LEN write, push, issue, one barrier at the end
 //   6 push_issue_barrier - section 5 with a barrier after every page
 //   7 sw_issue_barrier   - section 3 with a barrier after every page
-//   8 sequencer      - tensor_accessor::transfer_noc_addr() (the sequencer as shipped), address only
+//   8 sequencer      - tensor_accessor::generated_noc_addr() (the sequencer as shipped), address only
 // The push breakdown, a ladder from the bare push to the NoC API (one barrier at the end of each):
-//   9 sequencer_push    - the sequencer with push allowed (transfer_noc_addr<Read, MayPush>), nothing issued: on a hit
+//   9 sequencer_push    - the sequencer with push allowed (generated_noc_addr<Read, MayPush>), nothing issued: on a hit
 //   the
 //                      address goes into the command buffer instead of back to the RISC-V (vs 8: the same with pop)
 //  10 push_v3        - raw push, then the NoC V3 issue of a pushed address (ncrisc_noc_fast_read<src_in_cmd_buf>:
@@ -262,7 +262,7 @@ void kernel_main() {
     // 8: the sequencer as shipped (it resets and programs the generators it uses itself).
     time(8, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
-            sink += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read>(ta, i, 0, noc_index);
+            sink += tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read>(ta, i, 0, noc_index);
             RAW_PERF_KEEP(sink);
         }
     });
@@ -271,14 +271,14 @@ void kernel_main() {
     // over at page 0, so the sequencer re-seeks once per section (as in 8).
     time(9, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
-            sink += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
+            sink += tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
             RAW_PERF_KEEP(sink);
         }
     });
     time(11, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
             const uint64_t addr =
-                tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
+                tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
             if (addr == tt_addrgen::kAddrPushed) {
                 issue_pushed(i);
             } else {
@@ -299,7 +299,7 @@ void kernel_main() {
     time(13, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
             noc_async_read(
-                tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read>(ta, i, 0, noc_index),
+                tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read>(ta, i, 0, noc_index),
                 pad_base + i * page_size,
                 page_size,
                 noc_index,
@@ -307,10 +307,10 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     });
-    // Untimed: how many of a sequential walk's requests the sequencer pushed (all but its seek, when push is built in).
+    // Untimed: how many of a sequential walk's requests the sequencer pushed (all of them, its seek included).
     uint32_t sequencer_pushes = 0;
     for (uint32_t i = 0; i < num_pages; ++i) {
-        sequencer_pushes += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(
+        sequencer_pushes += tensor_accessor::generated_noc_addr<tensor_accessor::TransferDir::Read, true>(
                                 ta, i, 0, noc_index) == tt_addrgen::kAddrPushed;
     }
 

@@ -41,12 +41,17 @@ inline constexpr bool noc_zero_l1_endpoint_v = false;
 template <typename T>
 inline constexpr bool is_scratchpad_v = false;
 
-// Push (Quasar tensor endpoints in a TT_TA_ADDRGEN_PUSH build; api/tensor/noc_traits.h): the address generator can
-// write T's remote address straight into the command buffer instead of returning it. Such an endpoint issues
-// async_read / async_write itself, through noc_traits_t<T>::issue_read / issue_write: it either runs the transfer with
-// the address already in the command buffer, or calls back the ordinary issue (a lambda from the call site) with the
-// address. noc.h never sees a pushed address, and endpoints that can't push compile to the ordinary issue alone.
-// (noc.h is shared by every arch; the pushed issue exists only in Quasar's NoC V3 header, hence the traits.)
+// True when T can push its generated address straight into the command buffer that will issue the noc transaction.
+// Quasar DM with the address-generator path (the same condition as TT_TA_ADDRGEN_ACTIVE,
+// internal/tensor/generated_noc_addr.h): the transfer calls below are forced inline, so the sequencer's hit path ends
+// up in the kernel's transfer loop. Left to the compiler, the inline budget ran out somewhere along Noc call -> traits
+// -> sequencer, and the call that remained cost 20-45 cycles per transfer. Elsewhere the compiler decides, as before.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
+#define NOC_TRANSFER_INLINE FORCE_INLINE
+#else
+#define NOC_TRANSFER_INLINE
+#endif
+
 template <typename T, typename = void>
 inline constexpr bool noc_addrgen_push_v = false;
 template <typename T>
@@ -137,10 +142,8 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
-    // Every NoC transfer path takes its endpoint addresses from these three helpers (or the *_maybe_pushed issues
-    // below, for an endpoint whose address the address generator may push), so this is where op-to-op R/W inference
-    // notes a bound tensor: a source is read, a destination written (api/dataflow/buf_rw_note.h). The notes are section
-    // data only: no instructions.
+    // Every NoC transfer path takes its endpoint addresses from the helpers below, so this is where R/W inference notes
+    // are emitted. A source is read, a destination written (api/dataflow/buf_rw_note.h).
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
@@ -152,11 +155,10 @@ private:
         }
     }
 
-    // Issue a read from a source that may push its address (noc_addrgen_push_v): its traits get the remote address and
-    // either issue the read with it already in the command buffer, or call `issue` (the ordinary issue) with it. Notes
-    // the read like get_src_ptr.
+    // Issue a read from a source that may push its address into a command buffer. Its traits get the remote address and
+    // either issue the read with it already in the command buffer, or call `issue` (the ordinary issue) with it.
     template <typename Src, typename Issue>
-    void issue_read_maybe_pushed(
+    FORCE_INLINE void issue_read_maybe_pushed(
         const Src& src,
         const src_args_t<Src>& src_args,
         uint32_t dst_local_l1_addr,
@@ -178,10 +180,9 @@ private:
         }
     }
 
-    // issue_read_maybe_pushed for a destination: issue a write to a destination that may push its address. Notes the
-    // write like get_dst_ptr.
+    // Write variant of issue_read_maybe_pushed, the destination address may be pushed into a command buffer.
     template <bool posted, bool use_trid, typename Dst, typename Issue>
-    void issue_write_maybe_pushed(
+    FORCE_INLINE void issue_write_maybe_pushed(
         const Dst& dst,
         const dst_args_t<Dst>& dst_args,
         uint32_t src_local_l1_addr,
@@ -237,7 +238,7 @@ public:
         bool enable_noc_tracing = true,
         typename Src,
         typename Dst>
-    void async_read(
+    NOC_TRANSFER_INLINE void async_read(
         const Src& src,
         const Dst& dst,
         uint32_t size_bytes,
@@ -396,7 +397,7 @@ public:
         bool enable_noc_tracing = true,
         typename Src,
         typename Dst>
-    void async_write(
+    NOC_TRANSFER_INLINE void async_write(
         const Src& src,
         const Dst& dst,
         uint32_t size_bytes,
@@ -894,8 +895,7 @@ public:
      * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
      */
     template <NocOptions opts, typename Src>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_read(
+    NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
         DataflowBuffer& dst,
         const src_args_t<Src>& src_args,
@@ -910,12 +910,8 @@ public:
      * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
      */
     template <NocOptions opts, typename Dst>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_write(
-        DataflowBuffer& src,
-        const Dst& dst,
-        const DataflowBufferArgs& src_args,
-        const dst_args_t<Dst>& dst_args) const;
+    NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
+        DataflowBuffer& src, const Dst& dst, const DataflowBufferArgs& src_args, const dst_args_t<Dst>& dst_args) const;
 #endif
 
 private:

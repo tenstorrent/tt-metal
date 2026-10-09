@@ -128,7 +128,7 @@ public:
     bool operator>=(const PagesAddressIteratorSharded& other) const { return !(*this < other); }
 
 private:
-    // The address generator serves this accessor's transfers: don't track the software address (see
+    // The address generator serves this accessor: don't track the software address (see
     // detail::lazy_page_addr_v); a page computes it only if asked.
     static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
 
