@@ -45,3 +45,9 @@ jit-main, jit-pr, out_* (keep small logs/stills copied here).
   compile, rerun just that arm (-t 570; cache now warm). Then run cmp301.py per gen by hand:
   P=/var/tmp/fasth3/t48/python_env/bin/python; for g in 0 1 2: $P cmp301.py out_main/ltx_av_fast_1920x1088_$g.mp4
   out_pr/... $D gen$g >> cmp.txt. Quote gen #2 tables, deltas, Stage1+Stage2+Audio decode check, md5s. Cleanup as above.
+
+## Attempt 3b (2026-10-09 ~02:22 UTC, light wake)
+- Job 210 (main) completed, T301_EXIT=0. Job 211 (pr) failed: pytest timeout 540 s while still JIT-compiling (cold cache), not a drop.
+  Old log moved to t301/run_pr_job211.log. Broker idle, fabric-check 212 passed. df / 52%, /var/tmp/fasth3 143G.
+- PR arm resubmitted as job 213 (-t 570, warm-ish cache). Next: check out_pr/run.log T301_EXIT; if 0 run cmp301.py per gen (see Attempt 3).
+  If it times out again in compile, that is not mechanical: consider splitting into a compile-only warmup job.
