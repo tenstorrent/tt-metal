@@ -44,7 +44,11 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     constexpr bool is_max                  = pool_type == PoolType::MAX;
     constexpr bool swap_operands           = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
-    constexpr bool is_scalar_sum           = (reduce_dim == ReduceDim::REDUCE_SCALAR) && !is_max;
+#if defined(RC_ALT_SOFF1) || defined(RC_ALT_SOFF2)
+    constexpr bool is_scalar_sum = reduce_dim == ReduceDim::REDUCE_SCALAR;
+#else
+    constexpr bool is_scalar_sum = (reduce_dim == ReduceDim::REDUCE_SCALAR) && !is_max;
+#endif
     constexpr std::uint32_t REPLAY_BUF_LEN = 2;
     constexpr std::uint32_t clear_src      = swap_operands ? Srcs::SrcB : Srcs::SrcA;
 

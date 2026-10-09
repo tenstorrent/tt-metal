@@ -6,9 +6,13 @@
 // reached by a call at each reconfig/init site, instead of an inlined fast path at every one) to reclaim
 // kernel-config-buffer space. Must be defined before the compute API includes. Perf-neutral (init-time only).
 // The reduce scaler is 1.0: on Blackhole the row sum runs at the fewest fidelity phases that keep the bits
+#if !defined(RC_ALT_OFF1) && !defined(RC_ALT_OFF2)
 #define REDUCE_POW2_SCALER
+#endif
 // A chunk's rows are resident: on Blackhole reduce_c sums each row of at least 8 tiles with one block call
+#if !defined(RC_ALT_BOFF1) && !defined(RC_ALT_BOFF2)
 #define REDUCE_ROW_BLOCK
+#endif
 
 #define LLK_ZEROFLAG_OUTLINE 1
 
