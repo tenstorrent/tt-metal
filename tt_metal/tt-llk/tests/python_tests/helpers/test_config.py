@@ -30,6 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
+from .cfg_restore import maybe_restore_cfg_from_env
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
@@ -2039,12 +2040,16 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
+                maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
                 return
+
+        # Before reset is released, see if config should be applied.
+        maybe_restore_cfg_from_env(TestConfig.TENSIX_LOCATION)
 
         match boot_mode:
             case BootMode.BRISC:
