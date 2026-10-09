@@ -133,9 +133,9 @@ _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
     expected_ns=5_815_453,
-    # 3%: K3 runs second on an already-warm device, so 3% is already generous -- the midpoint is
-    # what goes stale here, not the width. Sub-nominal DDR doubles it to 6% via
-    # adjust_margin_for_ddr_speed.
+    # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
+    # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
+    # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
