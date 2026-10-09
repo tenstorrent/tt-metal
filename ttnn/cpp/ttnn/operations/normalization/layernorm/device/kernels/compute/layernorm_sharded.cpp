@@ -164,6 +164,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb_eps_obj(dfb_eps);
 
     compute_kernel_hw_startup(dfb_in0, dfb_in0, dfb_x);
 
@@ -512,6 +513,8 @@ void kernel_main() {
             // reads dfb_ex2 back by tile index across the whole count, so wait for the whole
             // count.
             dfb_ex2.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
+            // eps is read by tile index below; wait for the writer's tile before the first read.
+            dfb_eps_obj.wait_front(1);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
                 dfb_ex2pe.reserve_back(1);
@@ -710,6 +713,16 @@ void kernel_main() {
     // The column mask is waited once near the top of the kernel and read by tile index at every masking
     // site; pop its block_w tiles once here so the buffer is left balanced.
     dfb_col_mask_packed.pop_front(block_w);
+#endif
+    // The writer pushes one eps tile on every core, but only the cores that finish the variance read it (by
+    // tile index, above). Wait and pop it here so it is consumed on every core.
+    dfb_eps_obj.wait_front(1);
+    dfb_eps_obj.pop_front(1);
+#ifdef OUT_SELF_LOOP
+    // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
+    // Pop what it pushed so the buffer is left balanced.
+    dfb_out.wait_front(num_tiles_per_block);
+    dfb_out.pop_front(num_tiles_per_block);
 #endif
 
 #endif  // IDLE_CORE
