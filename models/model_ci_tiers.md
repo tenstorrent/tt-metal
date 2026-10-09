@@ -286,6 +286,12 @@ and smaller output budget bound CI runtime; they do not reproduce the separately
 reported full-dataset benchmark. The command saves actual request counts, raw
 responses, scoring inputs and timing definitions.
 
+Gemma4 26B A4B QB2 also uses Tier 3. Its weekly command runs host contract tests,
+live sampling and request-isolation checks, the first 10 of 198 GPQA Diamond
+questions, and fixed 128-input/128-output serving measurements at concurrency 1
+and 32. The checkpoint, scorer, decoding settings, and input hashes are pinned in
+the model-owned benchmark artifacts.
+
 To add a model:
 
 1. Add its command, model identifier, owner, and team to the test YAML.
@@ -295,9 +301,10 @@ To add a model:
    the budget. The QB2 Tier 3 budget is:
 
    - **Llama3.1-8B:** 12 minutes
+   - **Gemma4 26B A4B:** 40 minutes
    - **Gemma4 31B:** 40 minutes
    - **Qwen3.8-27B:** 50 minutes
-   - **Total:** 12 + 40 + 50 = 102 minutes
+   - **Total:** 12 + 40 + 40 + 50 = 142 minutes
 
    The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its
