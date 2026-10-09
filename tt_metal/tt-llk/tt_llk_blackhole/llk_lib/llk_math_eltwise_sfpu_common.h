@@ -19,8 +19,8 @@ inline void _llk_math_eltwise_sfpu_start_(const std::uint32_t dst_index)
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 #ifdef SFPU_START_AFTER_COPY
 #define LLK_SFPU_START_AFTER_COPY_SEEN 1
-    // copy_tile is the only FPU writer of DEST before this: its two SETRWCs (unpacked to DEST, the later faces' ZEROACCs),
-    // the SETC16 above and this NOP space the first DEST load.
+    // An SFPLOAD needs three unrelated instructions after an FPU write of DEST; copy_tile, the only FPU writer before
+    // this, ends with two SETRWCs, and the SETC16 above and this NOP make four.
     TTI_NOP;
 #else
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);

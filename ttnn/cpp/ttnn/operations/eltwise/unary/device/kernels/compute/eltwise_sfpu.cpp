@@ -20,9 +20,8 @@
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
 
-// The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
-// state another op wrote, square stores through ADDR_MOD_4 (free here) and keeps its rounding constants out of Prgm0-2
-// when another op writes them, the reciprocal leaves Prgm0.
+// The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: on a later tile an op re-programs only the state
+// another op of the chain wrote.
 namespace ckernel {
 #ifdef SFPU_OP_EXP_INCLUDE
 template <bool approx, bool constants, bool upper_macros>

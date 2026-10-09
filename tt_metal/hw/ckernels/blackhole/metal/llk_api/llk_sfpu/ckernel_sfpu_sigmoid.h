@@ -56,7 +56,6 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (is_fp32_dest_acc_en && ITERATIONS == 32) {
-            // the 32-row call with a 32-bit DEST is faster unrolled by 4
 #pragma GCC unroll 4
             for (int d = 0; d < ITERATIONS; d++) {
                 _sigmoid_row_<is_fp32_dest_acc_en>();

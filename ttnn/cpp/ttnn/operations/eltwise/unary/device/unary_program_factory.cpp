@@ -75,8 +75,8 @@ bool pack_first_op_scalars(
 
 bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
-// Blackhole eltwise_sfpu.cpp: an op of the unary bit-for-bit dump set that loads DEST before it stores, so its SFPU
-// start may space the first load from copy_tile's datacopy with a NOP instead of draining the FPU.
+// Blackhole eltwise_sfpu.cpp: an op whose body loads DEST before it stores, so its SFPU start can follow copy_tile's
+// datacopy with a NOP instead of an FPU drain; tiled_prod and typecast keep the drain.
 bool sfpu_start_after_copy(const EltwiseUnaryWithParam& op) {
     switch (op.type()) {
         case UnaryOpType::FILL:  // stores before it loads
@@ -115,8 +115,7 @@ struct ChainOpState {
     std::string func;
 };
 
-// The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
-// the softcapping chains), for float inputs with math_approx_mode off. Any other op keeps the chain on per-tile inits.
+// The ops of the chains ttnn and the models build, on float inputs with math_approx_mode off; others init per tile.
 // An op's masks name every SFPU state its init and call write; change them with the op's init or body.
 std::optional<ChainOpState> chain_op_state(
     const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en, bool square_prgm) {
@@ -186,11 +185,8 @@ std::optional<ChainOpState> chain_op_state(
     }
 }
 
-// Blackhole: in a chain of two or more ops, an init runs with the first tile only when nothing that runs after it on
-// a later tile writes the state its call reads: no call, no per-tile init, no init that follows it on the first tile.
-// The other inits re-program only their op's state on later tiles. SFPU_OP_CHAIN_0_TILE is the per-tile chain for
-// eltwise_sfpu.cpp; with block > 1, SFPU_OP_CHAIN_0_BLOCK_OPS runs each op over a block of tiles before the next op,
-// and "tile" above reads "block".
+// Blackhole chains: an init runs on the first tile only when nothing after it on a later tile writes the state its call
+// reads; the other inits re-program only their op's state. With block > 1, "tile" means a block of tiles.
 std::map<std::string, std::string> get_chain_init_once_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain, DataType dtype, bool fp32_dest_acc_en, uint32_t block) {
     if (op_chain.size() < 2) {
