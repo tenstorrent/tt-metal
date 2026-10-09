@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
+#include <tuple>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -11,13 +13,15 @@
 
 #include <tt-metalium/global_circular_buffer.hpp>
 
-#include "dram_prefetcher_device_operation.hpp"
+#include "dram_prefetcher_program_factory.hpp"
 
 namespace ttnn::prim {
 
 using std::vector;
 
 using namespace tt::tt_metal;
+
+namespace {
 
 std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
     uint32_t max_page_size, uint32_t num_tiles, uint32_t num_datums_per_tile) {
@@ -32,10 +36,72 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
     return {page_size, num_pages};
 }
 
-ProgramDescriptor DramPrefetcherOperation::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+}  // namespace
+
+DramPrefetcherGeometry compute_dram_prefetcher_geometry(
+    const std::vector<Tensor>& weight_tensors, const uint32_t num_receivers_per_reader) {
+    TT_FATAL(!weight_tensors.empty(), "dram_prefetcher needs at least one weight tensor besides the address tensor");
+    DramPrefetcherGeometry geometry;
+    geometry.num_receivers_per_reader = num_receivers_per_reader;
+    geometry.num_readers = weight_tensors[0].shard_spec()->grid.num_cores();
+    geometry.num_blocks = geometry.num_readers * num_receivers_per_reader;
+    const uint32_t num_blocks = geometry.num_blocks;
+
+    // Largest single NoC transfer the reader and writer issue.
+    constexpr uint32_t max_page_size = 8192;
+
+    geometry.tensors.reserve(weight_tensors.size());
+    for (const auto& tensor : weight_tensors) {
+        const tt::tt_metal::Tile tile = tensor.tensor_spec().tile();
+        const auto& shard_shape = tensor.buffer()->shard_spec().shape();
+        DramPrefetcherTensorGeometry t;
+        t.data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+        t.tile_size = tile.get_tile_size(t.data_format);
+
+        const uint32_t height_in_tiles = tt::round_up(shard_shape[0] / tile.get_tile_shape()[0], num_blocks);
+        const uint32_t width_in_tiles = shard_shape[1] / tile.get_tile_shape()[1];
+        t.block_height_in_tiles = height_in_tiles / num_blocks;
+        t.block_num_tiles = height_in_tiles * width_in_tiles / num_blocks;
+
+        std::tie(t.page_size, t.block_num_pages) =
+            get_max_page_size_and_num_pages(max_page_size, t.block_num_tiles, tt::tile_size(t.data_format));
+        std::tie(t.coalesced_page_size, t.coalesced_num_pages) = get_max_page_size_and_num_pages(
+            max_page_size, width_in_tiles / num_receivers_per_reader, tt::tile_size(t.data_format));
+        t.block_size_per_receiver = t.block_num_tiles * t.tile_size / num_receivers_per_reader;
+        geometry.tensors.push_back(t);
+    }
+
+    for (const auto& t : geometry.tensors) {
+        geometry.max_block_num_tiles = std::max(geometry.max_block_num_tiles, t.block_num_tiles);
+        // The first tensor with the largest tile size sets the staging buffer's data format.
+        if (t.tile_size > geometry.max_tile_size) {
+            geometry.max_tile_size = t.tile_size;
+            geometry.max_tile_size_data_format = t.data_format;
+        }
+    }
+    geometry.max_block_size = geometry.max_tile_size * geometry.max_block_num_tiles;
+    return geometry;
+}
+
+uint32_t dram_prefetcher_reader_vc(const std::vector<CoreCoord>& reader_cores, const uint32_t reader_index) {
+    // Reader i reads DRAM bank i, on one of the two DRAM-read VCs (2 and 3) by bank parity. A reader
+    // whose row already holds a reader of the same parity moves to the other VC.
+    const auto parity_vc = [](uint32_t bank_id) { return (bank_id & 0x1) + 2; };
+    const uint32_t bank_id = reader_index;
+    uint32_t vc = parity_vc(bank_id);
+    for (uint32_t j = 0; j < reader_index; ++j) {
+        if (reader_cores[j].y == reader_cores[reader_index].y && parity_vc(bank_id) == parity_vc(j)) {
+            vc = ((vc + 1) & 0x1) + 2;
+            break;
+        }
+    }
+    return vc;
+}
+
+ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
+    const DramPrefetcherParams& operation_attributes,
+    const DramPrefetcherInputs& tensor_args,
+    Tensor& /*tensor_return_value*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(operation_attributes.global_cb.has_value(), "Global circular buffer must be provided");
@@ -48,60 +114,25 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     // tensors that with addresses
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
-    std::vector<Buffer*> tensor_buffers;
     // tensors that with actual data
-    std::vector<Tensor> tensors;
-    tensors.resize(input_tensors.size() - 1);
-    std::copy(input_tensors.begin(), input_tensors.end() - 1, tensors.begin());
-    tensor_buffers.reserve(tensors.size());
-    std::transform(
-        tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
-
-    /* Tiles */
-    std::vector<tt::tt_metal::Tile> tensor_tiles;
-    tensor_tiles.reserve(tensors.size());
-    std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
-        return t.tensor_spec().tile();
-    });
+    const std::vector<Tensor> tensors(input_tensors.begin(), input_tensors.end() - 1);
 
     /* Dataformats */
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
-    std::vector<tt::DataFormat> tensor_data_formats;
-    tensor_data_formats.reserve(tensors.size());
-    std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_data_formats), [](const auto& t) {
-        return tt::tt_metal::datatype_to_dataformat_converter(t.dtype());
-    });
 
     // In validate we make sure that all tensors are on the same device
     uint32_t num_tensors = tensors.size();
     auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
     uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
 
-    uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
-    uint32_t num_blocks = num_readers * num_receivers_per_reader;
+    const DramPrefetcherGeometry geometry = compute_dram_prefetcher_geometry(tensors, num_receivers_per_reader);
+    const uint32_t num_readers = geometry.num_readers;
+    const uint32_t num_blocks = geometry.num_blocks;
+    const uint32_t max_block_tiles = geometry.max_block_num_tiles;
+    const uint32_t max_tile_size = geometry.max_tile_size;
+    const tt::DataFormat max_tile_size_df = geometry.max_tile_size_data_format;
+    const uint32_t max_block_size_per_reader_core = geometry.max_block_size;
 
-    std::vector<uint32_t> tensor_block_num_tiles;
-    std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
-    std::vector<uint32_t> tensor_tile_sizes;
-    tensor_block_num_tiles.reserve(num_tensors);
-    tensor_tile_sizes.reserve(num_tensors);
-    for (uint32_t t = 0; t < num_tensors; t++) {
-        uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
-        uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
-
-        height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
-        tensor_shapes[t][0] = height_in_tiles;
-        tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
-        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
-    }
-    uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
-    auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-    uint32_t max_tile_size = *max_tile_size_iterator;
-    uint32_t max_tile_size_tensor_idx = std::distance(tensor_tile_sizes.begin(), max_tile_size_iterator);
-    tt::DataFormat max_tile_size_df = tensor_data_formats[max_tile_size_tensor_idx];
-
-    uint32_t max_block_size_per_reader_core = max_tile_size * max_block_tiles;
     uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
 
     TT_FATAL(
@@ -123,7 +154,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
-    const uint32_t total_num_blocks_in_buffer = 3;  // reader cb is triple buffered
+    const uint32_t total_num_blocks_in_buffer = kDramPrefetcherStagingBlocks;
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
 
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
@@ -219,31 +250,21 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     /* Runtime args */
     std::vector<uint32_t> page_sizes;
     std::vector<uint32_t> block_num_pages;
-    page_sizes.reserve(num_tensors);
-    block_num_pages.reserve(num_tensors);
-
+    std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<uint32_t> coalesced_page_sizes;
     std::vector<uint32_t> coalesced_num_pages;
-    coalesced_page_sizes.reserve(num_tensors);
-    coalesced_num_pages.reserve(num_tensors);
-
-    uint32_t max_page_size = 8192;
-
-    for (uint32_t t = 0; t < num_tensors; t++) {
-        auto [page_size, num_pages] = get_max_page_size_and_num_pages(
-            max_page_size, tensor_block_num_tiles[t], tt::tile_size(tensor_data_formats[t]));
-        page_sizes.push_back(page_size);
-        block_num_pages.push_back(num_pages);
-
-        uint32_t block_width_in_tiles = tensor_shapes[t][1];
-        auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
-            max_page_size, block_width_in_tiles / num_receivers_per_reader, tt::tile_size(tensor_data_formats[t]));
-        coalesced_page_sizes.push_back(coalesced_page_size);
-        coalesced_num_pages.push_back(coalesced_num_page);
+    std::vector<uint32_t> tensor_tile_sizes;
+    std::vector<uint32_t> block_heights_in_tiles;
+    for (const auto& t : geometry.tensors) {
+        page_sizes.push_back(t.page_size);
+        block_num_pages.push_back(t.block_num_pages);
+        tensor_block_num_tiles.push_back(t.block_num_tiles);
+        coalesced_page_sizes.push_back(t.coalesced_page_size);
+        coalesced_num_pages.push_back(t.coalesced_num_pages);
+        tensor_tile_sizes.push_back(t.tile_size);
+        block_heights_in_tiles.push_back(t.block_height_in_tiles);
     }
 
-    std::vector<uint32_t> bank_ids;
-    bank_ids.reserve(reader_core_range.num_cores());
     const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
 
     KernelDescriptor reader_desc;
@@ -273,19 +294,8 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         const auto& core = reader_cores[core_index];
 
         /* reader kernel */
-        uint32_t bank_id = core_index;
-        uint32_t vc = (bank_id & 0x1) + 2;
-        bank_ids.push_back(bank_id);
-
-        // Compare with previous cores' vc
-        for (size_t j = 0; j < core_index; ++j) {
-            const CoreCoord& prev_core = reader_cores[j];
-            if (prev_core.y == core.y and
-                (((bank_id & 0x1) + 2) == ((bank_ids[j] & 0x1) + 2))) {  // same vc and same row
-                vc = ((vc + 1) & 0x1) + 2;
-                break;
-            }
-        }
+        const uint32_t bank_id = core_index;
+        const uint32_t vc = dram_prefetcher_reader_vc(reader_cores, core_index);
 
         std::vector<uint32_t> reader_rt_args;
         reader_rt_args.reserve(3 + 3 * num_tensors);
@@ -303,9 +313,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-        for (auto tensor_shape : tensor_shapes) {  // block_height_in_itles
-            writer_rt_args.push_back(tensor_shape[0] / num_blocks);
-        }
+        writer_rt_args.insert(writer_rt_args.end(), block_heights_in_tiles.begin(), block_heights_in_tiles.end());
 
         writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
     }
