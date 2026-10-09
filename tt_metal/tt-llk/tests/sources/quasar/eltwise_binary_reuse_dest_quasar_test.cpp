@@ -172,7 +172,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(i);
                 }
 
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
+                const DataFormat math_format     = static_cast<DataFormat>(formats.math);
+                const DataFormat dest_src_format = ckernel::math::dest_src_format<is_fp32_dest_acc_en>(math_format);
+                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                    REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : math_format,
+                    REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : math_format,
+                    ckernel::DEFAULT_TENSOR_SHAPE);
                 for (int block = 0; block < num_blocks; block++)
                 {
                     for (int n = 0; n < num_tiles_accum; n++)

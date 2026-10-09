@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.eltwise import eltwise_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import fidelity_source_formats
 from helpers.llk_params import (
     BroadcastType,
     MathOperation,
@@ -46,13 +47,16 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             return (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
-                f"({tensor_shape});\n"
+                f"({src_a_format}, {src_b_format}, {tensor_shape});\n"
             )
 
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
@@ -61,7 +65,7 @@ class EltwiseFpu(Fpu):
         return (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {math_fidelity}, {reuse_dest}>"
-            f"({tensor_shape}, {acc_to_dest});\n"
+            f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
         )
 
     def calculate(

@@ -47,14 +47,18 @@ inline void llk_math_eltwise_binary_init(
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        const DataFormat dest_src_format = ckernel::math::dest_src_format<DST_ACCUM_MODE>(srcA_format);
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : srcA_format,
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : srcB_format,
+            tensor_shape_A,
+            acc_to_dest);
     } else {
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
         _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A);
+            srcA_format, srcB_format, tensor_shape_A);
     }
 }
 

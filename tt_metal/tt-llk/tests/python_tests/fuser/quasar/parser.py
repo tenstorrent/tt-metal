@@ -85,7 +85,7 @@ from .unpacker.unpack_ab import UnpackerAB
 
 
 def _validate_math_fidelities(operation, config):
-    wide_formats = {DataFormat.Float16, DataFormat.Tf32}
+    wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
     config.sentinel.prepare_operation(config, operation)
     output_format = operation._get_pack_nodes()[0].output.data_format
     errors = []
@@ -103,8 +103,10 @@ def _validate_math_fidelities(operation, config):
         allowed = [MathFidelity.LoFi]
         if src_a in wide_formats:
             allowed.append(MathFidelity.HiFi2)
+        if src_b in wide_formats:
+            allowed.append(MathFidelity.HiFi3)
         if src_a in wide_formats and src_b in wide_formats:
-            allowed.extend((MathFidelity.HiFi3, MathFidelity.HiFi4))
+            allowed.append(MathFidelity.HiFi4)
         if node.math_fidelity not in allowed:
             errors.append(
                 f"Math node {index} (Fpu)\n    Quasar "
