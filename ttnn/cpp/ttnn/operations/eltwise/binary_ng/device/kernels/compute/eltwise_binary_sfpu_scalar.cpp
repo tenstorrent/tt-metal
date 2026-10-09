@@ -28,6 +28,14 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+// Blackhole per-tensor quantization: the SFPU takes the scale at init, so the scalar tile is not copied into DEST.
+#if defined(ARCH_BLACKHOLE) && defined(QUANT_SCALAR_OP)
+#define QUANT_SCALAR_SCALE 1
+#define SFPU_SCALAR_INIT QUANT_SCALAR_INIT
+#else
+#define SFPU_SCALAR_INIT BINARY_SFPU_INIT
+#endif
+
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
@@ -45,7 +53,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     cb_out.reserve_back(n);
 
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-    BINARY_SFPU_INIT;
+    SFPU_SCALAR_INIT;
 #endif
 
     tile_regs_acquire();
@@ -54,12 +62,21 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
+#ifdef QUANT_SCALAR_SCALE
+    for (uint32_t i = 0; i < n; ++i) {
+#if HAS_ACTIVATIONS(POST)
+        SFPU_SCALAR_INIT;
+#endif
+        QUANT_SCALAR_OP(i * 2, i * 2);
+        PROCESS_POST_ACTIVATIONS(i * 2);
+    }
+#else
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
-        BINARY_SFPU_INIT;
+        SFPU_SCALAR_INIT;
 #endif
 #ifdef ISCLOSE_OP
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
@@ -73,6 +90,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
     reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+#endif
     tile_regs_commit();
 
     tile_regs_wait();
@@ -112,7 +130,7 @@ void kernel_main() {
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-    BINARY_SFPU_INIT
+    SFPU_SCALAR_INIT
 #endif
 
     PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, CircularBuffer(cb_out_id), 1);
