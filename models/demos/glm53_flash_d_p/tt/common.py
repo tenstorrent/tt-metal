@@ -85,7 +85,20 @@ def gather_rows(t: ttnn.Tensor) -> ttnn.Tensor:
 
 def scatter_rows(t: ttnn.Tensor) -> ttnn.Tensor:
     """Per-chip partial sums over all S rows -> the split quarter of the 4-chip sum (reduce_scatter on axis 0, then
-    axis 1): half the bytes of an all_reduce, and no slice afterwards."""
+    axis 1): half the bytes of an all_reduce, and no slice afterwards.
+    GLM_SCATTER_OP=fabric_bf16 (experiment): the partials typecast to bf16, then ttnn.bringup.fabric_reduce_scatter
+    (MiMo's, bf16 only) on axis 0 and 1 (GLM_MOE_LINKS links); returns bf16."""
+    import os
+
+    if os.environ.get("GLM_SCATTER_OP", "ttnn") == "fabric_bf16":
+        links = int(os.environ.get("GLM_MOE_LINKS", "2"))
+        tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=MC)
+        a = ttnn.bringup.fabric_reduce_scatter(tb, cluster_axis=0, num_links=links)
+        if tb is not t:
+            ttnn.deallocate(tb)
+        b = ttnn.bringup.fabric_reduce_scatter(a, cluster_axis=1, num_links=links)
+        ttnn.deallocate(a)
+        return b
     a = ttnn.reduce_scatter(t, dim=-2, cluster_axis=0, memory_config=MC)
     b = ttnn.reduce_scatter(a, dim=-2, cluster_axis=1, memory_config=MC)
     ttnn.deallocate(a)
