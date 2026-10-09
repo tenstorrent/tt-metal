@@ -109,18 +109,19 @@ std::vector<tt::tt_metal::TensorTopology> ReduceScatterDeviceOperation::compute_
     // wrapper; compute_output_specs has already indexed output_shape[dim] before this hook runs, but Shape's
     // operator[] takes an int32_t and normalises negative indices from the end, so a negative int32 that wrapped
     // into this uint32 gets through it -- the one case the guard below catches, leaving it for validation to
-    // report. No honest label (nullopt, already logged): {} keeps the union default (the input's label) for both
-    // tensors.
+    // report. No honest label (nullopt, already logged) and the guard alike: both tensors keep the input's label,
+    // stated explicitly. Returning {} would instead hand the framework the union over every tensor argument, the
+    // caller's optional_output_tensor included.
     const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
     if (operation_attributes.dim >= input_tensor.logical_shape().rank()) {
-        return {};
+        return {input_topology, input_topology};
     }
-    auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
-        input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {input_tensor.tensor_topology(), std::move(*output_topology)};
+    auto output_topology =
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+            .value_or(input_topology);
+    return {input_topology, std::move(output_topology)};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterDeviceOperation::tensor_return_value_t>

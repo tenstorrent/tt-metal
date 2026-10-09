@@ -752,7 +752,8 @@ def test_reduce_scatter_prim_collapsed_shard_outer_axis_warn_only_keeps_input_la
     mesh_device, warn_only_ccl_topology
 ):
     """The default (warn-only) mode: the refused scatter still runs, logs (at error level: a scatter-family
-    fallback can over-claim Replicate) and the output keeps the union default -- the input's {N}, [Shard(3)]. Here
+    fallback can over-claim Replicate) and the output keeps the input's {N}, [Shard(3)], the hook's explicit
+    fallback (not the framework's union default, which would also fold in a preallocated output's label). Here
     that label only under-claims (every device does hold a distinct piece, just not in row-major order), so the
     per-device bytes are checked directly: device (r, c) holds part r of the sum over the rows of column c's
     pieces."""
