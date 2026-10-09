@@ -10,7 +10,7 @@ T=tests/eb_r3_ci
 case $1 in
   dp) for i in 1 2 3; do
         echo "##### $(date -u +%T) dpsw: off=- main_env=EB_R3_NO_BLOCK=1"
-        EB_K_EXPR="test_qb2_add and dp_" bash $T/ab_r10.sh - EB_R3_NO_BLOCK=1 -p eb_k_plugin $T/test_eb_r11.py
+        EB_K_EXPR="test_qb2_add and (dp_post or dp_add or llama_p150 or qwen_qb2_40 or llama_qb2)" bash $T/ab_r10.sh - EB_R3_NO_BLOCK=1 -p eb_k_plugin $T/test_eb_r11.py
       done ;;
   ab) for i in 1 2 3; do
         echo "##### $(date -u +%T) qb2sw: off=- main_env=EB_R3_NO_BLOCK=1"
