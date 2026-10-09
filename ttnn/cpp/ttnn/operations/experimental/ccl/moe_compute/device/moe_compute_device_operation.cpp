@@ -76,34 +76,41 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
         rank_of(tensor_args.matmul_w2_tensor));
 
-    // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
-    // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
-    // dm0 silently reads from wrong expert boundaries after the first expert.
+    // When has_bias=True, dm0 derives per-expert byte strides from K+1 and N+1 padded to whole DRAM
+    // blocks. The physical tensors must be padded to those tile counts; if not, dm0 silently reads from
+    // wrong expert boundaries after the first expert. (The program factory also checks both tensors'
+    // total page counts against the layout.) Block height = 2 * tiles_per_txn / 4 rows for the per-shape
+    // transaction size.
     if (args.has_bias) {
         constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_BLOCK_TILES_H * tile_h;  // bytes per transaction row
-        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_A2A_ITER_H * tile_h;
+        const uint32_t tiles_per_txn = moe_ring::tiles_per_txn_for_shape(
+            tensor_args.tilize_input_tensor.logical_shape()[-1] / tile_h,
+            args.intermediate_size / tile_h,
+            true,
+            args.bh_ring_size);
+        const uint32_t w0w1_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
+        const uint32_t w2_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
 
         const auto& w0_w1_shape = tensor_args.matmul_w0_w1_tensor.tensor_spec().logical_shape();
         const uint32_t w0_w1_k = w0_w1_shape[-2];
         TT_FATAL(
-            w0_w1_k % w0w1_txn == 0,
+            w0_w1_k % w0w1_rows_per_block == 0,
             "matmul_w0_w1_tensor K-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w0_w1_tensor_with_bias() to prepare the tensor.",
             w0_w1_k,
-            w0w1_txn,
-            moe_ring::W0_W1_TILES_PER_TXN,
+            w0w1_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
 
         const auto& w2_shape = tensor_args.matmul_w2_tensor.tensor_spec().logical_shape();
         const uint32_t w2_n = w2_shape[-2];
         TT_FATAL(
-            w2_n % w2_txn == 0,
+            w2_n % w2_rows_per_block == 0,
             "matmul_w2_tensor N-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w2_tensor_with_bias() to prepare the tensor.",
             w2_n,
-            w2_txn,
-            moe_ring::W2_TILES_PER_TXN,
+            w2_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
     }
 
@@ -172,12 +179,6 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         intermediate_tiles,
         matmul_num_cores);
 
-    TT_FATAL(
-        matmul_num_cores % combine_data_parallel_cores == 0,
-        "matmul_num_cores ({}) must be divisible by num_data_parallel_cores ({}) "
-        "so RING_CORES_PER_COMBINE_COL is integral",
-        matmul_num_cores,
-        combine_data_parallel_cores);
     const uint32_t hidden_tiles = hidden_size / 32;
     TT_FATAL(
         hidden_tiles % combine_data_parallel_cores == 0,
@@ -187,15 +188,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
-    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step matches
-    // the round-up formula used in MoeRingConfig::in2_tiles_per_step.
+    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step (the a2a
+    // exchange width, MoeRingConfig::in2_tiles_per_step) holds every core's columns.
     const uint32_t tiles_per_step_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t tiles_per_step = moe_ring::even_stride_at_least_a2a_width(tiles_per_step_raw);
+    const uint32_t tiles_per_step = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
     TT_FATAL(
-        tiles_per_step >= moe_ring::W2_TILES_PER_A2A_ITER_W && tiles_per_step % 2 == 0,
-        "tiles_per_step ({}) must be even and >= W2_TILES_PER_A2A_ITER_W ({})",
+        tiles_per_step >= tiles_per_step_raw && tiles_per_step >= 2,
+        "a2a exchange width ({}) must hold the largest per-core column count ({}) and be >= 2",
         tiles_per_step,
-        moe_ring::W2_TILES_PER_A2A_ITER_W);
+        tiles_per_step_raw);
 
     const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     TT_FATAL(
@@ -447,14 +448,15 @@ std::vector<ttnn::Tensor> moe_compute(
             : 12u);
     // NOTE: the public API auto-detects the ring from the device and does not expose it as a knob.
 
-    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
-    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
-    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
-    // E.g. GPT-OSS (Ht=90) picks d=3 on WH (N=12) but falls back to d=2 on BH (N=8/7).
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4.
+    // The ring size does not constrain d: each ring core signals every combine column its w2
+    // width slice overlaps, and each combine core releases exactly the ring cores feeding it.
+    // Keeping d large matters for the fabric combine, which sends each token segment as one
+    // packet (e.g. DeepSeek at d=1 would need a 14 KB segment).
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0 && ring_n % d == 0) {
+        if (hidden_tiles % d == 0) {
             num_data_parallel_cores = d;
             break;
         }

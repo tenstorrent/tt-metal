@@ -455,7 +455,6 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
-    compute_kernel_hw_startup(dfb::input_values, dfb::index, dfb::input_transposed);
     top_k<
         Ht,
         Wt,

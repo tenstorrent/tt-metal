@@ -325,6 +325,30 @@ class SFPU_UNARY_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class RAND_RANGE(TemplateParameter):
+    """rand output interval ``[from, from + scale]`` as fp32 bits; emitted as macros over the dispatcher defaults."""
+
+    rand_from_bits: int = 0x3F800000  # 1.0f
+    rand_scale_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define RAND_FROM_BITS {self.rand_from_bits:#010x}u\n"
+            f"#define RAND_SCALE_BITS {self.rand_scale_bits:#010x}u"
+        )
+
+
+@dataclass
+class RAND_SEED(TemplateParameter):
+    """rand PRNG seed; emitted as a macro over the dispatcher default."""
+
+    rand_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return f"#define RAND_SEED {self.rand_seed:#010x}u"
+
+
+@dataclass
 class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
     """Integer threshold for relu_min's vInt branch, as a two's-complement uint32.
 
