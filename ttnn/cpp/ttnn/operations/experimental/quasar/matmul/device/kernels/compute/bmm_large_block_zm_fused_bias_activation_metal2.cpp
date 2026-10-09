@@ -43,6 +43,15 @@
 
 #include "api/compute/eltwise_binary.h"
 
+// Fused SFPU activation (silu / gelu / ...). The host emits SFPU_OP_INIT_ACTIVATION / SFPU_OP_FUNC_ACTIVATION
+// (unary_op_utils get_defines with idst "i"). On Quasar the SFPU unary API is MATH-thread only (no *_pack
+// variants), so the activation is applied in DST between the last matmul / bias add and tile_regs_commit,
+// the same way the quasar conv2d compute kernel does it.
+#ifdef SFPU_OP_INIT_ACTIVATION
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#endif
+
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  */
@@ -264,6 +273,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#ifdef SFPU_OP_INIT_ACTIVATION
+    SFPU_OP_INIT_ACTIVATION
+#endif
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -415,6 +427,12 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+#if defined SFPU_OP_FUNC_ACTIVATION and not defined FUSE_BIAS
+                                // final K block: apply the fused activation to the finished tiles in DST
+                                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                    SFPU_OP_FUNC_ACTIVATION
+                                }
+#endif
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
@@ -561,6 +579,12 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
+#ifdef SFPU_OP_FUNC_ACTIVATION
+                        // bias has been added in DST: apply the fused activation on top of it
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            SFPU_OP_FUNC_ACTIVATION
+                        }
+#endif
                         tile_regs_commit();
 
                         mm_partials_cb.pop_front(out_subblock_num_tiles);

@@ -543,10 +543,15 @@ def call_op(op, tensors, params, specs, device):
         )
         if p.get("dtype"):
             kw["dtype"] = DTYPE[p["dtype"]]
+        activation = p.get("activation")
+        # The captured program config may carry a fused activation (GEGLU: GELU); when the config is dropped
+        # (fit mode) pass it as the op's activation so the result still matches the golden.
+        if pc is None and isinstance(p.get("program_config"), dict) and p["program_config"].get("fused_activation"):
+            activation = p["program_config"]["fused_activation"]["UnaryWithParam"].lower()
+        if activation:
+            kw["activation"] = activation
         if op == "linear":
             kw["bias"] = tensors.get("bias")
-            if p.get("activation"):
-                kw["activation"] = p["activation"]
             return (qsr.linear(tensors["input"], tensors["weight"], **kw),)
         return (qsr.matmul(tensors["input"], tensors["weight"], **kw),)
     if op in ("add", "add_", "multiply", "mul_", "div"):

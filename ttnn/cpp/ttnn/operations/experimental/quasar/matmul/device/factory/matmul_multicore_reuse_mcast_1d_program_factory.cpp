@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -5633,11 +5634,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        TT_FATAL(
-            fused_activation.value().op_type == UnaryOpType::RELU,
-            "Quasar 1D matmul fused activation only supports RELU (packer); packer-thread SFPU "
-            "activations (SFPU_ACTIVATION) are not supported.");
-        mm_kernel_defines["PACK_RELU"] = "1";
+        if (fused_activation.value().op_type == UnaryOpType::RELU) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+        } else {
+            // SFPU activation on the MATH thread (Quasar has no pack-thread SFPU): the compute kernel applies
+            // SFPU_OP_FUNC_ACTIVATION to DST tile "i" after the last K block / the fused bias add.
+            const auto& act = fused_activation.value();
+            const auto act_defines =
+                ttnn::operations::unary::utils::get_defines(act.op_type, act.get_params(), "ACTIVATION", "i");
+            mm_kernel_defines.insert(act_defines.begin(), act_defines.end());
+        }
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
@@ -6648,11 +6654,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        TT_FATAL(
-            fused_activation.value().op_type == UnaryOpType::RELU,
-            "Quasar 1D matmul fused activation only supports RELU (packer); packer-thread SFPU "
-            "activations (SFPU_ACTIVATION) are not supported.");
-        mm_kernel_defines["PACK_RELU"] = "1";
+        if (fused_activation.value().op_type == UnaryOpType::RELU) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+        } else {
+            // SFPU activation on the MATH thread (Quasar has no pack-thread SFPU): the compute kernel applies
+            // SFPU_OP_FUNC_ACTIVATION to DST tile "i" after the last K block / the fused bias add.
+            const auto& act = fused_activation.value();
+            const auto act_defines =
+                ttnn::operations::unary::utils::get_defines(act.op_type, act.get_params(), "ACTIVATION", "i");
+            mm_kernel_defines.insert(act_defines.begin(), act_defines.end());
+        }
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
