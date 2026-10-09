@@ -291,6 +291,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
+    // The prep program's five binaries sit within a few hundred bytes of the 69 KB TENSIX
+    // kernel-config ring buffer once the watcher's NoC sanitizer and waypoints are compiled in
+    // (Program size (71536) too large for kernel config buffer (70656) in the Qwen3.6 unit legs).
+    // The reader and writer are not on the critical path (prep is compute-bound), so build them
+    // for size like ccl_worker_builder.cpp does for its overflowing dataflow kernels.
+    reader.opt_level = KernelBuildOptLevel::Os;
     reader.config = ReaderConfigDescriptor{};
     reader.runtime_args.reserve(n_used);
 
@@ -299,6 +305,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
+    writer.opt_level = KernelBuildOptLevel::Os;
     writer.config = WriterConfigDescriptor{};
     writer.runtime_args.reserve(n_used);
 
@@ -318,6 +325,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
+    compute.defines = gdn_prep_defines(attrs.tinv, false /*hoist_reconfig*/);
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 

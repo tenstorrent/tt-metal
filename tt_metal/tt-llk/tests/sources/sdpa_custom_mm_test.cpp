@@ -10,7 +10,8 @@
 // the low-level LLKs, because a tt-llk test cannot include tt_metal/hw/inc/api/compute.
 // The three threads mirror the compute API exactly:
 //
-//   UNPACK  llk_unpack_AB_custom_mm_init<transpose>   -> _llk_unpack_AB_custom_mm_init_
+//   UNPACK  llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>
+//                                                      -> _llk_unpack_AB_custom_mm_init_
 //           llk_unpack_AB_sdpa_custom_mm<read_transposed>
 //                                                      -> _llk_unpack_AB_sdpa_custom_mm_
 //   MATH    llk_math_sdpa_custom_mm_init<transpose>    -> _llk_math_sdpa_custom_mm_init_
@@ -78,7 +79,16 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_MASK_REENTRY
 #define SDPA_MASK_REENTRY false
 #endif
+#ifndef SDPA_INPUT_TILE_OFFSET
+#define SDPA_INPUT_TILE_OFFSET 0
+#endif
 constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
+#ifdef SDPA_ROW_STRIDE
+constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = READ_TRANSPOSED && SDPA_ROW_STRIDE != 0 ? SDPA_ROW_STRIDE : KT_DIM;
+#else
+constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
+#endif
+constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -109,7 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
     // heuristic (post1) in the MOP config.
-    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.
@@ -117,17 +127,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
         _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
-            L1_ADDRESS(params.buffer_A[0]),                                       // base_address_a : in1 (SrcA, rhs)
-            L1_ADDRESS(params.buffer_B[0]),                                       // base_address_b : in0 (SrcB, lhs)
-            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[KT_DIM * CT_DIM]) : 0, // base_address_mask
-            0,                                                                    // tile_index_a
-            0,                                                                    // tile_index_b
-            params.TILE_SIZE_UNPACK_A,                                            // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                            // tile_size_b (in0 [M,32])
+            L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
+            L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
+            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
+            SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
+            0,                                                                         // tile_index_b
+            params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
+            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
             KT_DIM,
             CT_DIM,
             SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
-            params.in0_face_r_dim);         // operandB_face_r_dim : in0 row count (M)
+            params.in0_face_r_dim           // operandB_face_r_dim : in0 row count (M)
+#ifdef SDPA_ROW_STRIDE
+            ,
+            SDPA_ROW_STRIDE
+#endif
+        );
     }
 }
 
@@ -193,8 +208,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
-    _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
-        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
     // sdpa_custom_mm_block_init_pack_short(): Z-stride = FACE_C_DIM * 8 * 2,
     // W-stride = (TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2. Both are spelled here exactly

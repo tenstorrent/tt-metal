@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Realtime-profiler perf harness for the DeepSeek V3.2 / GLM-5.1 / GLM-5.3 MLA (DSA) chunked-prefill layer.
+Realtime-profiler perf harness for the DeepSeek V3.2 / GLM-5.3 MLA (DSA) chunked-prefill layer.
 
 Production scenario (defaults): process one **5k-token chunk** with **50k tokens already cached**,
 on the Galaxy **SP=8 × TP=4** mesh.
@@ -50,7 +50,7 @@ operations and host duration to each cold iteration even when cached programs re
 total is the sum of the per-forward host durations; per-program device durations are secondary diagnostics.
 
 Single test (was a two-test tracy driver+impl split):
-  * test_mla_chunked_perf — parametrized over [deepseek_v32, glm_5_1, glm_5_3] × [warm, cold, long] ×
+  * test_mla_chunked_perf — parametrized over [deepseek_v32, glm_5_3] × [warm, cold, long] ×
     [sparse, dense]. Builds the DSA ttMLA (variant from the ``variant`` fixture) and, per scenario,
     measures one forward over the (zero-init) block-cyclic caches (warm/long) or a chunk loop that
     fills them (cold), profiling each forward under the realtime profiler. Prints a per-op table and
@@ -71,12 +71,12 @@ Three scenarios (the test sweeps all three):
     chunk over a long prefix. Like the others the cache scales by SP/8, so per-chip depth stays
     Galaxy-equal on every box (LoudBox=128k, QuietBox=128k box-local cache).
 
-variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_3 (64 / 32). Galaxy and
+variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32). Galaxy and
   LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. GLM's thin TP=4 head shard is handled by the
   head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer.
   GLM-5.3's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
   its compact 21-slot index cache. This makes the fused ring op select nonzero slot 20—the multi-slot path
-  used by the complete 78-layer model—rather than exercising only the trivial single-slot GLM-5.1 proxy.
+  used by the complete 78-layer model—rather than exercising only the trivial single-slot layer-0 proxy.
   All model dims come from the single-source reference configs.
 
 attn_mode axis — a baseline to compare the sparse impl against:
@@ -99,7 +99,7 @@ kv_shard axis — sparse mode runs both persistent-cache shardings (id suffix on
 
 Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 5 cache/mode cases), or narrow via -k:
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
-    pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse and kv_scaled_fp8" -s
+    pytest -m perf ...::test_mla_chunked_perf -k "glm_5_3 and cold and sparse and kv_scaled_fp8" -s
     pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16 and not tp_sharded" -s
     pytest -m perf ...::test_mla_chunked_perf -k "warm and kv_bf16 and tp_sharded" -s
 
@@ -134,7 +134,6 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
@@ -159,16 +158,15 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own profiler
 # subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
-# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_3 (64 / 32).
+# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32).
 # Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
 # GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
 # Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.3
 # additionally exercises a nonzero slot of its compact full-indexer cache below.
-VARIANTS = ("deepseek_v32", "glm_5_1", "glm_5_3")
+VARIANTS = ("deepseek_v32", "glm_5_3")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
     "deepseek_v32": deepseek_v32_hf_config,
-    "glm_5_1": glm_hf_config,
     "glm_5_3": glm_5_3_hf_config,
 }
 
@@ -381,7 +379,7 @@ pytestmark = pytest.mark.perf
 GALAXY_SP = 8
 GALAXY_TP = 4
 # Head counts / index dims are NOT constants here — they come from the reference config per variant
-# (deepseek_v32: 128/64, glm_5_1: 64/32; see _detect_perf_workload). GALAXY_SP/GALAXY_TP are the
+# (deepseek_v32: 128/64, glm_5_3: 64/32; see _detect_perf_workload). GALAXY_SP/GALAXY_TP are the
 # production mesh topology (shared by both variants), not model dims, so they stay in the harness.
 
 
@@ -432,7 +430,7 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
     system_name, mesh_shape = system
     sp, tp = mesh_shape
     # Head counts come from the single-source reference config for the variant (deepseek_v32: 128/64,
-    # glm_5_1: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
+    # glm_5_3: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
     cfg = _CONFIG_BUILDERS[variant_name]()
     local_chunk = _exact_div(CHUNK_TOKENS, GALAXY_SP, "DS_PERF_CHUNK")
     _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")

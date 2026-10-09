@@ -21,6 +21,11 @@ from models.experimental.modernbert.tt.modernbert_model import TtnnModernBertMod
 from models.experimental.modernbert.tt.weights import prepare_weights
 
 MODEL_PCC = 0.99
+# TTNN vs HF bf16-eager at seq 256. #56292 (2026-09-25, drop the legacy sqrt/rsqrt/reciprocal paths)
+# moved this comparison from 0.99046767 to 0.98934348, bit-identical across seven nightlies on four
+# N300 runners, while the fp32 comparisons stayed above MODEL_PCC (0.9921 / 0.9924). The shift sits
+# inside the bf16 reference's own error, not in the TTNN model; re-baselined per issue #58132.
+BF16_REF_PCC = 0.985
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +78,7 @@ def test_ttnn_model_vs_bf16_reference(device, torch_ref):
 
     p = pcc(expected.float(), got.float())
     print(f"\n[model seq={seq_len}] TTNN vs HF bf16-eager PCC={p:.8f}")
-    assert p >= MODEL_PCC, f"model vs bf16 reference PCC {p:.8f} < {MODEL_PCC}"
+    assert p >= BF16_REF_PCC, f"model vs bf16 reference PCC {p:.8f} < {BF16_REF_PCC}"
 
 
 @pytest.mark.parametrize("batch_size", [2, 4])

@@ -44,6 +44,23 @@ def cache_file_exists(cache_file_name):
         return False
 
 
+def sparse_attention_freq(hf_config):
+    """Per-layer MSA flags (``sparse_attention_config.sparse_attention_freq``, 1 = block-sparse layer: M3
+    layers 3-59), or None when the config has none. ``sparse_attention_config`` may be a dict (gated by
+    ``use_sparse_attention``) or an object. ``Layer``, the weight cache and the KV chunk table's index_k rows
+    all read it here, so they agree on which layers carry an index_k."""
+    cfg = getattr(hf_config, "sparse_attention_config", None)
+    if isinstance(cfg, dict):
+        return cfg.get("sparse_attention_freq") if cfg.get("use_sparse_attention") else None
+    return getattr(cfg, "sparse_attention_freq", None) if cfg is not None else None
+
+
+def is_sparse_attention_layer(hf_config, layer_idx: int) -> bool:
+    """True iff global layer ``layer_idx`` runs MSA block-sparse attention (see ``sparse_attention_freq``)."""
+    freq = sparse_attention_freq(hf_config)
+    return bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+
+
 def get_default_num_links(mesh_device):
     """Default number of fabric links for CCL ops on the given mesh.
 

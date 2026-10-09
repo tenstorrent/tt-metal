@@ -1245,6 +1245,19 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
         "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
 
+    // The deserialization constructor sets these sets independently, so local and remote are not
+    // guaranteed to be subsets of buffer_indices; all three index the per-core bitsets below.
+    const CircularBufferConfig& config = circular_buffer->config();
+    for (const auto* indices :
+         {&config.buffer_indices(), &config.local_buffer_indices(), &config.remote_buffer_indices()}) {
+        for (uint32_t buffer_index : *indices) {
+            if (buffer_index >= max_dfbs_) {
+                TT_THROW(
+                    "Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+            }
+        }
+    }
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -1264,17 +1277,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                uint32_t max_dfbs = max_dfbs_;
-                auto add_buffer_indices = [&cb_indices, max_dfbs](
+                auto add_buffer_indices = [&cb_indices](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
-                        // TT_ASSERT since we validate when constructing the config that it's within range
-                        TT_ASSERT(
-                            buffer_index < max_dfbs,
-                            "Invalid circular buffer index: {} should be between 0 and {}",
-                            buffer_index,
-                            max_dfbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
@@ -1715,19 +1721,21 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         "PrefetcherPipe slot {} has no receiver cores in this program; a relay lives on the receivers",
         prefetcher_pipe_id);
     TT_FATAL(
-        slot.ring_size % relay_dfb->config.entry_size == 0,
-        "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
+        slot.entry_size % relay_dfb->config.entry_size == 0,
+        "PrefetcherPipe relay entry size {} must divide the slot entry_size {}: a relay pages each pipe entry as a "
+        "whole number of its own entries",
         relay_dfb->config.entry_size,
-        slot.ring_size);
+        slot.entry_size);
+    // The relay covers the ring the pipe uses: its whole entries, short of any trailing gap.
+    const uint32_t usable_ring_size = slot.ring_size - slot.ring_size % slot.entry_size;
     TT_FATAL(
-        relay_dfb->config.num_entries == slot.ring_size / relay_dfb->config.entry_size,
-        "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
+        relay_dfb->config.num_entries == usable_ring_size / relay_dfb->config.entry_size,
+        "PrefetcherPipe relay depth {} must equal the {} relay entries that cover the pipe's whole entries ({} B of "
+        "ring_size {} at entry_size {})",
         relay_dfb->config.num_entries,
-        slot.ring_size / relay_dfb->config.entry_size);
-    TT_FATAL(
-        relay_dfb->config.entry_size == slot.entry_size,
-        "PrefetcherPipe relay entry size {} must match the slot entry_size {}",
-        relay_dfb->config.entry_size,
+        usable_ring_size / relay_dfb->config.entry_size,
+        usable_ring_size,
+        slot.ring_size,
         slot.entry_size);
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
@@ -2535,8 +2543,8 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
-                auto chip_claimed = svc.claimed_cores(dev->id());
+            for (auto device_id : mesh->get_device_ids()) {
+                auto chip_claimed = svc.claimed_cores(device_id);
                 claimed.insert(chip_claimed.begin(), chip_claimed.end());
             }
         } else {
@@ -2614,7 +2622,8 @@ void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     validate_semaphore_id(crs, semaphore_id, core_type);
-    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
+    const uint32_t l1_alignment = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1);
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, l1_alignment, core_type));
 }
 
 uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
@@ -3273,13 +3282,29 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // The compile and allocation steps below are individually guarded and would early-return:
     // nothing has changed since this program was compiled and laid out for this device. Skip them
     // outright, since this is called on every enqueue and the guards alone cost microseconds per
-    // program. The validation steps still have to run: they read live device state - L1 allocations
-    // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
-    // this program's regions is only caught by re-checking them here.
+    // program. Validation still reads live device state. In the lockstep case,
+    // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
+            device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
+            device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
+            if (this->simple_l1_validation_region_end_ == 0) {
+                return;
+            }
+            const auto lowest_address =
+                device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
+            if (!lowest_address.has_value() || *lowest_address >= this->simple_l1_validation_region_end_) {
+                return;
+            }
+            // Preserve the detailed collision error from the full validator.
+        }
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
+        this->simple_l1_validation_cached_ =
+            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+        this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
         return;
     }
     this->compile(device, force_slow_dispatch);
@@ -3296,6 +3321,24 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
+
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    this->simple_l1_validation_cached_ =
+        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+    this->simple_l1_validation_region_end_ = 0;
+    for (const auto& cb_allocator : this->cb_allocators_) {
+        if (!cb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, cb_allocator.l1_regions.back().second);
+        }
+    }
+    for (const auto& dfb_allocator : this->dfb_allocators_) {
+        if (!dfb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, dfb_allocator.l1_regions.back().second);
+        }
+    }
 
     this->compile_and_allocate_needed_ = false;
     this->compile_and_allocate_device_ = device;

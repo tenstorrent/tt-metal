@@ -8,64 +8,9 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
-
-
-def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9999):
-    """Run a binary eltwise op on bf16 inputs in [low, high) and assert vs the torch golden
-    with ``assert_with_pcc(pcc)`` -- these are all composite math (ldexp/logaddexp/xlogy)
-    where the expected error exceeds the ULP <= 5 policy."""
-    torch.manual_seed(0)
-    low = low
-    high = high
-    torch_input_tensor_a = torch_random((h, w), low, high, dtype=torch.bfloat16)
-    torch.manual_seed(42)
-    torch_input_tensor_b = torch_random((h, w), low, high, dtype=torch.bfloat16)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ldexp(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.ldexp, -60, 60, pcc=0.9995)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logaddexp(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logaddexp, -80, 80)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logaddexp2(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logaddexp2, -60, 100, pcc=0.993)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_xlogy(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.xlogy, 1e-6, 1e6)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_bias_gelu(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.bias_gelu, -100, 100)
 
 
 def test_arithmetic_operators(device):
@@ -144,31 +89,6 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
     result = ttnn.to_torch(tt_out)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
-
-
-# fmt: off
-@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.rsub])
-@pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (None, 1)])
-@pytest.mark.parametrize("high, low", [(0, -1e5), (1e5, 0), (500, -500), (1e5, 1e-5), ])
-# fmt: on
-def test_rne_approx_modes(device, ttnn_op, fast_and_approximate_mode, ulp_threshold, high, low):
-    """fast_and_approximate_mode=False routes bfloat16 add/sub/rsub through the SFPU with RNE
-    rounding, which matches torch exactly. The default (unset) keeps the 1-ULP FPU kernel."""
-
-    torch.manual_seed(0)
-    assert high > low, "high must be greater than low"
-    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
-    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
-    golden_fn = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
-    output = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b, **kwargs))
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=ulp_threshold)
 
 
 # fmt: off

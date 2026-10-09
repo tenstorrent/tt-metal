@@ -35,7 +35,9 @@ class MistralSmall4Config:
 
     # Core dimensions
     EMB_SIZE = 4096  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload: one bf16 hidden row + the fabric-2D routing header. The 64 must equal
+    # CMB_FABRIC2D_ROUTING_INFO_BYTES (tt/moe/init_helpers.py); keep them in sync if the format changes.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
@@ -132,6 +134,7 @@ def mistral4_hf_config(max_seq: int = 8192):
         pretraining_tp=1,
         # Mistral's softmax scale is a plain qk_head_dim ** -0.5 - see module docstring.
         mla_disable_yarn_mscale=True,
+        mla_chunked_sdpa_matmul_fidelity="LoFi",
         # rope_parameters renamed to rope_scaling, with "type" retained for the reference's
         # _init_rope dispatch.
         rope_scaling={

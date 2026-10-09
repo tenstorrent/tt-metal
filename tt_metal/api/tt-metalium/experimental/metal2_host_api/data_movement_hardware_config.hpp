@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>

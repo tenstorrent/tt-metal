@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rounding.h"
 #include "api/compute/reduce.h"
 #include "api/compute/transpose.h"
 #include "api/compute/bcast.h"
@@ -31,10 +32,13 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random tile is packed to BF16 before the strict cumulative-probability
-    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
-    // packed threshold remains strictly less than 1.0.
-    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
+    // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
+    // never be drawn and the rest of the tail was under-sampled (unit test
+    // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
+    // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
+    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
+    constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
@@ -44,6 +48,8 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
+    rounding_op_tile_init();
+    floor_tile(0);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, dfb_id, 0);
@@ -455,7 +461,6 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
-    compute_kernel_hw_startup(dfb::input_values, dfb::index, dfb::input_transposed);
     top_k<
         Ht,
         Wt,
@@ -487,4 +492,18 @@ void kernel_main() {
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
     recip_block_inplace(dfb::cur_sum, Ht);
     mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
+
+    // Buffers this kernel waited and left unpopped, popped here so they are left balanced.
+    // sub_exp_block_bcast_cols_inplace waits Ht tiles of dfb::cur_max, which is produced and
+    // consumed entirely within this kernel. add_block_inplace waits Ht * Kt tiles of
+    // dfb::topk_mask, and mul_block_bcast_scalar_inplace waits 1 tile of dfb::temp.
+    DataflowBuffer(dfb::cur_max).pop_front(Ht);
+    DataflowBuffer(dfb::topk_mask).pop_front(Ht * Kt);
+    DataflowBuffer(dfb::temp).pop_front(1);
+
+    // dfb::scaler_max and dfb::scaler_sum are pushed once by the writer and waited inside
+    // compute_kernel_lib::reduce, which leaves them unpopped so one pushed tile serves every reduce
+    // call. Pop both here so they are left balanced.
+    DataflowBuffer(dfb::scaler_max).pop_front(1);
+    DataflowBuffer(dfb::scaler_sum).pop_front(1);
 }

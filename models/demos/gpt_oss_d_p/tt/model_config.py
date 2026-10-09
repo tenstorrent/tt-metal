@@ -27,6 +27,14 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_fo
 DEFAULT_HF_MODEL = "models/demos/gpt_oss/configs/gpt-oss-120b"
 
 
+def tensor_cache_dir_name(dtype_str: str, mesh_shape) -> str:
+    """Directory name of the tilized weight cache for one dtype and mesh, e.g.
+    ``tensor_cache_bfp8_MeshShape([4, 8])``. Shared with the prefill-runner adapter so the runner and
+    the standalone harness read the same files."""
+    rows, cols = (int(d) for d in mesh_shape)
+    return f"tensor_cache_{dtype_str}_MeshShape([{rows}, {cols}])"
+
+
 class ModelArgs:
     """GPT-OSS ModelArgs compatible with the tt_transformers create_tt_model interface."""
 
@@ -160,7 +168,7 @@ class ModelArgs:
         cache_dir = Path(cache_dir) if cache_dir else Path(self.model_path)
         logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
+        cache_path = cache_dir / tensor_cache_dir_name(dtype_str, tuple(self.mesh_device.shape))
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
 

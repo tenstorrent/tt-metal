@@ -8,9 +8,15 @@
 #include <gtest/gtest.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace {
+
+// Use the arch of the silicon under test. TODO: query the fixture's MetalEnv once tests hold one.
+FabricEriscDatamoverOptions silicon_options() {
+    return FabricEriscDatamoverOptions{.arch = tt::tt_metal::MetalContext::instance().hal().get_arch()};
+}
 
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWorkerInjection) {
     constexpr size_t channel_buffer_size = 14432;
@@ -22,7 +28,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
     for (const auto topology : {Topology::Mesh, Topology::Torus}) {
         const FabricStaticSizedChannelsAllocator allocator(
             topology,
-            FabricEriscDatamoverOptions{},
+            silicon_options(),
             sender_channels,
             receiver_channels,
             channel_buffer_size,
@@ -62,7 +68,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) 
 
     const FabricStaticSizedChannelsAllocator allocator(
         Topology::Torus,
-        FabricEriscDatamoverOptions{},
+        silicon_options(),
         sender_channels,
         receiver_channels,
         channel_buffer_size,
@@ -81,7 +87,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
 
     const FabricStaticSizedChannelsAllocator allocator(
         Topology::Ring,
-        FabricEriscDatamoverOptions{},
+        silicon_options(),
         sender_channels,
         receiver_channels,
         channel_buffer_size,

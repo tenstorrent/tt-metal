@@ -134,6 +134,11 @@ class MotifTransformer(Module):
     LATENT_CHANNELS = 16
     K_CHUNK_SIZE_BASE = 1024
     Q_CHUNK_SIZE = 128
+    # Approximate softmax exponential in joint SDPA. The sp > 1 (ring-joint streaming) path always uses
+    # it, and the sp == 1 path did too until #57180 made the joint kernel honour exp_approx_mode=False:
+    # on Wormhole the accurate bf16-dest exponential added ~0.1 s per denoising step on T3K (+24 %),
+    # while the attention PCC gate (0.996) passes either way (0.99973 approx vs 0.99983 accurate).
+    SDPA_EXP_APPROX_MODE = True
 
     def __init__(
         self,
@@ -220,6 +225,7 @@ class MotifTransformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
                 attention_q_chunk_size=self.Q_CHUNK_SIZE,
+                attention_exp_approx_mode=self.SDPA_EXP_APPROX_MODE,
             )
             for i in range(config.num_layers)
         )
