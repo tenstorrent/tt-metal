@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import gc
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.stable_diffusion_xl_base.quasar.tt import qsr
+from models.demos.stable_diffusion_xl_base.quasar.tests.sdxl_quasar_test_utils import load_torch_unet
+from models.common.utility_functions import torch_random
+from models.demos.stable_diffusion_xl_base.quasar.tt.model_configs import load_model_optimisations
+from models.demos.stable_diffusion_xl_base.quasar.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize(
+    "image_resolution, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, down_block_id, pcc",
+    [
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 320, 64, 64), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.996),
+        ((1024, 1024), (1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.997),
+    ],
+)
+def test_crossattndown(
+    device,
+    image_resolution,
+    input_shape,
+    temb_shape,
+    encoder_shape,
+    query_dim,
+    num_attn_heads,
+    out_dim,
+    down_block_id,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_unet_location,
+    reset_seeds,
+):
+    unet = load_torch_unet(sdxl_base_unet_location, is_ci_env, is_ci_v2_env)
+    state_dict = unet.state_dict()
+
+    torch_crosattn = unet.down_blocks[down_block_id]
+
+    model_config = load_model_optimisations(image_resolution)
+    tt_crosattn = TtCrossAttnDownBlock2D(
+        device,
+        state_dict,
+        f"down_blocks.{down_block_id}",
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        down_block_id == 1,
+        debug_mode=debug_mode,
+    )
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_encoder_tensor = torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32)
+
+    torch_output_tensor, _ = torch_crosattn(
+        torch_input_tensor, temb=torch_temb_tensor, encoder_hidden_states=torch_encoder_tensor
+    )
+
+    ttnn_input_tensor, [B, C, H, W] = to_device_nhwc(torch_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    ttnn_temb_tensor = qsr.from_torch(
+        torch.nn.functional.silu(torch_temb_tensor),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn_encoder_tensor = qsr.from_torch(
+        torch_encoder_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn_output_tensor, output_shape, _ = tt_crosattn.forward(
+        ttnn_input_tensor, [B, C, H, W], temb=ttnn_temb_tensor, encoder_hidden_states=ttnn_encoder_tensor
+    )
+
+    output_tensor = ttnn.to_torch(ttnn_output_tensor)
+    output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+
+    del unet, tt_crosattn
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")
