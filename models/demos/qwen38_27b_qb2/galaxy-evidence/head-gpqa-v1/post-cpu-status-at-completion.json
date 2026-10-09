@@ -1,0 +1,46 @@
+{
+  "state": "running",
+  "started_at": 1791525050.8920786,
+  "source_sha256": {
+    "/home/ttuser/qwen38-artifacts-20261007/qwen38-load-image-v1.py": "eed8909e9c5dbfa761bc8ef33bfc886c489ac2ec7bd27be4b83149d9326b663a",
+    "/home/ttuser/qwen38-artifacts-20261007/probe-hf-head-v1.py": "21e1a6a24e05e44558c3933aa1170a06838b8baddaeff7f54d0459a915c43343"
+  },
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "hardware_opened": false,
+  "stages": [
+    {
+      "name": "image-runtime-check",
+      "state": "running",
+      "started_at": 1791536045.3637257,
+      "command": [
+        "/usr/bin/python3",
+        "/home/ttuser/qwen38-artifacts-20261007/qwen38-load-image-v1.py"
+      ],
+      "timeout_seconds": 2600
+    }
+  ],
+  "observed_at": 1791536045.3577418,
+  "dependencies": [
+    {
+      "unit": "qwen38-overnight-v2-20261009.service",
+      "properties": {
+        "MainPID": "0",
+        "Result": "success",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "InvocationID": ""
+      }
+    },
+    {
+      "unit": "qwen38-accuracy-head-v1-20261009.service",
+      "properties": {
+        "MainPID": "0",
+        "Result": "success",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "InvocationID": ""
+      }
+    }
+  ]
+}

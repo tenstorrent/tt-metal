@@ -1,0 +1,12 @@
+{
+  "same_input_sha256": "73f40d9f36c2cf2070120e34c425f0a10aafaa7edd8c1f6878b002e7bf756114",
+  "same_gpqa_protocol": true,
+  "total": 198,
+  "both_correct": 157,
+  "native_only_correct": 13,
+  "head_only_correct": 9,
+  "neither_correct": 19,
+  "native_correct": 170,
+  "head_correct": 166,
+  "interpretation": "One sampled run per policy; matched protocol does not isolate numerical causality or sampling variance"
+}

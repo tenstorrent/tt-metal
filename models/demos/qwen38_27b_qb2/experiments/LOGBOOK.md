@@ -1109,3 +1109,47 @@ No session connection is needed for that queue to continue.
   the allocation definitions are in decoder.py and model.py and were inspected.
 
 [Prepared controls and evidence](../galaxy-evidence/decoder-precision-controls-v1/README.md).
+
+## Oct 9, 08:53-08:54 UTC: precision controls pushed; Tau3 timeout evidence extended
+
+- Published decoder controls and capacity assumptions at `92dcd68096e` on the
+  existing model branch. Pre-commit passed; all 722 indexed tracked artifacts
+  matched their sizes/hashes. Staging first encountered the protected worktree
+  Git index; the approved retry succeeded. No remote run was changed.
+- Extended the read-only Tau3 review with per-role client-call timing from the
+  saved requests. In the four 1,200-second task timeouts, completed agent calls
+  account for 1,034-1,149 seconds; maximum prompts are 51,402-120,851 tokens.
+  These wall times include prompt work and other serving overhead, so they are
+  not pure decode rates. Unrecorded in-flight calls are not assigned outcomes.
+- Reviewed final saved actions for the incomplete trials. At least one simulator
+  response disregards the agent's waiting-period explanation; another task had
+  successfully executed credit tools and was filing reports before timeout.
+  Neither observation proves eventual task success. Apparent nested JSON
+  escaping in a raw response was checked against successful downstream tool
+  responses and was not labeled a parser bug. Pilot score remains 3/12.
+- Initial trace inspection printed too much nested reasoning metadata; the
+  follow-up artifact contains only hashes, counts, token totals and durations.
+  Raw conversations remain on the allocated host.
+
+[Extended Tau3 review](../galaxy-evidence/tau-review-v1/README.md).
+
+## Oct 9, 08:53-08:56 UTC: head GPQA completed; persistent follow-up advanced
+
+- Full head-control GPQA finished at 08:53:32 UTC: 166/198 (83.84%), 51m43s,
+  one incorrect output-budget cutoff. All 198 raw-response hashes match the
+  scored receipts. The completion audit confirms 166 naturally completed
+  correct answers, with 31 natural-stop failures. No qualification gate changed.
+- Compared identical-input/protocol receipts: 157 both correct, 13 native-only,
+  nine head-only, 19 neither. The previous native result is 170/198; the head
+  change did not qualify. The single sampled comparison does not prove lower
+  expected accuracy or identify a causal kernel defect.
+- Confirmed the head service is terminal and the original post-CPU controller
+  advanced at 08:54:05 UTC. It is importing/checking the native v5 image, then
+  will run its frozen CPU HF reference. Remaining hardware followers still wait
+  for that reference. There was no restart, source replacement or queue change.
+- The first attempt to collect JSON through a tool response exceeded its
+  output limit and failed parsing before writing artifacts. A bounded local
+  collector captured SSH stdout directly instead and saved exact receipts plus
+  a deterministic gzip of the full audit. No raw private answer text was copied.
+
+[Completed head-control evidence](../galaxy-evidence/head-gpqa-v1/README.md).

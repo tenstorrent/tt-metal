@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T08:50:48.977652+00:00",
+  "generated_at": "2026-10-09T08:56:33.439783+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 85103,
-      "sha256": "6db9a805caa0f881f834d3f7cf847be6036e1f2104aef2181ef7136aa44f0272"
+      "bytes": 88003,
+      "sha256": "1c10959f52efd3a1cd0a7884a63e085d022d3080388bb30593d89ca36170f1b9"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 27594,
-      "sha256": "5c9a40df48c719de255a9986ef8b6971f85f4dd4e0dfe5df59ddd650ef87ae41"
+      "bytes": 28397,
+      "sha256": "da57285cd8df048a939f57db821979861605697346991cb013c2c38234c92fef"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2322,6 +2322,46 @@
       "path": "galaxy-evidence/head-g0-v1/values.yaml",
       "bytes": 2927,
       "sha256": "bc092c9a88895da3ccc343642ff365f40c33d5340f422dd1ac72f41f8f24564e"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/README.md",
+      "bytes": 2317,
+      "sha256": "77482ee87ed85d49ed6d1e9485d872f555a06870478a69450e7ad11b1232550c"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/completion-audit-status.json",
+      "bytes": 1565,
+      "sha256": "63272aacd71d40a4b3ac5e6ab038b53fe33f9a36abe819c3b536588015742cd6"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/completion-audit.json.gz",
+      "bytes": 14910,
+      "sha256": "642056127975d52346e10eab101162fd9e149fa6d15be6b439bc87e1f3db36d3"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/matched-native-comparison.json",
+      "bytes": 417,
+      "sha256": "f974ad14e74adf3d65539fd1b558f37a9ca1f25725c5a0c308715d67db5d1aca"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/post-cpu-status-at-completion.json",
+      "bytes": 1300,
+      "sha256": "3cc6a7eccf466a4ead2f98c38e27837299f25e47b44897e3535dff26640fd859"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/protocol.json",
+      "bytes": 1414,
+      "sha256": "1709f25551042cc2893f1a14b3ce27b6e96c713074e84f1b000e6460ddd92e9f"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/responses.jsonl",
+      "bytes": 78175,
+      "sha256": "89480f4983c92e25f15ad0009dda9ce44d39eaffe4bebf29c4d46834c08f61a9"
+    },
+    {
+      "path": "galaxy-evidence/head-gpqa-v1/summary.json",
+      "bytes": 2067,
+      "sha256": "169b860d52521fc03dc65a3396ea90ad80e1f006293c09d3dd42873e32cca66d"
     },
     {
       "path": "galaxy-evidence/helm-health-v1/README.md",
@@ -4902,13 +4942,18 @@
     },
     {
       "path": "galaxy-evidence/tau-review-v1/README.md",
-      "bytes": 4981,
-      "sha256": "63a4141d3c8372391e63c4b456be3c74f0a7966084bf917b223e757627e889d6"
+      "bytes": 6698,
+      "sha256": "83cb09e75d8f2ef443861e65e2d7d6a9b519caa3d0ffe6524857b8f3680d68a4"
     },
     {
       "path": "galaxy-evidence/tau-review-v1/audit.json",
       "bytes": 8801,
       "sha256": "700792d01ab1c4f6281c5bac4f74765727e5e8417494f036b0a97e7bccc899fa"
+    },
+    {
+      "path": "galaxy-evidence/tau-review-v1/call-timing.json",
+      "bytes": 11011,
+      "sha256": "2f9c2fe353193aedac759307f7b5cc06136af36e667599eecb616c8c8b273983"
     },
     {
       "path": "galaxy-evidence/unit.xml",

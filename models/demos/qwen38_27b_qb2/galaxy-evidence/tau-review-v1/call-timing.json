@@ -1,0 +1,361 @@
+{
+  "recorded_at": "2026-10-09T08:53:07.488307+00:00",
+  "scope": "Saved completed-call wall times by request sampling mode; includes prefill, decode, queueing, network and host overhead; not a pure decode throughput measurement",
+  "summary_sha256": "8182512fecb958421a78fe09061020509b7ea14eb505426998564a218c5ec272",
+  "protocol_sha256": "2c612b7820b6dfa66bc61e20cd614ed95efe7ce64432fdaf7858e9dc3943481f",
+  "score_unchanged": {
+    "passed": 3,
+    "selected": 12
+  },
+  "model_calls_made": 0,
+  "trials": [
+    {
+      "task_id": "task_032",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 370.85237981704995
+      },
+      "raw_calls_sha256": "5c91f20218324537c7774a1c320bdf4779c4631b9516d1cad5877f0679070d71",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 6,
+          "call_wall_seconds": 71.2357673808001,
+          "prompt_tokens_max": 2924,
+          "prompt_tokens_sum": 14123,
+          "completion_tokens_sum": 227,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 12,
+          "call_wall_seconds": 296.3334914878942,
+          "prompt_tokens_max": 16170,
+          "prompt_tokens_sum": 103914,
+          "completion_tokens_sum": 2885,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_050",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 402.60775388404727
+      },
+      "raw_calls_sha256": "eb405563d6b89e18fcb92cba986013dd012e3b9c9d53da9dc7591d1c59637d36",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 4,
+          "call_wall_seconds": 62.75835742615163,
+          "prompt_tokens_max": 1161,
+          "prompt_tokens_sum": 3794,
+          "completion_tokens_sum": 150,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 16,
+          "call_wall_seconds": 336.6044194204733,
+          "prompt_tokens_max": 33882,
+          "prompt_tokens_sum": 330879,
+          "completion_tokens_sum": 4075,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_019",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 938.2109041591175
+      },
+      "raw_calls_sha256": "88e6ee7b37294dbd40d845c7b6cefc212347eff8fd37bc580a60e8d312f30fbc",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 15,
+          "call_wall_seconds": 154.34188845288008,
+          "prompt_tokens_max": 4855,
+          "prompt_tokens_sum": 46664,
+          "completion_tokens_sum": 1059,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 22,
+          "call_wall_seconds": 780.4993649786338,
+          "prompt_tokens_max": 28133,
+          "prompt_tokens_sum": 442470,
+          "completion_tokens_sum": 10846,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_016",
+      "passed": true,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 423.80713403364643
+      },
+      "raw_calls_sha256": "f25cb3cbb1e7f7297df8d7639f9378d87953d0c3b2ebc7128c857b6e8900612e",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 7,
+          "call_wall_seconds": 78.43332149181515,
+          "prompt_tokens_max": 3851,
+          "prompt_tokens_sum": 20005,
+          "completion_tokens_sum": 457,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 12,
+          "call_wall_seconds": 342.12035368103534,
+          "prompt_tokens_max": 19524,
+          "prompt_tokens_sum": 121648,
+          "completion_tokens_sum": 4548,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_057",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1513238348998
+      },
+      "raw_calls_sha256": "65d26d67ec085f625867bbc87ad47bdc41cc0f9d85340b148f9ad649772920a7",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 9,
+          "call_wall_seconds": 113.8674830654636,
+          "prompt_tokens_max": 3923,
+          "prompt_tokens_sum": 24373,
+          "completion_tokens_sum": 584,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 24,
+          "call_wall_seconds": 1033.6889675948769,
+          "prompt_tokens_max": 65778,
+          "prompt_tokens_sum": 689908,
+          "completion_tokens_sum": 13940,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_047",
+      "passed": false,
+      "termination": "max_steps",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 993.5662800329737
+      },
+      "raw_calls_sha256": "2cdf420a1f8ed865fa38540f7c2cbabbd6be9a2995dfe89b542ab0a09d8e14b1",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 10,
+          "call_wall_seconds": 115.38838713103905,
+          "prompt_tokens_max": 4411,
+          "prompt_tokens_sum": 32872,
+          "completion_tokens_sum": 670,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 29,
+          "call_wall_seconds": 874.7754420470446,
+          "prompt_tokens_max": 87790,
+          "prompt_tokens_sum": 1292704,
+          "completion_tokens_sum": 10317,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_060",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1508802236058
+      },
+      "raw_calls_sha256": "2cf07864441a9a3acdf704dc40d0ab7fbf98e91e4377520e4aba193d4b2845f5",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 5,
+          "call_wall_seconds": 42.32094549480826,
+          "prompt_tokens_max": 2537,
+          "prompt_tokens_sum": 10330,
+          "completion_tokens_sum": 203,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 20,
+          "call_wall_seconds": 1131.6323641906492,
+          "prompt_tokens_max": 51402,
+          "prompt_tokens_sum": 645549,
+          "completion_tokens_sum": 15628,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_026",
+      "passed": false,
+      "termination": "infrastructure_error",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 755.3893045959994
+      },
+      "raw_calls_sha256": "32fbb5cfdf82b8ddee2e057cc4873a3e0fa829416626fa7495239c087084906b",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 2,
+          "call_wall_seconds": 62.248666315339506,
+          "prompt_tokens_max": 1790,
+          "prompt_tokens_sum": 3438,
+          "completion_tokens_sum": 89,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 9,
+          "call_wall_seconds": 690.1114284023643,
+          "prompt_tokens_max": 16578,
+          "prompt_tokens_sum": 66381,
+          "completion_tokens_sum": 6721,
+          "errors": 1
+        }
+      }
+    },
+    {
+      "task_id": "task_051",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 785.6917039621621
+      },
+      "raw_calls_sha256": "fa19ef75aa82f9bd08ef310a2c882ecc4406a1b0edbc40e86834409fdaed25b5",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 7,
+          "call_wall_seconds": 77.3589327163063,
+          "prompt_tokens_max": 2255,
+          "prompt_tokens_sum": 10778,
+          "completion_tokens_sum": 254,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 28,
+          "call_wall_seconds": 704.8265482163988,
+          "prompt_tokens_max": 38063,
+          "prompt_tokens_sum": 776037,
+          "completion_tokens_sum": 9803,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_102",
+      "passed": false,
+      "termination": "user_stop",
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 995.9713290068321
+      },
+      "raw_calls_sha256": "b14679463867b3c48c7ace0e0b08b3962c4beea404f77b3334f685138320d63e",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 7,
+          "call_wall_seconds": 105.1612816923298,
+          "prompt_tokens_max": 68348,
+          "prompt_tokens_sum": 90807,
+          "completion_tokens_sum": 1274,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 12,
+          "call_wall_seconds": 887.5910672475584,
+          "prompt_tokens_max": 71573,
+          "prompt_tokens_sum": 417673,
+          "completion_tokens_sum": 15925,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_066",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1936748670414
+      },
+      "raw_calls_sha256": "7e3e01aafeee31ef92b295b155632b70182f59e6bba21c7bd62052e4c79ecc9e",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 5,
+          "call_wall_seconds": 41.91964812204242,
+          "prompt_tokens_max": 4520,
+          "prompt_tokens_sum": 17274,
+          "completion_tokens_sum": 507,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 16,
+          "call_wall_seconds": 1118.9148478452116,
+          "prompt_tokens_max": 120851,
+          "prompt_tokens_sum": 1167795,
+          "completion_tokens_sum": 16253,
+          "errors": 0
+        }
+      }
+    },
+    {
+      "task_id": "task_097",
+      "passed": false,
+      "termination": null,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1634010709822
+      },
+      "raw_calls_sha256": "f3f7d9cdda2d93b17c6958606d21f9f1dc21ea6e4dabff9737500f75cf46cab6",
+      "roles": {
+        "greedy_no_thinking_simulator_or_judge": {
+          "calls": 2,
+          "call_wall_seconds": 27.206144356168807,
+          "prompt_tokens_max": 2114,
+          "prompt_tokens_sum": 3918,
+          "completion_tokens_sum": 204,
+          "errors": 0
+        },
+        "sampled_thinking_agent": {
+          "calls": 19,
+          "call_wall_seconds": 1149.193982173223,
+          "prompt_tokens_max": 107239,
+          "prompt_tokens_sum": 763059,
+          "completion_tokens_sum": 24016,
+          "errors": 0
+        }
+      }
+    }
+  ]
+}

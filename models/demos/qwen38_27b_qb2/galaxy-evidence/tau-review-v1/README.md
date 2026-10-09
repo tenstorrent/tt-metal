@@ -70,3 +70,35 @@ simulator/judge validity from agent behavior, and measure timeout sensitivity
 after serving-latency work. It should use a validated simulator/judge protocol
 before claiming a published-score comparison. GPQA remains the current primary
 accuracy gate and has not been affected by this audit.
+
+## Saved-call timing follow-up, 08:53 UTC
+
+`call-timing.json` aggregates existing raw-call receipts without inference or
+rescoring. Roles are distinguished using the executed protocol: sampled,
+thinking requests are the agent; greedy, non-thinking requests are the local
+simulator or judge. These are client call wall times including prompt work,
+generation, queueing and host/network overhead, not device decode timings.
+
+| Timed-out task | Agent calls | Recorded agent call time | Largest agent prompt |
+|---|---:|---:|---:|
+| 057 | 24 | 1,033.7 s | 65,778 tokens |
+| 060 | 20 | 1,131.6 s | 51,402 tokens |
+| 066 | 16 | 1,118.9 s | 120,851 tokens |
+| 097 | 19 | 1,149.2 s | 107,239 tokens |
+
+These calls alone consume 86-96% of each task's 1,200-second limit. In-flight
+requests killed at the outer deadline may have no completed raw-call receipt;
+the table does not invent their duration or outcome. Latency is a material
+constraint, but this does not prove more time would make these tasks pass.
+
+The final saved trajectories still show useful actions as well as mistakes:
+task 047 was searching/unlocking a retention-credit tool when it hit the step
+limit; task 060's simulated user asked to proceed with savings immediately
+after the agent explained a waiting-period restriction; task 097 had four
+successful credit-tool responses and was filing reports before its timeout.
+None of those observations establishes a successful final benchmark state.
+
+An initially suspicious escaped nested argument string in task 097 did not
+prove a malformed tool call: the subsequent actual tool responses reported
+successful credits. No parser defect or reward change is inferred from the
+raw response representation alone.

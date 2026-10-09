@@ -1,0 +1,46 @@
+{
+  "state": "completed",
+  "predecessor_unit": "qwen38-accuracy-head-v1-20261009.service",
+  "predecessor_invocation": "ff89c12d6a9b4feaa268d7eff48b4132",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791532371.227255,
+  "updated_at": 1791536035.6947055,
+  "last_service": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-source-v1/gpqa_response_audit.py",
+    "--receipts",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-head-v1/native-control/evaluation/gpqa/gpqa-responses.jsonl",
+    "--private-responses",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-head-v1/native-control/evaluation/gpqa/private-responses",
+    "--summary",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-head-v1/native-control/evaluation/gpqa/summary.json",
+    "--count",
+    "198",
+    "--max-output-tokens",
+    "65536",
+    "--max-model-len",
+    "262144",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-v1/audit.json"
+  ],
+  "qualification": {
+    "required_correct": 177,
+    "selected_count": 198,
+    "harness_correct": 166,
+    "harness_passed": false,
+    "completed_response_correct": 166,
+    "completed_response_passed": false,
+    "incomplete_credited_by_harness": 0,
+    "proves_container_or_release_qualification": false
+  },
+  "finished_at": 1791536035.694702
+}

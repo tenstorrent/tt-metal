@@ -1,5 +1,17 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 08:56 UTC update: head-control full GPQA completed **166/198 (83.84%)**
+in 51m43s, with one incorrect output-budget cutoff. The completion audit agrees;
+197 answers stopped naturally, including 31 incorrect answers. The native-head
+control remains 170/198. Neither meets 177/198. Matched outcomes include nine
+head-only successes and thirteen native-only successes; one sampled run does
+not establish numerical causality. The persistent follow-up automatically
+advanced to image import/runtime checks, then the CPU HF reference. Tau3 remains
+3/12; saved-call timing confirms latency consumes most of the four task-timeout
+budgets, without proving they would otherwise pass.
+[Head GPQA result](../galaxy-evidence/head-gpqa-v1/README.md),
+[Tau3 timing](../galaxy-evidence/tau-review-v1/README.md).
+
 Oct 9 08:50 UTC update: head GPQA has 166 correct out of 196 completed,
 zero cutoffs and two requests still generating. It cannot reach 177/198.
 All six persistent controllers were revalidated as live; reference diagnostics
