@@ -205,9 +205,8 @@ struct MatmulFusedOpSignaler {
     // Get the rt values
     // Write the semaphore ID
     void push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const;
-    // Privileged core xy + its semaphore id, then is_privileged. If privileged: target value, rs semaphore id,
-    // number of RS core rectangles, then per rectangle: noc start xy, noc end xy, num cores.
-    // First core to run this is the privileged core
+    // Append privileged-core coordinates, its semaphore ID, and an is-privileged flag.
+    // If privileged: target value, receiver count, RS semaphore ID, then each receiver's physical xy.
     void push_llama_rs_rt_args_for_mm(
         std::vector<uint32_t>& out_rt_args,
         tt::tt_metal::CoreCoord current_core,
