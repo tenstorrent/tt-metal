@@ -232,11 +232,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif
