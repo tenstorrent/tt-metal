@@ -73,7 +73,8 @@ inline void execute_high_fidelity_gapool()
 /**
  * @brief Move destination tile to source registers for mul_reduce_scalar
  *
- * Moves data from destination registers to source A or B registers.
+ * Moves a whole tile from destination registers to source A, or its first 16 rows to source B (the scaler rows 0 to 3 and
+ * the rest of the 16x16 block the pooling reads).
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
  * @param idst Destination tile index (0-7)
@@ -134,18 +135,7 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 16);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 20);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 24);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 28);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 32, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 32);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 36, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 36);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 40, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 40);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 44, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 44);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 48, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 48);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 52, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 52);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 56, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 56);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 60, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 60);
+        // The pooling passes read SrcB rows 0 to 15 only.
     }
 }
 
@@ -204,9 +194,10 @@ inline void _llk_math_mul_reduce_scalar_init_()
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  * @param dst_index Destination tile index to accumulate into (0-7)
+ * @tparam tile_setup Drain the SFPU and set the DEST address first; a later tile of the same row can skip both
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, bool tile_setup = true>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -216,9 +207,12 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
     // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    if constexpr (tile_setup)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
 
     for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
     {
@@ -243,6 +237,15 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
         }
     }
+}
+
+// Zeroes the face of dest[dst_index] that the column passes pool into; the reduce reads only its element 0.
+template <bool is_fp32_dest_acc_en>
+inline void _llk_math_mul_reduce_scalar_clear_tile_(const std::uint32_t dst_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    constexpr std::uint32_t tiles_per_bank = is_fp32_dest_acc_en ? 4 : 8;
+    TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index & (tiles_per_bank - 1), 0));
 }
 
 /**

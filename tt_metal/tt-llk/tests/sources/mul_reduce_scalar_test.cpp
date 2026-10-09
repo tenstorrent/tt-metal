@@ -143,16 +143,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
+    _llk_math_mul_reduce_scalar_clear_tile_<is_fp32_dest_acc_en>(DST_INDEX);
 
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
     _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+    // The tile count is a runtime argument here; the API unrolls this loop for its compile-time count.
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
     }
 
     // Step 7 - collapse DEST[0] to a single scalar.

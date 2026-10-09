@@ -92,6 +92,9 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_mul_reduce_scalar_clear_tile<is_fp32_dest_acc_en>(0)));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -100,6 +103,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
         0 /*dst_index*/,
         VectorMode::RC_custom,
         0.0f));
+#endif
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
@@ -110,10 +114,19 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Remaining iterations - always move
     const uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
+#if defined(ARCH_BLACKHOLE)
+    // Unrolled for a compile-time count; the first column pass already drained the SFPU and set the DEST address.
+#pragma GCC unroll 8
+    for (uint32_t i = 1; i < product_tiles; i++) {
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
+        MATH((llk_math_mul_reduce_column<reduce_f, false>(0, icb0)));
+    }
+#else
     for (uint32_t i = 1; i < product_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
     }
+#endif
 
     // Step 7: Perform final scalar reduction
     MATH((llk_math_mul_reduce_scalar<reduce_f>()));
