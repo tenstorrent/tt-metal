@@ -9,7 +9,7 @@
 
 namespace ttml::metal {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> sdpa_bw(
     const ttnn::Tensor& grad_output,
     const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query,
@@ -18,15 +18,29 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     const ttnn::Tensor& intermediates,
     AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
-    const float dropout_probability) {
+    const float dropout_probability,
+    const std::optional<ttnn::Tensor>& gate) {
     // Call Q kernel first to compute grad_Q and u_scaler = rowsum(dO * O)
-    auto [grad_Q, u_scaler] = ttnn::prim::ttml_sdpa_q_bw(
-        grad_output, attn_output, query, key, value, mask_type, attn_mask, intermediates, dropout_probability);
+    auto [grad_Q, u_scaler, grad_gate, gated_grad_output] = ttnn::prim::ttml_sdpa_q_bw(
+        grad_output,
+        attn_output,
+        query,
+        key,
+        value,
+        mask_type,
+        attn_mask,
+        intermediates,
+        dropout_probability,
+        /*preallocated_grad_query=*/std::nullopt,
+        /*preallocated_u_scaler=*/std::nullopt,
+        gate);
+
+    const auto& kv_grad_output = gated_grad_output.has_value() ? gated_grad_output.value() : grad_output;
 
     auto [grad_K, grad_V] = ttnn::prim::ttml_sdpa_kv_bw(
-        grad_output, query, key, value, mask_type, attn_mask, intermediates, u_scaler, dropout_probability);
+        kv_grad_output, query, key, value, mask_type, attn_mask, intermediates, u_scaler, dropout_probability);
 
-    return {grad_Q, grad_K, grad_V};
+    return {grad_Q, grad_K, grad_V, grad_gate};
 }
 
 }  // namespace ttml::metal
