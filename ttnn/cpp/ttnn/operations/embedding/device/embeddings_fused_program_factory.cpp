@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 namespace ttnn::prim {
 
@@ -119,7 +120,14 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        if (row_bytes <= max_l1_budget_bytes) {
+        // Holding the whole row sizes both the weight staging buffer and the output buffer to it, so the
+        // pair has to fit in L1 (with the usual margin), not just the staging budget. The bank size is
+        // fixed per device, so the choice doesn't depend on what else is allocated.
+        const uint64_t whole_row_l1_bytes =
+            static_cast<uint64_t>(num_tiles_per_block) * (weights_single_tile_size + output_single_tile_size);
+        const uint64_t l1_limit_bytes = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) *
+                                        ttnn::operations::core::kProgramL1UsagePercent / 100;
+        if (row_bytes <= max_l1_budget_bytes && whole_row_l1_bytes <= l1_limit_bytes) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
