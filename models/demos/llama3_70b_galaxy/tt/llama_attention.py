@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
 
 
 class TtLlamaAttention(LightweightModule):
@@ -1111,6 +1112,17 @@ class TtLlamaAttention(LightweightModule):
 
     def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
         """Q prep on this column's two ring-SDPA slices only; returns the full bf8 Q buffer (other slices unused)."""
+        if self.qk_norm:
+            # One generic_op program per device (custom_ops/qwen_q_prep, bit-identical to the chain below): reads
+            # the owned slices and their cos/sin rows straight from the full buffers and rewrites the slices in place.
+            return qwen_q_prep(
+                q_pre_bf8,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                self.q_norm.weight,
+                eps=self.q_norm.eps,
+            )
         starts, ends_q, page_table, (cos_local, sin_local) = self._qwen_local_q_setup(rot_mats, seq_len)
         sl = seq_len // 8
         parts = [ttnn.slice(q_pre_bf8, starts=st, ends=ends_q, slice_dim=2, num_devices=8) for st in starts]
