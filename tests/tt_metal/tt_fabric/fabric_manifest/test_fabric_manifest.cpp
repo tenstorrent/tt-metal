@@ -36,6 +36,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -1352,6 +1353,39 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
+}
+
+TEST(ManifestArgs, SameFamily) {
+    EXPECT_TRUE(manifest::same_arg_family("SENDER_CH_7_IS_INJECTION", "SENDER_CH_{}_IS_INJECTION"));
+    EXPECT_TRUE(manifest::same_arg_family("SENDER_CH_7_IS_INJECTION", "SENDER_CH_12_IS_INJECTION"));
+    EXPECT_TRUE(manifest::same_arg_family(
+        "VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID", "VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID"));
+    EXPECT_FALSE(manifest::same_arg_family("SENDER_CH_IS_INJECTION", "SENDER_CH_{}_IS_INJECTION"));
+    EXPECT_FALSE(manifest::same_arg_family("SENDER_CH_7_IS_INJECTION", "SENDER_CH_{}_IS_INJECTIONS"));
+    EXPECT_FALSE(manifest::same_arg_family("SENDER_CH_7", "SENDER_CH_{}_IS_INJECTION"));
+}
+
+// A router's inputs pass when each is read or listed as unrecorded, and fail on one that is neither.
+TEST(ManifestArgs, KernelInputsAccounted) {
+    const RouterKernelInputs kernel{
+        .defines = {{"FABRIC_2D", ""}, {"FABRIC_2D_VC1_SERVICED", ""}},
+        .processors = {},
+        .named_ct_args = {{
+            {"EDM_STATUS_PTR_ADDR", 0},
+            {"SENDER_CH_7_IS_INJECTION", 0},
+            {"NUM_ACTIVE_ERISCS", 1},
+            {"MAX_NUM_VCS", 3},
+        }},
+    };
+    EXPECT_NO_THROW(check_kernel_inputs_accounted(kernel));
+
+    auto new_arg = kernel;
+    new_arg.named_ct_args.front()["SOME_NEW_ARG"] = 0;
+    EXPECT_THROW(check_kernel_inputs_accounted(new_arg), std::exception);
+
+    auto new_define = kernel;
+    new_define.defines["SOME_NEW_DEFINE"] = "";
+    EXPECT_THROW(check_kernel_inputs_accounted(new_define), std::exception);
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
