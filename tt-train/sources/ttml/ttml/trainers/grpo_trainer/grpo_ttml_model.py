@@ -139,9 +139,12 @@ def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
     ``LlamaGRPOCompleter``); Qwen3 opens a named mesh so an ``"fsdp"`` axis
     exists (as ``Qwen3GRPOCompleter``). Tests may override this to reuse an
     already-open device.
+
+    Llama leaves an already-set fabric config alone: in a 2-rank job both ranks
+    pin it before opening devices, and setting it again on one rank deadlocks.
     """
     if model_kind == "llama":
-        if device_config.total_devices() > 1:
+        if device_config.total_devices() > 1 and ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
             ttml.core.distributed.enable_fabric(device_config.total_devices())
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)

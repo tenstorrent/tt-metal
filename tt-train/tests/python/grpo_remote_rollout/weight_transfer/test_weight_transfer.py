@@ -5,7 +5,7 @@
 
 Rank 0 (TTML) pushes its weights through an MPIRolloutClient/HostWeightBridge
 sender; rank 1 (TTT) receives onto four [1, 1] submeshes and applies one dict per
-submesh. Flow: pre-push generate (gibberish) -> push_weights -> post-push generate
+submesh. Flow: pre-push generate (gibberish) -> send_weights -> post-push generate
 (identical) -> shutdown, then per-submesh verify that all four match.
 
 Runs under tt-run with world_size == 2 (see ``runner.sh``); self-skips otherwise.
@@ -119,40 +119,26 @@ class _GreedyCheckedSampler(RolloutSampler):
 
 
 def _ttml_side() -> None:
-    """Drive: handshake -> pre-push gen -> push_weights -> post-push gen -> shutdown."""
+    """Drive: handshake -> pre-push gen -> send_weights -> post-push gen -> shutdown."""
     import ttml
     from ttml.common.config import get_model_config
 
-    from _completer_utils import close_device, load_device_config, open_device
+    from _completer_utils import close_device, load_device_config
+    from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model, weights_ref_hf_dict
     from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
     from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
-    from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = load_device_config(TTML_DEVICE_CONFIG_REL)
-    mesh_device = open_device(device_config)
-    completer: Any = None
+    model: Any = None
     client: Any = None
     try:
+        model, _ = setup_ttml_model(get_model_config(raw["training_config"]["model_config"]), device_config, MODEL_ID)
         # Constructing the client blocks on the bridge handshake.
-        bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
+        bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
-
-        completer = LlamaCompleterRemoteRollout(
-            ctx=LlamaCompletionCtx(
-                max_tokens_to_complete=MAX_NEW_TOKENS,
-                temperature=TEMPERATURE,
-                # Any value satisfying the B % num_devices == 0 assertion works here.
-                completions_per_prompt=device_config.total_devices(),
-            ),
-            transformer_config=get_model_config(raw["training_config"]["model_config"]),
-            mesh_device=mesh_device,
-            model_source=MODEL_ID,
-            inference_client=client,
-            enable_ddp=device_config.enable_ddp,
-        )
 
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
@@ -165,10 +151,10 @@ def _ttml_side() -> None:
             flush=True,
         )
 
-        # step 2: single-call weight transfer via the completer.
-        print(f"[TTML rank {TTML_RANK}] completer.push_weights()", flush=True)
-        completer.push_weights()
-        print(f"[TTML rank {TTML_RANK}] push_weights() complete", flush=True)
+        # step 2: single-call weight transfer.
+        print(f"[TTML rank {TTML_RANK}] client.send_weights(version=1)", flush=True)
+        client.send_weights(weights_ref_hf_dict(model), version=1)
+        print(f"[TTML rank {TTML_RANK}] send_weights() complete", flush=True)
 
         # step 3: post-push remote generate, consistency check (submesh 0).
         completions, _logprobs, version = client.remote_generate([prompt_ids] * POST_PUSH_BATCH)
@@ -188,7 +174,7 @@ def _ttml_side() -> None:
 
         client.shutdown()
     finally:
-        completer = None
+        model = None
         gc.collect()
         close_device()
 
