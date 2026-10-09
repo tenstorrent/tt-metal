@@ -95,13 +95,18 @@ class Gemma4ForCausalLM:
         return result
 
     @classmethod
-    def get_max_tokens_all_users(cls, *, max_num_seqs, **kwargs):
+    def get_max_tokens_all_users(cls, *, max_num_seqs, max_model_len=262144, **kwargs):
         # The shared pool uses one full-attention group and five sliding groups.
         # Each window can straddle nine pages. Reserve both async batches of
         # in-flight prefill tokens globally, in addition to the per-request tails.
         # The plugin separately adds one output page per request.
+        # Shorter serving contexts need fewer full-attention pages; retain the
+        # same sliding and in-flight headroom at every configured batch size.
+        if not 0 < max_model_len <= 262144:
+            raise ValueError("Gemma4 QB2 requires a context in 1..262144")
+        full_context = (max_model_len + Decoder.PAGE_SIZE - 1) // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
         tails = Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
-        return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        return full_context + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         pools, kv, scratch = {}, [], {}

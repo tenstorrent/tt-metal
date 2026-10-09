@@ -21,6 +21,17 @@ def adapter():
     return model
 
 
+def test_shared_kv_budget_preserves_full_context_and_scales_for_agentic_service(expect_error):
+    budget = Gemma4ForCausalLM.get_max_tokens_all_users
+    original = budget(max_num_seqs=2)
+    assert original == budget(max_num_seqs=2, max_model_len=262144)
+    reduced = budget(max_num_seqs=2, max_model_len=196608)
+    assert 196608 < reduced < original
+    assert budget(max_num_seqs=4, max_model_len=196608) > reduced
+    with expect_error(ValueError, "context"):
+        budget(max_num_seqs=2, max_model_len=262145)
+
+
 def test_prefill_scatters_live_prefix_and_ignores_padded_rows():
     model = adapter()
     source = torch.tensor([[11, 12], [21, 22], [91, 92], [93, 94]])
