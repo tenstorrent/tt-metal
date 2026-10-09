@@ -7,7 +7,7 @@ from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     UntilizeGolden,
@@ -68,45 +68,107 @@ def test_pack_untilize(
     )
 
 
+_ALL_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Bfp8_b,
+        DataFormat.Fp8_e4m3,
+    ]
+)
+# Presubmit: 16-bit and 32-bit DEST reads and an 8-bit output; the nightly sweeps take every format pair.
+_SMOKE_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Fp8_e4m3),
+]
 # Full rows and rows split into blocks whose output rows are not contiguous in L1; the 68-tile row exceeds the packer's
 # output offset window for 32-bit data. block_ct_dim 0 takes the block size the other test derives.
-@skip_for_wormhole
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[
-        [32, 32],
-        [64, 32],
-        [32, 96],
-        [32, 256],
-        [32, 512],
-        [32, 64],
-        [32, 192],
-        [32, 320],
-        [64, 128],
-        [32, 2176],
-    ],
-    block_ct_dim=lambda input_dimensions: [
+_ROW_DIMENSIONS = [
+    [32, 32],
+    [64, 32],
+    [32, 96],
+    [32, 256],
+    [32, 512],
+    [32, 64],
+    [32, 192],
+    [32, 320],
+    [64, 128],
+    [32, 2176],
+]
+
+
+def _row_block_ct_dim(input_dimensions):
+    return [
         {32: 1, 96: 0, 256: 0, 512: 0, 64: 1, 192: 3, 320: 5, 128: 2, 2176: 4}[
             input_dimensions[1]
         ]
-    ],
+    ]
+
+
+# narrow_row: every tile row keeps its first row_datums datums, as in the sharded row-major transpose whose output
+# width is not a multiple of 32. Widths 5 and 21 give rows whose byte size is mostly not a multiple of 16.
+_NARROW_DIMENSIONS = [[32, 32], [64, 32], [32, 64], [32, 128]]
+_NARROW_ROW_DATUMS = [5, 8, 16, 21, 24]
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=_SMOKE_FORMATS,
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=_ROW_DIMENSIONS,
+    block_ct_dim=_row_block_ct_dim,
 )
-def test_pack_untilize_rows(
-    formats,
-    dest_acc,
-    input_dimensions,
-    block_ct_dim,
+def test_pack_untilize_rows(formats, dest_acc, input_dimensions, block_ct_dim):
+    _check_pack_untilize_rows(formats, dest_acc, input_dimensions, block_ct_dim)
+
+
+@pytest.mark.nightly
+@skip_for_wormhole
+@parametrize(
+    formats=_ALL_FORMATS,
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=_ROW_DIMENSIONS,
+    block_ct_dim=_row_block_ct_dim,
+)
+def test_pack_untilize_rows_all_formats(
+    formats, dest_acc, input_dimensions, block_ct_dim
 ):
+    _check_pack_untilize_rows(formats, dest_acc, input_dimensions, block_ct_dim)
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=_SMOKE_FORMATS,
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=_NARROW_DIMENSIONS,
+    row_datums=_NARROW_ROW_DATUMS,
+)
+def test_pack_untilize_narrow_row(formats, dest_acc, input_dimensions, row_datums):
+    _check_pack_untilize(
+        formats, dest_acc, input_dimensions, DestSync.Half, 0, None, row_datums
+    )
+
+
+@pytest.mark.nightly
+@skip_for_wormhole
+@parametrize(
+    formats=_ALL_FORMATS,
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=_NARROW_DIMENSIONS,
+    row_datums=_NARROW_ROW_DATUMS,
+)
+def test_pack_untilize_narrow_row_all_formats(
+    formats, dest_acc, input_dimensions, row_datums
+):
+    _check_pack_untilize(
+        formats, dest_acc, input_dimensions, DestSync.Half, 0, None, row_datums
+    )
+
+
+def _check_pack_untilize_rows(formats, dest_acc, input_dimensions, block_ct_dim):
     if dest_acc == DestAccumulation.Yes and block_ct_dim > 4:
         pytest.skip("A 32-bit DEST half holds four tiles")
     if (
@@ -115,39 +177,10 @@ def test_pack_untilize_rows(
         and block_ct_dim * 32 < input_dimensions[1]
     ):
         pytest.skip(
-            "An Fp8_e4m3 block row of one tile pads the next 32 bytes and is refused, #59140"
+            "An Fp8_e4m3 block row of one tile pads the next 32 bytes and is refused, https://github.com/tenstorrent/tt-metal/issues/59140"
         )
     _check_pack_untilize(
         formats, dest_acc, input_dimensions, DestSync.Half, 0, block_ct_dim or None
-    )
-
-
-# narrow_row: every tile row keeps its first row_datums datums, as in the sharded row-major transpose whose output
-# width is not a multiple of 32. Widths 5 and 21 give rows whose byte size is mostly not a multiple of 16.
-@skip_for_wormhole
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[32, 32], [64, 32], [32, 64], [32, 128]],
-    row_datums=[5, 8, 16, 21, 24],
-)
-def test_pack_untilize_narrow_row(
-    formats,
-    dest_acc,
-    input_dimensions,
-    row_datums,
-):
-    _check_pack_untilize(
-        formats, dest_acc, input_dimensions, DestSync.Half, 0, None, row_datums
     )
 
 
