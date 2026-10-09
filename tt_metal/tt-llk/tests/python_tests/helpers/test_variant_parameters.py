@@ -2173,3 +2173,39 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
             f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
         )
+
+
+@dataclass
+class GATED_REDUCE_PARAMS(TemplateParameter):
+    gate: str
+    up: str
+    scale_flags: int
+    live_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define GATED_REDUCE_GATE ckernel::sfpu::GatedReduceGate::{self.gate}\n"
+            f"#define GATED_REDUCE_UP ckernel::sfpu::GatedReduceUp::{self.up}\n"
+            f"constexpr int GATED_REDUCE_SCALE_FLAGS = {self.scale_flags};\n"
+            f"constexpr int GATED_REDUCE_ROWS = {self.live_rows};"
+        )
+
+
+@dataclass
+class GATED_REDUCE_SCALARS(RuntimeParameter):
+    scale_bits: int
+    out_scale_bits: int
+    limit_bits: int
+    alpha_bits: int
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            f"constexpr std::uint32_t GATED_{name.upper()} = {value}u;"
+            for name, value in vars(self).items()
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "\n".join(f"std::uint32_t GATED_{name.upper()};" for name in vars(self)),
+            "IIII",
+        )

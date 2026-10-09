@@ -5951,6 +5951,42 @@ class SdpaExpUnclampedGolden:
 
 
 @register_golden
+class GatedReduceGolden:
+    """Adjacent gate/up fusion: scale and activate in FP32, round only the result."""
+
+    def __call__(
+        self,
+        gate,
+        up,
+        gate_mode,
+        up_mode,
+        scale_flags,
+        scale,
+        out_scale,
+        limit,
+        alpha,
+        dest_acc,
+    ):
+        gate = gate.float()
+        up = up.float()
+        if scale_flags & 1:
+            gate = gate * scale
+        if scale_flags & 2:
+            up = up * scale
+        if gate_mode == "ClampedSilu":
+            gate = gate.clamp(max=limit)
+            activated = gate * torch.sigmoid(alpha * gate)
+        else:
+            activated = torch.nn.functional.silu(gate)
+        if up_mode == "Clamp":
+            up = up.clamp(-limit, limit)
+        result = activated * up
+        if scale_flags & 4:
+            result = result * out_scale
+        return round_to_dest_width(result, dest_acc)
+
+
+@register_golden
 class SamplingGolden:
     """Golden for the sampling SFPU helpers
     (experimental/llk_sfpu/ckernel_sfpu_sampling.h).
