@@ -1225,7 +1225,7 @@ class DeepseekV41ForCausalLM:
             f"DSV4.1 spec seeding of {len(act)} rows took {time.perf_counter() - t0:.2f} s (replayed first token != prefill first token on {bad} rows)"
         )
 
-    def _spec_seed_taps(self, need):
+    def _spec_seed_taps(self, need, draft=True):
         """Seed the drafter of the users ``need`` {model user: the token fed now} from the taps their PREFILL left (tt/prefill_taps.py): the drafter's ring rows of the last 128 prompt
         positions are computed eagerly from the stream means the prefill captured at layers 37-39, and the first 5 drafts are drafted from them (``SpecRunner.seed_from_prefill``): a few
         tens of ms, whatever the number of rows, no verify round. Only for users whose prompt is exactly what the stash holds (no token committed since the prefill). -> False (nothing
@@ -1246,23 +1246,24 @@ class DeepseekV41ForCausalLM:
             logger.info("DSV4.1 spec seeding: the speculative runner has no prefill taps: replay")
             return False
         t0 = time.perf_counter()
-        self.spec.seed_from_prefill(lens, first, users)
+        self.spec.seed_from_prefill(lens, first, users, draft=draft)
         act = torch.tensor(users, dtype=torch.long)
-        self.spec_drafts[act] = self.spec.d_final[act, :K].to(torch.int32)
+        if draft:
+            self.spec_drafts[act] = self.spec.d_final[act, :K].to(torch.int32)
+            self.spec_has[act] = True
         self.spec_last[act] = first[act]
-        self.spec_has[act] = True
         logger.info(
             f"DSV4.1 spec seeding of {len(users)} rows from the prefill taps took {time.perf_counter() - t0:.3f} s"
         )
         return True
 
-    def _spec_seed_active(self, items, need=None):
+    def _spec_seed_active(self, items, need=None, draft=True):
         """Interleaved prefill + speculative decode: seed the drafter at the FIRST verify round of a request. ``need`` {model user: token fed now}: the rows that need seeding; they are seeded
         from their prefill's taps (``_spec_seed_taps``) when those are valid. Otherwise (a reseed after a draftless step / a mismatch: no taps for the current context) ``items`` [(model user,
         position of the fed token, the token fed now)] of every row of the step: the prompt / history of each (``TokenBook``) is replayed through the captured verify trace (last 128 tokens,
         forced accepts: idempotent for the users that already decode, which keeps their state; idle rows replay one dummy token), and the proposals of the replay are kept.
         """
-        if need and self._spec_seed_taps(need):
+        if need and self._spec_seed_taps(need, draft):
             return
         B, K = self.B, self.spec.k
         L = max(pos for _, pos, _ in items)
@@ -1338,8 +1339,8 @@ class DeepseekV41ForCausalLM:
         need_ = {p: int(tokens[i, 0]) for i, p, pos, _ in rows if bool(self.spec_ok[p]) and not bool(self.spec_has[p])}
         if need_:
             self._spec_seed_active(
-                [(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows], need_
-            )  # (safety net: propose_draft_tokens seeds before a request's first verify)
+                [(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows], need_, draft=False
+            )  # (safety net: propose_draft_tokens seeds before a request's first verify; the round below drafts, so from the taps only the ring rows are written)
         srows = {}
         sp = sampling_params
         if sp is not None and runner.sampled:

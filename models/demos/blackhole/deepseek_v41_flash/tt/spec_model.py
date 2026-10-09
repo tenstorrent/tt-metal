@@ -27,7 +27,14 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, PAD_HEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
-from models.demos.blackhole.deepseek_v41_flash.tt.mtp import BLOCK, ChunkedDrafter, DSparkDrafter, load_mtp_stage
+from models.demos.blackhole.deepseek_v41_flash.tt.mtp import (
+    BLOCK,
+    L_D,
+    RING,
+    ChunkedDrafter,
+    DSparkDrafter,
+    load_mtp_stage,
+)
 from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import DSV41PagedStepState
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_decoder import SpecDecoder
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import (
@@ -518,7 +525,7 @@ class SpecRunner:
         users = [b for b in range(self.B) if int(lens[b]) > 1] if users is None else list(users)
         return bool(users) and all(self.m.tap_n.get(b) == int(lens[b]) for b in users)
 
-    def seed_from_prefill(self, lens, first, users=None):
+    def seed_from_prefill(self, lens, first, users=None, draft=True):
         """Seed the drafter of ``users`` (default: every user with taps) from the PREFILL's taps: no replay of the prompt tail through the verify trace. ``lens`` [B] prompt lengths (the position
         of the first generated token), ``first`` [B] the first generated token. Writes the drafter's ring rows of the last 128 positions of every selected user (eager, tt/mtp.py
         ``DSparkDrafter.seed_from_taps``), then drafts the first 5 tokens exactly as the last replay round does (token ``first`` at the frontier ``lens - 1``). Rows of the other users are
@@ -543,15 +550,16 @@ class SpecRunner:
             self.d_final = torch.zeros(B, BLOCK, dtype=torch.long)
             self.conf_final = torch.zeros(B, BLOCK)
             self.dev_first = torch.zeros(B, dtype=torch.long)
-        self._taps_seed(sel, lens, first)
+        self._taps_seed(sel, lens, first, draft=draft)
         X0 = torch.zeros(B, n, dtype=torch.long)
         X0[:, 0] = first
         X0[:, 1:] = self.d_final[:, : self.k]
         return X0, lens.clone()
 
-    def _taps_seed(self, sel, lens, first, dry=False):
+    def _taps_seed(self, sel, lens, first, dry=False, draft=True):
         """Body of ``seed_from_prefill``: per drafter chunk with a selected user, ring rows from the stash + the first drafts. ``dry``: run every chunk with nothing selected (compile pass:
-        writes no ring row, keeps no draft)."""
+        writes no ring row, keeps no draft). ``draft`` False: only the ring rows (the caller's next verify round drafts).
+        """
         from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_ROWS
 
         B, rows, cols = self.B, self.rows, self.cols
@@ -579,13 +587,26 @@ class SpecRunner:
                 continue
             S = lens[gb]  # [rows, Uc]
             # position held by stash slot j of user (r, u): the latest position < S with position % 128 == j (valid: >= 0 and the user is selected)
-            p = (S.unsqueeze(1) - 1) - ((S.unsqueeze(1) - 1 - j.reshape(1, -1, 1)) % TAP_ROWS)  # [rows, 128, Uc]
-            valid = ok.unsqueeze(1) & (p >= 0)
-            pos = torch.where(valid, p, torch.zeros_like(p)).reshape(rows * TAP_ROWS * Uc)
-            slot = torch.where(valid, p % 160, torch.full_like(p, -1)).reshape(rows * TAP_ROWS, Uc)
+            p = (S.unsqueeze(-1) - 1) - ((S.unsqueeze(-1) - 1 - j.reshape(1, 1, -1)) % TAP_ROWS)  # [rows, Uc, 128]
+            valid = ok.unsqueeze(-1) & (p >= 0)
+            pos = torch.where(valid, p, torch.zeros_like(p)).reshape(rows * Uc * TAP_ROWS)
+            # selection matrix (ring slot <- stash slot) and keep mask of the ring writes
+            perm = torch.zeros(rows, Uc, L_D, TAP_ROWS)
+            keep = torch.ones(rows, Uc, L_D, HEAD_DIM)
+            ri, ui, ji = valid.nonzero(as_tuple=True)
+            slot = p[ri, ui, ji] % RING
+            perm[ri, ui, slot, ji] = 1.0
+            keep[ri, ui, slot, :] = 0.0
             hidden = taps.chunk_hidden(c)
-            sub.seed_from_taps(hidden, up(pos.to(torch.int32), ttnn.int32), up(slot.to(torch.int32), ttnn.int32))
+            sub.seed_from_taps(
+                hidden,
+                up(pos.to(torch.int32), ttnn.int32),
+                up(perm.reshape(rows * Uc, 1, L_D, TAP_ROWS).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                up(keep.reshape(rows * Uc, 1, L_D, HEAD_DIM).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            )
             ttnn.deallocate(hidden)
+            if not draft:
+                continue
             # first drafts: token ``first`` at the frontier lens - 1 (what the last replay round drafts from)
             t_dev = up(first[gb].reshape(rows * Uc, 1).to(torch.int32), ttnn.uint32)
             f_dev = up((lens[gb] - 1).clamp(min=0).reshape(rows * Uc, 1).to(torch.int32), ttnn.int32)

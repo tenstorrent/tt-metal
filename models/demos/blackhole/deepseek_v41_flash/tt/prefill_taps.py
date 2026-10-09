@@ -10,8 +10,8 @@ prefill chunk, before ``pl.forward`` of layers 37 / 38 / 39) scatters the mean-o
 and ``DSparkDrafter.seed_from_taps`` (tt/mtp.py, eager, after the prefill) turns the stash into the drafter's ring rows.
 
 Stash layout (per mesh row, bf16 row-major rows of 512 elements, so the row scatter of the paged KV hand-off serves it: one token row of 5120 = 10 rows): for the layer index li = 0, 1, 2
-and the decode user ``ud`` of the row (in-row index), slot = position % 128:  row ``li * S10 + 10 * stash_row(ud, slot) + c`` (c = 0..9), ``stash_row = ((ud // Uc) * 128 + slot) * Uc + ud % Uc``
-with ``Uc`` the users per chunk of the chunked drafter: the rows of one drafter chunk and one slot are contiguous (slot-major), which is the order the eager seeding consumes.
+and the decode user ``ud`` of the row (in-row index), slot = position % 128:  row ``li * S10 + 10 * (ud * 128 + slot) + c`` (c = 0..9): user-major, so the 128 rows of the users of one
+chunk of the chunked drafter (``Uc`` users) are contiguous, which is what the eager seeding consumes.
 Nothing is allocated inside a trace: the stash and the per-chunk index tensors (``PagedStateSink.bind``) are persistent, the indices are refreshed before every replay like the hand-off's.
 """
 
@@ -59,9 +59,6 @@ class PrefillTaps:
         )
 
     # ---- host side -------------------------------------------------------------------------------------------------------------------
-    def stash_row(self, ud, slot):
-        return ((ud // self.Uc) * TAP_ROWS + slot) * self.Uc + ud % self.Uc
-
     @staticmethod
     def groups(rtok):
         """(token rows per scatter call, calls) for ``rtok`` token rows per mesh row."""
@@ -85,7 +82,7 @@ class PrefillTaps:
                     continue
                 ud = b % self.Ud
                 ok = (pos < S) & (pos >= S - TAP_ROWS)
-                row = ((ud // self.Uc) * TAP_ROWS + pos % TAP_ROWS) * self.Uc + ud % self.Uc
+                row = ud * TAP_ROWS + pos % TAP_ROWS
                 tok[r, u * C : (u + 1) * C] = torch.where(ok, row, torch.full_like(pos, SKIP))
         ids = tok.unsqueeze(-1) * PIECES + torch.arange(PIECES)
         ids = torch.where(tok.unsqueeze(-1) == SKIP, torch.full_like(ids, SKIP), ids)
@@ -153,7 +150,7 @@ class PrefillTaps:
 
     # ---- eager readers ---------------------------------------------------------------------------------------------------------------
     def chunk_hidden(self, c):
-        """bf16 tile [1,1,TAP_ROWS * Uc, 15360] of drafter chunk ``c`` (rows slot-major: slot * Uc + user, users c * Uc ..): the concat of the 3 layers' stash rows."""
+        """bf16 tile [1,1,TAP_ROWS * Uc, 15360] of drafter chunk ``c`` (rows user-major: (user - c * Uc) * 128 + slot): the concat of the 3 layers' stash rows."""
         M = TAP_ROWS * self.Uc
         parts = []
         for li in range(3):
