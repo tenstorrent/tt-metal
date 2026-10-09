@@ -272,6 +272,9 @@ class SolutionProducer:
     def __init__(self, proc: Optional[subprocess.Popen]):
         self.proc = proc
         self.pgid: Optional[int] = None
+        # True once stop() killed a live producer. The driver does this itself (settle_for_recover, early
+        # stop), so the resulting non-zero exit code is not a crash and must not fail the sweep.
+        self.stopped_by_driver = False
         if proc is not None:
             try:
                 self.pgid = os.getpgid(proc.pid)
@@ -300,6 +303,7 @@ class SolutionProducer:
         """SIGKILL the producer's whole process group (its mpirun + prted tree)."""
         if self.proc is None or self.proc.poll() is not None:
             return
+        self.stopped_by_driver = True
         if self.pgid:
             try:
                 os.killpg(self.pgid, signal.SIGKILL)
@@ -799,6 +803,7 @@ def _write_sweep_report(
     stopped_early: bool,
     sweep_report: Optional[Path],
     dry_run: bool,
+    producer_stopped: bool = False,
 ) -> Tuple[Path, int, int, int]:
     """Build, optionally write, and print ``sweep_report.yaml``.
 
@@ -827,6 +832,9 @@ def _write_sweep_report(
             "failed": failed,  # workload non-zero exit
             "timed_out": timed_out,  # killed by --per-solution-timeout
             "stopped_early": stopped_early,  # true => --sweep-timeout budget stopped the sweep before all were run
+            # true => the driver killed a still-enumerating producer before a cluster recover; the swept
+            # verdicts stand, the enumeration may be incomplete (index truncated=true).
+            "producer_stopped_by_driver": producer_stopped,
         },
         "results": results,
     }
@@ -1383,6 +1391,7 @@ def main(
     results = consumer.consume()
 
     # Stop the producer if it is still running (early stop via --limit / --stop-on-failure / --sweep-timeout).
+    producer_stopped = False
     if producer is not None:
         producer_rc = producer.returncode()
         if producer.alive():
@@ -1393,6 +1402,16 @@ def main(
             # enumeration itself completed, so the (kill-induced) exit code is not a crash. A
             # 0-solution enumeration still fails below via the "No solutions were swept" guard.
             pass
+        elif producer.stopped_by_driver:
+            # WE stopped it (settle_for_recover: it was still enumerating when a failed tt-run needed a
+            # cluster recover). Its exit code is our SIGKILL, not a crash. Everything it streamed before
+            # the stop was swept and those verdicts stand; only the enumeration may be incomplete, which
+            # the index's truncated=true (streaming) flag already records. Keep the results and the report.
+            producer_stopped = True
+            log.line(
+                f"■ WARNING: solution generation was stopped by the driver before a cluster recover (it was still "
+                f"enumerating); {len(results)} swept solution(s) kept, enumeration may be incomplete."
+            )
         elif producer_rc not in (None, 0):
             # Producer exited non-zero on its OWN (a crash -- us stopping it leaves it alive, handled above).
             # Generation is therefore incomplete, so this is an error even if some solutions were already
@@ -1417,6 +1436,7 @@ def main(
         program=program,
         recover_command=recover_command,
         stopped_early=consumer.stopped_early,
+        producer_stopped=producer_stopped,
         sweep_report=sweep_report,
         dry_run=dry_run,
     )
