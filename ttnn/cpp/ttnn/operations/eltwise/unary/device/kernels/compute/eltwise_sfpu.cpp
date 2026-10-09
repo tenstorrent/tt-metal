@@ -61,6 +61,18 @@ ALWI void square_tile_chain(uint32_t idst) {
 }
 #endif
 }  // namespace ckernel
+
+// Expanded in kernel_main's loops: i == 0 on the first tile or block.
+#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
+    if (i == 0) {                           \
+        init                                \
+    }
+#define SFPU_OP_CHAIN_FIRST_OR_LATER_TILE(first, later) \
+    if (i == 0) {                                       \
+        first                                           \
+    } else {                                            \
+        later                                           \
+    }
 #endif
 
 void kernel_main() {
@@ -77,16 +89,6 @@ void kernel_main() {
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_BLOCK)
     // Op-major blocks: every op runs over the block's tiles before the next op, so an init or re-program the chain
     // repeats is paid once per block; each tile is copied just before the first op runs on it.
-#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
-    if (i == 0) {                           \
-        init                                \
-    }
-#define SFPU_OP_CHAIN_FIRST_OR_LATER_TILE(first, later) \
-    if (i == 0) {                                       \
-        first                                           \
-    } else {                                            \
-        later                                           \
-    }
 #define SFPU_OP_CHAIN_FOR_EACH_TILE(func) \
     for (uint32_t t = 0; t < n; ++t) {    \
         if (!copied) {                    \
@@ -134,16 +136,6 @@ void kernel_main() {
         SFPU_OP_CHAIN_0_FUNC_0
 #elif defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
         // The host wraps the inits whose state nothing after them writes, and the inits a later tile repeats.
-#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
-    if (i == 0) {                           \
-        init                                \
-    }
-#define SFPU_OP_CHAIN_FIRST_OR_LATER_TILE(first, later) \
-    if (i == 0) {                                       \
-        first                                           \
-    } else {                                            \
-        later                                           \
-    }
         SFPU_OP_CHAIN_0_TILE
 #else
 #ifdef SFPU_OP_CHAIN_0

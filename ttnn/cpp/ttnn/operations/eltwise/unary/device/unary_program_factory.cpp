@@ -117,6 +117,7 @@ struct ChainOpState {
 
 // The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
 // the softcapping chains), for float inputs with math_approx_mode off. Any other op keeps the chain on per-tile inits.
+// An op's masks name every SFPU state its init and call write; change them with the op's init or body.
 std::optional<ChainOpState> chain_op_state(
     const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en, bool square_prgm) {
     if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT8_B) {
