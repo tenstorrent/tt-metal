@@ -636,11 +636,14 @@ def _nd_shard_config(shard_shape, num_cores=2, buffer_type=ttnn.BufferType.L1):
 
 
 def _assert_nd_output(result, output_mem_config):
+    # Not a full MemoryConfig comparison: an ND spec that fits a 2D shard comes back with memory_layout
+    # normalized to HEIGHT/WIDTH_SHARDED. Buffer type plus nd_shard_spec pin the requested placement.
     actual = result.memory_config()
-    assert actual.nd_shard_spec == output_mem_config.nd_shard_spec, (
-        f"Expected output nd_shard_spec {output_mem_config.nd_shard_spec}, got {actual.nd_shard_spec} "
-        f"(output memory_config: {actual})"
-    )
+    expected = (output_mem_config.buffer_type, output_mem_config.nd_shard_spec)
+    got = (actual.buffer_type, actual.nd_shard_spec)
+    assert (
+        got == expected
+    ), f"Expected output buffer_type/nd_shard_spec {expected}, got {got} (output memory_config: {actual})"
 
 
 # All-1 repeat vector with an explicit ND-sharded output: the caller's nd_shard_spec is honored.
