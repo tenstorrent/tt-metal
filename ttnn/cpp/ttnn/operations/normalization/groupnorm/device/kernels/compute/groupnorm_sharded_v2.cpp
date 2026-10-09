@@ -226,10 +226,13 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
+    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
+    DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
+    DataflowBuffer dfb_inbeta(dfb_inbeta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_mask_last(dfb_mask_last_id);
     DataflowBuffer dfb_ones(dfb_ones_id);
@@ -385,14 +388,14 @@ void kernel_main() {
                     ckl::input(
                         dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                    ckl::DestAccumulation::WholeShape>{dfb_x, dfb_ones, ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
                     ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
+                    ckl::DestAccumulation::WholeShape)>{dfb_ex2pe});
 
             // reduce only one final tile
             //
@@ -450,7 +453,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
+                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape, dfb_x, dfb_ex_global, dfb_x);
 
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
             // Re-mask (x - E[x]); otherwise each padding row is centered to (garbage - E[x])
@@ -480,7 +483,10 @@ void kernel_main() {
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>(
                     has_row_mask ? ckl::IterationShape::grid(bcast_row_tiles, block_w).block_size(subblock_w)
-                                 : valid_group_shape);
+                                 : valid_group_shape,
+                    dfb_x,
+                    dfb_input_mask,
+                    dfb_x);
             }
 
             // Peeled final row-tile: full-tile multiply with the composed mask.
@@ -504,7 +510,7 @@ void kernel_main() {
                         ckl::ReservePolicy::PerBlockSize,
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(1, block_w).block_size(subblock_w));
+                    ckl::IterationShape::grid(1, block_w).block_size(subblock_w), dfb_x, dfb_mask_last, dfb_x);
             }
             dfb_input_mask.pop_front(mask_tiles_per_group);
             if constexpr (has_row_mask) {
@@ -522,14 +528,14 @@ void kernel_main() {
                     x_strided_block_input,
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{
-                    ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
+                    dfb_x, dfb_x, ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
                     ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
+                    ckl::DestAccumulation::WholeShape)>{dfb_ex2pe});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
             // pack into dfb_ex_partial earlier in this kernel.
@@ -575,13 +581,14 @@ void kernel_main() {
                         ckl::PopPolicy::PerTile,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
-                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{},
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
+                    dfb_ex_global, dfb_eps},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::DataFormatReconfig::Disabled)>{dfb_ex2pe});
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 dfb_eps format.
             if constexpr (enable_fp32_reconfig) {
@@ -605,7 +612,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
+                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape, dfb_x, dfb_ex2pe, dfb_x);
             dfb_x.wait_front(block_hw);
             //  add or copy with previous output results
             const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
@@ -619,14 +626,14 @@ void kernel_main() {
                     if (copy_or_add) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
-                            ckl::CopyTile<x_strided_col_input>{input_range},
-                            ckl::PackTile<out_strided_output>{output_range});
+                            ckl::CopyTile<x_strided_col_input>{dfb_x, input_range},
+                            ckl::PackTile<out_strided_output>{dfb_out, output_range});
                     } else {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
                             ckl::BinaryFpu<ckl::BinaryFpuOp::Add, out_strided_col_input, x_strided_col_input>{
-                                output_range, input_range},
-                            ckl::PackTile<out_strided_output>{output_range});
+                                dfb_out, dfb_x, output_range, input_range},
+                            ckl::PackTile<out_strided_output>{dfb_out, output_range});
                     }
 
                     // update group tile offset
@@ -663,8 +670,8 @@ void kernel_main() {
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Row,
-                            ckl::DataFormatReconfig::Disabled)>{output_range},
-                    ckl::PackTile<in_strided_output>{output_range});
+                            ckl::DataFormatReconfig::Disabled)>{dfb_in, dfb_in_negative_mask, output_range},
+                    ckl::PackTile<in_strided_output>{dfb_in, output_range});
 
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
@@ -673,8 +680,8 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Add, in_strided_block_input, x_strided_block_input>{
-                        output_range, ckl::StridedTileRange{0u, block_w}},
-                    ckl::PackTile<in_strided_output>{output_range});
+                        dfb_in, dfb_x, output_range, ckl::StridedTileRange{0u, block_w}},
+                    ckl::PackTile<in_strided_output>{dfb_in, output_range});
                 dfb_in_negative_mask.pop_front(block_w);
             }
 
@@ -753,7 +760,8 @@ void kernel_main() {
                     dfb_outgamma_id,
                     ckl::ReservePolicy::Upfront,
                     ckl::PushPolicy::AtEnd,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_out, dfb_gamma, dfb_outgamma);
             dfb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
@@ -776,7 +784,8 @@ void kernel_main() {
                     dfb_in_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_in, dfb_gamma, dfb_in);
         }
     }
 
@@ -805,7 +814,8 @@ void kernel_main() {
                     dfb_outbeta_id,
                     ckl::ReservePolicy::Upfront,
                     ckl::PushPolicy::AtEnd,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_inbeta, dfb_beta, dfb_outbeta);
             dfb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in_id has data required for beta, so we do it inplace
@@ -828,7 +838,8 @@ void kernel_main() {
                     dfb_in_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_in, dfb_beta, dfb_in);
         }
     }
 

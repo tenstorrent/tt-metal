@@ -171,14 +171,37 @@ void kernel_main() {
 #endif
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
+#else
+    DataflowBuffer& dfb_inb = dfb_in;
 #endif
     DataflowBuffer dfb_out(dfb_out_id);
 #ifndef RMSNORM
     DataflowBuffer dfb_ex(dfb_ex_id);
+#else
+    DataflowBuffer& dfb_ex = dfb_in;
 #endif
     DataflowBuffer dfb_xmm2(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_accumulate(dfb_accumulate_id);
+    DataflowBuffer dfb_ex2(dfb_ex2_id);
+    DataflowBuffer dfb_xmm(dfb_xmm_id);
+#ifdef FUSE_GAMMA
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+#else
+    DataflowBuffer& dfb_gamma = dfb_out;
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer dfb_beta(dfb_beta_id);
+#else
+    DataflowBuffer& dfb_beta = dfb_out;
+#endif
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    DataflowBuffer dfb_fusion(dfb_fusion_id);
+    DataflowBuffer& dfb_im_or_out = dfb_fusion;
+#else
+    DataflowBuffer& dfb_fusion = dfb_out;
+    DataflowBuffer& dfb_im_or_out = dfb_out;
+#endif
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
@@ -231,20 +254,21 @@ void kernel_main() {
                 block_shape,
                 ckl::Optional<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{dfb_in},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Sub,
                         in_input,
-                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
+                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{
+                    dfb_in, dfb_ex},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
-                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
                 // (x-E[x])^2. Pack to the buffer
                 ckl::Square<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
-                    dfb_xmm2_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    dfb_xmm2_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_xmm2});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -302,13 +326,13 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_ex2, dfb_eps},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{});
+            ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{dfb_ex2pe});
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
-            ckl::IterationShape::one_tile());
+            ckl::IterationShape::one_tile(), dfb_ex2pe, dfb_ex2pe);
         dfb_ex2pe.wait_front(onetile);
 
         // End of
@@ -337,50 +361,53 @@ void kernel_main() {
                 block_shape,
                 ckl::Optional<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{dfb_in},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Sub,
                         in_input,
-                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
+                        ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{
+                    dfb_in, dfb_ex},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
-                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{dfb_inb},
                 // Note: We shouldn't have to pack to
                 // an intermediate buffer. We should be able to
                 // do a binary dest with reuse (as we used
                 // to). However, tt-llk #868 is preventing
                 // that from working at the moment.
-                ckl::PackTile<ckl::output(
-                    dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                ckl::PackTile<ckl::output(dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                    dfb_xmm});
 
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
                     xmm_input,
-                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{},
+                    ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{dfb_xmm, dfb_ex2pe},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
-                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
 
             if constexpr (do_gamma == 1) {
                 constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
+                DataflowBuffer& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{dfb_fusion, dfb_gamma},
                     ckl::Optional<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
-                        dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                        dfb_gamma_out});
             }
             if constexpr (do_beta == 1) {
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{dfb_fusion, dfb_beta},
                     ckl::Optional<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
-                        dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_out});
             }
 
 #ifdef UNTILIZE_OUT

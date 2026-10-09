@@ -59,9 +59,12 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows = get_compile_time_arg_val(8);
 
-    CircularBuffer cb_in(in_cb);
+    DataflowBuffer cb_in(in_cb);
     CircularBuffer cb_trans_mat(trans_mat_cb);
-    CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    DataflowBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    DataflowBuffer cb_cos_interm(cos_interm_cb);
+    DataflowBuffer cb_sin_interm(sin_interm_cb);
+    DataflowBuffer cb_out(out_cb);
 
 #ifdef DECODE_MODE
     constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(9);
@@ -88,6 +91,8 @@ void kernel_main() {
     constexpr auto trig_bcast = BroadcastDim::None;
     constexpr auto trig_pop = PopPolicy::PerTile;
 #endif
+    DataflowBuffer cb_updated_cos(updated_cos_cb);
+    DataflowBuffer cb_updated_sin(updated_sin_cb);
 
     cb_trans_mat.wait_front(onetile);
     compute_kernel_hw_startup(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
@@ -113,14 +118,15 @@ void kernel_main() {
         // sin_interim = rotated * sin  (chain waits+pops rotated_in_interm_cb; sin held/streamed per mode)
         mul<input(rotated_in_interm_cb),
             input(updated_sin_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
-            output(sin_interm_cb)>(IterationShape::tiles(onetile));
+            output(sin_interm_cb)>(IterationShape::tiles(onetile), cb_rotated_in_interm, cb_updated_sin, cb_sin_interm);
 
         // cos_interim = in * cos
         mul<input(in_cb, WaitPolicy::None, PopPolicy::PerTile),
             input(updated_cos_cb, trig_bcast, WaitPolicy::PerTile, trig_pop),
-            output(cos_interm_cb)>(IterationShape::tiles(onetile));
+            output(cos_interm_cb)>(IterationShape::tiles(onetile), cb_in, cb_updated_cos, cb_cos_interm);
 
         // out = cos_interim + sin_interim
-        add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(IterationShape::tiles(onetile));
+        add<input(cos_interm_cb), input(sin_interm_cb), output(out_cb)>(
+            IterationShape::tiles(onetile), cb_cos_interm, cb_sin_interm, cb_out);
     }
 }

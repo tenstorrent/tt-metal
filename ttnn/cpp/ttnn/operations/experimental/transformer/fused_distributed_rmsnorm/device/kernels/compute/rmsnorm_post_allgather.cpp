@@ -50,14 +50,16 @@ void kernel_main() {
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
 
     CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
-    CircularBuffer cb_epsilon(epsilon_cb);
+    DataflowBuffer cb_epsilon(epsilon_cb);
     CircularBuffer cb_transformation_mat(transformation_mat_cb);
-    CircularBuffer cb_reduce_result(reduce_result_cb);
-    CircularBuffer cb_weight(weight_cb);
-    CircularBuffer cb_intermediate(intermediate_cb);
-    CircularBuffer cb_rotated_input(rotated_input_cb);
+    DataflowBuffer cb_reduce_result(reduce_result_cb);
+    DataflowBuffer cb_weight(weight_cb);
+    DataflowBuffer cb_intermediate(intermediate_cb);
+    DataflowBuffer cb_rotated_input(rotated_input_cb);
     CircularBuffer cb_rope_cos(rope_cos_cb);
     CircularBuffer cb_rope_sin(rope_sin_cb);
+    DataflowBuffer cb_input(input_cb);
+    DataflowBuffer cb_output(output_cb);
 
     if constexpr (fuse_rope) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
@@ -80,6 +82,8 @@ void kernel_main() {
      */
     constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
     constexpr uint32_t mul_weight_result_cb = fuse_rope ? intermediate_cb : output_cb;
+    DataflowBuffer& cb_mul_rms_result = (fuse_rope || has_weight) ? cb_intermediate : cb_output;
+    DataflowBuffer& cb_mul_weight_result = fuse_rope ? cb_intermediate : cb_output;
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
         // ROPE tracking variables
@@ -100,9 +104,9 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(reduce_result_cb),
-                ckl::input(epsilon_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(epsilon_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{cb_reduce_result, cb_epsilon},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(reduce_result_cb)>{});
+            ckl::PackTile<ckl::output(reduce_result_cb)>{cb_reduce_result});
 
         /*
          * norm x
@@ -114,7 +118,10 @@ void kernel_main() {
                 ckl::input(input_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::input(reduce_result_cb, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(mul_rms_result_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                ckl::IterationShape::tiles(block_size).block_size(block_size));
+                ckl::IterationShape::tiles(block_size).block_size(block_size),
+                cb_input,
+                cb_reduce_result,
+                cb_mul_rms_result);
 
             /**
              * Weight (gamma) fusion
@@ -144,9 +151,10 @@ void kernel_main() {
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileAddressing::Offset)>{0u, col_tile},
+                            ckl::TileAddressing::Offset)>{cb_mul_rms_result, cb_weight, 0u, col_tile},
                     ckl::PackTile<ckl::output(
-                        mul_weight_result_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        mul_weight_result_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                        cb_mul_weight_result});
             }
 
             /**
@@ -242,7 +250,10 @@ void kernel_main() {
                         ckl::PopPolicy::AtEnd,
                         ckl::InputTileMapping::Block),
                     ckl::output(output_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                    ckl::IterationShape::tiles(block_size).block_size(block_size));
+                    ckl::IterationShape::tiles(block_size).block_size(block_size),
+                    cb_intermediate,
+                    cb_rotated_input,
+                    cb_output);
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);
