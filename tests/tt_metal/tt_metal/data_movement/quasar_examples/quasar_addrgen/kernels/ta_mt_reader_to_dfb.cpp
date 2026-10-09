@@ -4,10 +4,12 @@
 
 // Multi-threaded TensorAccessor -> DFB reader. Each producer thread t of T reads its strided_pages() (pages t, t+T,
 // ...) of tensor::src into dfb::out, one page per entry. With a STRIDED producer pattern, thread t fills DFB entries
-// t, t+T, ..., so the DFB holds the tensor's pages in page-id order.
+// t, t+T, ..., so the DFB holds the tensor's pages in page-id order. With shards = 1, thread t instead reads every page
+// of its strided_shard_pages() (shards t, t+T, ...) in shard order.
 //
 // Named CTAs:
 //   num_pages:     tensor pages (interleaved accessors don't know their volume)
+//   shards:        1 = walk strided_shard_pages() (sharded only), 0 = strided_pages()
 //   implicit_sync: 1 = DFB implicit sync (async_read<TXN_ID>), 0 = explicit reserve_back / async_read / barrier /
 //                  push_back
 // Named RTAs:
@@ -30,6 +32,7 @@ constexpr uint32_t kDoneMarker = 0x600DD00Du;
 void kernel_main() {
     constexpr uint32_t num_pages = get_arg(args::num_pages);
     constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
+    constexpr uint32_t shards = get_arg(args::shards);
     const uint32_t report_addr = get_arg(args::report_addr);
 
     Noc noc;
@@ -47,7 +50,7 @@ void kernel_main() {
                 return ta.strided_pages();
             }
         };
-        for (const auto& page : my_pages()) {
+        auto read = [&](const auto& page) {
             using Traits = noc_traits_t<std::decay_t<decltype(page)>>;
             if constexpr (implicit_sync) {
                 noc.async_read<NocOptions::TXN_ID>(page, dfb, typename Traits::src_args_type{}, {});
@@ -58,6 +61,18 @@ void kernel_main() {
                 dfb.push_back(1);
             }
             ++transfers;
+        };
+        if constexpr (shards) {
+            static_assert(!TA::DSpec::is_interleaved, "strided_shard_pages() needs a sharded tensor");
+            for (const auto& shard : ta.strided_shard_pages()) {
+                for (const auto& page : shard) {
+                    read(page);
+                }
+            }
+        } else {
+            for (const auto& page : my_pages()) {
+                read(page);
+            }
         }
     };
     run(src);
