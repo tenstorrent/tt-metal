@@ -32,9 +32,12 @@ _TRACY = bool(os.environ.get("BRINGUP_TRACY_SIGNPOSTS"))
 _P = {"mesh": None}
 
 
-def enable(mesh, ops: bool = False, timeline: bool = False) -> None:
+def enable(mesh, ops: bool = False, timeline: bool = False, calls: bool = False) -> None:
     """ops: op mode (sync + drain per outermost ttnn call). timeline: no syncs at all; each outermost call's host
-    dispatch time is timed and the device programs are read once, by ``collect_timeline()`` (F44)."""
+    dispatch time is timed and the device programs are read once, by ``collect_timeline()`` (F44).
+    calls (with ops): also keep every call individually in ``calls`` with its per-chip device ns and full metadata
+    (every tensor argument's and output's per-device shape / dtype / layout / buffer, the CCL and compute kwargs),
+    for the per-op report (testing/op_report.py)."""
     import ttnn
 
     dev_to_chip = {int(d): c for c, d in enumerate(mesh.get_device_ids())}
@@ -54,6 +57,8 @@ def enable(mesh, ops: bool = False, timeline: bool = False) -> None:
         wall_s={},
         t=time.time(),
         dev_to_chip=dev_to_chip,
+        keep_calls=calls,
+        calls=[],
     )
     ttnn.synchronize_device(mesh)
     ttnn.ReadDeviceProfiler(mesh)
@@ -312,6 +317,59 @@ def _tensors(x, limit=2) -> list:
     return out[:limit]
 
 
+def _desc(t) -> dict:
+    """Per-device shape, dtype, layout and buffer of one tensor (the op report's cost models read these)."""
+    try:
+        mc = t.memory_config()
+        return {
+            "shape": [int(x) for x in t.shape],
+            "dtype": str(t.dtype).split(".")[-1],
+            "layout": "RM" if "ROW_MAJOR" in str(t.layout) else "TILE",
+            "buffer": str(mc.buffer_type).split(".")[-1],
+            "sharded": bool(mc.is_sharded()),
+        }
+    except Exception:
+        return {"shape": [], "dtype": "?", "layout": "?", "buffer": "?", "sharded": False}
+
+
+_KW = (
+    "cluster_axis",
+    "num_links",
+    "dim",
+    "in_dim",
+    "out_dim",
+    "topology",
+    "kv_len",
+    "chunk_start_idx",
+    "key_stride",
+    "k_chunk_size",
+    "v_dim",
+    "block_cyclic_chunk_local",
+    "num_heads",
+)
+
+
+def _kw_of(kwargs) -> dict:
+    """The scalar kwargs the op report uses: CCL geometry, attention extents, and from a compute config the math
+    fidelity / fp32 accumulation / packer L1 accumulation, from a program config its type."""
+    out = {}
+    for k in _KW:
+        v = kwargs.get(k)
+        if v is not None:
+            out[k] = v if isinstance(v, (int, float, bool)) else str(v).split(".")[-1]
+    ckc = kwargs.get("compute_kernel_config")
+    if ckc is not None:
+        for f in ("math_fidelity", "fp32_dest_acc_en", "packer_l1_acc"):
+            v = getattr(ckc, f, None)
+            if v is not None:
+                out[f] = v if isinstance(v, bool) else str(v).split(".")[-1]
+    for k in ("program_config", "config"):
+        pc = kwargs.get(k)
+        if pc is not None:
+            out["program_config"] = type(pc).__name__
+    return out
+
+
 def _mem_of(args, kwargs, out) -> str:
     """Where the first two tensor inputs and the outputs live: 'DRAM interleaved · L1 height-sharded 64 cores ->
     DRAM interleaved'."""
@@ -392,6 +450,19 @@ def _patch_ops() -> None:
         per_dev, n = _drain()
         _book(per_dev, n)
         _book_op(name, _shape_of(args, kwargs), per_dev, n, _mem_of(args, kwargs, out))
+        if p.get("keep_calls") and n and p["current_full"] is not None:
+            p["calls"].append(
+                {
+                    "key": p["current_full"],
+                    "layer": p.get("layer"),
+                    "op": name,
+                    "ins": [_desc(t) for t in _tensors(list(args) + list(kwargs.values()), limit=8)],
+                    "outs": [_desc(t) for t in _tensors(out, limit=4)],
+                    "kw": _kw_of(kwargs),
+                    "ns_dev": {p["dev_to_chip"].get(int(d), int(d)): ns for d, ns in per_dev.items()},
+                    "programs": n,
+                }
+            )
         return out
 
     D.FastOperation._bringup_orig_call = orig
