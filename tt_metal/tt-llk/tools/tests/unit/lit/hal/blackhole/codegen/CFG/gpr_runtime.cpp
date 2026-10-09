@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_compare_codegen} %t.o
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
 // RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
+
+// Each HAL function is compared with its adjacent reference_ function.
+// Disable identical-code folding so both bodies must be emitted independently.
 
 #include <cstdint>
 
@@ -19,20 +22,71 @@ namespace cfg = hal::cfg;
 
 inline constexpr cfg::Field state_last_block {cfg::RegisterScope::State, 32, 220, 0, 0, 32, 1, 0};
 
+// WRCFG 32-bit to word 76; Deferred emits no trailing NOP.
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_default_completion(std::uint32_t index)
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(index));
 }
 
-// WRCFG 32-bit to word 76 is 0xb0000000 + 76; Deferred emits no trailing NOP.
-// CHECK-LABEL: <write_runtime_gpr_default_completion>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0000
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],76
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_default_completion(std::uint32_t index)
+{
+    TT_WRCFG(index, 0, 76);
+}
+
+extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint32_t index)
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(
+        hal::gpr(index));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_wait(std::uint32_t index)
+{
+    TT_WRCFG(index, 0, 76);
+    TTI_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void write_runtime_gpr_last_block(std::uint32_t index)
+{
+    cfg::write<cfg::Access::TensixCfgUnit, state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Deferred>(hal::gpr(index));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_gpr_last_block(std::uint32_t index)
+{
+    TT_WRCFG(index, 1, 220);
+}
+
+// The runtime transfer is last in the group, so Wait appends the final NOP.
+extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_wait_group(std::uint32_t index)
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
+        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>(),
+        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(hal::gpr(index)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_from_gpr_wait_group(std::uint32_t index)
+{
+    TTI_RMWCIB0(0x0f, 1, 0);
+    TTI_RMWCIB0(0x01, 1, 5);
+    TT_WRCFG(index, 0, 76);
+    TTI_NOP;
+}
+
+extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_deferred_group(std::uint32_t index)
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(index)),
+        cfg::set<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0, 3>());
+}
+
+extern "C" __attribute__((noinline, used)) void reference_write_runtime_from_gpr_deferred_group(std::uint32_t index)
+{
+    TT_WRCFG(index, 1, 76);
+    TTI_RMWCIB0(0xff, 3, 80);
+    TTI_RMWCIB1(0xff, 0, 80);
+    TTI_RMWCIB2(0xff, 0, 80);
+    TTI_RMWCIB3(0xff, 0, 80);
+}
 
 #ifdef ENABLE_LLK_ASSERT
 
@@ -71,74 +125,3 @@ extern "C" void write_runtime_gpr_valid_boundaries()
 // ASSERT: ret
 
 #endif
-
-extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(
-        hal::gpr(index));
-}
-
-// CHECK-LABEL: <write_runtime_gpr_wait>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0000
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],76
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_runtime_gpr_last_block(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixCfgUnit, state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Deferred>(hal::gpr(index));
-}
-
-// CHECK-LABEL: <write_runtime_gpr_last_block>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0008
-// CHECK-DAG: addi {{a[0-7]}},[[OP]],220
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK: R_RISCV_HI20 __instrn_buffer
-// CHECK: sw {{a[0-7]}},0({{a[0-7]}})
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_wait_group(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
-        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(hal::gpr(index)),
-        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>());
-}
-
-// The runtime transfer keeps its position between the two constant words and
-// its NOP precedes the next field write.
-// CHECK-LABEL: <write_runtime_from_gpr_wait_group>:
-// CHECK-NEXT: ttrmwcib0 15,1,0
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0000
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],76
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ttrmwcib0 1,1,5
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_deferred_group(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(index)),
-        cfg::set<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0, 3>());
-}
-
-// CHECK-LABEL: <write_runtime_from_gpr_deferred_group>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0008
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],76
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ttrmwcib0 255,3,80
-// CHECK-NEXT: ttrmwcib1 255,0,80
-// CHECK-NEXT: ttrmwcib2 255,0,80
-// CHECK-NEXT: ttrmwcib3 255,0,80
-// CHECK-NEXT: ret

@@ -11,5 +11,10 @@ inspection tools.
 - `<architecture>/lit.local.cfg` defines substitutions shared by that
   architecture's tests.
 
-Code-generation tests disassemble their target objects and use LLVM FileCheck
-directives to describe the expected instruction sequence.
+Blackhole CFG runtime tests place each HAL function next to a `reference_`
+function using explicit `TT_*`/`TTI_*` instructions or MMIO operations. Read the
+two C++ bodies to see the expected behavior.
+
+`%{blackhole_compare_codegen}` compares the disassembled function pairs,
+including instruction bytes and operands and relocation types, targets, and
+addends.
