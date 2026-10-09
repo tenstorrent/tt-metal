@@ -223,3 +223,6 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Also from the sweep: HiFi2 matmuls are 0.28% low (scale 0.99722 vs fp32; HiFi4 1.00004) - MLA q_b / kv_a / o_proj
   run at the attention fidelity (HiFi2). minimal_matmul: another 1.2..1.7x at bf16 out, but fp32 out is 0.03% low
   (0.99969) and fp32 input fails; not used yet.
+- All attention at HiFi4 (GLM_ATTN_FIDELITY=HiFi4; KDA already HiFi4): warm 56k prefill 7.66 -> 7.76 s, s4096 KV PCC
+  within noise (kv_latent 0.96883 / 0.98505 vs 0.96876 / 0.98514, index_key 0.98929 / 0.99562 vs 0.98899 / 0.99550,
+  final hidden 0.9465 vs 0.9460). The MLA / indexer HiFi2 bias (0.28%) does not reach the caches; kept at HiFi2.
