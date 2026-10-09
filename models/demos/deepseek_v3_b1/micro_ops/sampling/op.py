@@ -568,8 +568,9 @@ class SamplingOp:
                 )
             ],
         )
+        # Two pages: the probabilities and the cumsum, rescaled together in one two-tile call.
         max_cb_descriptor = ttnn.CBDescriptor(
-            total_size=bf16_tile_size,
+            total_size=2 * bf16_tile_size,
             core_ranges=final_core_crs,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=max_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
@@ -1193,7 +1194,7 @@ class SamplingOp:
                     ]:
                         cbs.append(
                             ttnn.CBDescriptor(
-                                total_size=bf16_tile_size,
+                                total_size=(2 if cb_idx == max_cb else 1) * bf16_tile_size,
                                 core_ranges=final_core_crs,
                                 format_descriptors=[
                                     ttnn.CBFormatDescriptor(

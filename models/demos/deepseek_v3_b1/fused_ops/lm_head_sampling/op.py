@@ -2171,8 +2171,9 @@ class LMHeadSampling:
                     )
 
                     # --- Final-core-only softmax / top-P / RNG compute CBs ------------
-                    # Each is a single bf16 tile (2 KB). Mirrors the final-device
-                    # block in _op_mesh_topk under `is_final_mesh_device`.
+                    # Each is a single bf16 tile (2 KB), but sampling_max_cb holds two: the
+                    # probabilities and the cumsum, rescaled together in one two-tile call.
+                    # Mirrors the final-device block in _op_mesh_topk under `is_final_mesh_device`.
                     for _sampling_compute_cb_id in (
                         sampling_softmax_in_cb,
                         sampling_softmax_out_cb,
@@ -2186,7 +2187,8 @@ class LMHeadSampling:
                     ):
                         cbs_list.append(
                             ttnn.CBDescriptor(
-                                total_size=sampling_bf16_tile_size,
+                                total_size=(2 if _sampling_compute_cb_id == sampling_max_cb else 1)
+                                * sampling_bf16_tile_size,
                                 core_ranges=sampling_final_core_crs,
                                 format_descriptors=[
                                     ttnn.CBFormatDescriptor(

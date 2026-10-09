@@ -398,11 +398,16 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-10");
-        // Step 15: Pack T(cumsum) into out_cb (used by Pass 4's rescale MUL).
+        // Step 15: Pack T(cumsum) into out_cb (BRISC's num_kept) and after the probabilities in probs_cb, so
+        // Pass 4 rescales both in one two-tile call.
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
+        cb_reserve_back(probs_cb, 1);
+        pack_reconfig_data_format(probs_cb);
+        pack_tile(0, probs_cb);
+        cb_push_back(probs_cb, 1);
         // Step 16: Pack T(filtered cumsum) into exp_cb (input to Pass 4 MIN).
         cb_reserve_back(exp_cb, 1);
         pack_reconfig_data_format(exp_cb);
@@ -434,57 +439,30 @@ void trisc_fused_softmax_top_p_sampling_block() {
         // Step 18: Compute DST[0] = 1/cum_kept
         MATH((sampling_recip_tile_scalar(0)));
     }
-    // Step 18.5: Compute DST[3] = probs * 1/cum_kept = rescaled (renormalized) PMF.
-
+    // Step 18.5: DST[2] = probs * 1/cum_kept (the rescaled PMF) and DST[3] = cumsum * 1/cum_kept (the rescaled CDF),
+    // probs_cb pages 0 and 1, in one two-tile call.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13b");
+        cb_wait_front(probs_cb, 2);
         rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
             EltwiseBinaryType::ELWMUL,
-            /*num_tiles=*/1,
+            /*num_tiles=*/2,
             MathFidelity::HiFi4>(probs_cb);
         rmsnorm_bcast_scalar_reuse_tiles_fidelity<
             EltwiseBinaryType::ELWMUL,
-            /*num_tiles=*/1,
+            /*num_tiles=*/2,
             MathFidelity::HiFi4,
-            /*clear_dest=*/true>(probs_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/3);
+            /*clear_dest=*/true>(probs_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);
     }
-    cb_pop_front(probs_cb, 1);
-    // Step 18.75: Recompute 1/cum_kept into DST[0] for Step 19 to consume.
-    {
-        DeviceZoneScopedN("SP-TOPP-TRISC-13c");
-        copy_init(exp_cb);
-        copy_tile(exp_cb, 0, 0);
-        sfpu_reduce_init<PoolType::MIN, DataFormat::Float32>();
-        sfpu_reduce<PoolType::MIN, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
-        // Same clamp as Step 17.5: see comment above.
-        constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
-        MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
-        MATH((sampling_recip_tile_scalar(0)));
-    }
-    // Step 19: Compute DST[2] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
-    // SrcA reads out_cb (Step 15's T(cumsum)), SrcB scalar comes from
-    // DST[0] (Step 18.75's recomputed 1/cum_kept).
-    // NOTE: rescaled_cumsum_i = cumsum(softmax_out_i, dim=0) * 1/cum_kept
-    {
-        DeviceZoneScopedN("SP-TOPP-TRISC-14");
-        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
-            EltwiseBinaryType::ELWMUL,
-            /*num_tiles=*/1,
-            MathFidelity::HiFi4>(out_cb);
-        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
-            EltwiseBinaryType::ELWMUL,
-            /*num_tiles=*/1,
-            MathFidelity::HiFi4,
-            /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);
-    }
+    cb_pop_front(probs_cb, 2);
     // Step 20: DST[1] = rand (column-0 broadcast staged by BRISC into rand_bcast_cb).
     copy_init(rand_bcast_cb);
     copy_tile(rand_bcast_cb, 0, 1);
-    // Step 21: DST[2] = (rescaled_cumsum >= rand) ? 1.0 : 0.0.
+    // Step 21: DST[3] = (rescaled_cumsum >= rand) ? 1.0 : 0.0.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-15");
         ge_binary_tile_init();
-        MATH((sampling_ge_binary_tile_first_column(2, 1, 2)));
+        MATH((sampling_ge_binary_tile_first_column(3, 1, 3)));
         tile_regs_commit();
     }
     tile_regs_wait();
@@ -497,12 +475,12 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     cb_reserve_back(mask_cb, 1);
     pack_reconfig_data_format(mask_cb);
-    pack_tile(2, mask_cb);
+    pack_tile(3, mask_cb);
     cb_push_back(mask_cb, 1);
-    // Step 21.5: Hand the rescaled PMF (DST[3] from Step 18.5) off to BRISC.
+    // Step 21.5: Hand the rescaled PMF (DST[2] from Step 18.5) off to BRISC.
     cb_reserve_back(probs_out_cb, 1);
     pack_reconfig_data_format(probs_out_cb);
-    pack_tile(3, probs_out_cb);
+    pack_tile(2, probs_out_cb);
     cb_push_back(probs_out_cb, 1);
 
     tile_regs_release();
