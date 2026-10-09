@@ -32,14 +32,34 @@ DREAM_METRIC = re.compile(r"DREAM_METRIC\s+(.*)")
 PAIR = re.compile(r"([A-Za-z_][\w.]*)=([-+0-9.eE]+|nan|inf)")
 
 
+_COLLECTOR = """
+import json, sys
+import pytest
+
+ids = []
+
+
+class Collector:
+    def pytest_collection_finish(self, session):
+        ids.extend(item.nodeid for item in session.items)
+
+
+rc = pytest.main(["--collect-only", "-p", "no:cacheprovider", *sys.argv[1:]], plugins=[Collector()])
+print("DREAM_IDS " + json.dumps(ids))
+sys.exit(0 if ids else (rc or 1))
+"""
+
+
 def collect(test: str, k: str | None, cwd: Path) -> list[str]:
-    cmd = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", test]
-    if k:
-        cmd += ["-k", k]
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    ids = [l.strip() for l in r.stdout.splitlines() if "::" in l and not l.startswith(("=", " "))]
+    """Node ids of the selected tests, read from pytest itself (immune to addopts such as -vv)."""
+    args = [test] + (["-k", k] if k else [])
+    r = subprocess.run([sys.executable, "-c", _COLLECTOR, *args], cwd=cwd, capture_output=True, text=True)
+    line = next((l for l in reversed(r.stdout.splitlines()) if l.startswith("DREAM_IDS ")), None)
+    ids = json.loads(line[len("DREAM_IDS ") :]) if line else []
     if not ids:
-        raise SystemExit(f"no tests collected from {test} (rc {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+        raise RuntimeError(
+            f"no tests collected from {test} (rc {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}"
+        )
     return ids
 
 
@@ -151,6 +171,21 @@ def main():
     cwd = Path.cwd()
     a.work.mkdir(parents=True, exist_ok=True)
 
+    try:
+        result = run_cases(a, extra, cwd)
+    except Exception as e:  # never leave the engine without a result file
+        result = {
+            "valid": False,
+            "cases": {},
+            "fail_class": "infra",
+            "error": f"adapter error: {type(e).__name__}: {e}",
+            "adapter": "ttmetal_op_perf",
+        }
+    a.out.write_text(json.dumps(result, indent=2) + "\n")
+    print(f"[adapter] wrote {a.out}: valid={result['valid']}", flush=True)
+
+
+def run_cases(a, extra: list, cwd: Path) -> dict:
     ids = collect(a.test, a.k, cwd)
     names = case_names(ids, a.case_regex)
     result = {"valid": True, "cases": {}, "error": None, "fail_class": None, "adapter": "ttmetal_op_perf"}
@@ -196,8 +231,7 @@ def main():
             break
         result["cases"][name] = {**m, **case}
         print(f"[adapter]   {m['value']} (mean of {m['calls']} calls x {m['devices']} devices) {case}", flush=True)
-    a.out.write_text(json.dumps(result, indent=2) + "\n")
-    print(f"[adapter] wrote {a.out}: valid={result['valid']}", flush=True)
+    return result
 
 
 if __name__ == "__main__":
