@@ -167,7 +167,9 @@ void kernel_main() {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
 
                 // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
-                exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+                if constexpr (EXP_APPROX_MODE) {
+                    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+                }
 
                 // Phase 1: Q@K^T -> scores and running row max.
                 {
@@ -231,7 +233,7 @@ void kernel_main() {
                     // sub_exp in place: cb_qk_im = exp((cb_qk_im - max)*scale); partial row-sum -> sum_cur (L1-acc).
                     // Walk key-tile columns in DEST-sized steps.
                     for (uint32_t kc = 0; kc < Skt; kc += exp_sbw) {
-                        sub_exp_block_bcast_cols<false, scale_fp32>(
+                        sub_exp_block_bcast_cols<false, scale_fp32, EXP_APPROX_MODE>(
                             cb_qk_im,
                             max_cur.get_cb_id(),
                             sum_cur.get_cb_id(),
