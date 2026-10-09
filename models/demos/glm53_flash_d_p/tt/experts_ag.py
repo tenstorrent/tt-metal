@@ -205,6 +205,11 @@ class _Block:
 
 
 _BLOCKS = {}
+# debug hooks (tests/test_moe_routing.py): ROUTE_LOG a list -> each call appends its layer's route-plan token counts per
+# global expert (every chip's copy); TIME_FLAT -> profiler signposts right around the flat op, so its device time per
+# chip is charged to section "flat<layer>" (the profiler must be enabled)
+ROUTE_LOG = None
+TIME_FLAT = False
 
 
 class TtExpertsAg:
@@ -328,7 +333,20 @@ class TtExpertsAg:
         for t in tmp:
             ttnn.deallocate(t)
         blk.plan(gi, blk.lmap)
+        if ROUTE_LOG is not None:
+            ROUTE_LOG.append(
+                {
+                    "layer": self.layer,
+                    "counts": [ttnn.to_torch(t).reshape(-1).tolist() for t in ttnn.get_device_tensors(blk.counts)],
+                    "gids": [list(g) for g in self.gids],
+                    "T": blk.T,
+                }
+            )
         gx2 = ttnn.reshape(gx, (blk.T, self.H))
+        if TIME_FLAT:
+            from models.demos.common.bringup.testing import profiler
+
+            profiler.signpost(f"flat{self.layer}")
         y = self.flat(
             gx2,
             blk.counts,
@@ -338,6 +356,8 @@ class TtExpertsAg:
             down_fp32=self.down_fp32,
             pack_stochastic_rounding=self.pack_srnd,
         )
+        if TIME_FLAT:
+            profiler.signpost(f"after_flat{self.layer}")
         if own_gx:
             ttnn.deallocate(gx)
         ttnn.deallocate(gi)
