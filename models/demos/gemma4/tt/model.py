@@ -1022,9 +1022,8 @@ class Gemma4Model:
             input_ids_torch: CPU tensor of input_ids for per-layer input computation (E2B)
             embeds_torch: CPU tensor of embeddings for per-layer input projection (E2B)
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
-            pli_stacked: optional [n_layers,1,rows,pli_size] device tensor. It is
-                sliced by layer and is suitable for a caller-owned persistent
-                buffer because its address stays stable across trace replays.
+            pli_stacked: optional [n_layers,1,rows,pli_size] device tensor from
+                ``compute_pli_device``, sliced by layer.
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
             page_tables_per_layer: optional list of per-layer page tables, one
@@ -1506,7 +1505,7 @@ class Gemma4Model:
         if token_ids_host is None:
             raise ValueError(
                 "This target uses per-layer inputs, so verification requires token_ids_host, "
-                "pli_device_tensors, or pli_stacked"
+                "pli_device_tensors, or pli_on_device=True"
             )
         pli_host = self.compute_host_pli_batch(token_ids_host)
         pli_all = ttnn.from_torch(
@@ -1529,7 +1528,6 @@ class Gemma4Model:
         page_tables_per_layer=None,
         token_ids_host=None,
         pli_device_tensors=None,
-        pli_stacked=None,
         pli_on_device=False,
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
@@ -1551,8 +1549,6 @@ class Gemma4Model:
             kv_cache: optional KV cache override (defaults to self.tt_kv_cache).
             token_ids_host: host candidate ids used to compute PLI for PLI targets.
             pli_device_tensors: optional list with exactly one PLI tensor per layer.
-            pli_stacked: optional [n_layers,1,K,pli_size] PLI buffer. It takes
-                precedence over the host ids and per-layer list.
             pli_on_device: derive PLI from token IDs and scaled embeddings on device.
 
         Returns:
@@ -1560,9 +1556,9 @@ class Gemma4Model:
             ``hidden`` is the post-final-norm hidden [1,1,K,hidden], the
             it-assistant drafter's recurrent seed.
         """
-        if pli_on_device and (pli_stacked is not None or pli_device_tensors is not None):
-            raise ValueError("pass either pli_on_device=True or explicit PLI tensors, not both")
-        if pli_stacked is None and not pli_on_device:
+        if pli_on_device and pli_device_tensors is not None:
+            raise ValueError("pass either pli_on_device=True or pli_device_tensors, not both")
+        if not pli_on_device:
             pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
 
         if x.dtype in (ttnn.uint32, ttnn.int32):
@@ -1572,6 +1568,7 @@ class Gemma4Model:
             input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        pli_stacked = None
         owns_pli_stacked = pli_on_device and bool(self.hidden_size_per_layer_input)
         if owns_pli_stacked:
             if x.dtype not in (ttnn.uint32, ttnn.int32):
@@ -1622,7 +1619,6 @@ class Gemma4Model:
         page_tables_per_layer=None,
         token_ids_host=None,
         pli_device_tensors=None,
-        pli_stacked=None,
         pli_on_device=False,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
@@ -1649,22 +1645,21 @@ class Gemma4Model:
             hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
             token_ids_host: host candidate ids used to compute PLI for PLI targets.
             pli_device_tensors: optional list with exactly one PLI tensor per layer.
-            pli_stacked: optional [n_layers,1,P,pli_size] PLI buffer. It takes
-                precedence over the host ids and per-layer list.
             pli_on_device: compute PLI from ``x`` inside the device forward.
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
-        if pli_on_device and (pli_stacked is not None or pli_device_tensors is not None):
-            raise ValueError("pass either pli_on_device=True or explicit PLI tensors, not both")
-        if pli_stacked is None and not pli_on_device:
+        if pli_on_device and pli_device_tensors is not None:
+            raise ValueError("pass either pli_on_device=True or pli_device_tensors, not both")
+        if not pli_on_device:
             pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
         input_embeds = self.embed_tokens(x)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
         input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        pli_stacked = None
         owns_pli_stacked = pli_on_device and bool(self.hidden_size_per_layer_input)
         if owns_pli_stacked:
             pli_stacked = self.compute_pli_device(x, input_embeds)

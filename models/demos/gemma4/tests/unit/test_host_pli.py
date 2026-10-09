@@ -95,10 +95,9 @@ def test_decode_device_pli_requires_loaded_pli_weights(monkeypatch, pli_size, we
 
 
 @pytest.mark.parametrize("packed", [False, True])
-@pytest.mark.parametrize("explicit", ["pli_device_tensors", "pli_stacked"])
-def test_verify_rejects_device_pli_with_explicit_tensors(packed, explicit, expect_error):
+def test_verify_rejects_device_pli_with_explicit_tensors(packed, expect_error):
     model, _ = _host_pli_model()
-    kwargs = {"pli_on_device": True, explicit: object()}
+    kwargs = {"pli_on_device": True, "pli_device_tensors": object()}
     with expect_error(ValueError, "not both"):
         if packed:
             model.ttnn_packed_verify_forward(None, None, None, None, 4, **kwargs)

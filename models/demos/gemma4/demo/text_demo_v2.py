@@ -1048,6 +1048,9 @@ def _run_spec_decode(
     use_fused = (
         batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
     )
+    # A per-layer-input target needs device PLI for the fused iteration; with
+    # GEMMA4_PLI=host it runs the host loop, as generate() does.
+    use_fused = use_fused and (not spec.target_has_pli or spec._pli_dev_host)
     # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
     # SLOWER than plain decode); the single fused Metal trace removes that
     # overhead (>3x, exceeding plain decode). Default tracing to the demo's
