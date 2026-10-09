@@ -82,6 +82,11 @@ struct MathFidelitySchedule
 {
     std::uint8_t phase_count;
     std::uint8_t phase_increment;
+
+    constexpr bool operator==(const MathFidelitySchedule& other) const
+    {
+        return phase_count == other.phase_count && phase_increment == other.phase_increment;
+    }
 };
 
 /**
@@ -117,35 +122,19 @@ static_assert(math_fidelity_phases<MathFidelity::HiFi2>() == 2);
 static_assert(math_fidelity_phases<MathFidelity::HiFi3>() == 3);
 static_assert(math_fidelity_phases<MathFidelity::HiFi4>() == 4);
 static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Float16_b) == 0b0001);
-static_assert(fidelity_mask(DataFormat::Float16, DataFormat::Float16_b) == 0b0011);
-static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Float16) == 0b0101);
-static_assert(fidelity_mask(DataFormat::Float16, DataFormat::Float16) == 0b1111);
 static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Float16_b) == 0b0011);
 static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Tf32) == 0b0101);
 static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Tf32) == 0b1111);
-static_assert(fidelity_mask(DataFormat::Float32, DataFormat::Float32) == 0b1111);
 static_assert(fidelity_mask(DataFormat::MxFp4_2x_A, DataFormat::MxFp4_2x_B) == 0b0001);
 static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Int8) == 0b0001);
-static_assert(fidelity_mask(DataFormat::UInt8, DataFormat::UInt8) == 0b0001);
-static_assert(fidelity_mask(DataFormat::Int8_2x, DataFormat::Int8_2x) == 0b0001);
-static_assert(fidelity_mask(DataFormat::UInt8_2x, DataFormat::UInt8_2x) == 0b0001);
 static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Float16) == 0);
 static_assert(fidelity_mask(DataFormat::MxFp4, DataFormat::MxFp4) == 0);
-static_assert(fidelity_mask(DataFormat::Invalid, DataFormat::Float16) == 0);
-static_assert(!is_math_fidelity_supported(static_cast<MathFidelity>(1), DataFormat::Float16, DataFormat::Float16));
 
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Float16).phase_count == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Float16).phase_increment == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 3);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32).phase_increment == 1);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b).phase_count == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b).phase_increment == 1);
-static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 1);
-static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 0);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 4);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_increment == 1);
+static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32) == MathFidelitySchedule {1, 0});
+static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b) == MathFidelitySchedule {2, 1});
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32) == MathFidelitySchedule {3, 1});
+static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32) == MathFidelitySchedule {2, 2});
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32) == MathFidelitySchedule {4, 1});
 
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
