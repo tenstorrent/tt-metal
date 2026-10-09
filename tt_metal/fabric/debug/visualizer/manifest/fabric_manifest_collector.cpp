@@ -31,6 +31,11 @@ using NamedArgs = std::unordered_map<std::string, uint32_t>;
 
 // Helper to get a named compile-time argument.
 uint32_t get_named_arg(const NamedArgs& args, const std::string& name) {
+    TT_FATAL(
+        manifest::manifest_reads_arg(name),
+        "Fabric manifest: the collector reads {}, which no field table reads and k_collector_args does not list "
+        "(fabric_manifest_fields.hpp). Add to ignore list k_unrecorded_args if this is intentional.",
+        name);
     const auto it = args.find(name);
     TT_FATAL(it != args.end(), "Fabric manifest: missing fabric router named compile-time argument {}", name);
     return it->second;
@@ -66,6 +71,15 @@ uint32_t emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, con
 
 bool emitted_flag(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
     return emitted_value(named_ct_args_per_risc, name) != 0;
+}
+
+bool has_define(const RouterKernelInputs& kernel, const std::string& name) {
+    TT_FATAL(
+        manifest::manifest_reads_define(name),
+        "Fabric manifest: the collector reads the define {}, which k_collector_defines does not list "
+        "(fabric_manifest_fields.hpp). Add to k_unrecorded_defines if this is intentional.",
+        name);
+    return kernel.defines.contains(name);
 }
 
 // Return the RouterIdentity based on its location.
@@ -355,8 +369,8 @@ manifest::content::Stream fed_stream(const ManifestRouterInputs& inputs, const s
 // The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
 bool kernel_runs_vc(const ManifestRouterInputs& inputs, uint32_t vc) {
     switch (vc) {
-        case 1: return inputs.kernel.defines.contains("FABRIC_2D_VC1_SERVICED");
-        case 2: return inputs.kernel.defines.contains("FABRIC_2D_VC2_SERVICED");
+        case 1: return has_define(inputs.kernel, "FABRIC_2D_VC1_SERVICED");
+        case 2: return has_define(inputs.kernel, "FABRIC_2D_VC2_SERVICED");
         default: return true;
     }
 }
@@ -486,7 +500,7 @@ std::optional<uint32_t> collect_forwards_on(const ChannelContext& ctx, uint32_t 
     if (!serviced || vc == 2 || (vc == 0 && ctx.speedy_vc0)) {
         return std::nullopt;
     }
-    if (vc == 0 && ctx.inputs.kernel.defines.contains("FABRIC_2D_VC0_CROSSOVER_TO_VC1")) {
+    if (vc == 0 && has_define(ctx.inputs.kernel, "FABRIC_2D_VC0_CROSSOVER_TO_VC1")) {
         return 1;
     }
     return vc;
@@ -615,7 +629,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
         vc,
         connections.size());
     TT_FATAL(
-        vc == 0 || num_edges == 0 || inputs.kernel.defines.contains("FABRIC_2D_VC1_ACTIVE"),
+        vc == 0 || num_edges == 0 || has_define(inputs.kernel, "FABRIC_2D_VC1_ACTIVE"),
         "Fabric manifest: the router has VC1 downstream edges, but no FABRIC_2D_VC1_ACTIVE to build them");
 
     const auto my_direction = builder::routing_direction_to_eth_direction(inputs.location.direction);
@@ -666,7 +680,29 @@ std::vector<std::vector<manifest::DownstreamEdge>> collect_router_edges(const Ch
 
 }  // namespace
 
+// Go through all inputs fed into the kernel and ensure that they are
+// accounted for by the manifest.
+void check_kernel_inputs_accounted(const RouterKernelInputs& kernel) {
+    for (const auto& args : kernel.named_ct_args) {
+        for (const auto& [name, value] : args) {
+            TT_FATAL(
+                manifest::manifest_reads_arg(name) || manifest::is_unrecorded_arg(name),
+                "Fabric manifest: {} is fed to the router, but neither a field table nor the collector reads it; add "
+                "a table entry, or an entry with a reason to k_unrecorded_args (fabric_manifest_fields.hpp)",
+                name);
+        }
+    }
+    for (const auto& [name, value] : kernel.defines) {
+        TT_FATAL(
+            manifest::manifest_reads_define(name) || manifest::is_unrecorded_define(name),
+            "Fabric manifest: the define {} is fed to the router, but the collector does not read it; read it, or "
+            "add an entry with a reason to k_unrecorded_defines (fabric_manifest_fields.hpp)",
+            name);
+    }
+}
+
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
+    check_kernel_inputs_accounted(inputs.kernel);
     const auto& args = inputs.kernel.named_ct_args;
     TT_FATAL(
         !args.empty() && inputs.kernel.processors.size() == args.size(),

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstdint>
@@ -592,5 +593,162 @@ static_assert(sources_name_channels(k_erisc_fields, false));
 static_assert(sources_name_channels(k_sender_channel_fields, true));
 static_assert(sources_name_channels(k_receiver_channel_fields, true));
 static_assert(sources_name_channels(k_downstream_edge_fields, true));
+
+// Every named argument and define the router kernel is fed is read by a field table above or by the collector, or
+// is listed as unrecorded with a reason; otherwise the collector throws (check_kernel_inputs_accounted). Arguments
+// are matched by family, so "SENDER_CH_{}_IS_INJECTION" covers every channel's; defines are matched exactly.
+
+// Where the index at `pos` ends, or `pos` when no index starts there.
+constexpr size_t skip_index(std::string_view name, size_t pos) {
+    if (name.substr(pos, 2) == "{}") {
+        return pos + 2;
+    }
+    while (pos < name.size() && name[pos] >= '0' && name[pos] <= '9') {
+        ++pos;
+    }
+    return pos;
+}
+
+// Whether two argument names are the same but for their indices: a run of digits or a {} matches any other.
+constexpr bool same_arg_family(std::string_view a, std::string_view b) {
+    size_t i = 0;
+    size_t j = 0;
+    while (i < a.size() && j < b.size()) {
+        const size_t next_i = skip_index(a, i);
+        const size_t next_j = skip_index(b, j);
+        if ((next_i != i) != (next_j != j)) {
+            return false;
+        }
+        if (next_i != i) {
+            i = next_i;
+            j = next_j;
+        } else if (a[i++] != b[j++]) {
+            return false;
+        }
+    }
+    return i == a.size() && j == b.size();
+}
+
+// The named arguments the collector reads to work out facts, rather than through a field table.
+inline constexpr auto k_collector_args = std::to_array<std::string_view>({
+    "NUM_ACTIVE_ERISCS",
+    "ENABLE_DEADLOCK_AVOIDANCE",
+    "ACTUAL_VC{}_SENDER_CHANNELS",
+    "NUM_RECEIVER_CHANNELS",
+    "TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR",
+    "TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR",
+    "LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR",
+    "LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR",
+    "IS_2D_FABRIC",
+    "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE",
+    "ENABLE_SPEEDY_VC0",
+    "FABRIC_TENSIX_EXTENSION_MUX_MODE",
+    "CHANNEL_BUFFER_SIZE",
+    "VC{}_FABRIC_POSITION_START",
+    "IS_SENDER_CHANNEL_{}_SERVICED",
+    "IS_RECEIVER_CHANNEL_{}_SERVICED",
+    "VC{}_USES_COUNTER_CREDITS",
+    "TO_SENDER_{}_PKTS_COMPLETED_ID",
+    "TO_SENDER_{}_PKTS_ACKED_ID",
+    "NUM_DOWNSTREAM_SENDERS_VC{}",
+});
+
+// The defines the collector reads.
+inline constexpr auto k_collector_defines = std::to_array<std::string_view>({
+    "FABRIC_2D_VC1_ACTIVE",
+    "FABRIC_2D_VC1_SERVICED",
+    "FABRIC_2D_VC2_SERVICED",
+    "FABRIC_2D_VC0_CROSSOVER_TO_VC1",
+});
+
+// A kernel input the manifest leaves out, and why.
+struct Unrecorded {
+    std::string_view name;
+    std::string_view reason;
+};
+
+inline constexpr std::string_view k_not_yet_described = "Not yet described.";
+
+inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
+    // Recorded elsewhere
+    {"LOCAL_HANDSHAKE_MASTER_ETH_CHAN", "The chip's local_sync master_eth_chan, from KernelCreationContext."},
+    {"NUM_LOCAL_EDMS", "The chip's local_sync num_routers, from KernelCreationContext."},
+    {"EDM_CHANNELS_MASK", "The chip's local_sync router_channels_mask, from KernelCreationContext."},
+    {"MY_ERISC_ID", "The ERISC's index in the router's eriscs, which the manifest lists in RISC order."},
+
+    // The same on every router
+    {"MAX_NUM_SENDER_CHANNELS", "builder_config::num_max_sender_channels."},
+    {"MAX_NUM_RECEIVER_CHANNELS", "builder_config::num_max_receiver_channels."},
+    {"MAX_NUM_VCS", "builder_config::MAX_NUM_VCS."},
+
+    // Not yet described
+    {"MY_ETH_CHANNEL", k_not_yet_described},
+    {"NUM_ETH_PORTS", k_not_yet_described},
+    {"NUM_SENDER_CHANNELS", k_not_yet_described},
+    {"NUM_DOWNSTREAM_CHANNELS", k_not_yet_described},
+    {"NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS", k_not_yet_described},
+    {"VC{}_DOWNSTREAM_EDM_SIZE", k_not_yet_described},
+    {"PACKED_DOWNSTREAM_VC{}_SENDER_CHANNEL_IDS", k_not_yet_described},
+    {"IS_INTERMESH_ROUTER", k_not_yet_described},
+    {"IS_INTERMESH_ROUTER_ON_EDGE", k_not_yet_described},
+    {"IS_INTRAMESH_ROUTER_ON_EDGE", k_not_yet_described},
+    {"MESH_X_SIZE", k_not_yet_described},
+    {"MESH_Y_SIZE", k_not_yet_described},
+    {"SENDER_CH_{}_LIVE_CHECK_SKIP", k_not_yet_described},
+    {"ENABLE_FIRST_LEVEL_ACK_VC{}", k_not_yet_described},
+    {"FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR", k_not_yet_described},
+    {"SENDER_TXQ_ID", k_not_yet_described},
+    {"RECEIVER_TXQ_ID", k_not_yet_described},
+    {"EDM_NOC_VC", k_not_yet_described},
+    {"FORCE_ALL_PATHS_TO_USE_SAME_NOC", k_not_yet_described},
+    {"SKIP_SRC_CH_ID_UPDATE", k_not_yet_described},
+    {"REMOTE_WORKER_SENDER_CHANNEL", k_not_yet_described},
+    {"UDM_MODE", k_not_yet_described},
+    {"LOCAL_RELAY_NUM_BUFFERS", k_not_yet_described},
+    {"TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID", k_not_yet_described},
+    {"ENABLE_FABRIC_TELEMETRY", k_not_yet_described},
+    {"PERF_TELEMETRY_MODE", k_not_yet_described},
+    {"CODE_PROFILING_ENABLED_TIMERS", k_not_yet_described},
+});
+
+inline constexpr auto k_unrecorded_defines = std::to_array<Unrecorded>({
+    {"FABRIC_2D", "The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled."},
+});
+
+constexpr bool table_reads(const auto& fields, std::string_view name) {
+    return std::ranges::any_of(fields, [&](const RouterField& field) {
+        const auto* arg = std::get_if<NamedArg>(&field.source);
+        return arg != nullptr && same_arg_family(arg->name, name);
+    });
+}
+
+// Whether a field table or the collector reads the named argument `name`.
+constexpr bool manifest_reads_arg(std::string_view name) {
+    return table_reads(k_router_fields, name) || table_reads(k_erisc_fields, name) ||
+           table_reads(k_sender_channel_fields, name) || table_reads(k_receiver_channel_fields, name) ||
+           table_reads(k_downstream_edge_fields, name) ||
+           std::ranges::any_of(k_collector_args, [&](std::string_view arg) { return same_arg_family(arg, name); });
+}
+
+constexpr bool is_unrecorded_arg(std::string_view name) {
+    return std::ranges::any_of(
+        k_unrecorded_args, [&](const Unrecorded& arg) { return same_arg_family(arg.name, name); });
+}
+
+constexpr bool manifest_reads_define(std::string_view name) {
+    return std::ranges::find(k_collector_defines, name) != k_collector_defines.end();
+}
+
+constexpr bool is_unrecorded_define(std::string_view name) {
+    return std::ranges::find(k_unrecorded_defines, name, &Unrecorded::name) != k_unrecorded_defines.end();
+}
+
+// An input the manifest reads cannot also be listed as unrecorded.
+static_assert(std::ranges::none_of(k_unrecorded_args, [](const Unrecorded& arg) {
+    return manifest_reads_arg(arg.name);
+}));
+static_assert(std::ranges::none_of(k_unrecorded_defines, [](const Unrecorded& define) {
+    return manifest_reads_define(define.name);
+}));
 
 }  // namespace tt::tt_fabric::manifest
