@@ -24,6 +24,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     MathOperation,
     VectorMode,
     format_dict,
@@ -33,6 +34,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     MATH_OP,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
@@ -99,8 +101,9 @@ def _bits(value: float) -> int:
     formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=list(_TORCH_COMPARE),
     threshold=THRESHOLDS,
+    dest_sync=[DestSync.Half],
 )
-def test_sfpu_comp_unary_threshold(formats, mathop, threshold):
+def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
     reps = ELEMENTS_PER_TILE // len(INPUTS) + 1
     src_A = torch.tensor((list(INPUTS) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
@@ -114,6 +117,7 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold):
             MATH_OP(mathop=mathop),
             SFPU_UNARY_SCALAR(_bits(threshold)),
             VECTOR_MODE(VectorMode.RC),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(

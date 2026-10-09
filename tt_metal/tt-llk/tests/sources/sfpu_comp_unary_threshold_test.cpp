@@ -19,8 +19,6 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
-
 // The tile the datacopy writes and the SFPU then reads; both calls must use the same index.
 static constexpr std::uint32_t DST_INDEX = 0;
 
@@ -62,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
@@ -70,9 +68,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The compares need only the generic SFPU init (config reg, ADDR_MOD_7, dest RWC reset).
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
+    _llk_math_wait_for_dest_available_<dest_sync>();
 
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         DST_INDEX, formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
@@ -80,7 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_params_(
         [] { ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(SFPU_UNARY_SCALAR); }, DST_INDEX, VECTOR_MODE);
 
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -97,11 +95,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif
