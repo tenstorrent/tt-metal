@@ -1,0 +1,3007 @@
+{
+  "scope": "Synthetic recurrence; three eager calls on four TP4 ranks. Includes profiler overhead.",
+  "limitations": [
+    "RISC phases overlap; do not sum across processors.",
+    "Compute regions include unpack/pack synchronization; they are not pure arithmetic time.",
+    "DRAM regions include issue and completion waits; they are not measured link utilization.",
+    "No NoC congestion counters were populated.",
+    "Two input buffers are already used by the model candidate; that gain is not new."
+  ],
+  "architecture": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 130",
+  "frequency_mhz": 1350,
+  "total_raw_rows": 2294336,
+  "selected_raw_rows": 2105856,
+  "duplicate_raw_events": 0,
+  "observed_riscs": [
+    "BRISC",
+    "NCRISC",
+    "TRISC_0",
+    "TRISC_1",
+    "TRISC_2"
+  ],
+  "all_phase_pairs_complete": true,
+  "source_sha256": {
+    "gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/ops_perf_results_2026_10_09_23_09_52.csv.gz": "1d1f1766487cfb400e63258277dc30a138e063715f8d5e937f2cb41648d5186f",
+    "event-partitions.json": "dfbd018d864e78a1f57d4af441151289e14c82af9feb7611ee56bfd3f57fdadb"
+  },
+  "kernels": [
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "duration_us": {
+        "n": 12,
+        "min": 131.836,
+        "median": 132.571,
+        "mean": 132.62266666666667,
+        "p90": 133.351,
+        "max": 133.859
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 132.558,
+          "median": 132.621,
+          "mean": 132.63533333333334,
+          "p90": 132.727,
+          "max": 132.727
+        },
+        "4": {
+          "n": 3,
+          "min": 131.976,
+          "median": 132.479,
+          "mean": 132.34633333333335,
+          "p90": 132.584,
+          "max": 132.584
+        },
+        "8": {
+          "n": 3,
+          "min": 133.331,
+          "median": 133.351,
+          "mean": 133.51366666666667,
+          "p90": 133.859,
+          "max": 133.859
+        },
+        "12": {
+          "n": 3,
+          "min": 131.836,
+          "median": 132.01,
+          "mean": 131.99533333333332,
+          "p90": 132.14,
+          "max": 132.14
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "duration_us": {
+        "n": 12,
+        "min": 134.614,
+        "median": 135.05849999999998,
+        "mean": 135.28683333333333,
+        "p90": 135.979,
+        "max": 136.539
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 134.691,
+          "median": 135.807,
+          "mean": 135.679,
+          "p90": 136.539,
+          "max": 136.539
+        },
+        "4": {
+          "n": 3,
+          "min": 135.064,
+          "median": 135.327,
+          "mean": 135.40366666666665,
+          "p90": 135.82,
+          "max": 135.82
+        },
+        "8": {
+          "n": 3,
+          "min": 134.614,
+          "median": 134.918,
+          "mean": 135.17033333333333,
+          "p90": 135.979,
+          "max": 135.979
+        },
+        "12": {
+          "n": 3,
+          "min": 134.737,
+          "median": 134.893,
+          "mean": 134.89433333333332,
+          "p90": 135.053,
+          "max": 135.053
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "duration_us": {
+        "n": 12,
+        "min": 91.361,
+        "median": 91.66900000000001,
+        "mean": 91.61408333333333,
+        "p90": 91.77,
+        "max": 91.84
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 91.502,
+          "median": 91.541,
+          "mean": 91.56933333333333,
+          "p90": 91.665,
+          "max": 91.665
+        },
+        "4": {
+          "n": 3,
+          "min": 91.407,
+          "median": 91.673,
+          "mean": 91.593,
+          "p90": 91.699,
+          "max": 91.699
+        },
+        "8": {
+          "n": 3,
+          "min": 91.428,
+          "median": 91.727,
+          "mean": 91.64166666666667,
+          "p90": 91.77,
+          "max": 91.77
+        },
+        "12": {
+          "n": 3,
+          "min": 91.361,
+          "median": 91.756,
+          "mean": 91.65233333333333,
+          "p90": 91.84,
+          "max": 91.84
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "duration_us": {
+        "n": 12,
+        "min": 93.137,
+        "median": 93.495,
+        "mean": 93.4315,
+        "p90": 93.647,
+        "max": 93.801
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 93.156,
+          "median": 93.395,
+          "mean": 93.35066666666667,
+          "p90": 93.501,
+          "max": 93.501
+        },
+        "4": {
+          "n": 3,
+          "min": 93.204,
+          "median": 93.489,
+          "mean": 93.42566666666667,
+          "p90": 93.584,
+          "max": 93.584
+        },
+        "8": {
+          "n": 3,
+          "min": 93.137,
+          "median": 93.514,
+          "mean": 93.43266666666666,
+          "p90": 93.647,
+          "max": 93.647
+        },
+        "12": {
+          "n": 3,
+          "min": 93.206,
+          "median": 93.544,
+          "mean": 93.517,
+          "p90": 93.801,
+          "max": 93.801
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "duration_us": {
+        "n": 12,
+        "min": 233.278,
+        "median": 234.8405,
+        "mean": 234.877,
+        "p90": 235.652,
+        "max": 235.811
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 234.316,
+          "median": 234.639,
+          "mean": 234.922,
+          "p90": 235.811,
+          "max": 235.811
+        },
+        "4": {
+          "n": 3,
+          "min": 234.445,
+          "median": 235.19,
+          "mean": 235.08433333333332,
+          "p90": 235.618,
+          "max": 235.618
+        },
+        "8": {
+          "n": 3,
+          "min": 234.767,
+          "median": 234.813,
+          "mean": 234.90233333333333,
+          "p90": 235.127,
+          "max": 235.127
+        },
+        "12": {
+          "n": 3,
+          "min": 233.278,
+          "median": 234.868,
+          "mean": 234.59933333333333,
+          "p90": 235.652,
+          "max": 235.652
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "duration_us": {
+        "n": 12,
+        "min": 238.568,
+        "median": 239.111,
+        "mean": 239.18283333333335,
+        "p90": 239.712,
+        "max": 239.811
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 238.568,
+          "median": 239.206,
+          "mean": 239.16066666666666,
+          "p90": 239.708,
+          "max": 239.708
+        },
+        "4": {
+          "n": 3,
+          "min": 238.781,
+          "median": 239.016,
+          "mean": 239.09233333333333,
+          "p90": 239.48,
+          "max": 239.48
+        },
+        "8": {
+          "n": 3,
+          "min": 239.449,
+          "median": 239.712,
+          "mean": 239.65733333333333,
+          "p90": 239.811,
+          "max": 239.811
+        },
+        "12": {
+          "n": 3,
+          "min": 238.782,
+          "median": 238.787,
+          "mean": 238.821,
+          "p90": 238.894,
+          "max": 238.894
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "duration_us": {
+        "n": 12,
+        "min": 158.858,
+        "median": 158.953,
+        "mean": 158.98258333333334,
+        "p90": 159.136,
+        "max": 159.173
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 158.892,
+          "median": 158.936,
+          "mean": 158.927,
+          "p90": 158.953,
+          "max": 158.953
+        },
+        "4": {
+          "n": 3,
+          "min": 158.924,
+          "median": 158.965,
+          "mean": 158.99633333333333,
+          "p90": 159.1,
+          "max": 159.1
+        },
+        "8": {
+          "n": 3,
+          "min": 158.934,
+          "median": 158.967,
+          "mean": 159.01233333333334,
+          "p90": 159.136,
+          "max": 159.136
+        },
+        "12": {
+          "n": 3,
+          "min": 158.858,
+          "median": 158.953,
+          "mean": 158.99466666666666,
+          "p90": 159.173,
+          "max": 159.173
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "duration_us": {
+        "n": 12,
+        "min": 161.937,
+        "median": 162.1365,
+        "mean": 162.19258333333335,
+        "p90": 162.583,
+        "max": 162.71
+      },
+      "per_rank": {
+        "0": {
+          "n": 3,
+          "min": 161.937,
+          "median": 162.072,
+          "mean": 162.07866666666666,
+          "p90": 162.227,
+          "max": 162.227
+        },
+        "4": {
+          "n": 3,
+          "min": 161.959,
+          "median": 162.13,
+          "mean": 162.07733333333334,
+          "p90": 162.143,
+          "max": 162.143
+        },
+        "8": {
+          "n": 3,
+          "min": 162.055,
+          "median": 162.178,
+          "mean": 162.272,
+          "p90": 162.583,
+          "max": 162.583
+        },
+        "12": {
+          "n": 3,
+          "min": 161.981,
+          "median": 162.336,
+          "mean": 162.34233333333333,
+          "p90": 162.71,
+          "max": 162.71
+        }
+      },
+      "core_counts": [
+        120
+      ]
+    }
+  ],
+  "phase_summaries": [
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 102.28814814814815,
+        "median": 110.83,
+        "mean": 116.62886265432098,
+        "p90": 131.28222222222223,
+        "max": 133.59259259259258
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 90.34,
+        "median": 98.78703703703704,
+        "mean": 104.6507695473251,
+        "p90": 119.30592592592592,
+        "max": 121.62518518518519
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 101.0,
+        "median": 109.43296296296296,
+        "mean": 115.32833796296296,
+        "p90": 130.00148148148148,
+        "max": 132.2837037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 101.73555555555555,
+        "median": 110.14740740740741,
+        "mean": 116.01943209876544,
+        "p90": 130.68814814814814,
+        "max": 133.01555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 98.92962962962963,
+        "median": 107.37814814814814,
+        "mean": 113.26048919753086,
+        "p90": 127.9274074074074,
+        "max": 130.2111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 104.44592592592592,
+        "median": 112.94444444444444,
+        "mean": 119.06739917695474,
+        "p90": 133.9474074074074,
+        "max": 136.2962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.783703703703704,
+        "median": 15.885925925925926,
+        "mean": 16.969880658436214,
+        "p90": 18.51037037037037,
+        "max": 20.523703703703703
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 3.8733333333333335,
+        "median": 5.095555555555556,
+        "mean": 5.495496913580247,
+        "p90": 7.272592592592592,
+        "max": 10.346666666666666
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 80.33111111111111,
+        "median": 90.67777777777778,
+        "mean": 95.82090997942387,
+        "p90": 109.64962962962963,
+        "max": 112.18592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 56.02148148148148,
+        "median": 56.224444444444444,
+        "mean": 60.62093209876543,
+        "p90": 67.3488888888889,
+        "max": 67.44444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.245925925925926,
+        "median": 12.123703703703704,
+        "mean": 12.132008744855968,
+        "p90": 17.157037037037036,
+        "max": 19.467407407407407
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.791851851851852,
+        "median": 30.80074074074074,
+        "mean": 32.85061419753087,
+        "p90": 35.93185185185185,
+        "max": 35.93703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 92.22148148148148,
+        "median": 100.64444444444445,
+        "mean": 106.81259002057614,
+        "p90": 121.70814814814815,
+        "max": 124.02296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.70148148148148,
+        "median": 25.842222222222222,
+        "mean": 27.524833847736627,
+        "p90": 30.118518518518517,
+        "max": 30.18148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 35.75333333333333,
+        "median": 44.08222222222223,
+        "mean": 45.786221193415635,
+        "p90": 53.96666666666667,
+        "max": 56.2962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.732592592592592,
+        "median": 14.834814814814814,
+        "mean": 15.788262860082305,
+        "p90": 17.277037037037037,
+        "max": 17.325925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.085925925925928,
+        "median": 25.263703703703705,
+        "mean": 26.894862139917695,
+        "p90": 29.454814814814814,
+        "max": 29.545185185185186
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 103.08296296296297,
+        "median": 111.54666666666667,
+        "mean": 117.71081893004116,
+        "p90": 132.61111111111111,
+        "max": 134.95333333333335
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.276296296296294,
+        "median": 69.61222222222221,
+        "mean": 72.9732968106996,
+        "p90": 83.62666666666667,
+        "max": 85.96296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08814814814814814,
+        "median": 0.09259259259259259,
+        "mean": 0.09731378600823046,
+        "p90": 0.10740740740740741,
+        "max": 0.11777777777777777
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.651851851851852,
+        "median": 15.749259259259258,
+        "mean": 16.756613683127572,
+        "p90": 18.33851851851852,
+        "max": 18.40740740740741
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.93925925925926,
+        "median": 26.084444444444443,
+        "mean": 27.76577314814815,
+        "p90": 30.418518518518518,
+        "max": 30.462962962962962
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 103.8637037037037,
+        "median": 112.24962962962962,
+        "mean": 118.41981790123457,
+        "p90": 133.32,
+        "max": 135.66
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 13.542962962962964,
+        "median": 13.674814814814814,
+        "mean": 14.687778806584362,
+        "p90": 16.295555555555556,
+        "max": 16.346666666666668
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08,
+        "median": 0.0874074074074074,
+        "mean": 0.08969701646090535,
+        "p90": 0.10074074074074074,
+        "max": 0.10518518518518519
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.776296296296296,
+        "median": 5.822962962962963,
+        "mean": 6.193369341563786,
+        "p90": 6.7881481481481485,
+        "max": 6.8133333333333335
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 80.8,
+        "median": 89.16851851851851,
+        "mean": 93.82203446502058,
+        "p90": 106.50962962962963,
+        "max": 108.95407407407407
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 100.9962962962963,
+        "median": 109.41518518518518,
+        "mean": 115.57874845679012,
+        "p90": 130.49185185185186,
+        "max": 132.85555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 74.87037037037037,
+        "median": 78.43703703703704,
+        "mean": 82.57155864197532,
+        "p90": 90.67555555555556,
+        "max": 91.44444444444444
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 57.239259259259256,
+        "median": 63.654074074074074,
+        "mean": 66.42096141975308,
+        "p90": 74.60518518518519,
+        "max": 75.82592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 73.5911111111111,
+        "median": 76.71481481481482,
+        "mean": 80.99952314814814,
+        "p90": 89.43185185185185,
+        "max": 90.19407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 74.28148148148148,
+        "median": 77.39185185185184,
+        "mean": 81.65928755144033,
+        "p90": 90.09407407407407,
+        "max": 90.9088888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 71.48518518518519,
+        "median": 74.6037037037037,
+        "mean": 78.9005133744856,
+        "p90": 87.34444444444445,
+        "max": 88.11037037037038
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 76.62074074074074,
+        "median": 80.01814814814816,
+        "mean": 84.28552160493827,
+        "p90": 92.52888888888889,
+        "max": 93.52888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.779259259259259,
+        "median": 15.891851851851852,
+        "mean": 17.285737139917696,
+        "p90": 18.755555555555556,
+        "max": 32.54962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.078518518518519,
+        "median": 6.587407407407408,
+        "mean": 8.384182098765432,
+        "p90": 15.012592592592593,
+        "max": 26.966666666666665
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 36.968148148148146,
+        "median": 56.25555555555556,
+        "mean": 57.84766615226337,
+        "p90": 67.85481481481482,
+        "max": 69.28740740740741
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.613333333333333,
+        "median": 13.745185185185186,
+        "mean": 14.716536008230452,
+        "p90": 20.591851851851853,
+        "max": 24.51851851851852
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 4.245185185185186,
+        "median": 20.307777777777776,
+        "mean": 18.849819444444446,
+        "p90": 26.925185185185185,
+        "max": 31.563703703703705
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 30.817037037037036,
+        "median": 30.94,
+        "mean": 32.94199742798354,
+        "p90": 36.031851851851854,
+        "max": 36.11333333333334
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 58.47185185185185,
+        "median": 64.85148148148149,
+        "mean": 67.73754423868313,
+        "p90": 76.11333333333333,
+        "max": 77.52888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 26.785925925925927,
+        "median": 26.936296296296295,
+        "mean": 28.679531378600824,
+        "p90": 31.392592592592592,
+        "max": 31.465925925925927
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.397037037037037,
+        "median": 9.486666666666666,
+        "mean": 9.3440591563786,
+        "p90": 11.08074074074074,
+        "max": 11.847407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 14.735555555555555,
+        "median": 14.83925925925926,
+        "mean": 15.792289609053498,
+        "p90": 17.28148148148148,
+        "max": 17.36888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.12962962962963,
+        "median": 25.30814814814815,
+        "mean": 26.929987139917696,
+        "p90": 29.477037037037036,
+        "max": 29.577037037037037
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 75.16888888888889,
+        "median": 78.28925925925927,
+        "mean": 82.65089763374486,
+        "p90": 91.20370370370371,
+        "max": 92.1874074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 33.15259259259259,
+        "median": 36.376296296296296,
+        "mean": 37.881852366255146,
+        "p90": 42.205925925925925,
+        "max": 43.11925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08296296296296296,
+        "median": 0.08666666666666667,
+        "mean": 0.09102726337448559,
+        "p90": 0.10074074074074074,
+        "max": 0.10962962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 15.634814814814815,
+        "median": 15.744444444444444,
+        "mean": 16.75335853909465,
+        "p90": 18.343703703703703,
+        "max": 18.46074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 25.96962962962963,
+        "median": 26.144444444444446,
+        "mean": 27.813392489711934,
+        "p90": 30.45925925925926,
+        "max": 30.537037037037038
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 75.8125925925926,
+        "median": 78.98037037037037,
+        "mean": 83.33222119341563,
+        "p90": 91.88518518518518,
+        "max": 92.94592592592592
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 13.54,
+        "median": 13.66148148148148,
+        "mean": 14.678661522633744,
+        "p90": 16.294814814814814,
+        "max": 16.411851851851853
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.08,
+        "median": 0.08518518518518518,
+        "mean": 0.0886985596707819,
+        "p90": 0.09851851851851852,
+        "max": 0.10666666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 5.771111111111111,
+        "median": 5.822962962962963,
+        "mean": 6.191065329218107,
+        "p90": 6.79037037037037,
+        "max": 6.808888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 52.766666666666666,
+        "median": 55.909629629629634,
+        "mean": 58.77447222222222,
+        "p90": 65.10888888888888,
+        "max": 65.92666666666666
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 6,
+        "median": 6.0,
+        "mean": 6.4,
+        "p90": 7,
+        "max": 7
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 73.01037037037037,
+        "median": 76.12740740740742,
+        "mean": 80.49622993827161,
+        "p90": 89.06,
+        "max": 90.01555555555555
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 202.98222222222222,
+        "median": 228.31333333333333,
+        "mean": 225.0046764403292,
+        "p90": 233.43407407407406,
+        "max": 235.51185185185184
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 191.02370370370372,
+        "median": 216.31814814814817,
+        "mean": 213.0201898148148,
+        "p90": 221.46592592592592,
+        "max": 223.55037037037036
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 201.6985185185185,
+        "median": 227.0425925925926,
+        "mean": 223.72919187242798,
+        "p90": 232.1822222222222,
+        "max": 234.23481481481483
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 202.33185185185187,
+        "median": 227.73481481481483,
+        "mean": 224.41319650205762,
+        "p90": 232.84592592592594,
+        "max": 234.97407407407408
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 0,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 199.60888888888888,
+        "median": 224.95555555555558,
+        "mean": 221.64118364197532,
+        "p90": 230.1074074074074,
+        "max": 232.14296296296297
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 206.9725925925926,
+        "median": 232.8162962962963,
+        "mean": 229.43557767489713,
+        "p90": 237.8014814814815,
+        "max": 239.49407407407406
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.488888888888887,
+        "median": 34.18666666666667,
+        "mean": 33.76267438271605,
+        "p90": 34.297777777777775,
+        "max": 37.61925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 7.939259259259259,
+        "median": 9.524074074074075,
+        "mean": 9.936414609053498,
+        "p90": 12.063703703703704,
+        "max": 15.978518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 165.03703703703704,
+        "median": 186.48333333333335,
+        "mean": 184.2578029835391,
+        "p90": 193.16074074074075,
+        "max": 194.9525925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 122.79555555555555,
+        "median": 134.10333333333335,
+        "mean": 131.94259979423867,
+        "p90": 134.33925925925925,
+        "max": 135.47629629629628
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 8.153333333333334,
+        "median": 17.344074074074072,
+        "mean": 17.232064300411523,
+        "p90": 22.28,
+        "max": 24.054074074074073
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.58518518518518,
+        "median": 66.72740740740741,
+        "mean": 65.70288014403292,
+        "p90": 66.73481481481481,
+        "max": 66.74666666666667
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 194.78074074074075,
+        "median": 220.55185185185184,
+        "mean": 217.17400360082306,
+        "p90": 225.56962962962962,
+        "max": 227.21037037037038
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 51.38962962962963,
+        "median": 55.77185185185185,
+        "mean": 54.9243811728395,
+        "p90": 55.81185185185185,
+        "max": 56.07703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 71.4325925925926,
+        "median": 85.90296296296296,
+        "mean": 84.75862911522634,
+        "p90": 90.86814814814815,
+        "max": 92.62296296296296
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 29.384444444444444,
+        "median": 31.888148148148147,
+        "mean": 31.420530349794237,
+        "p90": 31.95777777777778,
+        "max": 32.102222222222224
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 50.2562962962963,
+        "median": 54.54925925925926,
+        "mean": 53.758364711934156,
+        "p90": 54.76592592592593,
+        "max": 55.55925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 205.65185185185186,
+        "median": 231.47703703703704,
+        "mean": 228.0835128600823,
+        "p90": 236.48,
+        "max": 238.1511111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 121.61037037037038,
+        "median": 140.17000000000002,
+        "mean": 138.244058127572,
+        "p90": 145.16814814814813,
+        "max": 147.0274074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.17851851851851852,
+        "median": 0.19777777777777777,
+        "mean": 0.19551697530864198,
+        "p90": 0.20074074074074075,
+        "max": 0.20962962962962964
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.234074074074073,
+        "median": 33.9062962962963,
+        "mean": 33.39850720164609,
+        "p90": 33.97037037037037,
+        "max": 34.068888888888885
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 51.882962962962964,
+        "median": 56.25259259259259,
+        "mean": 55.457220164609055,
+        "p90": 56.44814814814815,
+        "max": 57.50222222222222
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 206.43185185185186,
+        "median": 232.13925925925923,
+        "mean": 228.79044804526748,
+        "p90": 237.17555555555555,
+        "max": 238.95333333333335
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 29.33111111111111,
+        "median": 32.03259259259259,
+        "mean": 31.52110133744856,
+        "p90": 32.08518518518518,
+        "max": 32.2162962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16,
+        "median": 0.17555555555555555,
+        "mean": 0.17704783950617284,
+        "p90": 0.18814814814814815,
+        "max": 0.19333333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.562962962962963,
+        "median": 12.56,
+        "mean": 12.381564814814816,
+        "p90": 12.605925925925925,
+        "max": 12.828888888888889
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 161.1074074074074,
+        "median": 183.10407407407405,
+        "mean": 180.46231172839506,
+        "p90": 188.1325925925926,
+        "max": 189.84222222222223
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 203.55925925925925,
+        "median": 229.33814814814815,
+        "mean": 225.94453189300413,
+        "p90": 234.33851851851853,
+        "max": 236.06148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 142.65407407407406,
+        "median": 156.7711111111111,
+        "mean": 154.48281738683127,
+        "p90": 158.0511111111111,
+        "max": 158.8362962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 125.02666666666667,
+        "median": 141.2051851851852,
+        "mean": 138.75458950617283,
+        "p90": 143.5074074074074,
+        "max": 144.83185185185187
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 141.15407407407406,
+        "median": 155.28407407407406,
+        "mean": 152.97388323045269,
+        "p90": 156.80814814814815,
+        "max": 157.59333333333333
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 141.89037037037036,
+        "median": 155.93851851851852,
+        "mean": 153.63602829218107,
+        "p90": 157.4711111111111,
+        "max": 158.31259259259258
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 0,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 139.06740740740742,
+        "median": 153.1811111111111,
+        "mean": 150.8705262345679,
+        "p90": 154.71925925925925,
+        "max": 155.48296296296297
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "BRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 145.29555555555555,
+        "median": 159.94037037037037,
+        "mean": 157.55269238683127,
+        "p90": 161.23851851851853,
+        "max": 162.37185185185186
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_DRAM_ISSUE_AND_OUTPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.47851851851852,
+        "median": 34.19148148148148,
+        "mean": 34.83711625514403,
+        "p90": 35.81037037037037,
+        "max": 80.9562962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_OUTPUT_AND_BARRIER",
+      "core_total_us": {
+        "n": 1440,
+        "min": 8.431111111111111,
+        "median": 14.095555555555556,
+        "mean": 18.0510591563786,
+        "p90": 33.13777777777778,
+        "max": 57.74444444444445
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "BRISC",
+      "zone": "GDN_WRITER_STATE_CB_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.12222222222222,
+        "median": 104.86074074074074,
+        "mean": 103.20128600823045,
+        "p90": 115.21703703703703,
+        "max": 117.92518518518519
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_CB_RESERVE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 16.16962962962963,
+        "median": 29.808518518518518,
+        "mean": 33.18654012345679,
+        "p90": 51.12,
+        "max": 58.302962962962965
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_DRAM_ISSUE_AND_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 8.407407407407407,
+        "median": 44.66888888888889,
+        "mean": 39.918737139917695,
+        "p90": 55.59703703703704,
+        "max": 60.78074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "GDN_READER_L1_PREPARE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 61.64962962962963,
+        "median": 66.85333333333334,
+        "mean": 65.88483024691358,
+        "p90": 66.99111111111111,
+        "max": 67.1525925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "NCRISC",
+      "zone": "NCRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 127.28370370370371,
+        "median": 143.88444444444445,
+        "mean": 141.3287031893004,
+        "p90": 146.13185185185185,
+        "max": 147.32888888888888
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 53.72,
+        "median": 58.28888888888889,
+        "mean": 57.418597222222225,
+        "p90": 58.36,
+        "max": 58.45703703703704
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 6.683703703703704,
+        "median": 10.031111111111112,
+        "mean": 9.82353549382716,
+        "p90": 11.511851851851851,
+        "max": 12.14962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 29.35703703703704,
+        "median": 31.874074074074073,
+        "mean": 31.406988683127572,
+        "p90": 31.96074074074074,
+        "max": 32.08592592592593
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 50.25037037037037,
+        "median": 54.54296296296296,
+        "mean": 53.7421316872428,
+        "p90": 54.65481481481481,
+        "max": 55.05111111111111
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_0",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 143.9237037037037,
+        "median": 158.40148148148148,
+        "mean": 156.00271193415637,
+        "p90": 159.9177777777778,
+        "max": 161.05925925925925
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 59.63925925925926,
+        "median": 67.28666666666666,
+        "mean": 66.2464408436214,
+        "p90": 68.78296296296297,
+        "max": 69.52518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.1674074074074074,
+        "median": 0.18296296296296297,
+        "mean": 0.1815679012345679,
+        "p90": 0.18592592592592594,
+        "max": 0.1948148148148148
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 31.184444444444445,
+        "median": 33.87111111111111,
+        "mean": 33.369841049382714,
+        "p90": 33.96222222222222,
+        "max": 34.09185185185185
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 51.92074074074074,
+        "median": 56.276296296296294,
+        "mean": 55.461514917695474,
+        "p90": 56.404444444444444,
+        "max": 57.03925925925926
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_1",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 144.51037037037037,
+        "median": 159.09074074074073,
+        "mean": 156.68061985596708,
+        "p90": 160.59037037037038,
+        "max": 161.78
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_DELTA",
+      "core_total_us": {
+        "n": 1440,
+        "min": 29.251851851851853,
+        "median": 31.97,
+        "mean": 31.472449588477367,
+        "p90": 32.08888888888889,
+        "max": 32.23555555555556
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_INPUT_WAIT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 0.16,
+        "median": 0.17666666666666667,
+        "mean": 0.1759758230452675,
+        "p90": 0.18296296296296297,
+        "max": 0.19111111111111112
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_OUTPUT",
+      "core_total_us": {
+        "n": 1440,
+        "min": 11.571851851851852,
+        "median": 12.551851851851852,
+        "mean": 12.364212448559671,
+        "p90": 12.568148148148149,
+        "max": 12.718518518518518
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "GDN_COMPUTE_STATE_UPDATE",
+      "core_total_us": {
+        "n": 1440,
+        "min": 99.37333333333333,
+        "median": 110.19592592592593,
+        "mean": 108.50155555555556,
+        "p90": 111.66296296296296,
+        "max": 112.76074074074074
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 12,
+        "median": 13.0,
+        "mean": 12.8,
+        "p90": 13,
+        "max": 13
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": 1,
+      "risc": "TRISC_2",
+      "zone": "TRISC-KERNEL",
+      "core_total_us": {
+        "n": 1440,
+        "min": 141.75925925925927,
+        "median": 156.25185185185185,
+        "mean": 153.8514799382716,
+        "p90": 157.76444444444445,
+        "max": 158.92962962962963
+      },
+      "items_per_core": {
+        "n": 1440,
+        "min": 1,
+        "median": 1.0,
+        "mean": 1,
+        "p90": 1,
+        "max": 1
+      }
+    }
+  ]
+}

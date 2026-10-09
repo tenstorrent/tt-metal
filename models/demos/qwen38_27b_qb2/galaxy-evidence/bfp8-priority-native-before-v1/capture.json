@@ -1,0 +1,26 @@
+{
+  "captured_at": 1791587632.848446,
+  "source_root": "/home/ttuser/qwen38-artifacts-20261007",
+  "files": {
+    "perf-priority-v1/native-before/sweep.json": {
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5",
+      "bytes": 43831,
+      "compressed": false
+    },
+    "perf-priority-v1/native-before/sweep.csv.gz": {
+      "sha256": "2766216d2bfc812a257ca6c4d5ab645394af8c9eac307451fd96a0c5122b977e",
+      "bytes": 809,
+      "compressed": true
+    },
+    "perf-priority-v1/native-before/hardware.xml.gz": {
+      "sha256": "f249493e1a4529251a1e0e6edd87a4f4448a3811748832f841b751b66b87a8c9",
+      "bytes": 541,
+      "compressed": true
+    },
+    "perf-priority-v1/native-before/run.log.gz": {
+      "sha256": "fda9295556b56f90124577ce84249c67b17f9963a02378f9c771a04f9b4e2cd1",
+      "bytes": 19989,
+      "compressed": true
+    }
+  }
+}

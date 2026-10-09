@@ -1726,3 +1726,44 @@ No session connection is needed for that queue to continue.
   matching the prior baseline. Native-before advanced to16K/B32. After the
   interruption, all four owned service invocations were revalidated live;
   the new physical experiments were still waiting for the shared device lock.
+
+
+## Oct 9, 23:08-23:24 UTC: completed phase profile and real-weight epilogue
+
+- Native-before finished all four cells and clean shutdown. Refreshed 32K B16/B32
+  is11.754/7.343 TSU;16K is12.646/8.040. The persistent full-model queue advanced
+  to shared-QK and loaded all64 layers; the native-after bracket and qualification
+  remain queued. Do not treat active service Result=success as completion.
+- Real-weight epilogue completed all B32/B16/B8/B1 controls. Every projected
+  output/state matches bit-for-bit on all four ranks. B32 block1016.36->951.70us
+  (+6.79% throughput), B16 710.69->685.47us (+3.68%); native fallbacks unchanged
+  within timing noise. Linear48-layer savings3.103/1.211ms are projections.
+- Targeted phase profiler completed all24calls, eight buffer/instrumentation
+  cases, all ten labels, identical instrumented/control output/state, passing
+  JUnit and clean shutdown. Added zones cost about2% in these eager calls.
+  Two buffers reduce B32 recurrence234.84->158.95us and B16 132.57->91.67us;
+  that setting is already selected by the model candidate, not a new gain.
+- AtB32/two buffers, mean per-core unpack input wait9.82us; delta57.42us,
+  state update53.74us and output31.41us. Reader L1 preparation65.88us and DRAM
+  issue/completion39.92us overlap compute. Writer waits103.20us for state.
+  This points toward compute/unpack/pack synchronization and external preparation
+  as leads; it does not prove NoC congestion or measure DRAM utilization.
+- Parsed2,105,856 relevant raw events, checked exact per-phase work-item counts
+  across all four ranks and matched every start/end. No duplicates. Fixed an
+  analysis mapping error (global call ID already includes device identity)
+  caught by the four-rank count assertion. Archived original rawCSV/Tracy;
+  published untouched event rows per call/device under the500KB/file limit.
+  Reanalysis reproduces every aggregate and per-core statistic from full CSV.
+- Added a physical direct tiled-input preparation test: nine geometry/placement
+  cases, all-rank bit equality, two allocations, changed-input trace replay and
+  native/fused/native timing. Native exp remains external; model unchanged.
+  First staging failed collection because the frozen base omitted prototype
+  files; no hardware accessed. v2 explicitly includes them;472CPU tests and
+  40subtests pass, one skipped; hardware collection passes. Preserved failure.
+- Launched qwen38-gdn-flat-prepare-hardware-v2-20261009, invocation
+  c6713def66f8497c9e695154edb2ddbe, under the same global lock. Persistent across
+  disconnect, bounded2h/48GiB/8CPUs,90min capture,20min hardware pytest; no reboot
+  resume. Source manifest and launch receipts captured. Hardware result pending.
+- Network-denied collection/staging helpers retried with sandbox escalation.
+  No model promotion, precision change, firmware/NFS mutation or running queue
+  rewrite. Original large profiler artifacts remain on host disk and locally.

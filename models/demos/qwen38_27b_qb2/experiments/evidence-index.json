@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T22:58:41.293223+00:00",
+  "generated_at": "2026-10-09T23:28:05.194943+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -113,6 +113,11 @@
       "sha256": "93678e2bd08ea96c1eab2e6479f9a768ace7642069b58749db1d605e9eee496c"
     },
     {
+      "path": "demo/run_gdn_flat_prepare.py",
+      "bytes": 4434,
+      "sha256": "5bb683457afe7efa72f9ac43d15abefbb32cf66c92d7591138247f5f6062a2cf"
+    },
+    {
       "path": "demo/run_gdn_phase_profile.py",
       "bytes": 5571,
       "sha256": "f4a3cd5dad519c3909f785788077af7cec15e14594e2472a6d2aa95aa4ac4508"
@@ -144,8 +149,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 127824,
-      "sha256": "cbbbfebc0cd12acc72a3a6438b5d80a0f1e5fb71ecf11cf577086039712521d0"
+      "bytes": 130782,
+      "sha256": "79d19058617dcaed811284a5dc05b176c54207ecbe40c1b0912bab2591003ba8"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -1104,6 +1109,41 @@
       "path": "galaxy-evidence/bfp8-gdn-followup-v1/units.txt",
       "bytes": 370,
       "sha256": "7b263e365845588614584ab9980cc4c42fc035e0da5eaf0fab06f2d1722eb514"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/README.md",
+      "bytes": 849,
+      "sha256": "762f38c0f6e59795da89f0956d334a379e9cfe9311531c9072a0a0546ab42552"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/capture.json",
+      "bytes": 875,
+      "sha256": "38fa6eac32ce017eea529ac6387af26b77c148cee6f5967ce4c3783261e922b0"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/perf-priority-v1/native-before/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "9558e0d6c346d3df42807ffad403f712ed2347e70bdcb58e926442a37d2f0d23"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/perf-priority-v1/native-before/run.log.gz",
+      "bytes": 4252,
+      "sha256": "88ab8ba692bfe2dae10fd7f1ffe320085a9d380b8c78b29020997e95bdd9f5b2"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/perf-priority-v1/native-before/sweep.csv.gz",
+      "bytes": 446,
+      "sha256": "5600e659c88a1ea0b4e1351bb0e10cfda0041c415302edfa492c3fc0a3be3ab4"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/perf-priority-v1/native-before/sweep.json",
+      "bytes": 43831,
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-native-before-v1/units.txt",
+      "bytes": 419,
+      "sha256": "bb07010e2a4ea12a996c374f6d77d085cb35478418975789651f351ee5371d37"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/README.md",
@@ -2649,6 +2689,41 @@
       "sha256": "3cda5634c6c731d48384edb607056f49fc84ca4a2151c65b6269282927632250"
     },
     {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/README.md",
+      "bytes": 1439,
+      "sha256": "b9ee5aaeb5e8cc60b40dc3e9e9f078818887018fc128772f0581196e90565c91"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/capture.json",
+      "bytes": 848,
+      "sha256": "f94085e324293e63717213af6385a8f7cffc292b14cf957da3d2120014531e30"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-control-v1/run.log.gz",
+      "bytes": 3273,
+      "sha256": "6b268063b2f41aace638c214c7027a79f97a943be829989e38bc51b8c6ccd0fb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-v1/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "86c6e5c14c6ddfd45305422e71e21738ad4655cf4488f1bc36e0e449d9550b6c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-v1/layer.json",
+      "bytes": 142050,
+      "sha256": "d98e26e65238e5e687ef2d539ad0d15616904006c3eb9fd71322b79271205f58"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-v1/queue.json",
+      "bytes": 914,
+      "sha256": "e2d95c8ec7090ae73a3c756cee35bb7316e2bab3e217c94d848fbb120c12a8f0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/units.txt",
+      "bytes": 419,
+      "sha256": "bb07010e2a4ea12a996c374f6d77d085cb35478418975789651f351ee5371d37"
+    },
+    {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/README.md",
       "bytes": 2868,
       "sha256": "ea43104454b1586a2ce88010848ec9f54465ad92223c93711293ba71bb478fe3"
@@ -2877,6 +2952,116 @@
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/units.txt",
       "bytes": 421,
       "sha256": "b3569f4b20f9a52d5cce17909d13cb98d62f91adcd1858973b5f223117afa74e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/README.md",
+      "bytes": 1386,
+      "sha256": "56e8c1a6bff3005d2ccb4353038a2ef1f8be6118a51d5835e15a64019599eed0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/capture.json",
+      "bytes": 137,
+      "sha256": "92c9d9229d2dbc17e363ead1175982d66a80c2623e85e051d835f390ac9274d7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v1/preflight.log.gz",
+      "bytes": 1072,
+      "sha256": "7a62290d6ff7a8bcb34efe0499872393f2238f46981bb9caaedba32b558e5a2f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v1/unit.xml.gz",
+      "bytes": 9053,
+      "sha256": "9fc52f5b1b67477a669221ec6f1aa925e8d723edd00bda4c0ccfb48f520a7c9d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v2/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "d4c237d5fecdcdb9f74294f6489672a6a448e5bc4e7503e9e8c5f5de44639d39"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v2/launch.json",
+      "bytes": 1678,
+      "sha256": "ddfa3ddd73da634cf6b615b51621a790695b013b2580de327984948198280b17"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v2/preflight.log.gz",
+      "bytes": 384,
+      "sha256": "1f2c07a6a330f642a8ca34269677963d25308a5b3dc2b6e9e0110f90afe98843"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v2/source-manifest.json",
+      "bytes": 23682,
+      "sha256": "c270206fb25c2e4b9ae00c26e1e05bde35ffe91a86cd4680469cf462ebfef8d1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-control-v2/unit.xml.gz",
+      "bytes": 9047,
+      "sha256": "d5b65866dc0c4d53a3ec8c305622a5aaeb0285fef4736fec56a4d32cfad0b9b9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz",
+      "bytes": 1848,
+      "sha256": "fb717e56b75f1c4e1f3b4802ea08ef1eecbb08cdcafca298150da76aba1c5de3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz",
+      "bytes": 3086,
+      "sha256": "ad778d878e827d8fa4c74893d6df8f4b5dbb842cfbf6c494328b836da2f51d65"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_layer_integration.py.gz",
+      "bytes": 4085,
+      "sha256": "b1eaa780e227b6715a41f9a1332486476f88fe86b4d15af6391de7f09ec15149"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2208,
+      "sha256": "37c0c48beb5a7e428612bc58c761e2aee0399aedf24cc3d406a0ee5f96d69f90"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11301,
+      "sha256": "c1f02347796b1cc65f94ddb02561c52b2dff308891394092b9ca36273d54b799"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1770,
+      "sha256": "9ba65b0b8dca041f8c628bb7e6160bcd87e340c940e1439db8678ae1b39e5f8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1296,
+      "sha256": "29f541a145429eb08851b51d9816a7ae70a098361ec8fa89d49042d1571fbcd8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1680,
+      "sha256": "53a993068a053b847d21f0e79c15b02234833784cd750cfc3c89dcf851b5cd50"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1319,
+      "sha256": "b5d401310ddec492324a6937abd2609f8379c61d7f3f66a79f4bb41a1a253f47"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tt/precision.py.gz",
+      "bytes": 1866,
+      "sha256": "3d630c984729bc64463a3439c0c58527efca8b31a7c9703db772f2e73a2b3e28"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-v2/queue.json",
+      "bytes": 930,
+      "sha256": "d4bde4ebf9c2c095106182d107cdc1a989d2bbafeef87fdc5354a743e141f7d5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/perf-priority-v1/queue.json",
+      "bytes": 6494,
+      "sha256": "ca3044727b48a6eb398a87f7d9970090faa3a96bee65389e00ae702ec8e8e613"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/units.txt",
+      "bytes": 297,
+      "sha256": "ebb5dae2c8785114f3357ec1a5edb2b1a3f5c7f59b887dd790253fdd27efa6c8"
     },
     {
       "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/README.md",
@@ -3410,6 +3595,566 @@
       "path": "galaxy-evidence/gdn-phase-profile-launch-v2/units.txt",
       "bytes": 289,
       "sha256": "1812065e22e8c473e6663797cb8c41fe754169072d11c8e0a75d70e97bd95315"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/README.md",
+      "bytes": 3977,
+      "sha256": "2eecb406d2a55f43c397dd5cabb3aa7c42cbe45ad35126c313e1aba525ddd3d4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/analyze.py",
+      "bytes": 8821,
+      "sha256": "9821b5b5677624ffdea3ce4232606c600b4160b2fdf610207ef075134eb5659c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/capture.json",
+      "bytes": 3326,
+      "sha256": "d49dbb6f91a1ee7a6abad21242f0608a363e79eb0d30118e5441a0ea0438e114"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-10240-device-0.csv.gz",
+      "bytes": 8071,
+      "sha256": "66c11463bb09877725b98b04b6cf240f4aa505960efee572ff76818c862b844b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-10244-device-4.csv.gz",
+      "bytes": 8042,
+      "sha256": "fff12a4b09dd0054a35f0d471d3a7c66cc972addc1ba8df7a2f6ba46d8b45e3a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-10248-device-8.csv.gz",
+      "bytes": 8073,
+      "sha256": "a8cff217f377a2689526a0f25454a67f80d568692c9e3962166d90954e1609ad"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-10252-device-12.csv.gz",
+      "bytes": 7996,
+      "sha256": "51cfab6f54bcd02b96275d5021dee1d8e4a3fd10eab2f0443a6caf3fd010bd14"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-11264-device-0.csv.gz",
+      "bytes": 8054,
+      "sha256": "cc420b837203882cc8e9526953dedd9d67c98d306f92e8e744b765b8d2fbaa5f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-11268-device-4.csv.gz",
+      "bytes": 8067,
+      "sha256": "2d710cadd1f98099c6d14fa8d0812cb1d9d110bc3dbfd212c385f33a686c34be"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-11272-device-8.csv.gz",
+      "bytes": 8100,
+      "sha256": "2a581e8e12bc947092d071bfc1c1c0814f1236e0af980c5dd9c5d9ba193e99f0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-11276-device-12.csv.gz",
+      "bytes": 8101,
+      "sha256": "e50f3e87d4bfa63fb9d4ba3cbd1e604810d2a90c6f3c39209c231fc5e61dd88e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-12288-device-0.csv.gz",
+      "bytes": 8053,
+      "sha256": "aed43a33a860130af26dd21bffe69edca5024026ad4745d8c968ff0b256726d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-12292-device-4.csv.gz",
+      "bytes": 8120,
+      "sha256": "bb970119a3a136337add0ba28385a422ca55485785a5089763d62bafe39ff411"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-12296-device-8.csv.gz",
+      "bytes": 8103,
+      "sha256": "f9706aae4ba2c00f862cb5ad607fea71af28965ad5553a101b6483e6013b1d09"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-12300-device-12.csv.gz",
+      "bytes": 8162,
+      "sha256": "3c1c8b29a579fd2d50f03564213925808550f62ec206c5fb7e7ad133751b51be"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-14336-device-0.csv.gz",
+      "bytes": 352208,
+      "sha256": "31297560b8054d9bcf90d79cf258d0ebec9ba080046e2dcfcd6fd1a860a2789a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-14340-device-4.csv.gz",
+      "bytes": 352391,
+      "sha256": "72a7173acafe2d74c49b721fdc4de2a3111b297dcaf6ccc85ae10077c7b25101"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-14344-device-8.csv.gz",
+      "bytes": 352244,
+      "sha256": "dcc55c0da2c7e2d538daf3a697121022be526efd862a61b7e33b36f98b4710fe"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-14348-device-12.csv.gz",
+      "bytes": 354916,
+      "sha256": "8a9fe6ebcdb181bdf106746ae2b4b6ede014feb61855521e925188e80f8d58ab"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-15360-device-0.csv.gz",
+      "bytes": 353184,
+      "sha256": "208fa945c32f4b2c50d81aeeebe92849457195dc6cf6f0889ca58667c97a7592"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-15364-device-4.csv.gz",
+      "bytes": 352930,
+      "sha256": "a1c378806c28910478c6c93e30b7bec59c6a14836c24847228ea0dc65c7982c8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-15368-device-8.csv.gz",
+      "bytes": 350897,
+      "sha256": "7d11591b9009d4e48d5f77d37254730ef7186b4fcba25fc0a2b568d750c93f6d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-15372-device-12.csv.gz",
+      "bytes": 354454,
+      "sha256": "18539ff729e030fe9ec62c925599be4a4e71978a68d14ae7f996c781a2fd281d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-16384-device-0.csv.gz",
+      "bytes": 352463,
+      "sha256": "4c64932255aebc8ce413808f64ba2fa798a30e79b1d812d3ad4b6e301cd7a795"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-16388-device-4.csv.gz",
+      "bytes": 353067,
+      "sha256": "389769101196076de1eb136fbf4ed8c2159a959c374f451c0f48c214534df849"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-16392-device-8.csv.gz",
+      "bytes": 351404,
+      "sha256": "3421d485a5274e4e4ff2d7ac3ea6203ced1aef485b254edce28e90e6a6c45744"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-16396-device-12.csv.gz",
+      "bytes": 354493,
+      "sha256": "9bd94c99b63fc1e9516d73267e4e2aea4ff5224c42a6beb959fed90d4feaa0ae"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-18432-device-0.csv.gz",
+      "bytes": 8304,
+      "sha256": "800d48357a8e4a020125a9ca29bcf6eeb96eeb2fc968687e7e8bbbea8065d2f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-18436-device-4.csv.gz",
+      "bytes": 8224,
+      "sha256": "e7b619b22b9c6be93ae906b71a7e110b5ae93e4f36c8748aa66d9de708f6dc38"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-18440-device-8.csv.gz",
+      "bytes": 8254,
+      "sha256": "78339c6231c859a8c56d88e81d49f56bbcc06a1b3e2a41994f00934f2a814038"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-18444-device-12.csv.gz",
+      "bytes": 8331,
+      "sha256": "f77c482d3fe2e1e6197e758410958564109daf44530e8037c81cd7a52fb8f239"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-19456-device-0.csv.gz",
+      "bytes": 8210,
+      "sha256": "3a129951a084a686ca74a458546efd19854caade4eedf925542173a0b5c4224a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-19460-device-4.csv.gz",
+      "bytes": 8234,
+      "sha256": "a67afd0fc65209a4fc1fa698e5c33c86302c57f9f0eb510cbff3fc3506639609"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-19464-device-8.csv.gz",
+      "bytes": 8253,
+      "sha256": "390df5df90e83ae6ffd72cf34f0455826663dbfc7b66c78be584265e0a4d382e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-19468-device-12.csv.gz",
+      "bytes": 8292,
+      "sha256": "5ef830741c9cdc520bb36d0bb448e0a4c90525ba290f31ad5a876d82d5360eb1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-2048-device-0.csv.gz",
+      "bytes": 8206,
+      "sha256": "7c5ba6aefbbd326a94f59daa6bde081f7802819d6264fceae60d23a4cefd2c43"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-20480-device-0.csv.gz",
+      "bytes": 8292,
+      "sha256": "ecd19108af3b2b22372b702886c59a7d7391854b58f4f71b003cdd2988748867"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-20484-device-4.csv.gz",
+      "bytes": 8248,
+      "sha256": "22c6cfbc72d871eaf33cc83b104e095fcb58a0127561e161a24dc77ddaec27e1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-20488-device-8.csv.gz",
+      "bytes": 8318,
+      "sha256": "4decf9abb74cc96263c922dc4b71a487b2f36efe2fb9c388f74f9289426993d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-20492-device-12.csv.gz",
+      "bytes": 8281,
+      "sha256": "b69e59b1a32c6aab1276b5b93bd4e554d30975d015d9e847dac7c21547d1ec16"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-2052-device-4.csv.gz",
+      "bytes": 8204,
+      "sha256": "9b98d282385c5b4a4b5aedb79c4dcba102837836a257eb0ff5ad2150fa7deb98"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-2056-device-8.csv.gz",
+      "bytes": 8199,
+      "sha256": "3b711afd9a55791cf7ec2369d01af0efecec81f05966ce437a7037d6d5d52c9c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-2060-device-12.csv.gz",
+      "bytes": 8237,
+      "sha256": "215c22261984b40dc2da1bbeda218f040cfe937b736fc48bfd04ba6eaea77154"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-22528-device-0.csv.gz",
+      "bytes": 173596,
+      "sha256": "b2a98474d0b5cb7ae26f8195aca3d984dcdc6bcb3012243968e41e24d2202df8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-22532-device-4.csv.gz",
+      "bytes": 173383,
+      "sha256": "a0270841fcc83e07d44efec4ff7ff3e3ee97d568a1d31c376fd9579f50af854c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-22536-device-8.csv.gz",
+      "bytes": 173039,
+      "sha256": "c8a23de5ecb0ae3bc3d407f8711ba47f15d7db36c4c1f346810b26d0f1029ea2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-22540-device-12.csv.gz",
+      "bytes": 172953,
+      "sha256": "d397814d9ac0b6a35d11de1e8435599ca0b85ec9e145383590fbb1a4add29215"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-23552-device-0.csv.gz",
+      "bytes": 173419,
+      "sha256": "b45280d83b2f2843184f17e2958ad8a8638360c96abac3af8614c07d18caa875"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-23556-device-4.csv.gz",
+      "bytes": 173585,
+      "sha256": "ed7d022e532352a48497816bcdcd9def24c30433e45457ea1e2f5cf3586fed59"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-23560-device-8.csv.gz",
+      "bytes": 172457,
+      "sha256": "cd80969eca2b08639ecadf8807e1aa0b5ac458d64d1dd863bae4dd4df15e9b41"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-23564-device-12.csv.gz",
+      "bytes": 173521,
+      "sha256": "276b3a964fb2432c0a1e0574d38647e6202863e580288bd451b5870163447894"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-24576-device-0.csv.gz",
+      "bytes": 172235,
+      "sha256": "95785799f7dc0f59979260ca0b6256a3a0b09b06e2d33727dd0c8b7458d6ae5e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-24580-device-4.csv.gz",
+      "bytes": 172504,
+      "sha256": "f286dc53a57639bb600fe1f8f7074d5277facbae95360b189ddddad7c9cc6955"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-24584-device-8.csv.gz",
+      "bytes": 172621,
+      "sha256": "ffc01a56ee09beaa30be4f860763a71d8009bfdaad3f3b826d46536271e9748f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-24588-device-12.csv.gz",
+      "bytes": 173919,
+      "sha256": "096f8013afd2ad1a7e3b45c4de60a156f51be83443cc7599c5a84674b65eea02"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-26624-device-0.csv.gz",
+      "bytes": 8068,
+      "sha256": "855e7dc4d4621c159d0d9b0bec4faca8e8cba39c6be4c97b340f66118046dbce"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-26628-device-4.csv.gz",
+      "bytes": 8061,
+      "sha256": "027f17bf4fa8452beafd32f3fe0cfd8341efcf2a50b0837a4e6b4b2b7da406fb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-26632-device-8.csv.gz",
+      "bytes": 8117,
+      "sha256": "66affac06a925e43400cd76b5b8fbcd19434327b8d59f58f17dae318ebd3571a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-26636-device-12.csv.gz",
+      "bytes": 8077,
+      "sha256": "7ad40513d5435c5e35117202d7ee68644e0794d14fec7267e65d7407ae9da7e4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-27648-device-0.csv.gz",
+      "bytes": 8095,
+      "sha256": "ab21ae94be0f6408bc543b6f4cf76648ec8109097f6cf4fa65798acfd0c10aa4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-27652-device-4.csv.gz",
+      "bytes": 8065,
+      "sha256": "ed2f74075cbc5fe3f49a182cdbfd6f31939a9252c050df991a577eae360d1359"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-27656-device-8.csv.gz",
+      "bytes": 8062,
+      "sha256": "707cfba96f43f377f218bfc9243f9e0accfb95f1ec16bdd6cc47de79f4957366"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-27660-device-12.csv.gz",
+      "bytes": 8112,
+      "sha256": "6575c0b4de1ae1e553d0eb8982702e97d1b9a9b5fcfd3766879dd393141c13a8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-28672-device-0.csv.gz",
+      "bytes": 8035,
+      "sha256": "569a1d3d5b3239e7d22c5e8cfe1a61cdd8512e2f10c16db2a6db0ce3307ae2f0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-28676-device-4.csv.gz",
+      "bytes": 8113,
+      "sha256": "39374fd1c247af327e59e063e4dddf0b888fce9df68958d2875dce7a13ca74d8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-28680-device-8.csv.gz",
+      "bytes": 8085,
+      "sha256": "45f2ea5df4799e9064d856c47aa44cba86cf46394ce076c015196d666d704b16"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-28684-device-12.csv.gz",
+      "bytes": 8048,
+      "sha256": "31ed7869c24ec6fef405e17d9ef01a29d658cbab9e8b85c6251c707c918e824f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-3072-device-0.csv.gz",
+      "bytes": 8284,
+      "sha256": "3fad7b10848c7227ade98841e8c95fc937d64ffbbff9f3cbe6bc9b21926b5dd7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-30720-device-0.csv.gz",
+      "bytes": 171186,
+      "sha256": "7b87024c65c1c6dd3ad4e287c4177178f54bebf3e7915bb68b73c28da58ea68b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-30724-device-4.csv.gz",
+      "bytes": 171109,
+      "sha256": "9cb8998524afd8dabfd05e651e2117e55d9b456ab524d0156c95b97505df8919"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-30728-device-8.csv.gz",
+      "bytes": 172130,
+      "sha256": "7652a7863cc29a7180a7755ad2dbe59f8904a1fd9a24d7bce8e4c43cd28d484c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-30732-device-12.csv.gz",
+      "bytes": 171945,
+      "sha256": "a156fd84dcda79a5952033f022795c7293280cae5e0b10086f20849ec5874210"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-3076-device-4.csv.gz",
+      "bytes": 8253,
+      "sha256": "1b525c9e930c4431d2c339a02c4cf134282ab772b883199dab68ac99685ab944"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-3080-device-8.csv.gz",
+      "bytes": 8272,
+      "sha256": "112bb05b8099ff941006c7141e120de10a8f6d814bac6cb47e67cb89cee7190c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-3084-device-12.csv.gz",
+      "bytes": 8279,
+      "sha256": "7218d0cd113b144fd198ab2602b60cded06fe47fe4715fc17cf3ff12c1cee88a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-31744-device-0.csv.gz",
+      "bytes": 171999,
+      "sha256": "5453ff2d92b3b609efe03283ed700401c7abaa4112f0c7f7b971e1155d79a549"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-31748-device-4.csv.gz",
+      "bytes": 171804,
+      "sha256": "5b2f2da57e1dd849a85ad4d026c1448300bf917b23425148f87feede7fe473c5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-31752-device-8.csv.gz",
+      "bytes": 172702,
+      "sha256": "ff98cb9b873f1ad8245041e8ed9ccd3ffc2e4b51f04369ac3c899ebcbaa5320f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-31756-device-12.csv.gz",
+      "bytes": 171581,
+      "sha256": "690f4fa9d7f3c23b8720e617df15c31aadd4a3a91a7926713deb2963792a1f55"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-32768-device-0.csv.gz",
+      "bytes": 171829,
+      "sha256": "9a4bae7f1f523814d599b26e72af0c1fc59c81073df551baf1791af76b49fb32"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-32772-device-4.csv.gz",
+      "bytes": 172092,
+      "sha256": "711c7a7e984891c47fe6f9349e9544c3a42f3ee93be1bb9814c3d54ee810ee47"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-32776-device-8.csv.gz",
+      "bytes": 171058,
+      "sha256": "3b4d4c1bb88dd89aecb55cfb2a525cd841c94f5739fcde8d4002decb78b02228"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-32780-device-12.csv.gz",
+      "bytes": 172338,
+      "sha256": "a522352d4133f310b1752f71b651a50a3fadbae33be6fdfa9576ceb5d264840d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-4096-device-0.csv.gz",
+      "bytes": 8272,
+      "sha256": "cd3a3226705bc78f1afedb96759acc9be1ae5531e34eb611890bf1113766257b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-4100-device-4.csv.gz",
+      "bytes": 8259,
+      "sha256": "635cff4392111baac73fd572807d00d343d0dbd20a5d1f2f6f1153d3d926a6f4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-4104-device-8.csv.gz",
+      "bytes": 8202,
+      "sha256": "4dedb09c568b416ed6e524028b7ff50afc991fa0494afc0517a037b37657ea3d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-4108-device-12.csv.gz",
+      "bytes": 8278,
+      "sha256": "7c63ae9bddf7caf233eab378e8936faa59eb80c0c3d3baae286d6cb5b2472e14"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-6144-device-0.csv.gz",
+      "bytes": 352656,
+      "sha256": "2974729348c6d11e540712cc1a1ee530c98c52eb9a7ad0213b19c0a9182beeab"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-6148-device-4.csv.gz",
+      "bytes": 354062,
+      "sha256": "077cb4b3a23ac46ecd267433a4df667c875d46700c2a91ff467ba0985a9bf7b6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-6152-device-8.csv.gz",
+      "bytes": 352005,
+      "sha256": "3c6405b0a6e2832ecabc90fe239836ed104edefa92927d30338b597a758229f8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-6156-device-12.csv.gz",
+      "bytes": 355191,
+      "sha256": "2277f13e8404ccdb708b57604f03c42d2c33ae797247e5b3a6c168d6560d1812"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-7168-device-0.csv.gz",
+      "bytes": 352007,
+      "sha256": "c7c1370aff55143a3910906caa636e6c62a730aab28ce02dd023778c6988ca28"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-7172-device-4.csv.gz",
+      "bytes": 351434,
+      "sha256": "070cbaab8ccfe581c98ff4142779a4b04852cfd9dabc5c99145402a4f4d8d3c4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-7176-device-8.csv.gz",
+      "bytes": 352392,
+      "sha256": "f69e54c45a303d8a80ba6ded5cd6931317babb3d9d7623670b6a613541283748"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-7180-device-12.csv.gz",
+      "bytes": 354642,
+      "sha256": "4d228d8ccaf126d09d298bcce373d267bca38be392468ae08eef8a94845f1cdb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-8192-device-0.csv.gz",
+      "bytes": 352708,
+      "sha256": "45ec54d41a7a92dac4dbce6f0abbf69c115c15af4f5ad64e14704491ef2d7344"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-8196-device-4.csv.gz",
+      "bytes": 353035,
+      "sha256": "05d07b1ce600756a54385a9ef5e6c6806b674b5c108d9a9b7deadd17b80061de"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-8200-device-8.csv.gz",
+      "bytes": 351822,
+      "sha256": "7da4f97b8889f30070620d36480e802e7a86abce6c0a0a0aad275d6e07eaffaa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/device-events/run-8204-device-12.csv.gz",
+      "bytes": 354290,
+      "sha256": "12ddb5deafac2acaf54a0518ce6f1ddeb394c7d0c55e7e8a56a261e763f0bbb0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/event-partitions.json",
+      "bytes": 23019,
+      "sha256": "dfbd018d864e78a1f57d4af441151289e14c82af9feb7611ee56bfd3f57fdadb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-control-v2/run.log.gz",
+      "bytes": 7297,
+      "sha256": "5e29a94cdb53d101f0522f0d80ff70a99f538e23b831b77bbf5dcdb7ed2d67df"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/hardware.xml.gz",
+      "bytes": 297,
+      "sha256": "282292d03cc5eeb899d1470ae2856cabaefc8681fe967f852ce16176e88be44a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/instrumented-compute.cpp.gz",
+      "bytes": 2079,
+      "sha256": "58463d31f31add4a389f8ac3604f1dc5a4a795284c6d1b054f6f3ab03d268d3e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/instrumented-reader.cpp.gz",
+      "bytes": 1415,
+      "sha256": "dda82c3c24910d522ce22ad07c9a2d65fe5865f10d68eb1c3dd92493d4564ccd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/instrumented-writer.cpp.gz",
+      "bytes": 1097,
+      "sha256": "3ffceb047ce14e62571b8d69e88776d1750b96525cd00896b199fda00a2b905b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/phase.json",
+      "bytes": 22897,
+      "sha256": "77d6e9d65644b4f135381cb800d20efae1abcae5eab406a5be33268c590c6e45"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/queue.json",
+      "bytes": 1579,
+      "sha256": "39ed7809298186c76e6b503c046e8880cd99687209221c959722720ce2e48abc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/tracy/.logs/cpp_device_perf_report.csv.gz",
+      "bytes": 9605,
+      "sha256": "b9da23bde5c149602b1efd24df696e7ab79a7b16b69d212f1264a7ced81b2cb2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 5496,
+      "sha256": "44eb2793754c0e20d468663de9791fa4c93db4bb1b791e28b92f4bfe28dab9ee"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/ops_perf_results_2026_10_09_23_09_52.csv.gz",
+      "bytes": 12346,
+      "sha256": "1d1f1766487cfb400e63258277dc30a138e063715f8d5e937f2cb41648d5186f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/summary.json",
+      "bytes": 66983,
+      "sha256": "2d7e75b10196b64e837bbc7722e874aeb3a57b288dc186e18d6a7003ed9b3110"
+    },
+    {
+      "path": "galaxy-evidence/gdn-phase-results-v2/units.txt",
+      "bytes": 419,
+      "sha256": "bb07010e2a4ea12a996c374f6d77d085cb35478418975789651f351ee5371d37"
     },
     {
       "path": "galaxy-evidence/gdn-step-buffering-v1/candidate.json.gz",
@@ -7511,6 +8256,11 @@
       "path": "tests/test_gdn_epilogue_layer.py",
       "bytes": 4518,
       "sha256": "9d0c2478e1139b076505681fa5f57abbddfbb737858170f96416fd035ad1aa79"
+    },
+    {
+      "path": "tests/test_gdn_flat_prepare.py",
+      "bytes": 9308,
+      "sha256": "8a39dcc70ca30b45b02db39b0e486cafea5817a29a68e2f410c3d242b2b2fb01"
     },
     {
       "path": "tests/test_gdn_layer_integration.py",

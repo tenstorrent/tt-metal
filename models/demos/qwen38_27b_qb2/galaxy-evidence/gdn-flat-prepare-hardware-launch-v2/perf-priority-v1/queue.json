@@ -1,0 +1,161 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "profile-s32768-b32-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/profile-s32768-b32-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791584457.0911584,
+      "finished_at": 1791584569.2316372
+    },
+    {
+      "name": "profile-s32768-b32-shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/profile-s32768-b32-shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791584569.3406131,
+      "finished_at": 1791584627.4152215
+    },
+    {
+      "name": "profile-s32768-b16-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/profile-s32768-b16-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791584627.5092168,
+      "finished_at": 1791584683.578827
+    },
+    {
+      "name": "profile-s32768-b16-shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/profile-s32768-b16-shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791584683.6787958,
+      "finished_at": 1791584737.7482717
+    },
+    {
+      "name": "epilogue",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/epilogue/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "state": "completed",
+      "started_at": 1791584737.8438175,
+      "finished_at": 1791584763.8749568
+    },
+    {
+      "name": "native-before",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/native-before/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "completed",
+      "started_at": 1791584763.8849676,
+      "finished_at": 1791587325.0761328
+    },
+    {
+      "name": "shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/perf-priority-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "running",
+      "started_at": 1791587325.0857537
+    }
+  ],
+  "predecessor_unit": "qwen38-perf-reorder-v1-20261009.service",
+  "predecessor_invocation": "73778f407fd14344862be169fe5bef93",
+  "hardware_started": true,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791584437.0628362,
+  "profiles_first": true,
+  "epilogue_first": true,
+  "release_audit": true,
+  "updated_at": "2026-10-09T23:08:45Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "shared-qk"
+}

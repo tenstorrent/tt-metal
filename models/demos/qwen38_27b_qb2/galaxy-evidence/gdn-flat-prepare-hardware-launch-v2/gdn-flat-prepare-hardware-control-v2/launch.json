@@ -1,0 +1,33 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-gdn-flat-prepare-hardware-v2-20261009",
+    "--property=RuntimeMaxSec=2h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=48G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-control-v2/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-control-v2/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_gdn_flat_prepare",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-v2",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-control-v2/source-manifest.json"
+  ],
+  "created_at": 1791588116.2492225,
+  "scope": "Direct tiled-input GDN preparation, nine geometries and placements, all four ranks, native/fused/native traces",
+  "source_manifest_sha256": "c270206fb25c2e4b9ae00c26e1e05bde35ffe91a86cd4680469cf462ebfef8d1"
+}

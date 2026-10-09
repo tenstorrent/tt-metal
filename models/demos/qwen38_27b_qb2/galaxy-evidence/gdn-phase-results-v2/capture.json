@@ -1,0 +1,82 @@
+{
+  "captured_at": 1791587632.8473384,
+  "source_root": "/home/ttuser/qwen38-artifacts-20261007",
+  "files": {
+    "gdn-phase-profile-v2/queue.json": {
+      "sha256": "39ed7809298186c76e6b503c046e8880cd99687209221c959722720ce2e48abc",
+      "bytes": 1579,
+      "compressed": false,
+      "published": true
+    },
+    "gdn-phase-profile-v2/phase.json": {
+      "sha256": "77d6e9d65644b4f135381cb800d20efae1abcae5eab406a5be33268c590c6e45",
+      "bytes": 22897,
+      "compressed": false,
+      "published": true
+    },
+    "gdn-phase-profile-v2/hardware.xml.gz": {
+      "sha256": "e7e69a0796d67cdc43599f272426d8c208c100cafa1aa4072ea287b95020aefb",
+      "bytes": 537,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-control-v2/run.log.gz": {
+      "sha256": "a44f6635fef283d6b9a108c0d7b679584dabb5d7d878843276a34ef054b57f43",
+      "bytes": 68696,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/instrumented-compute.cpp.gz": {
+      "sha256": "784ee99b4d5f4852a3c229d63df975bb2e8a664ef1ae97405e3e94b121994d55",
+      "bytes": 7671,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/instrumented-reader.cpp.gz": {
+      "sha256": "1323f4e2e0fd39e7b531006c313603bc5a84166be16598ae6b969bd3cc00e7ed",
+      "bytes": 4673,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/instrumented-writer.cpp.gz": {
+      "sha256": "e43ee6a3073b18e90767afcc2648249130092c60dc93f4d2b6d1eb06beba8d51",
+      "bytes": 2707,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/ops_perf_results_2026_10_09_23_09_52.csv.gz": {
+      "sha256": "b4c686234413cb5a771f8b0f738d2c76a1efe3ec09ccf0efa8f1cdc0b49113e3",
+      "bytes": 151604,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/profile_log_device.csv.gz": {
+      "sha256": "85103713530de6dea2dc49831110b9503d1a44ec1fd1e108590a8d401aa327d6",
+      "bytes": 257416118,
+      "compressed": true,
+      "published": false,
+      "retained_local": "/private/tmp/qwen38-phase-raw-v2/profile_log_device.csv.gz",
+      "retained_remote": "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/profile_log_device.csv"
+    },
+    "gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/tracy_profile_log_host.tracy": {
+      "sha256": "30ff1f7d3bd2d58b964f7bc7d359e48125d68335ab950bc475582e1a2e2b70f8",
+      "bytes": 6492879,
+      "compressed": false,
+      "published": false,
+      "retained_local": "/private/tmp/qwen38-phase-raw-v2/tracy_profile_log_host.tracy",
+      "retained_remote": "/home/ttuser/qwen38-artifacts-20261007/gdn-phase-profile-v2/tracy/reports/2026_10_09_23_09_52/tracy_profile_log_host.tracy"
+    },
+    "gdn-phase-profile-v2/tracy/.logs/tracy_ops_data.csv.gz": {
+      "sha256": "464b0a63fafb964ea375581e152b13993480c0c6c7233ff1223eded53a906a1c",
+      "bytes": 126483,
+      "compressed": true,
+      "published": true
+    },
+    "gdn-phase-profile-v2/tracy/.logs/cpp_device_perf_report.csv.gz": {
+      "sha256": "9935eaae50adab8efd958532f6fea0179c739b513e42599de0c3bce2d4cfb611",
+      "bytes": 32971,
+      "compressed": true,
+      "published": true
+    }
+  }
+}

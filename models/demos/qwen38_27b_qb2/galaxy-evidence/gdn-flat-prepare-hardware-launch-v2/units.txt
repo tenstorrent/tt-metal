@@ -1,0 +1,11 @@
+MainPID=3138921
+Id=qwen38-gdn-flat-prepare-hardware-v2-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=c6713def66f8497c9e695154edb2ddbe
+
+MainPID=2913530
+Id=qwen38-perf-priority-v1-20261009.service
+ActiveState=active
+SubState=running
+InvocationID=4a07251dcbda49239e3b017f7fe8ef47

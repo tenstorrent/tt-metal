@@ -1,0 +1,675 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "scope": "Synthetic shared-Q/K recurrence only; diagnostic instrumentation overhead, not serving performance",
+  "source_sha256": {
+    "reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "compute.cpp": "30bee4ee33369eb8a5e1ca9bd296447cf5ede963181b39ffea5f21f62e9d85a4"
+  },
+  "instrumented_sha256": {
+    "reader.cpp": "1323f4e2e0fd39e7b531006c313603bc5a84166be16598ae6b969bd3cc00e7ed",
+    "writer.cpp": "e43ee6a3073b18e90767afcc2648249130092c60dc93f4d2b6d1eb06beba8d51",
+    "compute.cpp": "784ee99b4d5f4852a3c229d63df975bb2e8a664ef1ae97405e3e94b121994d55"
+  },
+  "cases": [
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": false,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed"
+        ],
+        "output": [
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020"
+        ]
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 1,
+      "profiled": true,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed"
+        ],
+        "output": [
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020"
+        ]
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": false,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed"
+        ],
+        "output": [
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020"
+        ]
+      }
+    },
+    {
+      "batch": 32,
+      "buffers": 2,
+      "profiled": true,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999907,
+            "max_head_relative_rms": 1.3142590825703195e-07,
+            "max_abs": 2.980232238769531e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999372,
+            "max_head_relative_rms": 3.487063884583493e-07,
+            "max_abs": 2.2351741790771484e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed",
+          "2332e68eade988d6fd371bc6073325a4ce928338c5195a551776b7afcd3175ed"
+        ],
+        "output": [
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020",
+          "b5c8ef57ce49781e6dcb0dab08d4d4a5aba40999d23495fe1adcbe9d45a45020"
+        ]
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": false,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d"
+        ],
+        "output": [
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61"
+        ]
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 1,
+      "profiled": true,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d"
+        ],
+        "output": [
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61"
+        ]
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": false,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d"
+        ],
+        "output": [
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61"
+        ]
+      }
+    },
+    {
+      "batch": 16,
+      "buffers": 2,
+      "profiled": true,
+      "checks": {
+        "state": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999937,
+            "max_head_relative_rms": 1.1107146941356129e-07,
+            "max_abs": 2.384185791015625e-07
+          }
+        ],
+        "output": [
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          },
+          {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999999352,
+            "max_head_relative_rms": 3.6240309926787606e-07,
+            "max_abs": 2.60770320892334e-08
+          }
+        ]
+      },
+      "hashes": {
+        "state": [
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d",
+          "caec932ff9c9b20b5fcb7391673c8dfd177308c84bf602e9f7a3564e2f64356d"
+        ],
+        "output": [
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61",
+          "2e86dc861d6bf3806ceac8000d9de98708fbf4d491bb786b71c0b7fd0eb97a61"
+        ]
+      }
+    }
+  ],
+  "max_kernel_calls": 24,
+  "kernel_calls": 24,
+  "updated_at": "2026-10-09T23:09:39Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ]
+}
