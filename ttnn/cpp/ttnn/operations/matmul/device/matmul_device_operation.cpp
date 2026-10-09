@@ -17,6 +17,7 @@
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
 
