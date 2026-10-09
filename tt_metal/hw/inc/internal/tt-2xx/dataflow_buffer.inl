@@ -21,7 +21,10 @@
 
 #include <type_traits>
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+// MATH and the ISOLATE_SFPU TRISC own no DFB fifo state (only UNPACK/PACK get g_dfb_interface in trisc.cc), so
+// both take the state-less DataflowBuffer. Without ISOLATE_SFPU here its DataflowBuffer bound a reference to
+// g_dfb_interface, which only linked when LTO happened to drop it (larger matmul block configs failed to link).
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0

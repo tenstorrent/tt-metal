@@ -375,8 +375,8 @@ def golden_conv2d(inputs, params):
 
 def golden_matmul(inputs, params):
     a, w, b = inputs["input"], inputs["weight"], inputs.get("bias")
-    w2 = w.reshape(w.shape[-2], w.shape[-1])
-    y = a @ w2
+    # torch.matmul broadcasting matches ttnn: a [1, 77, K] @ w [1, 1, K, N] -> [1, 1, 77, N] (rank 4, like the op)
+    y = torch.matmul(a, w)
     if b is not None:
         y = y + b.reshape(-1)
     pc = params.get("program_config")
