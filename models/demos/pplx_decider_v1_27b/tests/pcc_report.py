@@ -6,10 +6,13 @@
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
-DEFAULT_LOG = Path("/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl")
+DEFAULT_LOG = Path(
+    os.environ.get("PPLX_DECIDER_PCC_LOG", "/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl")
+)
 
 
 def render(log: Path) -> str:

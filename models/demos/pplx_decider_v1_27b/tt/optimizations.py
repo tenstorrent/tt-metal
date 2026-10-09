@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 import ttnn
 
 # Matmul roles. Each projection weight belongs to exactly one role.
-ROLES = ("attention_qkvg", "attention_out", "delta_in", "delta_out", "mlp_gate", "mlp_up", "mlp_down", "readout")
+ROLES = ("attention_qkvg", "attention_out", "delta_in", "delta_out", "mlp_gate_up", "mlp_down", "readout")
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,8 @@ class AttentionOptimizations:
     sdpa_k_chunk: int
     sdpa_grid: tuple[int, int]
     compute_kernel_cfg: object
+    # rotary_embedding_llama rejects fp32 dest accumulation for head_dim > 128.
+    rope_compute_kernel_cfg: object
 
 
 @dataclass
@@ -140,6 +142,7 @@ class Optimizations:
             sdpa_k_chunk=128,
             sdpa_grid=(grid.x, grid.y),
             compute_kernel_cfg=_compute_cfg("HiFi4"),
+            rope_compute_kernel_cfg=_compute_cfg("HiFi4", fp32_dest_acc=False),
         )
         delta = DeltaOptimizations(
             recurrent_dtype=getattr(ttnn, policy.recurrent_dtype),
@@ -160,10 +163,10 @@ class Optimizations:
         )
 
 
-def _compute_cfg(fidelity: str):
+def _compute_cfg(fidelity: str, *, fp32_dest_acc: bool = True):
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=getattr(ttnn.MathFidelity, fidelity),
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest_acc,
         packer_l1_acc=True,
     )

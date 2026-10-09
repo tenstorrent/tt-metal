@@ -47,6 +47,7 @@ Environment variables read by this model directory:
 | `PPLX_DECIDER_GOLDEN_DIR` | `/local/ttuser/gtobar/artifacts/pplx_decider/goldens` | HF layer inputs streamed from the snapshot. |
 | `PPLX_DECIDER_PCC_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/pcc_results.jsonl` | PCC records appended by every test. |
 | `PPLX_DECIDER_PERF_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/perf/prefill_perf.jsonl` | Perf records. |
+| `PPLX_DECIDER_PROBE_LOG` | `/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl` | Context-probe records (`tests/probe`). |
 
 Generate the goldens once (CPU only, about 10 minutes, about 800 MB):
 

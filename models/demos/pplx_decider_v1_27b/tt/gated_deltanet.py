@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Gated DeltaNet (Qwen3.5 ``linear_attn``), causal prefill.
 
-Packed in-projection [qkv | z | b | a] -> causal depthwise conv (k=4, no bias) + SiLU on qkv ->
+In-projection as two matmuls, qkv and packed [z | b | a] -> causal depthwise conv (k=4, no bias) + SiLU on qkv ->
 q/k/v split (16 k-heads x128, 48 v-heads x128; the native scan L2-normalises q/k, scales q by
 128^-0.5 and maps k-head h//3 to v-head h) -> chunked gated delta rule with fp32 state ->
 gated RMSNorm ``w * norm(o) * silu(z)`` -> out_proj.
@@ -25,7 +25,20 @@ from models.demos.pplx_decider_v1_27b.tt.common import prefill_linear, resolve
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import TILE, GatedDeltaNetWeights
-from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
+
+
+def make_actual_start(device) -> ttnn.Tensor:
+    """``actual_start`` scalar [0] for ``qkv_causal_conv1d_silu``: zero-offset, single-device execution.
+
+    Every chunk passes [0] and its left context as history / predecessor_carry, so the value never
+    changes. Copied from models/demos/qwen38_27b_qb2/tt/decode_conv.py (stage 1 imported it).
+    """
+    import torch
+
+    mesh_kwargs = {"mesh_mapper": ttnn.ReplicateTensorToMesh(device)} if hasattr(device, "get_num_devices") else {}
+    return ttnn.from_torch(
+        torch.zeros(1, dtype=torch.int64), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **mesh_kwargs
+    )
 
 
 @dataclass
@@ -94,7 +107,8 @@ class PplxGatedDeltaNet(LightweightModule):
         if self._loaded:
             return
         w = self.config.weights
-        self.in_proj = w.in_proj.get_device_weight()
+        self.in_qkv = w.in_qkv.get_device_weight()
+        self.in_zba = w.in_zba.get_device_weight()
         self.out_proj = w.out_proj.get_device_weight()
         self.conv_taps = [tap.get_device_weight() for tap in w.conv_taps]
         self.a_neg = w.a_neg.get_device_weight()
@@ -111,16 +125,16 @@ class PplxGatedDeltaNet(LightweightModule):
         if b != 1:
             raise ValueError("Prefill GDN takes one request at a time")
         h, hv, dk = a.linear_num_key_heads, a.linear_num_value_heads, a.linear_key_head_dim
-        conv_width, z_width = a.conv_width, a.linear_value_dim
         gate_width = (hv + TILE - 1) // TILE * TILE
 
-        packed = prefill_linear(x, self.in_proj, "delta_in", opts.linear)
-        qkv = packed[:, :, :conv_width]
-        z = packed[:, :, conv_width : conv_width + z_width]
-        beta = ttnn.sigmoid(packed[:, :, conv_width + z_width : conv_width + z_width + hv])
-        a_raw = ttnn.typecast(
-            packed[:, :, conv_width + z_width + gate_width : conv_width + z_width + gate_width + hv], ttnn.float32
-        )
+        # Three matmuls on the same input instead of one packed [qkv|z|b|a] output: slicing the
+        # wide qkv and z columns back out of a packed output cost two full copies per chunk.
+        qkv = prefill_linear(x, self.in_qkv, "delta_in", opts.linear)
+        zba = prefill_linear(x, self.in_zba, "delta_in", opts.linear)
+        z_width = a.linear_value_dim
+        z = zba[:, :, :z_width]
+        beta = ttnn.sigmoid(zba[:, :, z_width : z_width + hv])
+        a_raw = ttnn.typecast(zba[:, :, z_width + gate_width : z_width + gate_width + hv], ttnn.float32)
 
         padded_t = (t + TILE - 1) // TILE * TILE
 
@@ -182,7 +196,8 @@ def _resolve(config: GatedDeltaNetConfig) -> GatedDeltaNetConfig:
         config,
         mesh_device=device,
         weights=GatedDeltaNetWeights(
-            in_proj=resolve(w.in_proj, device),
+            in_qkv=resolve(w.in_qkv, device),
+            in_zba=resolve(w.in_zba, device),
             out_proj=resolve(w.out_proj, device),
             conv_taps=tuple(resolve(tap, device) for tap in w.conv_taps),
             a_neg=resolve(w.a_neg, device),

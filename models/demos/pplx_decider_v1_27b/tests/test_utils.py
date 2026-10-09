@@ -67,7 +67,7 @@ def build_rotary(device):
     from models.demos.pplx_decider_v1_27b.tt.rope import PplxRotary
 
     a = model_args()
-    return PplxRotary(a.rotary_dim, a.rope_theta, a.max_seq_len, device)
+    return PplxRotary(a.rotary_dim, a.rope_theta, a.max_seq_len, device, head_dim=a.head_dim)
 
 
 def golden_tensor(name: str, seq_len: int) -> torch.Tensor:

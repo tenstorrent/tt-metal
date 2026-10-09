@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""SwiGLU MLP: ``down(silu(gate(x)) * up(x))``."""
+"""SwiGLU MLP: ``down(silu(gate(x)) * up(x))``. Gate and up are one matmul with a fused SwiGLU epilogue."""
 
 from __future__ import annotations
 
@@ -38,8 +38,7 @@ class PplxMLP(LightweightModule):
         if self._loaded:
             return
         w = self.config.weights
-        self.gate = w.gate.get_device_weight()
-        self.up = w.up.get_device_weight()
+        self.gate_up = w.gate_up.get_device_weight()
         self.down = w.down.get_device_weight()
         self._loaded = True
 
@@ -47,21 +46,18 @@ class PplxMLP(LightweightModule):
         """x: [B, S, 5120] BF16 TILE (already post-attention-normed)."""
         self.load_device_weights()
         opts = self.config.linear
-        gate = prefill_linear(x, self.gate, "mlp_gate", opts)
-        up = prefill_linear(x, self.up, "mlp_up", opts)
-        product = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
+        # One matmul over the interleaved [gate | up] weight; SwiGLU runs in its epilogue.
+        product = prefill_linear(x, self.gate_up, "mlp_gate_up", opts, fuse_swiglu=True)
         out = prefill_linear(product, self.down, "mlp_down", opts)
         ttnn.deallocate(product)
         return out
 
 
 def _resolve(config: MLPConfig) -> MLPConfig:
-    device = config.mesh_device or config.weights.gate.device or ttnn.GetDefaultDevice()
+    device = config.mesh_device or config.weights.gate_up.device or ttnn.GetDefaultDevice()
     w = config.weights
     return replace(
         config,
         mesh_device=device,
-        weights=MLPWeights(gate=resolve(w.gate, device), up=resolve(w.up, device), down=resolve(w.down, device)),
+        weights=MLPWeights(gate_up=resolve(w.gate_up, device), down=resolve(w.down, device)),
     )

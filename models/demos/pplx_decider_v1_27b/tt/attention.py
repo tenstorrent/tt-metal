@@ -4,7 +4,8 @@
 
 Per head: query and an output gate come from one q_proj; q/k get a zero-centred RMSNorm over
 head_dim before partial RoPE (first 64 of 256 dims). GQA 24 query / 4 KV heads, scale 256^-0.5,
-then ``attn * sigmoid(gate)`` and o_proj.
+then ``attn * sigmoid(gate)`` and o_proj. q|k|v is one matmul and the gate a second one; RoPE is
+one full-width ``rotary_embedding_llama`` per tensor on pre-permuted head dims (see rope.py).
 
 Prefill runs in bounded chunks. Each chunk writes its K/V into a request-local paged cache
 (allocated once at setup, sized for ``max_seq_len``) and runs chunked causal SDPA over the
@@ -74,13 +75,25 @@ class PplxGatedAttention(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # One 32x32 tile for rotary_embedding_llama: x @ trans_mat maps each pair (a, b) to (-b, a).
+        trans = torch.zeros(1, 1, 32, 32)
+        trans[..., torch.arange(0, 32, 2), torch.arange(1, 32, 2)] = 1.0
+        trans[..., torch.arange(1, 32, 2), torch.arange(0, 32, 2)] = -1.0
+        self.rope_trans_mat = ttnn.from_torch(
+            trans,
+            device=c.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self._loaded = False
 
     def load_device_weights(self) -> None:
         if self._loaded:
             return
         w = self.config.weights
-        self.qkvg = w.qkvg.get_device_weight()
+        self.qkv = w.qkv.get_device_weight()
+        self.gate = w.gate.get_device_weight()
         self.o_proj = w.o_proj.get_device_weight()
         self.q_norm = w.q_norm.get_device_weight()
         self.k_norm = w.k_norm.get_device_weight()
@@ -97,15 +110,19 @@ class PplxGatedAttention(LightweightModule):
         )
 
     def _rope(self, x, cos, sin):
-        """Rotate the first ``rotary_dim`` dims of every head of x [1, H, t, 256]; keep the rest."""
-        _, _, length, _ = x.shape
-        width = cos.shape[-1]
-        part = x[:, :, :, :width]
-        rotated = ttnn.experimental.rotary_embedding(
-            part, ttnn.reshape(cos, [1, 1, length, width]), ttnn.reshape(sin, [1, 1, length, width])
+        """Partial RoPE on x [1, H, t, 256] in one full-width op.
+
+        The head dims are pre-permuted (see ``rope.rope_head_permutation``) so the 64 rotary dims are
+        adjacent pairs; cos/sin [1, 1, t, 256] are 1/0 on the other 192 dims.
+        """
+        return ttnn.experimental.rotary_embedding_llama(
+            x,
+            cos,
+            sin,
+            self.rope_trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self.config.optimizations.attention.rope_compute_kernel_cfg,
         )
-        rotated = ttnn.reshape(rotated, part.shape, part.padded_shape)
-        return ttnn.concat([rotated, x[:, :, :, width:]], dim=-1)
 
     def forward(self, x: ttnn.Tensor, *, start_pos: int, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """One prefill chunk. x: [1, t, 5120] (input-normed), positions start_pos..start_pos+t-1.
@@ -119,16 +136,18 @@ class PplxGatedAttention(LightweightModule):
             raise ValueError("Prefill attention takes one request at a time")
         if start_pos % self.page_size or start_pos + t > self.num_pages * self.page_size:
             raise ValueError(f"Chunk at {start_pos} (+{t}) is not page aligned or exceeds the cache")
-        q_width, kv_width = a.num_attention_heads * a.head_dim, a.num_key_value_heads * a.head_dim
 
-        packed = prefill_linear(x, self.qkvg, "attention_qkvg", opts.linear)
+        # q/k/v and the output gate are two matmuls on the same input: slicing one packed
+        # [q|k|v|gate] output cost two full-width copies per chunk, more than the second dispatch.
+        qkv = prefill_linear(x, self.qkv, "attention_qkvg", opts.linear)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            packed[:, :, : q_width + 2 * kv_width],
+            qkv,
             num_heads=a.num_attention_heads,
             num_kv_heads=a.num_key_value_heads,
             transpose_key=False,
         )
-        gate = ttnn.reshape(packed[:, :, q_width + 2 * kv_width :], [b, t, q_width])
+        ttnn.deallocate(qkv)
+        gate = prefill_linear(x, self.gate, "attention_qkvg", opts.linear)
         q = self._rope(self._head_norm(q, self.q_norm), cos, sin)
         k = self._rope(self._head_norm(k, self.k_norm), cos, sin)
 
@@ -160,6 +179,8 @@ class PplxGatedAttention(LightweightModule):
             compute_kernel_config=att.compute_kernel_cfg,
         )
         attn = ttnn.transformer.concatenate_heads(attn)
+        # Sigmoid stays an input activation of the mul: as a minimal_matmul epilogue it measured
+        # +145 us on the gate matmul at S=2048 against -5 us on the mul (stage 2, rejected).
         gated = ttnn.mul(attn, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
         return prefill_linear(gated, self.o_proj, "attention_out", opts.linear)
 
@@ -171,7 +192,8 @@ def _resolve(config: AttentionConfig) -> AttentionConfig:
         config,
         mesh_device=device,
         weights=AttentionWeights(
-            qkvg=resolve(w.qkvg, device),
+            qkv=resolve(w.qkv, device),
+            gate=resolve(w.gate, device),
             o_proj=resolve(w.o_proj, device),
             q_norm=resolve(w.q_norm, device),
             k_norm=resolve(w.k_norm, device),

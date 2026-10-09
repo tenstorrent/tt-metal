@@ -18,6 +18,7 @@ Run::
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -39,7 +40,9 @@ from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
 from models.demos.pplx_decider_v1_27b.tt.rope import PplxRotary
 
-PROBE_LOG = Path("/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl")
+PROBE_LOG = Path(
+    os.environ.get("PPLX_DECIDER_PROBE_LOG", "/local/ttuser/gtobar/artifacts/pplx_decider/logs/context_probe.jsonl")
+)
 
 
 def dram_view(device) -> dict:
@@ -73,7 +76,11 @@ def test_context_probe(device, layer_idx, seq_len):
     layer = PplxDecoderLayer.from_state_dict(
         reader().layer_state_dict(layer_idx), args=args, layer_idx=layer_idx, optimizations=opts
     )
-    rotary = PplxRotary(args.rotary_dim, args.rope_theta, seq_len, device) if layer.kind == "full_attention" else None
+    rotary = (
+        PplxRotary(args.rotary_dim, args.rope_theta, seq_len, device, head_dim=args.head_dim)
+        if layer.kind == "full_attention"
+        else None
+    )
     for module in (layer.input_norm, layer.post_norm, layer.mlp, layer.mixer):
         module.load_device_weights()
     x = to_device(x_host, device)

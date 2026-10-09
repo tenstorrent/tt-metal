@@ -51,7 +51,7 @@ from models.demos.pplx_decider_v1_27b.tests.test_utils import (
 from models.demos.pplx_decider_v1_27b.tt.optimizations import PrecisionPolicy
 
 PERF_SEQ_LENS = [128, 1024, 2048, 4096, 8192]  # the prefill buckets
-PROFILE_SEQ_LENS = [2048, 8192]
+PROFILE_SEQ_LENS = [128, 2048, 8192]
 WARMUP = 2
 TIMED = 7
 PERF_LOG = Path(
