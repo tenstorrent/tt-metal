@@ -1027,6 +1027,18 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
+            # Wormhole, batch 1, seq_len > 8192: FF2 as a bf8 4-link ring all-gather + minimal_matmul (bf16 out)
+            # instead of the fused AG+MM, whose gather buffer takes the output dtype (bf16) and runs on 3 links.
+            # Isolated at S=40960 (mm_sweep.py --suite ff2bf8): typecast + fused 8.34 ms -> AG 2.13 + MM = 5.19 ms.
+            self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"] = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=5,
+                N_block_size=8,
+                subblock_h=1,
+                subblock_w=8,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
+            )
+
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
             if self.num_devices == 32:
                 lm_head_num_rows = 4

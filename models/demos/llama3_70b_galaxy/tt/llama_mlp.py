@@ -439,6 +439,15 @@ class TtLlamaMLP(LightweightModule):
         # Qwen long prefill on Wormhole: the fused FF2 all-gather + matmul below gathers in its output dtype, so
         # w2_in was typecast bf8 -> bf16 after the mul. Write the mul output in that dtype directly instead
         # (S=40960: mul bf8 + typecast 1.64 ms -> mul bf16 1.04 ms; skips the bf8 rounding of w2_in).
+        # Qwen long prefill (> 8192) on Wormhole instead gathers w2_in in bf8 on the 4-link ring and runs
+        # minimal_matmul to the bf16 output (ff2_bf8_gather below), so the mul writes bf8 there.
+        ff2_bf8_gather = (
+            self.args.is_qwen
+            and not self.args.is_blackhole
+            and self.use_prefetcher
+            and batch_size == 1
+            and seq_len > 8192
+        )
         w2_in_dtype = ttnn.bfloat8_b
         if (
             self.args.is_qwen
@@ -446,6 +455,7 @@ class TtLlamaMLP(LightweightModule):
             and batch_size == 1
             and seq_len > 4096
             and self.prefill_output_dtype == ttnn.bfloat16
+            and not ff2_bf8_gather
         ):
             w2_in_dtype = ttnn.bfloat16
         w2_in = ttnn.mul(
@@ -477,6 +487,27 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        elif ff2_bf8_gather:
+            # Gather the bf8 w2_in (4 links, half the bytes of bf16), then matmul to the bf16 output. The fused
+            # all_gather_minimal_matmul_async gathers in its output dtype and is limited to 3 links here.
+            w2_in_gathered = self.tt_ccl.ring_all_gather(
+                w2_in,
+                dim=3,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=prefill_num_links,
+                buffer_key="FF3",
+            )
+            ttnn.deallocate(w2_in)
+            w2_out = ttnn.experimental.minimal_matmul(
+                input_tensor=w2_in_gathered,
+                weight_tensor=self.w2_interleaved,
+                dtype=self.prefill_output_dtype,
+                config=self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"],
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w2_in_gathered)
         else:
             # Match the input format before communicating its bytes.
             if w2_in.dtype != self.prefill_output_dtype:
