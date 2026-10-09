@@ -433,14 +433,18 @@ class FusedDecodeSampling(TTSampling):
         self._force_argmax_sampling = self._is_force_argmax_sampling(k_n, p, temp_n)
         self._params_key = key
 
-    def forward(self, x, tt_out_tok=None):
+    def forward(self, x, tt_out_tok=None, apply_grammar=False):
         if not self.terminal.is_folded(x):
             forced = self._force_argmax_sampling
             self._force_argmax_sampling = False
             try:
-                return super().forward(x, tt_out_tok=tt_out_tok)
+                return super().forward(x, tt_out_tok=tt_out_tok, apply_grammar=apply_grammar)
             finally:
                 self._force_argmax_sampling = forced
+        if apply_grammar:
+            raise NotImplementedError(
+                "grammar masks are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
+            )
         if self.log_probs_calculator.enable_log_probs:
             raise NotImplementedError(
                 "log-probs are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
@@ -500,30 +504,35 @@ class FusedSamplingGenerator(SamplingGenerator):
             return
         super().reset_trace()
 
-    def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
-        if penalties_on and self.terminal.is_folded(logits):
+    def _run_sampling(self, logits, *, penalties_on, grammar_on, tt_out_tok=None, count_tokens=True):
+        if (penalties_on or grammar_on) and self.terminal.is_folded(logits):
             raise NotImplementedError(
-                "sampling penalties are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
+                "sampling penalties / grammar masks are not implemented on the fused batch-1 decode path "
+                "(fused_decode/terminal.py)"
             )
         return super()._run_sampling(
-            logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
+            logits, penalties_on=penalties_on, grammar_on=grammar_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
         )
 
-    def capture_trace(self, logits, *, tt_out_tok=None, skip_precompile=False):
+    def capture_trace(self, logits, *, tt_out_tok=None, skip_precompile=False, grammar_bitmask=None):
         """SamplingGenerator.capture_trace without its whole-window corruptible_allocation_scope for the fused path:
         the fused sampling ops allocate nothing inside the capture (the pick and ttnn.sampling write the preallocated
         tt_out_tok, manual_seed has no output, the candidates are persistent), so the trace allocation tracker keeps
         checking the window. Other logits (stock path) keep the base behavior."""
         if not self.terminal.is_folded(logits) or tt_out_tok is None:
-            return super().capture_trace(logits, tt_out_tok=tt_out_tok, skip_precompile=skip_precompile)
-        self._check_supported()
+            return super().capture_trace(
+                logits, tt_out_tok=tt_out_tok, skip_precompile=skip_precompile, grammar_bitmask=grammar_bitmask
+            )
+        self._check_supported(grammar_bitmask)
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         key, slot = self._trace_slot(penalties_on, log_probs_on, self.tt_sampling.force_argmax_sampling)
         if not skip_precompile:
-            self._run_sampling(logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=False)
+            self._run_sampling(
+                logits, penalties_on=penalties_on, grammar_on=False, tt_out_tok=tt_out_tok, count_tokens=False
+            )
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-        sampled = self._run_sampling(logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok)
+        sampled = self._run_sampling(logits, penalties_on=penalties_on, grammar_on=False, tt_out_tok=tt_out_tok)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
         slot["id"] = trace_id
@@ -532,36 +541,60 @@ class FusedSamplingGenerator(SamplingGenerator):
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
         return slot["output"]
 
-    def _check_supported(self):
-        """Penalties / log-probs requested for fused decode: reject before any trace capture starts (the generator's
-        prefill warmup legitimately compiles them on the stock path, so the parameters themselves are accepted)."""
-        if self._penalties_active or getattr(self, "_log_probs_active", False):
+    def _check_supported(self, grammar_bitmask=None):
+        """Penalties / log-probs / grammar masks requested for fused decode: reject before any trace capture starts
+        (the generator's prefill warmup legitimately compiles them on the stock path, so the parameters themselves are
+        accepted)."""
+        if self._penalties_active or getattr(self, "_log_probs_active", False) or grammar_bitmask is not None:
             raise NotImplementedError(
-                "sampling penalties / log-probs are not implemented on the fused batch-1 decode path "
+                "sampling penalties / log-probs / grammar masks are not implemented on the fused batch-1 decode path "
                 "(fused_decode/terminal.py)"
             )
 
-    def sample(self, logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False, count_tokens=True):
+    def sample(
+        self,
+        logits,
+        *,
+        enable_trace=True,
+        tt_out_tok=None,
+        skip_precompile=False,
+        count_tokens=True,
+        grammar_bitmask=None,
+    ):
         if self.terminal.is_folded(logits):
-            self._check_supported()
+            self._check_supported(grammar_bitmask)
         return super().sample(
             logits,
             enable_trace=enable_trace,
             tt_out_tok=tt_out_tok,
             skip_precompile=skip_precompile,
             count_tokens=count_tokens,
+            grammar_bitmask=grammar_bitmask,
         )
 
-    def precompile(self, logits, *, tt_out_tok=None, all_configs=False):
+    def precompile(
+        self, logits, *, tt_out_tok=None, grammar_bitmask=None, compile_token_update=False, all_configs=False
+    ):
         if not (all_configs and self.terminal.is_folded(logits)):
-            return super().precompile(logits, tt_out_tok=tt_out_tok, all_configs=all_configs)
-        # The fused path's variants: greedy pick (force-argmax key) and the ttnn.sampling draw.
+            return super().precompile(
+                logits,
+                tt_out_tok=tt_out_tok,
+                grammar_bitmask=grammar_bitmask,
+                compile_token_update=compile_token_update,
+                all_configs=all_configs,
+            )
+        if grammar_bitmask is not None:
+            self._check_supported(grammar_bitmask)
+        # The fused path's variants: greedy pick (force-argmax key) and the ttnn.sampling draw. Penalties are not
+        # supported on it, so there is no penalty token-count update to compile (compile_token_update).
         saved = self.tt_sampling._force_argmax_sampling
         try:
             for force_argmax in (False, True):
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
                     continue
                 self.tt_sampling._force_argmax_sampling = force_argmax
-                self._run_sampling(logits, penalties_on=False, tt_out_tok=tt_out_tok, count_tokens=False)
+                self._run_sampling(
+                    logits, penalties_on=False, grammar_on=False, tt_out_tok=tt_out_tok, count_tokens=False
+                )
         finally:
             self.tt_sampling._force_argmax_sampling = saved
