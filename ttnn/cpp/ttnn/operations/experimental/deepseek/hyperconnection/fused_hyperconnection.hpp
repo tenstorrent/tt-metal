@@ -5,7 +5,7 @@
 #pragma once
 
 #include <optional>
-#include <tuple>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -36,6 +36,11 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //   repeat sinkhorn_iters-1 times: row pass then column pass
 //   collapsed  = sum_h pre[..,h] * hidden_streams[..,h,:]
 //
+// With `pre_mix` given, `collapsed` weights the streams by `pre_mix` instead of the `pre` above
+// (DeepSeek V4.1, where each sublayer collapses with the `pre` its predecessor computed); `post`
+// and `comb` are unchanged, and the `pre` above is returned as a fourth output for the next
+// sublayer to collapse with.
+//
 // The RMSNorm + fn matmul that produces `fused_w` is NOT part of this op.
 //
 // Args:
@@ -48,9 +53,12 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //   pre_scale / post_scale / comb_scale: learned per-projection scales.
 //   eps: stability epsilon added to pre / comb (config.hc_eps).
 //   memory_config: optional output memory config (defaults to the input's).
+//   pre_mix: optional collapse weights [B,S,1,H], BFLOAT16 TILE (one tile per token). When
+//     absent the op collapses with the `pre` it computes from `fused_w`.
 //
-// Returns (post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]).
-std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
+// Returns [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus pre [B,S,1,H] (BFLOAT16
+// TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given.
+std::vector<Tensor> fused_hyperconnection(
     const Tensor& hidden_streams,
     const Tensor& fused_w,
     const Tensor& pre_bias,
@@ -62,6 +70,7 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
     float post_scale,
     float comb_scale,
     float eps,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& pre_mix = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek::hyperconnection

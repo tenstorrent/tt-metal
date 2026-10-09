@@ -250,11 +250,18 @@ void kernel_main() {
     constexpr uint32_t num_streams = get_compile_time_arg_val(22);
     constexpr uint32_t sinkhorn_iters = get_compile_time_arg_val(23);
     constexpr uint32_t comb_scale_bits = get_compile_time_arg_val(24);
+    constexpr bool use_pre_mix = get_compile_time_arg_val(25) != 0;
 
     if constexpr (role == 0) {
         const uint32_t d_tiles = get_arg_val<uint32_t>(0);
-        compute_kernel_hw_startup(cb_pre_w, cb_pre_bias, cb_pre);
-        fused_sigmoid_with_bias_and_scale(cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
+        // Given pre_mix, the reader fills cb_pre with it directly.
+        if constexpr (use_pre_mix) {
+            compute_kernel_hw_startup(cb_pre, cb_hidden, cb_collapsed_out);
+        } else {
+            compute_kernel_hw_startup(cb_pre_w, cb_pre_bias, cb_pre);
+            fused_sigmoid_with_bias_and_scale(
+                cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
+        }
 
         matmul_init(cb_pre, cb_hidden);
         cb_wait_front(cb_pre, 1);
@@ -277,6 +284,11 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_post_w, cb_post_bias, cb_post_out);
         fused_sigmoid_with_bias_and_scale(
             cb_post_w, cb_post_bias, cb_scratch, cb_post_out, post_scale_bits, two_bits, false, eps_bits);
+        // Given pre_mix, the collapse cores skip pre, and this core computes it for the writer.
+        if constexpr (use_pre_mix) {
+            fused_sigmoid_with_bias_and_scale(
+                cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
+        }
     } else {
         compute_kernel_hw_startup(cb_comb_w, cb_comb_bias, cb_comb);
         cb_wait_front(cb_scaler, 1);

@@ -31,6 +31,10 @@ constexpr uint32_t kCbFusedW = tt::CBIndex::c_9;
 constexpr uint32_t kCbCombW = tt::CBIndex::c_10;
 // Writer scratch holding post as a column, since the op emits post as [1,T,H,1].
 constexpr uint32_t kCbPostCol = tt::CBIndex::c_11;
+// Given pre_mix (which takes kCbPre), the pre computed from pre_w goes to kCbPreOut, and the
+// writer copies its H values into the zeroed kCbPreRow scratch it returns.
+constexpr uint32_t kCbPreOut = tt::CBIndex::c_12;
+constexpr uint32_t kCbPreRow = tt::CBIndex::c_13;
 
 constexpr char kReaderKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
@@ -58,6 +62,11 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     auto& post_out = tensor_return_value[0];
     auto& collapsed_out = tensor_return_value[1];
     auto& comb_w_mat_out = tensor_return_value[2];
+    const bool use_pre_mix = tensor_args.pre_mix.has_value();
+    const Buffer* pre_mix_buffer = use_pre_mix ? tensor_args.pre_mix->buffer() : nullptr;
+    const uint32_t pre_mix_addr = use_pre_mix ? pre_mix_buffer->address() : 0u;
+    const Buffer* pre_out_buffer = use_pre_mix ? tensor_return_value[3].buffer() : nullptr;
+    const uint32_t pre_out_addr = use_pre_mix ? pre_out_buffer->address() : 0u;
 
     const uint32_t hc = operation_attributes.num_streams;
 
@@ -105,6 +114,10 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     make_cb(kCbPre, tile_buffering);
     make_cb(kCbCombW, tile_buffering);
     make_cb(kCbPostCol, 1);
+    if (use_pre_mix) {
+        make_cb(kCbPreOut, tile_buffering);
+        make_cb(kCbPreRow, 1);
+    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         kCbFusedW,
@@ -117,16 +130,21 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
         tile_buffering,
         fused_w.layout() == Layout::ROW_MAJOR ? 1u : 0u,
         fused_w.buffer()->page_size(),
+        kCbPre,
+        use_pre_mix ? 1u : 0u,
     };
     TensorAccessorArgs(fused_w.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(pre_bias.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(post_bias.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(hidden_streams.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(pre_mix_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {kCbPostOut, kCbCollapsed, kCbCombW, kCbPostCol, hc};
+    std::vector<uint32_t> writer_compile_time_args = {
+        kCbPostOut, kCbCollapsed, kCbCombW, kCbPostCol, hc, use_pre_mix ? 1u : 0u, kCbPreOut, kCbPreRow};
     TensorAccessorArgs(post_out.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(collapsed_out.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(comb_w_mat_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(pre_out_buffer).append_to(writer_compile_time_args);
 
     const uint32_t pre_scale_bits = std::bit_cast<uint32_t>(operation_attributes.pre_scale);
     const uint32_t post_scale_bits = std::bit_cast<uint32_t>(operation_attributes.post_scale);
@@ -147,6 +165,8 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
         post_scale_bits,
         eps_bits,
         two_bits,
+        use_pre_mix ? 1u : 0u,
+        kCbPreOut,
     };
 
     const KernelHandle reader_kernel_id =
@@ -187,7 +207,8 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
              fused_w_row_tiles,
              d_tiles,
              start_token,
-             tokens_this_core});
+             tokens_this_core,
+             pre_mix_addr});
         SetRuntimeArgs(
             program,
             writer_kernel_id,
@@ -197,7 +218,8 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
              comb_w_mat_out.buffer()->address(),
              d_tiles,
              start_token,
-             tokens_this_core});
+             tokens_this_core,
+             pre_out_addr});
         SetRuntimeArgs(program, compute_kernel_id, core, {d_tiles, tokens_this_core});
 
         start_token += tokens_this_core;
@@ -223,9 +245,11 @@ void FusedPrePostProgramFactory::override_runtime_arguments(
     const uint32_t pre_bias_addr = tensor_args.pre_bias.buffer()->address();
     const uint32_t post_bias_addr = tensor_args.post_bias.buffer()->address();
     const uint32_t hidden_addr = tensor_args.hidden_streams.buffer()->address();
+    const uint32_t pre_mix_addr = tensor_args.pre_mix.has_value() ? tensor_args.pre_mix->buffer()->address() : 0u;
     const uint32_t post_addr = tensor_return_value[0].buffer()->address();
     const uint32_t collapsed_addr = tensor_return_value[1].buffer()->address();
     const uint32_t comb_w_addr = tensor_return_value[2].buffer()->address();
+    const uint32_t pre_out_addr = tensor_args.pre_mix.has_value() ? tensor_return_value[3].buffer()->address() : 0u;
 
     auto& reader_args_by_core = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, shared.writer_kernel_id);
@@ -235,11 +259,13 @@ void FusedPrePostProgramFactory::override_runtime_arguments(
         reader_args[1] = pre_bias_addr;
         reader_args[2] = post_bias_addr;
         reader_args[3] = hidden_addr;
+        reader_args[9] = pre_mix_addr;
 
         auto& writer_args = writer_args_by_core[core.x][core.y];
         writer_args[0] = post_addr;
         writer_args[1] = collapsed_addr;
         writer_args[2] = comb_w_addr;
+        writer_args[6] = pre_out_addr;
     }
 }
 

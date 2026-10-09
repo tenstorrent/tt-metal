@@ -57,12 +57,15 @@ void kernel_main() {
     constexpr uint32_t sender_noc_y = get_compile_time_arg_val(24);
     constexpr bool fused_w_row_major = get_compile_time_arg_val(25) != 0;
     constexpr uint32_t fused_w_read_bytes = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_pre = get_compile_time_arg_val(27);
+    constexpr bool use_pre_mix = get_compile_time_arg_val(28) != 0;
 
-    constexpr auto fused_w_args = TensorAccessorArgs<27>();
+    constexpr auto fused_w_args = TensorAccessorArgs<29>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
     constexpr auto comb_bias_args = TensorAccessorArgs<hidden_args.next_compile_time_args_offset()>();
+    constexpr auto pre_mix_args = TensorAccessorArgs<comb_bias_args.next_compile_time_args_offset()>();
 
     const uint32_t fused_w_addr = get_arg_val<uint32_t>(0);
     const uint32_t pre_bias_addr = get_arg_val<uint32_t>(1);
@@ -70,6 +73,7 @@ void kernel_main() {
     const uint32_t hidden_addr = get_arg_val<uint32_t>(3);
     const uint32_t comb_bias_addr = get_arg_val<uint32_t>(4);
     const bool is_source = get_arg_val<uint32_t>(5) != 0;
+    const uint32_t pre_mix_addr = get_arg_val<uint32_t>(6);
 
     const auto fused_w = TensorAccessor(fused_w_args, fused_w_addr);
     const auto pre_bias = TensorAccessor(pre_bias_args, pre_bias_addr);
@@ -85,11 +89,21 @@ void kernel_main() {
     const uint32_t tile_size_bytes = cb_fw.get_tile_size();
     const uint32_t tile_elems = tile_size_bytes / 2u;
 
-    // Collapse cores can publish the local hidden shard before fused_w arrives.
+    // Collapse cores can publish the local hidden shard before fused_w arrives -- and, given
+    // pre_mix, the collapse weights too, so the collapse does not wait on fused_w at all.
     if constexpr (role == 0) {
         CircularBuffer cb_h(cb_hidden);
         cb_h.reserve_back(hidden_tiles_per_core);
         cb_h.push_back(hidden_tiles_per_core);
+
+        if constexpr (use_pre_mix) {
+            const auto pre_mix = TensorAccessor(pre_mix_args, pre_mix_addr);
+            CircularBuffer cb_p(cb_pre);
+            cb_p.reserve_back(1);
+            noc.async_read(pre_mix, cb_p, cb_p.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_p.push_back(1);
+        }
     }
 
     cb_fw.reserve_back(one_tile);
@@ -139,22 +153,24 @@ void kernel_main() {
     };
 
     if constexpr (role == 0) {
-        CircularBuffer cb_pw(cb_pre_w);
-        CircularBuffer cb_pb(cb_pre_bias);
+        if constexpr (!use_pre_mix) {
+            CircularBuffer cb_pw(cb_pre_w);
+            CircularBuffer cb_pb(cb_pre_bias);
 
-        cb_pb.reserve_back(one_tile);
-        noc.async_read(pre_bias, cb_pb, cb_pb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_pb.push_back(one_tile);
+            cb_pb.reserve_back(one_tile);
+            noc.async_read(pre_bias, cb_pb, cb_pb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_pb.push_back(one_tile);
 
-        cb_pw.reserve_back(one_tile);
-        noc.async_write_zeros(cb_pw, cb_pw.get_tile_size(), {.offset_bytes = 0});
-        noc.write_zeros_l1_barrier();
-        auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
-        for (uint32_t k = 0; k < num_streams; ++k) {
-            pw[tile_face_index(0, k)] = fused_w_at(k);
+            cb_pw.reserve_back(one_tile);
+            noc.async_write_zeros(cb_pw, cb_pw.get_tile_size(), {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+            auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
+            for (uint32_t k = 0; k < num_streams; ++k) {
+                pw[tile_face_index(0, k)] = fused_w_at(k);
+            }
+            cb_pw.push_back(one_tile);
         }
-        cb_pw.push_back(one_tile);
     } else if constexpr (role == 1) {
         CircularBuffer cb_pw(cb_post_w);
         CircularBuffer cb_pb(cb_post_bias);
@@ -172,6 +188,26 @@ void kernel_main() {
             pw[tile_face_index(0, k)] = fused_w_at(num_streams + k);
         }
         cb_pw.push_back(one_tile);
+
+        // Given pre_mix the collapse cores do not compute pre, so this core does, to return it.
+        if constexpr (use_pre_mix) {
+            CircularBuffer cb_prw(cb_pre_w);
+            CircularBuffer cb_prb(cb_pre_bias);
+
+            cb_prb.reserve_back(one_tile);
+            noc.async_read(pre_bias, cb_prb, cb_prb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_prb.push_back(one_tile);
+
+            cb_prw.reserve_back(one_tile);
+            noc.async_write_zeros(cb_prw, cb_prw.get_tile_size(), {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+            auto* prw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_prw.get_write_ptr());
+            for (uint32_t k = 0; k < num_streams; ++k) {
+                prw[tile_face_index(0, k)] = fused_w_at(k);
+            }
+            cb_prw.push_back(one_tile);
+        }
     } else {
         CircularBuffer cb_cw(cb_comb_w);
         CircularBuffer cb_cb(cb_comb_bias);
