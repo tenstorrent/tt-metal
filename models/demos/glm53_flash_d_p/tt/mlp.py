@@ -21,7 +21,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config
+from models.demos.glm53_flash_d_p.tt.common import hifi4_config, mm_config
 
 TILE = 32
 
@@ -55,18 +55,18 @@ class TtDenseMLP:
         split: return this chip's [1, 1, S/4, H] quarter instead (reduce_scatter on both axes, fp32)."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         lim = self.limit
-        g = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
+        g = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
         gc = ttnn.minimum(g, lim, memory_config=mc)
         ttnn.deallocate(g)
         a = ttnn.silu(gc, memory_config=mc)
         ttnn.deallocate(gc)
-        u = ttnn.linear(x, self.w_up, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
+        u = ttnn.linear(x, self.w_up, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
         uc = ttnn.clamp(u, min=-lim, max=lim, memory_config=mc)
         ttnn.deallocate(u)
         h = ttnn.multiply(a, uc, dtype=ttnn.float32, memory_config=mc)
         ttnn.deallocate(a)
         ttnn.deallocate(uc)
-        o = ttnn.linear(h, self.w_down, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
+        o = ttnn.linear(h, self.w_down, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
         ttnn.deallocate(h)
         # reduce over both mesh axes: split -> scatter_rows (bf16 fabric_reduce_scatter by default, see common.py); the
         # replicated path keeps an fp32 all_reduce (a bf16 all_reduce scaled the sum by +0.19% on the 2x2 mesh).
