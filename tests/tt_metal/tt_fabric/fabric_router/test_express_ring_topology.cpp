@@ -344,6 +344,102 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
 
     EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::N));
     EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::E));
+
+    // Kernels are compiled for chords along N/S.
+    const auto defines = control_plane->get_fabric_kernel_defines();
+    ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
+}
+
+// The transpose of TestExpressRingPredicates32x4: the same two-family rings along the 32 columns, so
+// every assertion carries over with row r -> column c, N -> W, S -> E, and the Y and X dimensions
+// swapped. chip = row * 32 + col; these all sit on row 0.
+TEST_F(ControlPlaneFixture, TestExpressRingPredicates4x32) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "express_links_4x32 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    auto control_plane = make_control_plane(
+        "express_links_4x32_mesh_graph_descriptor.textproto",
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = RoutingDirection;
+    using Dim = RoutingDimension;
+    const auto col = [](int c) {  // row 0
+        return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(c)};
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+    EXPECT_TRUE(control_plane->has_protected_ring(col(2), Dim::X));   // ex4 member
+    EXPECT_TRUE(control_plane->has_protected_ring(col(0), Dim::X));   // ex8 member
+    EXPECT_FALSE(control_plane->has_protected_ring(col(3), Dim::X));  // leaf
+    EXPECT_TRUE(control_plane->has_protected_ring(col(3), Dim::Y));   // Y closes at every column
+
+    // Column 0 rides ex8 over its chord to column 7; its E neighbour column 1 is ex4, so that edge
+    // is a crossover and belongs to neither ring.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(0), D::Z));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(0), D::E));
+
+    // Column 2 arrives from column 1 and leaves over the ex4 chord to column 5.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(2), D::Z));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(col(2), D::W, D::Z));
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(col(2), D::E, D::Z));
+    EXPECT_TRUE(control_plane->continuation_allowed(col(2), D::E, D::Z));
+
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(2), D::W));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(col(2), D::Z, D::W));
+    EXPECT_TRUE(control_plane->continuation_allowed(col(2), D::E, D::W));
+
+    // ex8 -> ex4 may continue; ex4 -> ex8 is terminal.
+    EXPECT_TRUE(control_plane->continuation_allowed(col(1), D::W, D::E));
+    EXPECT_FALSE(control_plane->continuation_allowed(col(0), D::E, D::Z));
+    EXPECT_FALSE(control_plane->continuation_allowed(col(7), D::W, D::E));
+
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(3), D::W));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(3), D::E));
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(3), D::S));
+
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(col(2), D::W, D::W));
+
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::W));
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::S));
+
+    // Kernels are compiled for chords along E/W.
+    const auto defines = control_plane->get_fabric_kernel_defines();
+    ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "1");
+}
+
+// The express-axis kernel define follows the configuration: named for an express mesh, absent when
+// the same descriptor is brought up without express routing.
+TEST_F(ControlPlaneFixture, TestExpressAxisKernelDefine8x4) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    {
+        auto control_plane = make_control_plane(
+            "express_links_8x4_mesh_graph_descriptor.textproto",
+            FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            FabricConfig::FABRIC_2D_TORUS_XY);
+        ASSERT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+        const auto defines = control_plane->get_fabric_kernel_defines();
+        ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+        EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
+    }
+    {
+        // Plain FABRIC_2D drops the express edges (see PlainFabric2DDerivesLineFromExpressMgd).
+        auto control_plane = make_control_plane(
+            "express_links_8x4_mesh_graph_descriptor.textproto",
+            FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            FabricConfig::FABRIC_2D);
+        ASSERT_FALSE(control_plane->express_routing_enabled(MeshId{0}));
+        const auto defines = control_plane->get_fabric_kernel_defines();
+        EXPECT_TRUE(defines.contains("ROUTING_MODE")) << "premise: the fabric context computed its defines";
+        EXPECT_FALSE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    }
 }
 
 TEST(AxisRouteTopologyTest, DoubleChordPerRowIsRejected) {
