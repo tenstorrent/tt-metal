@@ -299,7 +299,7 @@ class SpecRunner:
             # sampled rows: verify | sample | accept-commit-draft, three replays and one synchronization (a round without sampled rows replays the single trace: the greedy fast path)
             self._set_sample_params()
             ttnn.execute_trace(self.md, self.tid_a, cq_id=0, blocking=False)
-            ttnn.execute_trace(self.md, self.tid_s, cq_id=0, blocking=False)
+            self.tid_s.replay()
             ttnn.execute_trace(self.md, self.tid_b, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.md)
             self.sample_stats["rows"] += 1
@@ -358,7 +358,8 @@ class SpecRunner:
             dec.set_force(self.n - 1)
             self._feed(X, base)
             dec.forward_verify()
-            dec.forward_sampler()
+            dec.forward_sampler(False)
+            dec.forward_sampler(True)
             dec.forward_tail()
             ttnn.synchronize_device(self.md)
             dec.restore_states(self.snaps)
@@ -375,9 +376,10 @@ class SpecRunner:
             self.tid_a = ttnn.begin_trace_capture(self.md, cq_id=0)
             dec.forward_verify()
             ttnn.end_trace_capture(self.md, self.tid_a, cq_id=0)
-            self.tid_s = ttnn.begin_trace_capture(self.md, cq_id=0)
-            dec.forward_sampler()
-            ttnn.end_trace_capture(self.md, self.tid_s, cq_id=0)
+            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
+
+            self.tid_s = SamplerTraces(self.samp)
+            self.tid_s.capture(dec.forward_sampler)
             self.tid_b = ttnn.begin_trace_capture(self.md, cq_id=0)
             dec.forward_tail()
             ttnn.end_trace_capture(self.md, self.tid_b, cq_id=0)
@@ -410,7 +412,10 @@ class SpecRunner:
     def release(self):
         for name in ("tid", "tid_a", "tid_s", "tid_b"):
             if getattr(self, name, None) is not None:
-                ttnn.release_trace(self.md, getattr(self, name))
+                if name == "tid_s":
+                    self.tid_s.release()
+                else:
+                    ttnn.release_trace(self.md, getattr(self, name))
                 setattr(self, name, None)
 
     # ---- hand-off: drafter seeding ----------------------------------------------------------------------------------------------

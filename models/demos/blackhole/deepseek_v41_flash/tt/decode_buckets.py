@@ -266,8 +266,9 @@ class DecodeBucket:
         self.last_logits = self.dec.forward()
         ttnn.synchronize_device(self.m.md)
         self.dec.restore_states(snaps)
-        if self.samp is not None:  # compile pass of the bucket's sampler
-            self.dec.forward_sampler(self.last_logits)
+        if self.samp is not None:  # compile pass of the bucket's sampler (both variants)
+            self.dec.forward_sampler(self.last_logits, False)
+            self.dec.forward_sampler(self.last_logits, True)
             ttnn.synchronize_device(self.m.md)
         self.set_loop_state(tokens, pos)
         self._warm = True
@@ -284,9 +285,10 @@ class DecodeBucket:
         if (
             self.samp is not None
         ):  # the bucket sampler's own trace (replayed after the step trace by a step with sampled rows)
-            self.samp_trace = ttnn.begin_trace_capture(md, cq_id=0)
-            self.dec.forward_sampler(self.last_logits)
-            ttnn.end_trace_capture(md, self.samp_trace, cq_id=0)
+            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
+
+            self.samp_trace = SamplerTraces(self.samp)
+            self.samp_trace.capture(lambda fast: self.dec.forward_sampler(self.last_logits, fast))
             ttnn.synchronize_device(md)
         self.set_loop_state(tokens, pos)
 
@@ -295,7 +297,7 @@ class DecodeBucket:
             ttnn.release_trace(self.m.md, self.trace_id)
             self.trace_id = None
         if self.samp_trace is not None:
-            ttnn.release_trace(self.m.md, self.samp_trace)
+            self.samp_trace.release()
             self.samp_trace = None
 
     # ---- one step -----------------------------------------------------------------------------------------------------------------------
@@ -326,11 +328,11 @@ class DecodeBucket:
             check_trace_allocations(m.md, self.trace_id, f"decode bucket B'={self.B}")
             ttnn.execute_trace(m.md, self.trace_id, cq_id=0, blocking=False)
             if sampled:  # the sampled tokens replace the greedy ones the step wrote
-                ttnn.execute_trace(m.md, self.samp_trace, cq_id=0, blocking=False)
+                self.samp_trace.replay()
         else:
             self.last_logits = self.dec.forward()
             if sampled:
-                self.dec.forward_sampler(self.last_logits)
+                self.dec.forward_sampler(self.last_logits, self.samp.fast)
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         out = torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
         t3 = time.perf_counter()

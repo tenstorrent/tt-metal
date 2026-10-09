@@ -207,6 +207,7 @@ def exact_cdf_parts(l, T, tk, tp):
     return e / e.sum()
 
 
+@pytest.mark.parametrize("fast", [False, True], ids=["full", "topk"])
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -219,7 +220,7 @@ def exact_cdf_parts(l, T, tk, tp):
     indirect=True,
 )
 @torch.no_grad()
-def test_device_sampler_distribution_vs_exact_sampler(mesh_device):
+def test_device_sampler_distribution_vs_exact_sampler(mesh_device, fast):
     """Distribution check of the production sampler (J=16, 3 levels: the settings of the decode / verify traces) against the exact float64 sampler, on flat, near-flat, constant, ordinary and peaked rows
     and on real logits rows: every row of every replay draws with its own stratified uniform u_i = (i + 0.5) / N; the token must satisfy cdf_before(tok) - tol <= u_i <= cdf_after(tok) + tol of the EXACT
     kept distribution (tol (0.002) absorbs the finite resolution of the threshold search: tokens within range / J**levels of a top-k / top-p boundary), i.e. the empirical law equals the exact law to within
@@ -248,6 +249,12 @@ def test_device_sampler_distribution_vs_exact_sampler(mesh_device):
         for i, j in enumerate(torch.randperm(L.shape[0], generator=g)[:3].tolist()):
             rows_l[f"real logits row {i}"] = L[j]
     cfgs = [(1.0, 0, 1.0), (1.0, 0, 0.95), (0.6, 20, 0.95), (1.0, 50, 1.0), (1.3, 0, 0.9)]
+    if (
+        fast
+    ):  # the top-k path (``forward_topk``): rows with 0 < top_k <= kcand, exact kept set (constant rows: ties beyond the candidates are not kept)
+        cfgs = [(1.0, 20, 1.0), (0.6, 20, 0.95), (1.0, 32, 0.9), (1.3, 5, 0.95), (1.0, 2, 1.0), (0.8, 32, 1.0)]
+        rows_l.pop("constant")
+    fwd = smp.forward_topk if fast else smp.forward
     N = int(os.environ.get("SAMP_DIST_N", "1024"))
     assert N % B == 0
     tol = float(os.environ.get("SAMP_DIST_TOL", "0.002"))
@@ -262,10 +269,10 @@ def test_device_sampler_distribution_vs_exact_sampler(mesh_device):
             mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(2, 3), mesh_shape=(rows, cols)),
         )
         smp.set_params(torch.ones(B), torch.zeros(B), torch.ones(B), torch.rand(B), torch.zeros(B))
-        out = smp.forward(logits, prm)
+        out = fwd(logits, prm)
         ttnn.synchronize_device(md)
         tid = ttnn.begin_trace_capture(md, cq_id=0)
-        out = smp.forward(logits, prm)
+        out = fwd(logits, prm)
         ttnn.end_trace_capture(md, tid, cq_id=0)
         for T_, tk, tp in cfgs:
             q = exact_cdf_parts(lrow, T_, tk, tp)
@@ -363,6 +370,8 @@ def test_device_sampler_cost(mesh_device):
     for stop in ("greedy_part", "scale_exp", "search_k", "search_p", "prefix", None):
         smp.stop = stop
         res[f"sampler up to {stop or 'end'}"] = timed(lambda: smp.forward(logits, prm))
+    smp.stop = None
+    res["top-k path (kcand=%d)" % smp.kcand] = timed(lambda: smp.forward_topk(logits, prm))
     print(
         f"SAMPLER_COST T={T} J={J} levels={L} levels_k={LK}: " + ", ".join(f"{k}: {v:.3f} ms" for k, v in res.items()),
         flush=True,
