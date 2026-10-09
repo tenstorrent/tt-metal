@@ -167,6 +167,10 @@ void kernel_main() {
             cos_interm_dfb_obj,
             sin_interm_dfb_obj,
             out_dfb_obj);
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced.
+        out_dfb_obj.wait_front(Wt);
+        out_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from DFB
