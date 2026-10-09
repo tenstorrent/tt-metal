@@ -22,6 +22,36 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
+// Kernel push order and runtime-arg layout of minimal_matmul_fabric_bound_factory_helper_common.
+// minimal_matmul_fabric_bound_patch_runtime_args writes at these positions, so they must track the helper.
+namespace fabric_bound_layout {
+using minimal_matmul_fabric_bound_layout::kNumKernels;
+// Kernel offsets from the helper's first kernel index.
+constexpr uint32_t kIn0SenderKernel = 0;
+constexpr uint32_t kIn0ReceiverKernel = 1;
+constexpr uint32_t kIn1SenderKernel = 2;
+constexpr uint32_t kIn1ReceiverKernel = 3;
+constexpr uint32_t kComputeKernel = 4;
+static_assert(kComputeKernel + 1 == kNumKernels, "kNumKernels must count every kernel offset");
+
+// in0 runtime args: [in0 address, bias address, AG input address, is_sink, next/prev noc (4), M/N tile ranges (4),
+// defer_write_k_block, max_defer_write_k_block, num_local_k_blocks].
+constexpr uint32_t kIn0InputAddrArg = 0;
+constexpr uint32_t kIn0BiasAddrArg = 1;
+constexpr uint32_t kIn0AgInputAddrArg = 2;
+constexpr uint32_t kIn0FixedArgs = 15;
+// in1 runtime args: [weight address, bias address, is_sink, next/prev noc (4), M/N tile ranges (4),
+// defer_write_k_block, max_defer_write_k_block, num_local_k_blocks].
+constexpr uint32_t kIn1WeightAddrArg = 0;
+constexpr uint32_t kIn1BiasAddrArg = 1;
+constexpr uint32_t kIn1FixedArgs = 14;
+// With a fused ternary, [ternary_a address, ternary_b address, broadcast_ternary_b] follow the fixed args of both
+// in0 and in1; the output addresses come next, one per output tensor.
+constexpr uint32_t kTernaryAAddrOffset = 0;
+constexpr uint32_t kTernaryBAddrOffset = 1;
+constexpr uint32_t kTernaryArgs = 3;
+}  // namespace fabric_bound_layout
+
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
     (void)K;  // K not used for determining defaults currently
@@ -115,27 +145,6 @@ void append_accessors(
     }
 }
 
-// Lowest semaphore id free on every core of `core_ranges`, the same id CreateSemaphore picks; Program{desc}
-// rejects an id past the per-core semaphore limit.
-uint32_t add_fabric_bound_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& core_ranges, uint32_t initial_value) {
-    uint32_t semaphore_id = 0;
-    while (std::any_of(
-        desc.semaphores.begin(), desc.semaphores.end(), [&](const tt::tt_metal::SemaphoreDescriptor& semaphore) {
-            return semaphore.id == semaphore_id && semaphore.core_type == tt::CoreType::WORKER &&
-                   semaphore.core_ranges.intersects(core_ranges);
-        })) {
-        semaphore_id++;
-    }
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return semaphore_id;
-}
-
 void add_fabric_bound_cb(
     tt::tt_metal::ProgramDescriptor& desc,
     uint32_t cb_id,
@@ -185,7 +194,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     const std::optional<const Tensor>& fused_ternary_input_b,
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler,
     bool fuse_swiglu) {
-    namespace layout = minimal_matmul_fabric_bound_layout;
+    namespace layout = fabric_bound_layout;
     using tt::tt_metal::ComputeConfigDescriptor;
     using tt::tt_metal::DataMovementConfigDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -389,13 +398,14 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
+    using ttnn::experimental::ccl::allocate_worker_semaphore;
     const CoreRangeSet core_grid_set(core_grid);
-    auto in0_sender_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, INVALID);
-    auto in0_receiver_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, INVALID);
-    auto in0_valid_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, VALID);
-    auto in1_sender_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, INVALID);
-    auto in1_receiver_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, INVALID);
-    auto in1_valid_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, VALID);
+    auto in0_sender_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
+    auto in0_receiver_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
+    auto in0_valid_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, VALID);
+    auto in1_sender_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
+    auto in1_receiver_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, INVALID);
+    auto in1_valid_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, VALID);
 
     // CB index of every circular buffer this helper creates, exposed to all five kernels as named compile-time args
     KernelDescriptor::NamedCompileTimeArgs cb_named_args;
@@ -529,22 +539,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     }
 
     if (fuse_op) {
-        // Descriptor form of MinimalMatmulFusedOpSignaler::init_fused_op (MULTI mode): every in0 injector core is
-        // signaled, and each gets 2 * num_ag_workers + 1 receiver semaphores laid out [backward..., forward..., self].
-        fused_op_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
-        fused_op_signaler->fused_op_receiver_cores_noc.clear();
-        for (const auto& core :
-             tt::tt_metal::grid_to_cores(in0_sender_cores.start_coord, in0_sender_cores.end_coord, true)) {
-            fused_op_signaler->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
-        }
-        const CoreRangeSet in0_sender_core_set(in0_sender_cores);
-        const uint32_t num_signal_semaphores = (2 * fused_op_signaler->num_ag_workers) + 1;
-        for (uint32_t i = 0; i < num_signal_semaphores; i++) {
-            fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(
-                add_fabric_bound_semaphore(desc, in0_sender_core_set, 0));
-        }
-        fused_op_signaler->num_fused_op_cores_to_signal = fused_op_signaler->fused_op_receiver_cores_noc.size();
-        fused_op_signaler->initialized_fused_op = true;
+        fused_op_signaler->init_fused_op(desc, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
         // Stream the in0 read in this many M-row bands (parsed above), matching the AG's per-band delivery/signal
         defines["IN0_SUB_CHUNKS"] = std::to_string(in0_sub_chunks);
@@ -609,7 +604,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";
-        srs_fuse_signaler_sync_semaphore_id = add_fabric_bound_semaphore(desc, core_grid_set, 0);
+        srs_fuse_signaler_sync_semaphore_id = allocate_worker_semaphore(desc, core_grid_set, 0);
     }
 
     std::vector<CoreCoord> all_worker_cores_noc;
@@ -1037,13 +1032,14 @@ void minimal_matmul_fabric_bound_factory_helper_common(
         });
         append_ternary_and_outputs(in0_args);
         append_signaler_args(in0_args);
-        if (in1_idx == 0) {
-            // in0 sender
-            in0_sender_kernel.emplace_runtime_args(core, in0_args);
-        } else {
-            // in0 receiver
-            in0_receiver_kernel.emplace_runtime_args(core, in0_args);
-        }
+        // in0 sender on the first in1 column, in0 receiver elsewhere
+        auto& in0_kernel = (in1_idx == 0) ? in0_sender_kernel : in0_receiver_kernel;
+        in0_kernel.emplace_runtime_args(core, in0_args);
+        TT_FATAL(
+            in0_kernel.runtime_args.back().second.at(layout::kIn0FixedArgs - 1) == num_local_k_blocks,
+            "minimal_matmul fabric-bound in0: kIn0FixedArgs ({}) no longer ends at num_local_k_blocks, so the "
+            "cache-hit patch would write the ternary and output addresses into the wrong slots",
+            layout::kIn0FixedArgs);
 
         KernelDescriptor::RTArgList in1_args;
         in1_args.push_back(in1_buffer);
@@ -1064,13 +1060,14 @@ void minimal_matmul_fabric_bound_factory_helper_common(
         });
         append_ternary_and_outputs(in1_args);
         append_signaler_args(in1_args);
-        if (in0_idx == 0) {
-            // in1 sender
-            in1_sender_kernel.emplace_runtime_args(core, in1_args);
-        } else {
-            // in1 receiver
-            in1_receiver_kernel.emplace_runtime_args(core, in1_args);
-        }
+        // in1 sender on the first in0 row, in1 receiver elsewhere
+        auto& in1_kernel = (in0_idx == 0) ? in1_sender_kernel : in1_receiver_kernel;
+        in1_kernel.emplace_runtime_args(core, in1_args);
+        TT_FATAL(
+            in1_kernel.runtime_args.back().second.at(layout::kIn1FixedArgs - 1) == num_local_k_blocks,
+            "minimal_matmul fabric-bound in1: kIn1FixedArgs ({}) no longer ends at num_local_k_blocks, so the "
+            "cache-hit patch would write the ternary and output addresses into the wrong slots",
+            layout::kIn1FixedArgs);
 
         std::vector<uint32_t> compute_runtime_args = {
             M_start_tile,
@@ -1112,7 +1109,7 @@ void minimal_matmul_fabric_bound_patch_runtime_args(
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
     const std::vector<Tensor>& output_tensors) {
-    namespace layout = minimal_matmul_fabric_bound_layout;
+    namespace layout = fabric_bound_layout;
 
     const uint32_t input_address = input_tensor.buffer()->address();
     const uint32_t weight_address = weight_tensor.buffer()->address();

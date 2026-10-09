@@ -5,12 +5,18 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 namespace ttnn::experimental::ccl {
+
+// Adds a WORKER semaphore on `core_ranges` to `desc` with the lowest id that is free on every core of the range,
+// the id CreateSemaphore would pick, and returns that id.
+uint32_t allocate_worker_semaphore(
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& core_ranges, uint32_t initial_value);
 
 struct CoreSemPair {
     tt::tt_metal::CoreCoord core = {0, 0};
@@ -90,6 +96,12 @@ struct StridedAllGatherFusedOpSignaler {
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
+
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
+        const std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
@@ -271,6 +283,12 @@ struct MinimalMatmulFusedOpSignaler {
 
     void init_fused_op(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::IDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);

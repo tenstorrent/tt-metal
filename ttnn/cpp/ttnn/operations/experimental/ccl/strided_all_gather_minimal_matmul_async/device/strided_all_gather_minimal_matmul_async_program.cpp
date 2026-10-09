@@ -83,10 +83,6 @@ tt::tt_metal::ProgramDescriptor StridedAllGatherMinimalMatmulAsyncProgramFactory
 
     // Matmul outputs: one tensor per chunk (chunks == 1 -> single output).
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
-    TT_FATAL(
-        desc.kernels.size() == strided_ag_mm_matmul_first_kernel_index,
-        "strided_all_gather_minimal_matmul_async matmul kernels must start at index {}",
-        strided_ag_mm_matmul_first_kernel_index);
     minimal_matmul_fabric_bound_factory_helper_common(
         desc,
         all_gather_output_tensor,
@@ -113,10 +109,6 @@ tt::tt_metal::ProgramDescriptor StridedAllGatherMinimalMatmulAsyncProgramFactory
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    TT_FATAL(
-        desc.kernels.size() == strided_ag_mm_all_gather_first_kernel_index,
-        "strided_all_gather_minimal_matmul_async all-gather kernels must start at index {}",
-        strided_ag_mm_all_gather_first_kernel_index);
     strided_all_gather_async_minimal_default_helper(
         desc,
         input_tensor,

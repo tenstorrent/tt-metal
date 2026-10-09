@@ -16,33 +16,10 @@
 
 namespace ttnn::experimental::prim {
 
-// Kernel push order and runtime-arg layout of minimal_matmul_fabric_bound_factory_helper_common.
-// minimal_matmul_fabric_bound_patch_runtime_args writes at these positions, so they must track the helper.
 namespace minimal_matmul_fabric_bound_layout {
-// Kernel offsets from the helper's first kernel index.
-inline constexpr uint32_t kIn0SenderKernel = 0;
-inline constexpr uint32_t kIn0ReceiverKernel = 1;
-inline constexpr uint32_t kIn1SenderKernel = 2;
-inline constexpr uint32_t kIn1ReceiverKernel = 3;
-inline constexpr uint32_t kComputeKernel = 4;
+// Number of kernels minimal_matmul_fabric_bound_factory_helper_common appends; a parent op that pushes its own
+// kernels after the matmul's starts them at the matmul's first kernel index plus this.
 inline constexpr uint32_t kNumKernels = 5;
-
-// in0 runtime args: [in0 address, bias address, AG input address, is_sink, next/prev noc (4), M/N tile ranges (4),
-// defer_write_k_block, max_defer_write_k_block, num_local_k_blocks].
-inline constexpr uint32_t kIn0InputAddrArg = 0;
-inline constexpr uint32_t kIn0BiasAddrArg = 1;
-inline constexpr uint32_t kIn0AgInputAddrArg = 2;
-inline constexpr uint32_t kIn0FixedArgs = 15;
-// in1 runtime args: [weight address, bias address, is_sink, next/prev noc (4), M/N tile ranges (4),
-// defer_write_k_block, max_defer_write_k_block, num_local_k_blocks].
-inline constexpr uint32_t kIn1WeightAddrArg = 0;
-inline constexpr uint32_t kIn1BiasAddrArg = 1;
-inline constexpr uint32_t kIn1FixedArgs = 14;
-// With a fused ternary, [ternary_a address, ternary_b address, broadcast_ternary_b] follow the fixed args of both
-// in0 and in1; the output addresses come next, one per output tensor.
-inline constexpr uint32_t kTernaryAAddrOffset = 0;
-inline constexpr uint32_t kTernaryBAddrOffset = 1;
-inline constexpr uint32_t kTernaryArgs = 3;
 }  // namespace minimal_matmul_fabric_bound_layout
 
 // Appends the fabric-bound matmul kernels, CBs and semaphores to `desc` (exposed for the fused all-gather matmul).

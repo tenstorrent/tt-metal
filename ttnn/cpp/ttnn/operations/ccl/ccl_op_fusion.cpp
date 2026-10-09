@@ -4,12 +4,52 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+
+#include <algorithm>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::ccl {
+
+namespace {
+
+// Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which no public header exposes.
+constexpr uint32_t kSemaphoresPerCore = 16;
+
+std::vector<CoreCoord> worker_cores_noc(const IDevice* device, const CoreRangeSet& core_ranges) {
+    std::vector<CoreCoord> cores_noc;
+    for (const auto& range : core_ranges.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    return cores_noc;
+}
+
+}  // namespace
+
+uint32_t allocate_worker_semaphore(ProgramDescriptor& desc, const CoreRangeSet& core_ranges, uint32_t initial_value) {
+    for (uint32_t semaphore_id = 0; semaphore_id < kSemaphoresPerCore; semaphore_id++) {
+        const bool taken = std::any_of(desc.semaphores.begin(), desc.semaphores.end(), [&](const auto& semaphore) {
+            return semaphore.id == semaphore_id && semaphore.core_type == tt::CoreType::WORKER &&
+                   semaphore.core_ranges.intersects(core_ranges);
+        });
+        if (!taken) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = semaphore_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = core_ranges,
+                .initial_value = initial_value,
+            });
+            return semaphore_id;
+        }
+    }
+    TT_THROW(
+        "No semaphore id is free on every core of {}: all {} ids are in use", core_ranges.str(), kSemaphoresPerCore);
+}
 
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -98,6 +138,23 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
     }
 
     // Get the noc coords for the all gather workers
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
+void StridedAllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRangeSet& all_gather_workers,
+    const std::vector<CoreCoord>& all_gather_worker_cores) {
+    // The sync semaphore is only needed when more than one worker core has to synchronize
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = allocate_worker_semaphore(desc, all_gather_workers, 0);
+    }
+
     this->all_gather_worker_cores_noc.clear();
     for (const auto& core : all_gather_worker_cores) {
         this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
@@ -547,6 +604,26 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
 
+    initialized_fused_op = true;
+}
+
+void MinimalMatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    const CoreRangeSet signaled_cores =
+        std::visit([](const auto& arg) { return CoreRangeSet(arg); }, core_range_to_signal);
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+    this->fused_op_receiver_cores_noc = worker_cores_noc(device, signaled_cores);
+
+    // N backward + N forward + 1 self (N == num_ag_workers), all on every signaled core
+    const uint32_t num_signal_semaphores = (2 * this->num_ag_workers) + 1;
+    for (uint32_t i = 0; i < num_signal_semaphores; i++) {
+        this->fused_op_receiver_signal_semaphores.push_back(allocate_worker_semaphore(desc, signaled_cores, 0));
+    }
+
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     initialized_fused_op = true;
 }
 

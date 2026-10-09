@@ -45,9 +45,9 @@ struct StridedAllGatherMinimalMatmulAsync {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Hashes the fields listed in StridedAllGatherMinimalMatmulAsyncParams::attribute_values(), which leave out the
-    // all-gather semaphores; StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments re-applies
-    // every semaphore address on a cache hit.
+    // Leaves out strided_all_gather_async_struct.semaphore and devices;
+    // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments re-applies every semaphore address
+    // on a cache hit.
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::experimental::prim

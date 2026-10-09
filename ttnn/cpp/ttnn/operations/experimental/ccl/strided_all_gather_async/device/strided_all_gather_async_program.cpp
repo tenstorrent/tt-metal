@@ -97,95 +97,46 @@ uint32_t strided_default_workers(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-constexpr uint32_t strided_all_gather_async_first_kernel_index = 0;
+// Kernel push order and runtime-arg layout of the pipeline appended by
+// strided_all_gather_async_minimal_default_helper. strided_all_gather_async_patch_runtime_args writes at
+// these positions, so they must track the helper in lockstep. Starting at the helper's first kernel index:
+//   [reader, writer] per worker pair, pair = (link * kNumDirectionsPerLink + dir) * num_workers + worker,
+//   then one matmul-signal aggregator per direction (fused op, when the aggregators are in use),
+//   then the fabric mux kernels, whose count differs per device.
+namespace strided_all_gather_async_layout {
+constexpr uint32_t kNumDirectionsPerLink = 2;
+constexpr uint32_t kNumMuxCoresPerDirectionPerLink = 1;
 
-constexpr const char* strided_all_gather_reader_kernel_path =
-    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/minimal_default_reader.cpp";
-constexpr const char* strided_all_gather_writer_kernel_path =
-    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/minimal_default_writer.cpp";
-constexpr const char* strided_all_gather_aggregator_kernel_path =
-    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
-    "minimal_default_mm_signal_aggregator.cpp";
-constexpr const char* strided_all_gather_mux_v1_kernel_path = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+// Reader runtime args: [0] input address, [1] output address, ..., [9] out-ready semaphore address.
+constexpr uint32_t kReaderInputAddrArg = 0;
+constexpr uint32_t kReaderOutputAddrArg = 1;
+constexpr uint32_t kReaderSemaphoreArg = 9;
+// Writer runtime args: [0] output address, ..., [11] out-ready semaphore address.
+constexpr uint32_t kWriterOutputAddrArg = 0;
+constexpr uint32_t kWriterSemaphoreArg = 11;
+// Fused-op writers end with [writer_signals_mm, aggregator noc x, aggregator noc y, aggregator semaphore].
+constexpr uint32_t kWriterAggregatorTailSize = 4;
+constexpr uint32_t kWriterAggregatorTailSignalsOffset = 0;
+constexpr uint32_t kWriterAggregatorTailSemaphoreOffset = 3;
+// Aggregator runtime args: 6 header words, ring_size k-block counts, then one semaphore address per AG worker.
+constexpr uint32_t kAggregatorHeaderArgs = 6;
+// semaphore[dir] is the out-ready semaphore of direction dir; the per-worker aggregator semaphores follow,
+// direction-major: semaphore[kAggregatorSemaphoreBase + dir * num_ag_workers + global_worker_id].
+constexpr uint32_t kAggregatorSemaphoreBase = kNumDirectionsPerLink;
 
-// Lowest semaphore id free on every core of `core_ranges`, the same id CreateSemaphore picks; Program{desc}
-// rejects an id past the per-core semaphore limit.
-uint32_t add_strided_all_gather_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& core_ranges, uint32_t initial_value) {
-    uint32_t semaphore_id = 0;
-    while (std::any_of(
-        desc.semaphores.begin(), desc.semaphores.end(), [&](const tt::tt_metal::SemaphoreDescriptor& semaphore) {
-            return semaphore.id == semaphore_id && semaphore.core_type == tt::CoreType::WORKER &&
-                   semaphore.core_ranges.intersects(core_ranges);
-        })) {
-        semaphore_id++;
-    }
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return semaphore_id;
+uint32_t worker_pair_index(uint32_t link, uint32_t dir, uint32_t worker, uint32_t num_workers_per_direction) {
+    return (((link * kNumDirectionsPerLink) + dir) * num_workers_per_direction) + worker;
 }
-
-void strided_fabric_mux_connection_ct_args(
-    const bool is_termination_master,
-    const CoreCoord& mux_virtual_core,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    uint32_t worker_id,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    std::vector<uint32_t>& writer_ct_args) {
-    writer_ct_args.push_back(is_termination_master);
-    writer_ct_args.push_back(mux_virtual_core.x);
-    writer_ct_args.push_back(mux_virtual_core.y);
-    writer_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
-    writer_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
-    writer_ct_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_status_address());
-    writer_ct_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
+uint32_t reader_kernel_index(uint32_t first_kernel_index, uint32_t pair) { return first_kernel_index + (2 * pair); }
+uint32_t writer_kernel_index(uint32_t first_kernel_index, uint32_t pair) { return first_kernel_index + (2 * pair) + 1; }
+uint32_t aggregator_kernel_index(
+    uint32_t first_kernel_index, uint32_t num_links, uint32_t num_workers_per_direction, uint32_t dir) {
+    return first_kernel_index + (2 * num_links * kNumDirectionsPerLink * num_workers_per_direction) + dir;
 }
+}  // namespace strided_all_gather_async_layout
 
-void strided_fabric_mux_connection_rt_args(
-    const bool& mux_connection_valid,
-    const CoreCoord& worker_logical_core,
-    tt::tt_metal::ProgramDescriptor& desc,
-    CoreCoord termination_master_virtual_core,
-    uint32_t num_workers_per_direction,
-    std::vector<uint32_t>& worker_rt_args) {
-    const CoreRangeSet worker_core_range{CoreRange(worker_logical_core)};
-    worker_rt_args.push_back(mux_connection_valid);
-    worker_rt_args.push_back(add_strided_all_gather_semaphore(desc, worker_core_range, 0));
-    worker_rt_args.push_back(add_strided_all_gather_semaphore(desc, worker_core_range, 0));
-    worker_rt_args.push_back(add_strided_all_gather_semaphore(desc, worker_core_range, 0));
-    worker_rt_args.push_back(add_strided_all_gather_semaphore(desc, worker_core_range, 0));
-    worker_rt_args.push_back(add_strided_all_gather_semaphore(desc, worker_core_range, 0));
-    worker_rt_args.push_back(termination_master_virtual_core.x);
-    worker_rt_args.push_back(termination_master_virtual_core.y);
-    worker_rt_args.push_back(num_workers_per_direction);
-}
-
-template <typename F>
-void for_each_strided_all_gather_core_runtime_args(
-    tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_index, F&& patch) {
-    auto& runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_index);
-    for (auto& runtime_args_column : runtime_args_by_core) {
-        for (auto& runtime_args : runtime_args_column) {
-            if (runtime_args.size() > 0) {
-                patch(runtime_args);
-            }
-        }
-    }
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
+// Workers per direction per link. Shared by the descriptor build and the cache-hit patch so both see the
+// same kernel layout.
 uint32_t strided_all_gather_async_num_workers_per_direction(
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
@@ -203,6 +154,61 @@ uint32_t strided_all_gather_async_num_workers_per_direction(
         layout::kNumDirectionsPerLink,
         layout::kNumMuxCoresPerDirectionPerLink));
 }
+
+constexpr const char* strided_all_gather_reader_kernel_path =
+    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/minimal_default_reader.cpp";
+constexpr const char* strided_all_gather_writer_kernel_path =
+    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/minimal_default_writer.cpp";
+constexpr const char* strided_all_gather_aggregator_kernel_path =
+    "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
+    "minimal_default_mm_signal_aggregator.cpp";
+
+// Single-core WORKER semaphore with the lowest id free on `core`.
+uint32_t add_core_semaphore(tt::tt_metal::ProgramDescriptor& desc, const CoreCoord& core) {
+    const auto semaphore_id = desc.find_available_semaphore_id(core, tt::CoreType::WORKER);
+    TT_FATAL(semaphore_id.has_value(), "strided_all_gather_async: no free semaphore id on worker core {}", core);
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = semaphore_id.value(),
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(CoreRange(core)),
+        .initial_value = 0,
+    });
+    return semaphore_id.value();
+}
+
+template <typename F>
+void for_each_strided_all_gather_core_runtime_args(
+    tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_index, F&& patch) {
+    auto& runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_index);
+    for (auto& runtime_args_column : runtime_args_by_core) {
+        for (auto& runtime_args : runtime_args_column) {
+            if (runtime_args.size() > 0) {
+                patch(runtime_args);
+            }
+        }
+    }
+}
+
+// Whether the fused writers signal the matmul through the aggregators. The builder makes this choice once for every
+// writer and records it in the writer tail; re-deriving it would re-run the worker-core selection (and its warning)
+// on every cache hit.
+bool writer_signals_mm_flag(tt::tt_metal::Program& program, tt::tt_metal::KernelHandle writer_kernel_index) {
+    namespace layout = strided_all_gather_async_layout;
+    std::optional<bool> signals_mm;
+    for_each_strided_all_gather_core_runtime_args(program, writer_kernel_index, [&](auto& writer_args) {
+        TT_FATAL(
+            writer_args.size() >= layout::kWriterAggregatorTailSize,
+            "strided_all_gather_async fused writer is missing its aggregator tail");
+        const size_t tail = writer_args.size() - layout::kWriterAggregatorTailSize;
+        signals_mm = writer_args[tail + layout::kWriterAggregatorTailSignalsOffset] != 0;
+    });
+    TT_FATAL(
+        signals_mm.has_value(), "strided_all_gather_async writer kernel {} has no runtime args", writer_kernel_index);
+    return signals_mm.value();
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 tt::tt_metal::ProgramDescriptor StridedAllGatherAsyncProgramFactory::create_descriptor(
     const StridedAllGatherAsyncParams& attributes,
@@ -225,10 +231,6 @@ tt::tt_metal::ProgramDescriptor StridedAllGatherAsyncProgramFactory::create_desc
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     tt::tt_metal::ProgramDescriptor desc;
-    TT_FATAL(
-        desc.kernels.size() == CMAKE_UNIQUE_NAMESPACE::strided_all_gather_async_first_kernel_index,
-        "strided_all_gather_async kernels must start at index {}",
-        CMAKE_UNIQUE_NAMESPACE::strided_all_gather_async_first_kernel_index);
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> empty_fused_op_signaler;
     strided_all_gather_async_minimal_default_helper(
         desc,
@@ -262,7 +264,7 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     strided_all_gather_async_patch_runtime_args(
         program,
-        CMAKE_UNIQUE_NAMESPACE::strided_all_gather_async_first_kernel_index,
+        /*first_kernel_index=*/0,
         attributes,
         tensor_args.input_tensor,
         output_tensor,
@@ -276,8 +278,8 @@ void strided_all_gather_async_patch_runtime_args(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     bool fused) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     namespace layout = strided_all_gather_async_layout;
-    using CMAKE_UNIQUE_NAMESPACE::for_each_strided_all_gather_core_runtime_args;
 
     // The semaphore addresses are excluded from the program hash (see compute_program_hash of the device
     // operations), so every one of them is rewritten here along with the tensor addresses.
@@ -305,7 +307,8 @@ void strided_all_gather_async_patch_runtime_args(
             semaphore.at(layout::kAggregatorSemaphoreBase + (dir * num_ag_workers) + global_worker_id).address());
     };
 
-    bool writer_signals_mm = false;
+    const bool aggregators_in_use =
+        fused && writer_signals_mm_flag(program, layout::writer_kernel_index(first_kernel_index, 0));
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < layout::kNumDirectionsPerLink; dir++) {
             const auto out_ready_semaphore_address = static_cast<uint32_t>(semaphore.at(dir).address());
@@ -323,23 +326,17 @@ void strided_all_gather_async_patch_runtime_args(
                     program, layout::writer_kernel_index(first_kernel_index, pair), [&](auto& writer_args) {
                         writer_args[layout::kWriterOutputAddrArg] = output_address;
                         writer_args[layout::kWriterSemaphoreArg] = out_ready_semaphore_address;
-                        if (fused) {
-                            TT_FATAL(
-                                writer_args.size() >= layout::kWriterAggregatorTailSize,
-                                "strided_all_gather_async fused writer is missing its aggregator tail");
+                        if (aggregators_in_use) {
                             const size_t tail = writer_args.size() - layout::kWriterAggregatorTailSize;
-                            if (writer_args[tail + layout::kWriterAggregatorTailSignalsOffset] != 0) {
-                                writer_signals_mm = true;
-                                writer_args[tail + layout::kWriterAggregatorTailSemaphoreOffset] =
-                                    aggregator_semaphore_address(dir, global_worker_id);
-                            }
+                            writer_args[tail + layout::kWriterAggregatorTailSemaphoreOffset] =
+                                aggregator_semaphore_address(dir, global_worker_id);
                         }
                     });
             }
         }
     }
 
-    if (writer_signals_mm) {
+    if (aggregators_in_use) {
         for (uint32_t dir = 0; dir < layout::kNumDirectionsPerLink; dir++) {
             for_each_strided_all_gather_core_runtime_args(
                 program,
@@ -376,8 +373,8 @@ void strided_all_gather_async_minimal_default_helper(
     std::optional<uint32_t> mm_block_wt,
     const CoreCoord core_grid_offset,
     const MMSignalAggregatorMode mm_signal_aggregator_mode) {
-    namespace layout = strided_all_gather_async_layout;
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    namespace layout = strided_all_gather_async_layout;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::DataMovementConfigDescriptor;
@@ -612,8 +609,7 @@ void strided_all_gather_async_minimal_default_helper(
     writer_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     agg_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
 
-    // Route the worker->fabric path through Mux V2 (dual-RISC forwarder+manager) instead of Mux V1
-    const bool use_mux_v2 = true;
+    // The worker->fabric path goes through Mux V2 (dual-RISC forwarder+manager)
     writer_compute_defines["USE_MUX_V2"] = "1";
 
     // KERNEL CREATION
@@ -653,25 +649,12 @@ void strided_all_gather_async_minimal_default_helper(
     }
 
     if (fuse_op) {
-        // Descriptor form of StridedAllGatherFusedOpSignaler::init_all_gather: the sync semaphore is only needed
-        // when more than one worker core has to synchronize.
-        const auto init_all_gather =
-            [&](std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& signaler,
-                const CoreRangeSet& all_gather_workers,
-                const std::vector<CoreCoord>& all_gather_worker_cores) {
-                if (all_gather_worker_cores.size() > 1) {
-                    signaler->all_gather_worker_sync_semaphore =
-                        add_strided_all_gather_semaphore(desc, all_gather_workers, 0);
-                }
-                signaler->all_gather_worker_cores_noc.clear();
-                for (const auto& core : all_gather_worker_cores) {
-                    signaler->all_gather_worker_cores_noc.push_back(mesh_device->worker_core_from_logical_core(core));
-                }
-                signaler->initialized_all_gather = true;
-            };
-        init_all_gather(fused_op_signaler_forward, sender_forward_core_range_set, sender_forward_cores);
-        init_all_gather(fused_op_signaler_backward, sender_backward_core_range_set, sender_backward_cores);
-        init_all_gather(fused_op_signaler_sender_workers, sender_forward_core_range_set, sender_forward_cores);
+        fused_op_signaler_forward->init_all_gather(
+            desc, mesh_device, sender_forward_core_range_set, sender_forward_cores);
+        fused_op_signaler_backward->init_all_gather(
+            desc, mesh_device, sender_backward_core_range_set, sender_backward_cores);
+        fused_op_signaler_sender_workers->init_all_gather(
+            desc, mesh_device, sender_forward_core_range_set, sender_forward_cores);
     }
 
     const uint32_t l1_unreserved_base_address =
@@ -679,29 +662,13 @@ void strided_all_gather_async_minimal_default_helper(
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
-    auto num_full_size_channels = num_workers_per_direction;
-    auto num_header_only_channels = 0;
-    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        0,
-        buffer_size_bytes_full_size_channel,
-        mux_base_l1_address,
-        tt::CoreType::WORKER,
-        mux_l1_small_floor_address);
-
     // V2 places one logical channel per worker
-    std::optional<tt::tt_fabric::FabricMuxV2Config> mux_v2_config;
-    if (use_mux_v2) {
-        mux_v2_config.emplace(
-            static_cast<uint8_t>(num_full_size_channels),
-            static_cast<uint8_t>(num_buffers_full_size_channels),
-            buffer_size_bytes_full_size_channel,
-            mux_base_l1_address,
-            mux_l1_small_floor_address);
-    }
+    const tt::tt_fabric::FabricMuxV2Config mux_v2_config(
+        static_cast<uint8_t>(num_workers_per_direction),
+        static_cast<uint8_t>(num_buffers_full_size_channels),
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        mux_base_l1_address,
+        mux_l1_small_floor_address);
 
     const auto mux_core_offset_of = [&](uint32_t link, uint32_t dir) {
         return (link * num_cores_per_link) + (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
@@ -803,6 +770,12 @@ void strided_all_gather_async_minimal_default_helper(
                 }
                 reader_rt_args.append(reader_rt_args_tail);
                 reader_desc.emplace_runtime_args(core, reader_rt_args);
+                TT_FATAL(
+                    reader_desc.runtime_args.back().second.at(layout::kReaderSemaphoreArg) ==
+                        out_ready_semaphore_address,
+                    "strided_all_gather_async reader: kReaderSemaphoreArg ({}) no longer points at the out-ready "
+                    "semaphore address the cache-hit patch rewrites",
+                    layout::kReaderSemaphoreArg);
 
                 TT_FATAL(
                     desc.kernels.size() == layout::reader_kernel_index(first_kernel_index, pair),
@@ -810,11 +783,6 @@ void strided_all_gather_async_minimal_default_helper(
                     pair,
                     layout::reader_kernel_index(first_kernel_index, pair));
                 desc.kernels.push_back(std::move(reader_desc));
-
-                CoreCoord termination_master_logical_core =
-                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
-                CoreCoord termination_master_virtual_core =
-                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 // Writer
                 KernelDescriptor writer_desc;
@@ -835,19 +803,10 @@ void strided_all_gather_async_minimal_default_helper(
                     global_worker_id,
                 };
                 auto& sender_writer_compile_args = writer_desc.compile_time_args;
-                if (use_mux_v2) {
-                    // V2 is runtime-arg driven and needs no mux compile-time args
-                    sender_writer_compile_args.push_back(worker == 0);
-                    sender_writer_compile_args.insert(sender_writer_compile_args.end(), 12, 0);
-                } else {
-                    strided_fabric_mux_connection_ct_args(
-                        worker == 0,
-                        mux_virtual_core,
-                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                        worker,
-                        mux_kernel_config,
-                        sender_writer_compile_args);
-                }
+                // Mux V2 is runtime-arg driven and needs no mux compile-time args; the 12 slots after
+                // is_termination_master stay reserved so the unicast args and TensorAccessorArgs keep their indices.
+                sender_writer_compile_args.push_back(worker == 0);
+                sender_writer_compile_args.insert(sender_writer_compile_args.end(), 12, 0);
                 if (dir) {
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
@@ -888,25 +847,15 @@ void strided_all_gather_async_minimal_default_helper(
                         writer_rt_args_tail.push_back(width);
                     }
                 }
-                if (use_mux_v2) {
-                    // Layout: [mux_connection_valid][11 client-connection args]
-                    writer_rt_args_tail.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
-                    const uint32_t flow_control_sem_id = add_strided_all_gather_semaphore(desc, worker_core_range, 0);
-                    const uint32_t teardown_sem_id = add_strided_all_gather_semaphore(desc, worker_core_range, 0);
-                    mux_v2_config->append_client_connection_rt_args(
-                        mux_virtual_core,
-                        static_cast<uint8_t>(worker),
-                        {flow_control_sem_id, teardown_sem_id},
-                        writer_rt_args_tail);
-                } else {
-                    strided_fabric_mux_connection_rt_args(
-                        mux_connection_valid,
-                        core,
-                        desc,
-                        termination_master_virtual_core,
-                        num_workers_per_direction,
-                        writer_rt_args_tail);
-                }
+                // Layout: [mux_connection_valid][11 client-connection args]
+                writer_rt_args_tail.push_back(static_cast<uint32_t>(mux_connection_valid ? 1 : 0));
+                const uint32_t flow_control_sem_id = add_core_semaphore(desc, core);
+                const uint32_t teardown_sem_id = add_core_semaphore(desc, core);
+                mux_v2_config.append_client_connection_rt_args(
+                    mux_virtual_core,
+                    static_cast<uint8_t>(worker),
+                    {flow_control_sem_id, teardown_sem_id},
+                    writer_rt_args_tail);
                 if (fuse_op) {
                     // Local self-signal path (op_signaler_sender): targets the single 'self' semaphore
                     const uint32_t self_sem_index =
@@ -927,6 +876,12 @@ void strided_all_gather_async_minimal_default_helper(
                 }
                 writer_rt_args.append(writer_rt_args_tail);
                 writer_desc.emplace_runtime_args(core, writer_rt_args);
+                TT_FATAL(
+                    writer_desc.runtime_args.back().second.at(layout::kWriterSemaphoreArg) ==
+                        out_ready_semaphore_address,
+                    "strided_all_gather_async writer: kWriterSemaphoreArg ({}) no longer points at the out-ready "
+                    "semaphore address the cache-hit patch rewrites",
+                    layout::kWriterSemaphoreArg);
 
                 TT_FATAL(
                     desc.kernels.size() == layout::writer_kernel_index(first_kernel_index, pair),
@@ -1007,33 +962,15 @@ void strided_all_gather_async_minimal_default_helper(
             const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_node_id =
                 mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
-            if (use_mux_v2) {
-                // Creates both the forwarder (RISCV_0) and manager
-                tt::tt_fabric::add_fabric_mux_v2_to_program(
-                    desc,
-                    *mux_v2_config,
-                    mux_logical_core,
-                    src_node_id,
-                    dst_node_id,
-                    link,
-                    tt::tt_metal::NOC::RISCV_0_default);
-            } else {
-                KernelDescriptor mux_desc;
-                mux_desc.kernel_source = strided_all_gather_mux_v1_kernel_path;
-                mux_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-                mux_desc.core_ranges = CoreRangeSet(CoreRange(mux_logical_core));
-                mux_desc.compile_time_args = mux_kernel_config.get_fabric_mux_compile_time_args();
-                mux_desc.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
-                mux_desc.config = DataMovementConfigDescriptor{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::NOC::RISCV_0_default,
-                };
-                mux_desc.runtime_args.emplace_back(
-                    mux_logical_core,
-                    mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                        src_node_id, dst_node_id, link, desc, mux_logical_core));
-                desc.kernels.push_back(std::move(mux_desc));
-            }
+            // Creates both the forwarder (RISCV_0) and manager
+            tt::tt_fabric::add_fabric_mux_v2_to_program(
+                desc,
+                mux_v2_config,
+                mux_logical_core,
+                src_node_id,
+                dst_node_id,
+                link,
+                tt::tt_metal::NOC::RISCV_0_default);
         }
     }
 }

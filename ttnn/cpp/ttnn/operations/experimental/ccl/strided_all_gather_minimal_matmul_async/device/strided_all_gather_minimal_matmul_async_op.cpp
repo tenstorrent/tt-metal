@@ -128,9 +128,10 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
 
 tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // `semaphore` is not hashed: its addresses are re-applied by
-    // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments. matmul_struct is hashed whole,
-    // so fused_ternary_scalar is part of the program structure.
+    // The all-gather `semaphore` is not hashed: its addresses are re-applied by
+    // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments. `devices` is not hashed
+    // either: the program cache belongs to one mesh device. matmul_struct is hashed whole, so fused_ternary_scalar is
+    // part of the program structure.
     const auto& ag_attributes = attributes.strided_all_gather_async_struct;
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
         ag_attributes.dim,
