@@ -60,6 +60,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
                 output_memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                     Defaults to L1_MEMORY_CONFIG.
 
+                residual (ttnn.Tensor, optional): bf16 TILE tensor of the output's [seq_len, emb_dim] added to the
+                    reduced result (e.g. a shared-expert partial), saving a separate full-size add.
+
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
@@ -72,7 +75,8 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("expert_dispatch_table") = nb::none(),
         nb::kw_only(),
         nb::arg("expert_dim") = 3,
-        nb::arg("output_memory_config") = nb::none());
+        nb::arg("output_memory_config") = nb::none(),
+        nb::arg("residual") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail

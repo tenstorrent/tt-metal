@@ -37,6 +37,9 @@ constexpr bool use_dispatch_table_skip =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset()) != 0;
 // output tiles per 32-token row of the whole tensor (emb_dim_out_tiles = this core's column group)
 constexpr uint32_t row_tiles = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 1);
+// residual: the compute's reduced + residual tiles (c_18, emb_dim_out_tiles per chunk) are written instead of c_16
+constexpr bool has_residual = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 2) != 0;
+constexpr uint32_t cb_final = tt::CBIndex::c_18;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -178,9 +181,11 @@ void kernel_main() {
         // The output CB holds TOKENS_PER_CHUNK * emb_dim_cb_tiles tile-sized pages
         // (including padding when emb_dim is not 1024-aligned); only the first
         // emb_dim_out_tiles of them hold real data for this 32-token block.
-        cb_wait_front(cb_output, cb_output_tiles);
+        constexpr uint32_t cb_src = has_residual ? cb_final : cb_output;
+        constexpr uint32_t src_tiles = has_residual ? emb_dim_out_tiles : cb_output_tiles;
+        cb_wait_front(cb_src, src_tiles);
 
-        uint32_t cb_read_addr = get_read_ptr(cb_output);
+        uint32_t cb_read_addr = get_read_ptr(cb_src);
 
         uint32_t tile_row = token_start_idx / TOKENS_PER_CHUNK;
         uint32_t start_tile_idx = tile_row * row_tiles + col_tile_start;
@@ -192,7 +197,7 @@ void kernel_main() {
 
         noc_async_write_barrier();
 
-        cb_pop_front(cb_output, cb_output_tiles);
+        cb_pop_front(cb_src, src_tiles);
 
         token_start_idx += TOKENS_PER_CHUNK;
     }

@@ -98,6 +98,25 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(expert_dispatch_table->layout() == ttnn::Layout::ROW_MAJOR, "expert_dispatch_table must be ROW_MAJOR");
         TT_FATAL(expert_dispatch_table->dtype() == DataType::INT32, "expert_dispatch_table must be int32");
     }
+
+    if (tensor_args.residual.has_value()) {
+        const auto& r = *tensor_args.residual;
+        TT_FATAL(r.storage_type() == StorageType::DEVICE && r.buffer() != nullptr, "residual must be on device");
+        TT_FATAL(r.layout() == ttnn::Layout::TILE, "residual must be TILE");
+        TT_FATAL(r.dtype() == DataType::BFLOAT16, "residual must be bfloat16");
+        const auto& cs = combine_output.padded_shape();
+        const auto& rs = r.padded_shape();
+        uint32_t tokens = 1;
+        for (uint32_t i = 0; i < operation_attributes.expert_dim; ++i) {
+            tokens *= cs[i];
+        }
+        TT_FATAL(
+            rs[-1] == cs[-1] && r.physical_volume() == static_cast<uint64_t>(tokens) * cs[-1],
+            "residual must hold [{} tokens, {}] (got padded shape {})",
+            tokens,
+            cs[-1],
+            rs);
+    }
 }
 
 ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
@@ -141,13 +160,14 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& indices,
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<ttnn::Tensor>& residual) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
     using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
         pcr::PostCombineReduceParams{expert_dim, output_memory_config},
-        pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table});
+        pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table, residual});
 }
 
 }  // namespace ttnn::prim

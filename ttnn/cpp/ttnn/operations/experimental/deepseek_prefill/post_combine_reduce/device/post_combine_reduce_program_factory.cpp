@@ -196,6 +196,31 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         });
     }
 
+    // c_5 / c_18 (residual only): the chunk's residual tiles of this core's column group, and their sum with the
+    // reduced tiles (the writer's source instead of c_16)
+    const auto& residual_opt = tensor_args.residual;
+    const bool has_residual = residual_opt.has_value();
+    if (has_residual) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * emb_dim_out_tiles * tile_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = output_cb_data_format,
+                .page_size = tile_size,
+            }}},
+        });
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = emb_dim_out_tiles * tile_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_18),
+                .data_format = output_cb_data_format,
+                .page_size = tile_size,
+            }}},
+        });
+    }
+
     // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
     uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -234,6 +259,13 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),  // read only local slots (writer's mask)
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
+    // residual: flag, output tiles per core column group, tiles per 32-token row, then its accessor (the combine
+    // buffer's as a placeholder when absent)
+    reader_compile_time_args.push_back(has_residual ? 1 : 0);
+    reader_compile_time_args.push_back(emb_dim_out_tiles);
+    reader_compile_time_args.push_back(row_tiles);
+    tt::tt_metal::TensorAccessorArgs(has_residual ? residual_opt->buffer() : combine_buffer)
+        .append_to(reader_compile_time_args);
 
     // Compute compile-time args. The skip-mode toggle is appended last so the
     // DeepSeek-only arg (dispatch_table page count) retains a stable position
@@ -243,6 +275,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
+        static_cast<uint32_t>(has_residual ? 1 : 0),
+        emb_dim_out_tiles,
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -268,6 +302,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
     writer_compile_time_args.push_back(row_tiles);  // output tiles per 32-token row of the whole tensor
+    writer_compile_time_args.push_back(has_residual ? 1 : 0);  // write c_18 (reduced + residual) instead of c_16
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
@@ -324,6 +359,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
         reader_rt_args.push_back(col_group * emb_dim_bytes);  // byte offset of this core's columns in a row
+        if (has_residual) {
+            reader_rt_args.push_back(residual_opt->buffer());
+        } else {
+            reader_rt_args.push_back(0u);
+        }
+        reader_rt_args.push_back(col_group * emb_dim_out_tiles);  // first tile column of this core
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
         // Compute RT args (no Buffer*).

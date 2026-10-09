@@ -19,12 +19,13 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& indices,
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
-    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config,
+    const std::optional<ttnn::Tensor>& residual) {
     // Use default L1 memory config if not specified
     auto memory_config = output_memory_config.value_or(ttnn::L1_MEMORY_CONFIG);
 
     return ttnn::prim::post_combine_reduce(
-        combine_output, weights, indices, expert_dispatch_table, expert_dim, memory_config);
+        combine_output, weights, indices, expert_dispatch_table, expert_dim, memory_config, residual);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

@@ -24,6 +24,8 @@ struct PostCombineReduceInputs {
     // weight is exactly zero (GPT-OSS). Both must be supplied together.
     std::optional<ttnn::Tensor> indices;
     std::optional<ttnn::Tensor> expert_dispatch_table;
+    // Optional [.., seq_len, emb_dim] bf16 TILE tensor added to the reduced output (e.g. a shared-expert partial).
+    std::optional<ttnn::Tensor> residual;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

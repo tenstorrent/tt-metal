@@ -1186,22 +1186,25 @@ class MultichipDecoder(OptimizedDecoder):
         ttnn.deallocate(region_offsets)
 
         weights_5d = ttnn.unsqueeze(ttnn.unsqueeze(weights, dim=-1), dim=0)
-        routed_local = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+        # the shared-expert partial is added inside post_combine_reduce (its tiles summed onto the reduced ones), not
+        # by a separate full [T, H] add
+        shared_partial = ttnn.reshape(self._token_dispatch_shared(ln_flat, seq_len), (1, 1, seq_len, cfg.hidden))
+        fold = shared_partial.dtype == ttnn.bfloat16 and shared_partial.layout == ttnn.TILE_LAYOUT
+        local_output = ttnn.experimental.deepseek_prefill.post_combine_reduce(
             combined_slots,
             weights_5d,
             indices,
             state["dispatch_table"],
             expert_dim=3,
             output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            residual=shared_partial if fold else None,
         )
-        routed_local = ttnn.reshape(routed_local, (1, 1, seq_len, cfg.hidden))
+        local_output = ttnn.reshape(local_output, (1, 1, seq_len, cfg.hidden))
         ttnn.deallocate(combined_slots)
         ttnn.deallocate(weights)
         ttnn.deallocate(indices)
-
-        shared_partial = self._token_dispatch_shared(ln_flat, seq_len)
-        local_output = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, seq_len, cfg.hidden)))
-        ttnn.deallocate(routed_local)
+        if not fold:
+            local_output = ttnn.add(local_output, shared_partial)
         ttnn.deallocate(shared_partial)
         output = self._reduce(local_output)
         ttnn.deallocate(local_output)

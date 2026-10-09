@@ -20,6 +20,13 @@ constexpr uint32_t emb_dim_bytes = get_compile_time_arg_val(2);
 // 0 = non-local slot (the compute skips it; nothing is read). Combine then need not zero-fill its output.
 constexpr bool use_local_mask = get_compile_time_arg_val(3) != 0;
 constexpr auto combine_accessor_args = TensorAccessorArgs<4>();
+// residual (optional): the chunk's out_tiles tiles of this core's column group -> cb_residual
+constexpr uint32_t res_base = combine_accessor_args.next_compile_time_args_offset();
+constexpr bool has_residual = get_compile_time_arg_val(res_base) != 0;
+constexpr uint32_t out_tiles = get_compile_time_arg_val(res_base + 1);
+constexpr uint32_t row_tiles = get_compile_time_arg_val(res_base + 2);
+constexpr auto residual_accessor_args = TensorAccessorArgs<res_base + 3>();
+constexpr uint32_t cb_residual = tt::CBIndex::c_5;
 constexpr uint32_t cb_local_mask = tt::CBIndex::c_4;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
@@ -29,10 +36,23 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(1);
     uint32_t num_chunks = get_arg_val<uint32_t>(2);
     const uint32_t col_off_bytes = get_arg_val<uint32_t>(3);  // this core's column group within a row
+    [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t col_tile_start = get_arg_val<uint32_t>(5);
 
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        if constexpr (has_residual) {
+            const auto res = TensorAccessor(residual_accessor_args, residual_addr, get_tile_size(cb_residual));
+            cb_reserve_back(cb_residual, out_tiles);
+            const uint32_t l1 = get_write_ptr(cb_residual);
+            const uint32_t first = (token_start_idx / TOKENS_PER_CHUNK) * row_tiles + col_tile_start;
+            for (uint32_t j = 0; j < out_tiles; ++j) {
+                noc_async_read_page(first + j, res, l1 + j * get_tile_size(cb_residual));
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_residual, out_tiles);
+        }
         volatile tt_l1_ptr uint8_t* mask = nullptr;
         if constexpr (use_local_mask) {
             cb_wait_front(cb_local_mask, 1);
