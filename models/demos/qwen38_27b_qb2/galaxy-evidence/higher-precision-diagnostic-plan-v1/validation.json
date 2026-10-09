@@ -1,0 +1,16 @@
+{
+  "state": "prepared_not_queued",
+  "observed_tests": "25 passed, 1 PytestCacheWarning in 0.06s",
+  "command": "env PYTHONPATH=/private/tmp/qwen38-host-validation-v3:/private/tmp/tt-metal-qwen38-long-context /Users/anatarajan/Documents/tt-blaze/local-notes/qwen38-tools/bin/python -m pytest -c /dev/null --confcutdir=models/demos/qwen38_27b_qb2/tests/unit -p qwen38_test_fixture models/demos/qwen38_27b_qb2/tests/unit/test_hf_decoder_control.py models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py -q --junitxml=/private/tmp/qwen38-host-validation-v3/unit.xml",
+  "fixture_scope": "expect_error fixture extracted from repository conftest; standard logging replaces loguru, no device fixture imported",
+  "hardware_run": false,
+  "serving_qualified": false,
+  "is_gpqa_score": false,
+  "fixture_sha256": "d1e79fd9601a3920015301ebb7d96a7fc15e0bcc80eea6159c57c7a632d8fd6f",
+  "source_sha256": {
+    "demo/probe_hf_layers.py": "c7223dfec8e119da22f4b4b7ee058049db5ac017dc5629e742a316e858a1fd20",
+    "tests/unit/test_hf_decoder_control.py": "230d711547a93d49de4e8886682f3f35a1508d6657e0c0b14476bd03cd2fe371",
+    "config/precision_diagnostic_bfp8_hifi4.json": "a1424ac3943fd32d3ef61d44c8f71b098419d516cb7c4a1bc6898a985fb7c4a2",
+    "config/precision_diagnostic_bf16_hifi4.json": "19c712679144286d166218931dae4530c3f744f94785db4419929c260e281df0"
+  }
+}

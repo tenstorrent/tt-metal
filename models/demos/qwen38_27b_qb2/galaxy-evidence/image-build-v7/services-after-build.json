@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-10-09T10:44:03.831172+00:00",
+  "qwen38-release-build-v7-20261009.service": "MainPID=0\nResult=success\nLoadState=not-found\nActiveState=inactive\nInvocationID=\n",
+  "qwen38-serve-image-v7-20261009.service": "MainPID=4028354\nResult=success\nLoadState=loaded\nActiveState=active\nInvocationID=6f554c86a2a14ac385dd5d459d0266dc\n",
+  "builder_state": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 1,
+    "Error": "",
+    "StartedAt": "2026-10-09T10:18:40.111090855Z",
+    "FinishedAt": "2026-10-09T10:33:44.495328608Z"
+  }
+}

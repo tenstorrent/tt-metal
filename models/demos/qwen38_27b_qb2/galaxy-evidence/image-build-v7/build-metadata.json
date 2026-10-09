@@ -1,0 +1,16 @@
+{
+  "containerimage.config.digest": "sha256:2f70ab2ae93b7edb362340ef3c241f1577a49d6795548c7d62cdde4f4e5b1ecd",
+  "containerimage.descriptor": {
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "digest": "sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055",
+    "size": 9046,
+    "annotations": {
+      "org.opencontainers.image.created": "2026-10-09T10:33:08Z"
+    },
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "containerimage.digest": "sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055"
+}

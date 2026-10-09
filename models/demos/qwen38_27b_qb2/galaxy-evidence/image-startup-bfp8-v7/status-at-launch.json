@@ -1,0 +1,19 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-precision-perf-v1-20261009.service",
+  "predecessor_invocation": "122b1077bed2438d9802360ab6277514",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "image_config_digest": "sha256:2f70ab2ae93b7edb362340ef3c241f1577a49d6795548c7d62cdde4f4e5b1ecd",
+  "image_manifest_digest": "sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055",
+  "started_at": 1791542386.3711758,
+  "updated_at": 1791542626.653526,
+  "predecessor": {
+    "MainPID": "1491803",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "122b1077bed2438d9802360ab6277514"
+  }
+}

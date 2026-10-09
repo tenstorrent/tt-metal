@@ -1345,3 +1345,70 @@ No session connection is needed for that queue to continue.
 
 [BFP8 G0 result](../galaxy-evidence/decoder-g0-v1/README.md),
 [exact-SHA build](../galaxy-evidence/image-build-v7/README.md).
+
+
+## Oct 9, 10:29-10:43 UTC: BFP8 GPQA advances; image completes and checks queued
+
+- Revalidated the exact live GPQA process rather than inferring progress from
+  its queue file. Early completion-order snapshots advanced from 43/46 to
+  156/169 and then 162/180 correct, with no truncations. The unchanged full
+  198-question gate and independent completion audit remain pending. All six
+  API checks passed, including multi-turn and concurrent repeatability.
+- Image v7 completed on .34 at 10:33:37 UTC (14m58s including preservation).
+  Source/import checks passed in the built runtime. Its 6,011,314,688-byte OCI
+  archive was checksummed on both reads, fsynced and preserved on host disk.
+  Manifest digest is 79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055.
+  The builder stopped, and the systemd service completed successfully.
+- Queued an image-specific import/startup controller after the exact precision
+  comparison, then the common lock. It waits before copying to avoid competing
+  with hardware work. It verifies the pinned TLS archive, byte count, checksum,
+  Docker identity, runtime imports, entrypoint and real TTIS handoff, without
+  TT devices or inference. PID 1582084, invocation
+  c3068a78ac924fd3a1de1c847be0e53c; observed live and waiting.
+- A fresh short-lived TLS server on .34 is restricted to the one digest and
+  source .98. Its source, public certificate, initial state and launch evidence
+  are retained; the private key stays on the host. Preflight verified source
+  hashes, syntax, the helper CLI and an authenticated HEAD with exact length.
+  Shared helper tests remain 44 passed from the unchanged source; no redundant
+  CPU suite or container pass was invented.
+- The first stage guard rejected a successful transient build unit because
+  systemd had already collected it. It stopped before transfer files were
+  created. Read-only inspection proved its completed artifact and stopped
+  builder; the corrected guard accepts that terminal case and still rejects
+  replaced or running invocations. No active experiment was restarted.
+- Reviewed remaining Tau3 integration: the queued native BFP4 state diagnostic
+  is not a full plugin/sampling qualification. Chunking stays disabled until
+  that diagnostic and an actual plugin continuation test pass. The installed
+  plugin remains unchanged; its isolated continuation-slot fix is already
+  pushed. No extra Tau3 rerun or chunked deployment has been launched yet.
+- A broad temporary-file name search encountered an inaccessible daemon
+  directory; all relevant task scripts were found. Subsequent reads were scoped.
+  A JSON evidence-index search was overly verbose but made no changes.
+
+[Serving evidence](../galaxy-evidence/decoder-gpqa-progress-v1/README.md),
+[completed build](../galaxy-evidence/image-build-v7/README.md),
+[image check queue](../galaxy-evidence/image-startup-bfp8-v7/README.md).
+
+
+## Oct 9, 10:46-10:51 UTC: GPQA gate unreachable; preserve full run
+
+- At 166/188 the maximum possible BFP8 score became 176/198, below 177/198.
+  The exact original process remained active; a later check found 168/192
+  with zero cutoffs. Reported this without claiming a final score, stopping
+  the run, changing the gate, or selecting a different seed.
+- Prepared diagnostic-only BFP8/HiFi4 and BF16/HiFi4 decoder configurations,
+  preserving the current BFP8/HiFi2 head, FP32 state, BFP8 KV and native
+  recurrence. Extended only the diagnostic validator; 25 local host tests
+  passed, including rejecting mixed projection modes and changed head/state.
+  These are not queued, measured or deployed. The user's instruction to let
+  the current full run finish and capture its result remains in effect.
+- The host tests exclude device conftest imports and reuse its expect_error
+  fixture, retained in the evidence. Pytest's cache write under /dev failed
+  harmlessly; all assertions and the saved JUnit report completed. No remote
+  CPU validation or hardware operation competed with the active evaluation.
+- First publication pre-commit adjusted EOFs on two raw transport receipts.
+  Preserved their original staged bytes as gzip instead, retaining exact
+  evidence. A guessed host test-fixture path was absent; the actual fixture
+  was located in repository-root conftest.py.
+
+[Prepared reference controls](../galaxy-evidence/higher-precision-diagnostic-plan-v1/README.md).

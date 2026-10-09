@@ -1,5 +1,24 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 10:49 UTC update: BFP8 GPQA is still running, now 168/192 completed
+answers correct with no truncations. At 166/188 it became mathematically
+unable to reach the 177/198 gate. Per the user request it will finish unchanged
+and retain all 198 results plus the independent audit. Further HiFi4/BF16
+reference controls are prepared with 25 local tests passing, but are not queued
+or deployed. [Prepared diagnostics](../galaxy-evidence/higher-precision-diagnostic-plan-v1/README.md).
+
+Oct 9 10:43 UTC update: the all-BFP8 native endpoint passed all six API checks
+and full GPQA is running: 162/180 completed answers correct, zero truncations,
+18 questions outstanding. This partial snapshot is not qualification. The BFP8
+image completed in 14m58s and is preserved on host disk at manifest
+`sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055`.
+Its separate import/startup follower is persistent behind the exact precision
+performance queue and the global device lock. Container inference, final GPQA,
+Tau3 and deployment gates remain open.
+[Live serving snapshot](../galaxy-evidence/decoder-gpqa-progress-v1/README.md),
+[completed image](../galaxy-evidence/image-build-v7/README.md),
+[queued import/startup](../galaxy-evidence/image-startup-bfp8-v7/README.md).
+
 Oct 9 10:21 UTC update: BFP8 passed all eight G0 replicas and concurrent
 execution. Short-context B1-per-replica traced aggregate decode is 211.54 tok/s,
 24.81% below the matched BFP4-decoder control. Serving is starting; zero GPQA

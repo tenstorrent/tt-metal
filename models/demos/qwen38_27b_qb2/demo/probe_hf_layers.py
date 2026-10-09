@@ -23,12 +23,15 @@ def validate_decoder_control(baseline, candidate):
     for key in ("weight_groups", "compute_fidelities"):
         if candidate[key]["head"] != baseline[key]["head"]:
             raise ValueError("Decoder control must retain the baseline head")
-    if (
-        len({candidate["weight_groups"][role] for role in ROLES}) != 1
-        or candidate["weight_groups"]["attention"] not in ("bfloat4_b", "bfloat8_b")
-        or any(candidate["compute_fidelities"][role] != "HiFi2" for role in ROLES)
-    ):
-        raise ValueError("Decoder control requires uniform BFP4 or BFP8 weights and HiFi2")
+    projection_modes = {(candidate["weight_groups"][role], candidate["compute_fidelities"][role]) for role in ROLES}
+    allowed_modes = {
+        ("bfloat4_b", "HiFi2"),
+        ("bfloat8_b", "HiFi2"),
+        ("bfloat8_b", "HiFi4"),
+        ("bfloat16", "HiFi4"),
+    }
+    if len(projection_modes) != 1 or not projection_modes <= allowed_modes:
+        raise ValueError("Decoder control requires one uniform supported weight/fidelity pair")
     return candidate
 
 

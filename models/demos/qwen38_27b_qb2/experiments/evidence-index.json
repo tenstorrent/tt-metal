@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T10:23:08.732108+00:00",
+  "generated_at": "2026-10-09T10:51:20.534117+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -18,6 +18,16 @@
       "sha256": "6169c63bfac9a8bc19d1e6288c3c72460328401c3aae4145ca328d938b3573db"
     },
     {
+      "path": "config/precision_diagnostic_bf16_hifi4.json",
+      "bytes": 998,
+      "sha256": "19c712679144286d166218931dae4530c3f744f94785db4419929c260e281df0"
+    },
+    {
+      "path": "config/precision_diagnostic_bfp8_hifi4.json",
+      "bytes": 1003,
+      "sha256": "a1424ac3943fd32d3ef61d44c8f71b098419d516cb7c4a1bc6898a985fb7c4a2"
+    },
+    {
       "path": "demo/probe_chunked_prefill.py",
       "bytes": 8176,
       "sha256": "6648ddacae732a5994f014d111ac7ecf76816d3eb45128e78964a6d578ab56fe"
@@ -29,8 +39,8 @@
     },
     {
       "path": "demo/probe_hf_layers.py",
-      "bytes": 12442,
-      "sha256": "a307e38b8ee1bd1bb083409086a18feed98dfced915cd5d6bede07cce866cb41"
+      "bytes": 12539,
+      "sha256": "c7223dfec8e119da22f4b4b7ee058049db5ac017dc5629e742a316e858a1fd20"
     },
     {
       "path": "demo/run_accuracy_followup.py",
@@ -64,8 +74,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 101272,
-      "sha256": "879bde1246ecd11ab23f7859d70f7ca2caf42bc387673e061edcf31853d35c55"
+      "bytes": 105658,
+      "sha256": "7c35e9b38abc93c2bd57ba8bf056cda96699c8d69e4b1597e0421f3b1a58737a"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +84,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 31942,
-      "sha256": "60dcef9a68bf074aa84a93c8fc3a21cef2b5011441262492f7f179465d513e6f"
+      "bytes": 33225,
+      "sha256": "6c7e0f0be7666057d9fca3ea9874cefcb76bfe704c94a7eaec3d4f266fdc42c8"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1192,6 +1202,41 @@
       "path": "galaxy-evidence/decoder-g0-v1/service-at-g0-completion.txt",
       "bytes": 81,
       "sha256": "7059c62b3ffcc329ec0930315cf3429f5a2745d8e0134395039faccdf6fe7e33"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/README.md",
+      "bytes": 1233,
+      "sha256": "f0ca0eaec334748c89d1607548743e8df6a71178da4483cd55645ede12fba9fe"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/api.json",
+      "bytes": 38554,
+      "sha256": "cc0a7525710e238de0068102b3ba78685848626207fe377274c97a8cb1fa1a33"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/deployment.json",
+      "bytes": 19469,
+      "sha256": "6db6dc5be860a24333a4669929323133fe1fbf698cc2ec7f151e55f7407cf889"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/gpqa-gpqa-progress.json",
+      "bytes": 176,
+      "sha256": "0dd316bd9f1e363c59b34d1518cc2ef79fafe4265b0ce6e37a763de09535785b"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/gpqa-gpqa-responses.jsonl.gz",
+      "bytes": 22335,
+      "sha256": "f782ee98c5a4e8b2ffe3657e6854defcef139c5905bb7b36178f60d7d3fa4d09"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/gpqa-protocol.json",
+      "bytes": 1414,
+      "sha256": "00b3962168e1ad0653cccc45462522e9cd48c99df3d4244095f16b7c298cffb2"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-progress-v1/service-at-snapshot.json",
+      "bytes": 156,
+      "sha256": "6e60f38355a97c3bdd94f5ebd64f3ebf1fd442e7630b00e68c6386e12bde06d5"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/README.md",
@@ -2759,6 +2804,26 @@
       "sha256": "3ffbe58aa1578fa583dcfaee76ef841471a41c7c3c6b0c0d215951c9bcf98322"
     },
     {
+      "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/README.md",
+      "bytes": 2183,
+      "sha256": "b45151e5985f16245c183e89b07fb2e6a6006039522976e7fcd7f5215625d143"
+    },
+    {
+      "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/host-fixture.py.gz",
+      "bytes": 469,
+      "sha256": "f21cfd402f9647159880e770fc3e7309ce3dac6179a519e3d7c5b148cc1dbe25"
+    },
+    {
+      "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/unit.xml.gz",
+      "bytes": 710,
+      "sha256": "9e18ca641113e2b7b8dba336d82626feacba10d497c2061180bf55414621f78d"
+    },
+    {
+      "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/validation.json",
+      "bytes": 1364,
+      "sha256": "b4f662a863981c0d6a75cb1bd9bbcfd60d76511894b0e93def1734c8eaacc3c3"
+    },
+    {
       "path": "galaxy-evidence/image-build-v5/README.md",
       "bytes": 1947,
       "sha256": "9556618902d03fb2e8b66df70df77f29593ebd326b131b6eb2226101c0b00658"
@@ -2860,8 +2925,13 @@
     },
     {
       "path": "galaxy-evidence/image-build-v7/README.md",
-      "bytes": 2420,
-      "sha256": "ef680ba51f13d7371b0f1d3c895995f5bd884965851f7ea9db427f6019f4c593"
+      "bytes": 3242,
+      "sha256": "d6bc482eab185bf1edd39a48ac8ee1b767b0f59cad5dcfab45603f8641804eea"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/build-metadata.json",
+      "bytes": 590,
+      "sha256": "b4ad385f223f3b743648d1a102ae7e3decd5850fedbe6b220900dccb4af056e7"
     },
     {
       "path": "galaxy-evidence/image-build-v7/bundle/manifest.json",
@@ -2899,14 +2969,44 @@
       "sha256": "5a1893b87deede2dbae3cf15fa5f71cf82eddc2751220df55482caf10ab5a3aa"
     },
     {
+      "path": "galaxy-evidence/image-build-v7/run.log.gz",
+      "bytes": 45916,
+      "sha256": "a29e64308679ec5671fdfe4c41069699aaa29c4b78de1d5a31157e3b6f3d2190"
+    },
+    {
       "path": "galaxy-evidence/image-build-v7/service-at-launch.txt",
       "bytes": 81,
       "sha256": "a9f280fdbb9251c5b23fcc5ba5311ff36f6eae8543b5cf13ff8d1e350c54c46b"
     },
     {
+      "path": "galaxy-evidence/image-build-v7/services-after-build.json",
+      "bytes": 669,
+      "sha256": "6aacb9df1e81fb9d34a48089326000140f21ac1a4a9814813195e296587dc6b2"
+    },
+    {
       "path": "galaxy-evidence/image-build-v7/state-at-launch.json",
       "bytes": 551,
       "sha256": "42676eaba9cc3c37d0b6f58bd8c74b07b74455da447d67dfc3574c78187776d5"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/state-final.json",
+      "bytes": 1485,
+      "sha256": "9e16ce43ac170ec40d15cdc65942f6fef00ba87a9d2070c6685ae43f8f50993e"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/transfer-status-v7.json.gz",
+      "bytes": 172,
+      "sha256": "bfba70bdde610025e20d325ed3c8ba5e881ac3a1af590ff8b82ea9795e462b04"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/transfer-v7-launch.json",
+      "bytes": 626,
+      "sha256": "f00fc2e8273182b01556663f2d7e89b39c777fcb241736cd1acfacba8d1057cd"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v7/transfer-v7-serve.py.gz",
+      "bytes": 792,
+      "sha256": "21b349b1e3fa5082eac3b6f81324ffcb1d9794deea3d52078f0464cee0101707"
     },
     {
       "path": "galaxy-evidence/image-build-v7/wrapper-validation.json",
@@ -2975,6 +3075,61 @@
     },
     {
       "path": "galaxy-evidence/image-recovery-v2/startup/verify_local_oci_image.py.gz",
+      "bytes": 1753,
+      "sha256": "fda5a180a2c4f62488ac09e9bb1bd0ded1d4686d9103d434d85d626ca957a81f"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/README.md",
+      "bytes": 3253,
+      "sha256": "b3c38e52df0d7e1bfbf93d21ccfcbeaa5cba3d1e4fd2723125697247a0e35e53"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/cert.pem",
+      "bytes": 1147,
+      "sha256": "efadabea8f358b5f2507ed51e312fc42a596a64365ae805af96acc9474fb49a7"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/controller.py.gz",
+      "bytes": 3618,
+      "sha256": "1d519e68fb68ff0b01ec8bc158f638df7758e733e8bc01367be6c8471049c8b1"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/launch.json",
+      "bytes": 860,
+      "sha256": "2be2502fc72d3be74f7e0e4c014172653cc10c7e21bcb09d44293c1a57c9f649"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/probe_qwen38_startup.py.gz",
+      "bytes": 2043,
+      "sha256": "5185894e6cb48bfbe15f3a64e0ca21b56b6a6bd42640699403ae965fe21a37c3"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "7ca17afe52c39b8cb50760274415bfc6018301da5bcf743d8dd01f1a4e5ffc7f"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/source-manifest.json",
+      "bytes": 368,
+      "sha256": "00c30bbd168f427e7fc2316a50d4afa4ca14746ad68581b9caa456a5931c2808"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/stage.py.gz",
+      "bytes": 2487,
+      "sha256": "516d8a4a9a4d9d04a5d8d396bbacbef2f67cc657ca27cdebf0cb289b1b22445b"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/status-at-launch.json",
+      "bytes": 707,
+      "sha256": "ddcc2f77fed01dca8f38025f5b001996c1e0c244167cc84beeda6b394949a55c"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/transfer-preflight.txt.gz",
+      "bytes": 128,
+      "sha256": "418f4e298651b48b2baffbfb82b0cddd1d6c63a22d15b23d09b03091d84ad5bd"
+    },
+    {
+      "path": "galaxy-evidence/image-startup-bfp8-v7/verify_local_oci_image.py.gz",
       "bytes": 1753,
       "sha256": "fda5a180a2c4f62488ac09e9bb1bd0ded1d4686d9103d434d85d626ca957a81f"
     },
@@ -5513,8 +5668,8 @@
     },
     {
       "path": "tests/unit/test_hf_decoder_control.py",
-      "bytes": 1966,
-      "sha256": "3eb3488e233fb468aa5268c054e35cbb9ca72d03aa967e502fc7805e1e22869f"
+      "bytes": 3131,
+      "sha256": "230d711547a93d49de4e8886682f3f35a1508d6657e0c0b14476bd03cd2fe371"
     },
     {
       "path": "tests/unit/test_hf_layer_followup.py",

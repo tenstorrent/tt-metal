@@ -1,0 +1,16 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-serve-image-v7-20261009",
+    "--property=RuntimeMaxSec=18h",
+    "--property=MemoryMax=128M",
+    "--property=CPUQuota=200%",
+    "--property=UMask=0077",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-release-build-20261009-v7/transfer-v7/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-release-build-20261009-v7/transfer-v7/run.log",
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-release-build-20261009-v7/transfer-v7/serve.py"
+  ],
+  "source_sha256": "ebd926c8cdbe268e80ae8843b8ee82dfd4c2fd79362c28ded6ab2ca5e2191d71"
+}
