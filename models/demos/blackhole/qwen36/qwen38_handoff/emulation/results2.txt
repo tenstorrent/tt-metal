@@ -1,0 +1,28 @@
+config                             top1% d_top1_vs_E7   top5%   KLmean    KLmed   KLp99 errs/512 GB/tok/dev vs TT default GB
+E1 +down BFP4                      95.90        -3.32   99.80   0.0707   0.0002   1.546       21      6.095           +0.713
+E2 +attn qkvo BFP4                 95.70        -3.52  100.00   0.0331   0.0001   0.592       22      6.598           +1.216
+E3 +down+attn BFP4                 94.14        -5.08   99.41   0.0808   0.0003   1.336       30      5.885           +0.503
+E4 +GDN in-proj BFP4               95.12        -4.10   99.80   0.0744   0.0002   1.207       25      6.301           +0.919
+E5 +GDN out_proj BFP4              96.88        -2.34   99.80   0.0358   0.0000   0.635       16      6.619           +1.237
+E6 +lm_head BFP4                   98.63        -0.59  100.00   0.0070   0.0000   0.142        7      6.649           +1.267
+E7 all BFP8 (Q8noGU)               99.22        +0.00  100.00   0.0039   0.0000   0.096        4      6.808           +1.426
+E8 gate BFP4 only                  94.14        -5.08   99.41   0.0735   0.0002   1.064       30      6.095           +0.713
+E9 bf16 (Q0)                       99.22        +0.00  100.00   0.0017   0.0000   0.031        4     12.815           +7.433
+ref: TT default (Q8, gu BFP4)      91.80        -7.42   99.41   0.1442   0.0004   2.582       42      5.382           +0.000
+ref: Q4 (TT Tier-2)                89.26        -9.96   97.85   0.2288   0.0009   3.893       55      4.459           -0.923
+ref: Q4all                         87.70       -11.52   96.29   0.3393   0.0018   4.925       63      3.952           -1.430
+
+Notes
+- Model Qwen3.8-27B, 512 positions, vs HF bf16 reference (hf38_logp.pt). KL = KL(HF||emul). Torch emulation only (bfp.py), no device.
+- GB/tok/dev = decode weight bytes read per token per device, TP=4 (all language-model matmul weights + lm_head; embedding is a lookup, not counted;
+  vision/MTP excluded). BFP8 = 1088/1024 = 1.0625 B/elem, BFP4 = 576/1024 = 0.5625 B/elem (tile = 1024 mantissa elems + 64 shared-exponent bytes), bf16 = 2.
+  GDN a/b counted as padded to 32 cols/device (fused with qkvz). Computed by bytes.py (shapes from safetensors headers); output in bytes.json.
+  Element counts (G): gate 5.704, up 5.704, down 5.704, GDN qkv+z 4.027 (+a/b 0.031), GDN out 1.510, attn qkvo 1.678, lm_head 1.271.
+  Last column: GB/token/device minus TT default (5.382). Total across 4 devices = 4x.
+- E8: feasible. HF gate_proj/up_proj are separate tensors; TT decode path (tt/mlp.py) keeps separate w1(gate)/w3(up) weights each with its own dtype arg.
+  The prefill-only packed [gate|up] tile-pair-interleaved copy (w_gate_up) is built with a single dtype, so a mixed gate-BFP4/up-BFP8 config would need that copy
+  split or dropped (it would be one dtype for both halves); blocks (16 along N) are not shared between gate and up, so the emulation is exact for decode.
+- E9 (bf16, no quant) is 99.22% / 4 errors, not 100%: the same 4-error floor as E7. The harness is bf16 HF vs HF, so the residual is not quantization;
+  it is run-to-run bf16 non-determinism between the saved reference run and this run (different thread count/kernels), i.e. a floor of ~4 near-tie positions (KL 0.0017 mean).
+  Differences of <=4 errors (<=0.8%) vs E7 are within this noise.
+- Ran with 2 procs x 8 threads, nice 10.

@@ -1,0 +1,7 @@
+ref row: TT-38 vs HF38: top1 91.99% KL 0.1498/0.0005/2.441 ; TT-36 vs HF36: 98.63% KL 0.0210/0.0001/0.304
+KL cols are mean/median/p99
+Q4-38: top1 vs HFbf16 89.26% (55 dis) | top5 97.85% | KL(HF||emul) 0.2288/0.0009/3.893 | argmax==TT 92.97% | KL(emul||TT) mean 0.1359 | err Jaccard w/ TT 33/63=0.524 (emul errs 55, TT errs 41)
+Q4all-38: top1 vs HFbf16 87.70% (63 dis) | top5 96.29% | KL(HF||emul) 0.3393/0.0018/4.925 | argmax==TT 87.70% | KL(emul||TT) mean 0.3384 | err Jaccard w/ TT 26/78=0.333 (emul errs 63, TT errs 41)
+Q8-36: top1 vs HFbf16 98.83% (6 dis) | top5 100.00% | KL(HF||emul) 0.0208/0.0001/0.351 | argmax==TT 99.80% | KL(emul||TT) mean 0.0043 | err Jaccard w/ TT 6/7=0.857 (emul errs 6, TT errs 7)
+Q8-38: top1 vs HFbf16 91.80% (42 dis) | top5 99.41% | KL(HF||emul) 0.1442/0.0004/2.582 | argmax==TT 97.27% | KL(emul||TT) mean 0.0155 | err Jaccard w/ TT 35/48=0.729 (emul errs 42, TT errs 41)
+Q8noGU-38: top1 vs HFbf16 99.22% (4 dis) | top5 100.00% | KL(HF||emul) 0.0039/0.0000/0.096 | argmax==TT 92.38% | KL(emul||TT) mean 0.1477 | err Jaccard w/ TT 3/42=0.071 (emul errs 4, TT errs 41)

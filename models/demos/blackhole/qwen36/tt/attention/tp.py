@@ -31,6 +31,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     tw = {}
     # Column-parallel q/k/v: fused [q+gate|k|v] per device, or separate DRAM-sharded weights.
     # Distinct cache names — as_tensor reload ignores requested memcfg.
+    # QKV + wo weight dtype (QWEN36_BFP4_ATTN, default off): BFP8; =1 -> BFP4. Cache stems unchanged (dtype is in the file name).
+    _attn_dtype = ttnn.bfloat4_b if tpc.bfp4_attn_enabled() else ttnn.bfloat8_b
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
@@ -72,7 +74,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
             cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
-            dtype=ttnn.bfloat8_b,
+            dtype=_attn_dtype,
         )
     else:
         qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
@@ -86,7 +88,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=qg_mc,
             cache_path=c("wqkv" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=_attn_dtype,
         )
         # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
         # each device lands on its GQA-assigned head instead of a fraction of one.
@@ -96,7 +98,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=k_mc,
             cache_path=c("wk" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=_attn_dtype,
         )
         tw["wv"] = tpc.shard_w(
             v_proj,
@@ -104,7 +106,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=v_mc,
             cache_path=c("wv" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=_attn_dtype,
         )
     # Row-parallel wo (reduce-scatter after): DRAM-width-sharded like the in-proj — decode tput win.
     wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -114,7 +116,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=0,
         memory_config=args.attn_wo_weight_memcfg if wo_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
-        dtype=ttnn.bfloat8_b,
+        dtype=_attn_dtype,
     )
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
@@ -138,7 +140,10 @@ class TPAttention:
         self.HD = args.head_dim
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
-        self.compute_cfg = tpc.COMPUTE_HIFI2
+        self.compute_cfg = tpc.COMPUTE_HIFI2  # SDPA + all prefill matmuls
+        # DECODE-only QKV / wo matmul configs: LoFi with BFP4 weights (QWEN36_BFP4_ATTN), else unchanged.
+        self.qkv_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
+        self.wo_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
         # Must match load_attention_weights_tp gates
@@ -171,11 +176,12 @@ class TPAttention:
         (it feeds nlp_create_qkv_heads_decode, which must read L1; see _forward_decode_lean). The default
         keeps the legacy DRAM qkv3 that _make_heads_decode copies to L1."""
         tw = self.tw
+        _cfg = self.qkv_cfg if x.shape[-2] <= tpc.TILE_SIZE else self.compute_cfg  # decode vs prefill
         if not self._fused_qkv:
             return (
-                self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg),
-                self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
-                self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
+                self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg, _cfg),
+                self._col_proj(x, tw["wk"], self.args.attn_k_progcfg, _cfg),
+                self._col_proj(x, tw["wv"], self.args.attn_v_progcfg, _cfg),
             )
         # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
         # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
@@ -190,11 +196,11 @@ class TPAttention:
                 x,
                 tw["wqkv_fused"],
                 self.args.attn_qkv_decode_1d_progcfg,
-                self.compute_cfg,
+                self.qkv_cfg,
                 out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
+            qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg, _cfg)
         # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
         # return it whole (no gate wedged between q and k → no re-concat in _make_heads*). Gate is
         # the trailing block. Sentinel: vp=None flags the fused/contiguous layout to _make_heads*.
@@ -212,14 +218,15 @@ class TPAttention:
         ttnn.deallocate(qkv)
         return qkv3, gate, None
 
-    def _col_proj(self, x, weight, decode_progcfg):
+    def _col_proj(self, x, weight, decode_progcfg, compute_cfg=None):
         """Column-parallel projection; DRAM-sharded decode matmul when enabled."""
+        cfg = self.compute_cfg if compute_cfg is None else compute_cfg
         if not self._dram_sharded:
-            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.linear(x, weight, compute_kernel_config=cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
             x,
             weight,
-            self.compute_cfg,
+            cfg,
             decode_progcfg,
             self.args.act_shard_hidden,
             self.args.prefill_progcfg,
@@ -235,7 +242,7 @@ class TPAttention:
                 x,
                 weight,
                 self.args.attn_wo_decode_1d_progcfg,
-                self.compute_cfg,
+                self.wo_cfg,
                 out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         if not self._wo_sharded:
@@ -257,11 +264,11 @@ class TPAttention:
                     program_config=pc,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.linear(x, weight, compute_kernel_config=self.wo_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
             x,
             weight,
-            self.compute_cfg,
+            self.wo_cfg if x.shape[-2] <= tpc.TILE_SIZE else self.compute_cfg,
             self.args.attn_wo_progcfg,
             self.args.act_shard_attn_out,
             self.args.prefill_progcfg,

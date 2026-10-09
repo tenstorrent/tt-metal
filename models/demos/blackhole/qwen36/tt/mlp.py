@@ -14,13 +14,13 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
-    w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b (bfloat8_b if QWEN36_MLP_GATEUP_BFP8=1, dense only)
+    w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_BFP4_MLP_DOWN=1, dense only)
+    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b (bfloat8_b if QWEN36_MLP_GATEUP_BFP8=1, dense only)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
@@ -38,7 +38,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
         layout=ttnn.TILE_LAYOUT,
@@ -47,8 +47,17 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     )
 
 
-def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True) -> MLPWeights:
-    """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
+def load_mlp_weights(
+    mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True, down_dtype=None, gateup_dtype=None
+) -> MLPWeights:
+    """Per-layer MLP state: gate_proj, down_proj, up_proj weights.
+
+    down_dtype=None: dense MLP, w2 dtype from QWEN36_BFP4_MLP_DOWN (default bfloat8_b). The MoE shared expert
+    passes ttnn.bfloat8_b explicitly."""
+    from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+    down_dtype = _tpc.resolve_mlp_down_dtype(down_dtype)
+    gateup_dtype = _tpc.resolve_mlp_gateup_dtype(gateup_dtype)
     tp = getattr(args, "num_devices", 1) if args is not None else 1
 
     if tp > 1:
@@ -77,6 +86,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 mesh_device,
                 tp,
                 cache("gate_up", ".swiglu"),
+                gateup_dtype,
             )
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
@@ -90,7 +100,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
                     cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=gateup_dtype,
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
@@ -98,7 +108,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
                     cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=gateup_dtype,
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -106,7 +116,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=0,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cache_path=cache("down_proj"),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=down_dtype,
                 ),
                 w_gate_up=wgu,
             )
@@ -119,7 +129,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=gateup_dtype,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -127,7 +137,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=gateup_dtype,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -135,7 +145,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("down_proj"),
-                dtype=ttnn.bfloat8_b,
+                dtype=down_dtype,
             ),
             w_gate_up=wgu,
         )
@@ -151,18 +161,28 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b (bandwidth; QWEN36_MLP_GATEUP_BFP8=1 -> bfloat8_b); down: bfloat8_b (QWEN36_BFP4_MLP_DOWN=1 -> bfloat4_b).
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", gateup_dtype),
+        w2=load("down_proj", down_dtype),
+        w3=load("up_proj", gateup_dtype),
     )
 
 
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
-    def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None, use_gateup_agmm=True):
+    def __init__(
+        self,
+        mesh_device,
+        state_dict,
+        tensor_cache_path=None,
+        args=None,
+        tt_ccl=None,
+        use_gateup_agmm=True,
+        down_dtype=None,
+        gateup_dtype=None,
+    ):
         self.device = mesh_device
         self.args = args
         self.tt_ccl = tt_ccl
@@ -182,17 +202,25 @@ class Qwen36MLP:
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
         self.weights = load_mlp_weights(
-            mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
+            mesh_device,
+            state_dict,
+            tensor_cache_path,
+            args=args,
+            use_gateup_agmm=use_gateup_agmm,
+            down_dtype=down_dtype,
+            gateup_dtype=gateup_dtype,
         )
+        # Dense MLP: QWEN36_MLP_FIDELITY (default lofi). MoE shared expert (down_dtype passed) stays LoFi.
+        fid = tpc.mlp_fidelity(ttnn.MathFidelity.LoFi if down_dtype is not None else None)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
     def forward(self, x, mode=None, decode_ar=None):

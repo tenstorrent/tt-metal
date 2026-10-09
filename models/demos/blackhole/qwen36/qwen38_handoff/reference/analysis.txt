@@ -1,0 +1,68 @@
+36 hf argmax==refpt top1: 1.0 tt argmax==refpt (acc): 0.986328125
+38 hf argmax==refpt top1: 1.0 tt argmax==refpt (acc): 0.919921875
+tokens-fed equal 36/38 refpt?  True
+
+== 36 a. top1 agree 98.63% (7 disagreements)
+ b. KL mean 0.0210 med 0.0001 p90 0.0137 p99 0.3039  | PCC mean 0.97064 min 0.89334
+ c. margin median 8.625 ; <0.1 0.002 <0.5 0.004 <1.0 0.014
+ d. bins:
+   [0,0.1) n=  1 dis=  1 rate=1.000 meanKL=0.2037
+   [0.1,0.5) n=  1 dis=  1 rate=1.000 meanKL=0.1099
+   [0.5,1) n=  5 dis=  1 rate=0.200 meanKL=0.1114
+   [1,2) n= 12 dis=  0 rate=0.000 meanKL=0.0835
+   [2,1000000000.0) n=493 dis=  4 rate=0.008 meanKL=0.0180
+ f. blocks:
+   0-127: dis 5/128 meanKL 0.0495 medKL 0.0001
+   128-255: dis 0/128 meanKL 0.0015 medKL 0.0001
+   256-383: dis 0/128 meanKL 0.0058 medKL 0.0000
+   384-511: dis 2/128 meanKL 0.0272 medKL 0.0002
+
+== 38 a. top1 agree 91.99% (41 disagreements)
+ b. KL mean 0.1498 med 0.0005 p90 0.2940 p99 2.4413  | PCC mean 0.96816 min 0.74068
+ c. margin median 7.749 ; <0.1 0.008 <0.5 0.043 <1.0 0.084
+ d. bins:
+   [0,0.1) n=  4 dis=  3 rate=0.750 meanKL=0.6724
+   [0.1,0.5) n= 18 dis= 13 rate=0.722 meanKL=0.5817
+   [0.5,1) n= 21 dis=  6 rate=0.286 meanKL=0.6876
+   [1,2) n= 20 dis=  8 rate=0.400 meanKL=0.7169
+   [2,1000000000.0) n=449 dis= 11 rate=0.024 meanKL=0.0774
+ f. blocks:
+   0-127: dis 18/128 meanKL 0.1844 medKL 0.0014
+   128-255: dis 1/128 meanKL 0.0120 medKL 0.0001
+   256-383: dis 2/128 meanKL 0.0257 medKL 0.0003
+   384-511: dis 20/128 meanKL 0.3770 medKL 0.0116
+
+== e. leak
+ TT38 vs HF38: agree 91.99%  KL mean 0.1498 med 0.0005 p90 0.2940 p99 2.4413
+ TT38 vs HF36: agree 90.43%  KL mean 0.3458 med 0.0027 p90 0.8442 p99 5.2898
+ TT36 vs HF36: agree 98.63%  KL mean 0.0210 med 0.0001 p90 0.0137 p99 0.3039
+ TT36 vs HF38: agree 92.97%  KL mean 0.8943 med 0.0017 p90 1.8404 p99 14.0980
+ HF36 vs HF38 (argmax; KL(HF38||HF36)): agree 93.16%  KL mean 0.9390 med 0.0018 p90 1.9855 p99 14.6824
+ TT36 vs TT38 (argmax; KL(TT38||TT36)): agree 90.04%  KL mean 1.2690 med 0.0035 p90 4.1952 p99 16.4260
+ disagreements TT38 on positions where HF36!=HF38: 19 of 35 ; on other positions: 22 of 477
+ TT38==HF36 where TT38!=HF38: 8 of 41
+
+ pos 442 (refpt row 953) KL 5.413 margin 2.499  fed/next-ref-token=' Even'
+    HF38 [(' Even', 7183, -0.249), (' As', 1577, -2.748), (' It', 1049, -2.873)]
+    TT38 [(' As', 1577, -0.728), (' And', 1541, -1.228), (' It', 1049, -2.103)]
+    HF36 [(' Even', 7183, -0.016), (' Moreover', 22117, -4.391), ('\n\n', 271, -6.891)]
+
+ pos 481 (refpt row 992) KL 3.983 margin 0.500  fed/next-ref-token='def'
+    HF38 [('def', 727, -0.732), ('assigned', 37729, -1.232), ('allowed', 20327, -3.107)]
+    TT38 [('assigned', 37729, -0.546), ('aff', 2562, -2.171), ('let', 1112, -2.296)]
+    HF36 [('def', 727, -0.0), ('_def', 7596, -9.25), ('Def', 2533, -9.375)]
+
+ pos 40 (refpt row 551) KL 3.741 margin 2.875  fed/next-ref-token=' Luck'
+    HF38 [(' Luck', 27830, -0.144), (' Cards', 25912, -3.019), (' the', 279, -3.519)]
+    TT38 [(' the', 279, -0.022), (' Luck', 27830, -4.022), (' a', 264, -6.772)]
+    HF36 [(' Cards', 25912, -0.263), (' Card', 6582, -1.514), (' cards', 7176, -4.637)]
+
+ pos 408 (refpt row 919) KL 3.524 margin 7.249  fed/next-ref-token=' of'
+    HF38 [(' of', 314, -0.001), (' in', 303, -7.25), (' and', 321, -11.25)]
+    TT38 [(' in', 303, -0.033), (' of', 314, -3.533), (' at', 506, -6.408)]
+    HF36 [(' of', 314, -0.0), ('\n', 198, -10.5), ('of', 1020, -11.75)]
+
+ pos 494 (refpt row 1005) KL 3.241 margin 0.875  fed/next-ref-token=' to'
+    HF38 [(' to', 310, -0.424), (' in', 303, -1.299), (' had', 995, -2.674)]
+    TT38 [(' in', 303, -0.39), (' had', 995, -1.14), (' to', 310, -5.89)]
+    HF36 [(' in', 303, -0.0), ('\n', 198, -9.0), (',', 11, -11.438)]

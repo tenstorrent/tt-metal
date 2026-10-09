@@ -710,3 +710,128 @@ Final regression sweep on the final tree (2026-10-07, logs `qwen38_work/runs/T1/
 | async TPOT harness | sync 9.71 ms vs async 7.44 ms mean, with 2 ms host work |
 
 The 4 test_prefill failures are the known pre-existing L1 circular-buffer clash, which fails identically on the tree before 1.4B.
+
+## Tier 2: selective BFP4 weights (decode LoFi)
+
+Baseline T2_0 = commit 755a0d6461d (Tier 1 + section B), measured the same day.
+Each row is cumulative on the previously kept rows.
+Keep rule: accuracy_512 at or above the 97 / 99 targets, coherent text, and faster decode.
+A task-level GPQA-Diamond comparison of the final combination against the baseline follows at the end of Tier 2.
+
+| # | Change | Flag (default) | TTFT perf1/perf2 | decode t/s/u perf1/perf2 | Δ vs previous | accuracy_512 | t4k | b8 per-user (agg) | Text | Decision |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T2_0 | Baseline (755a0d6461d) | — | 0.09 / 0.08 s | 32.84 / 32.85 (30.45 ms) | — | 98.63 / 100.00 | 32.58 (ttft 0.46 s) | 24.42 (195.4), ttft 0.73 s | ` bringing its unique flavor ... dishes.\n\n<think>\n\n</think>\n\nAs an AI, I don't have taste buds ...` | — |
+| 2.1 | MLP down (w2) weights BFP4. The matmul is already LoFi in decode and prefill. Dense model only: the MoE shared expert keeps BFP8 via `down_dtype` | QWEN36_BFP4_MLP_DOWN (1) | 0.08 / 0.08 s | 34.29 / 34.29 (29.16 ms) | +1.45 / +1.44 t/s/u (+4.4%), -1.29 ms/token | 98.63 / 100.00 (=) | 34.00 (+4.4%) | 25.22 (201.7), +3.3% | Fluent and on-topic. It diverges at char 68 (the known near-tie after `different dishes.` that flipped in rows 1.2-1.4) into `Do you prefer the classic taste of ketchup, the plain taste of mayonnaise, ...` | KEPT |
+
+2.1 unit tests: test_mlp_tp decode PCC 0.99866, prefill T=2048 0.99868. test_model_tp contract 0.99973-0.99990, decode_batched B8 0.99971. test_moe_tp skipped (no 35B-A3B checkpoint). Logs are in `qwen38_work/runs/T1/T2_0`, `T1/T2_1` and `runs/T2`.
+| 2.2 | GDN in-proj ([qkv\|z\|a\|b] fused) weights BFP4, decode LoFi | QWEN36_BFP4_GDN_IN (**0**, opt-in) | 0.08 / 0.08 s | 35.54 / 35.54 (28.14 ms) | +1.25 t/s/u (+3.6%), -1.02 ms/token vs 2.1 | **97.66 / 99.80** (-0.97 / -0.20) | 35.23 (+3.6%) | 25.68 (205.4), +1.8% | Coherent and on-prompt (opens a `<think>` analysis of the condiment question) | **OPT-IN (default off)**: measurable accuracy cost |
+
+2.2 analysis:
+- The accuracy cost comes from the BFP4 weights, not from LoFi. BFP4 with HiFi2 measured 35.52 t/s/u and 97.66 / 99.80, and its unit PCC is identical to BFP4 + LoFi to every digit.
+- Unit decode PCC (test_gdn_tp), B1 / B8 min / B32 min:
+
+| Weights | B1 | B8 min | B32 min |
+|---|---|---|---|
+| BFP8 | 0.99997 | 0.99975 | 0.99928 |
+| BFP4 | 0.99237 | 0.97707 | 0.93467 |
+
+- Per column group, emulated by host BFP4 round-trips of single groups inside a BFP8 load (B32 min shown; the emulation reproduces the real BFP4 numbers exactly):
+
+| Group rounded to BFP4 | B32 min PCC |
+|---|---|
+| qkv | 0.958 |
+| z | 0.963 |
+| a | 0.99928 (lossless) |
+| b | 0.99846 |
+| a\|b in shared exponent blocks | 0.99540 |
+
+- The loss is spread over the large q/k/v and z blocks, so split precision would not recover it. test_prefill_trace_any_len L=1 picks a different first token with BFP4 on and passes with it off.
+- Decision: keep the code, but default the flag to 0. It costs 5 of 512 teacher-forced tokens and the B32 PCC margin to the 0.92 threshold is thin, while the gain is 1 ms/token. Logs are in `runs/T1/T2_2`, `T2_2h` and `runs/T2/C1-4`, `emul_*`.
+| 2.3 | Attention QKV (fused qkvg) and wo weights BFP4, decode LoFi (prefill keeps HiFi2) | QWEN36_BFP4_ATTN (1) | 0.08 / 0.08 s | 34.98 / 34.98 (28.59 ms) | +0.69 t/s/u (+2.0%), -0.57 ms/token vs 2.1 (2.2 off) | 98.44 / 99.80 (-0.19 / -0.20: one token each) | 34.69 (+2.0%) | 25.54 (204.3), +1.3% | Coherent and on-prompt (`Do you don't prefer the classic taste of ketchup, ...`) | KEPT (provisional) |
+
+2.3 unit tests:
+- test_attention_tp decode pos0 min is 0.98897 / 0.98662 (two parametrizations), against 0.99993 / 0.99992 with the flag off.
+- Attention prefill S=64 is 0.97939 (flag off: 0.99974). Paged prefill/decode and per-user are unchanged (0.9999-1.0).
+- Contract and decode_batched pass; prefill_trace_any_len has 23 passed.
+- 2.2 cleanup: the diagnostic knobs are removed and `QWEN36_BFP4_GDN_IN` defaults to 0. test_gdn_tp has 45 passed and prefill_trace_any_len 23 passed.
+
+**Acceptance rule changed by the user (2026-10-08):** a lower-precision format may be used wherever our task-eval accuracy is at least the GPU implementation's numbers, within run-to-run noise. The per-change accuracy_512 check stays as a quick screen. The final decision on 2.1/2.2/2.3 is taken from task evals (GPQA-Diamond, MMLU-Pro, AIME26) on Qwen3.8-27B, compared with its published GPU numbers. Tier-2 accuracy work moves to the Qwen3.8-27B checkpoint (same architecture; the one qwen38_27b_qb2 uses) at revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0, downloaded and checksum-verified to `/home/ttuser/atupe/models/Qwen3.8-27B`. Its TT cache lives in a separate `/home/ttuser/atupe/qwen38_tt_cache`, because the cache path is not model-specific.
+
+### Qwen3.8 accuracy gap: root cause (2026-10-09)
+- **Symptom.** On Qwen3.8-27B, accuracy_512 top-1 is 91.99% (all Tier-2 flags off). The same code scores 98.63% on Qwen3.6. accuracy_1536 is 85.42%. The 3.8 reference is a new HF CPU BF16 refpt (`Qwen3.8-27B.refpt`, 2048 tokens, single forward). The patched reference script reproduces the committed 3.6 refpt 100%.
+- **Ruled out:**
+  - Optimization flags: with every Tier-1/B flag off (≈ main) it scores 89.84%.
+  - Trace: eager decode gives identical results.
+  - Decode path: prefill-only all-position logits give 90.62%, with the same error positions.
+  - Wrong weights or cache: the logs show the 3.8 checkpoint and a fresh `qwen38_tt_cache`. Checkpoint layout is identical to 3.6. TT-3.8 is closer to HF-3.8 than to HF-3.6.
+  - Activation outliers: the 3.8/3.6 max and p99.99 ratios are 0.9-1.2, with the same massive channels.
+  - Reference noise: HF fp32 vs bf16 agree 99.2% on 3.8.
+- **Distribution comparison** (512 positions, KL(HF‖TT)):
+
+| | TT-3.6 | TT-3.8 |
+|---|---|---|
+| Mean KL | 0.021 | 0.150 |
+| p99 KL | 0.30 | 2.44 |
+| Errors at HF-confident positions (margin ≥ 2 nats) | 0.8% | 2.4% |
+
+- **Root cause.** A bit-exact torch emulation of TT BFP8/BFP4 weight storage (validated against `ttnn` host conversion, max diff 0) was applied to the HF model.
+
+| Emulated config | top-1 | KL(HF‖x) | Match to TT |
+|---|---|---|---|
+| TT default dtype map (MLP gate/up BFP4, rest BFP8) on 3.8 | 91.80% | 0.144 | 97.3% argmax agreement with TT-3.8; 35/42 shared error positions |
+| Same map on 3.6 | 98.83% | 0.021 | (TT-3.6: 98.63%) |
+| 3.8 with gate/up BFP8 | 99.22% | 0.004 | — |
+| 3.8 + Tier-2 (MLP down and attention BFP4) | 89.26% | — | — |
+| 3.8 + Tier-2 + GDN in-proj BFP4 | 87.70% | — | — |
+
+  The TT ops are correct. The whole 3.8 gap comes from the pre-existing BFP4 storage of the MLP gate/up weights, to which Qwen3.8 is about 7x more sensitive than 3.6. (HF-3.8 is itself about 10x more bf16/fp32-sensitive than HF-3.6.) Files are in `qwen38_work/runs/T3/{kl,bisect,emul}`.
+- **Consequence.** BFP8 gate/up costs decode bandwidth, because these are the largest weights. Device speed/accuracy for gate/up BFP8 (flag `QWEN36_MLP_GATEUP_BFP8`) is being measured. The emulator is now a device-free screen for any weight-precision change.
+
+### Qwen3.8: precision options measured on device (2026-10-09)
+Quick check: accuracy_512 and accuracy_1536 top-1/top-5 against the HF BF16 3.8 reference. Decode figures are traced_128 tok/s.
+All rows have Tier-2 flags off unless noted. New knobs (default = previous behavior): `QWEN36_MLP_GATEUP_BFP8` (0), `QWEN36_MLP_FIDELITY` (lofi), `QWEN36_LMHEAD_CFG` (default).
+
+| Config | decode t/s/u | acc512 | acc1536 | t4k t/s | b8 per user |
+|---|---|---|---|---|---|
+| G0 base (gate/up BFP4, MLP LoFi) | 32.84 | 91.99 / 99.41 | 85.42 / 98.11 | 32.57 | 24.39 |
+| G1 gate/up BFP8 (MLP LoFi) | 29.44 (-10.4%) | 96.68 / 100.00 | 94.27 / 99.80 | 29.52 | 22.58 |
+| H1 gate/up BFP8 + MLP HiFi2 | 29.64 (-9.7%) | 97.66 / 99.80 | 95.31 / 99.93 | 29.42 | 22.39 |
+| H2 gate/up BFP8 + MLP HiFi4 | 29.55 | 97.66 / 99.80 | 95.31 / 99.87 | 29.32 | 22.34 |
+| H0 base + MLP HiFi2 | 32.84 | 91.99 / 99.22 | — | — | — |
+| L1 H1 + LM head HiFi2 fp32-acc | 29.63 | 97.46 / 99.80 | 95.12 / 99.87 | — | — |
+| L2 H1 + LM head HiFi4 fp32-acc | 29.61 | 97.85 / 99.80 | 95.25 / 99.87 | — | — |
+| L0 base + LM head HiFi2 fp32-acc | 32.84 | 92.19 / 99.22 | 85.74 / 98.11 | — | — |
+| T3_def = Tier-2 defaults (2.1 + 2.3 BFP4) on base | 34.98 | 88.48 / 97.85 | 81.18 / 95.96 | 34.69 | 25.54 |
+| G2 gate/up BFP8 + 2.1 + 2.3 | 31.59 | 93.36 / 99.41 | 88.22 / 98.83 | 31.35 | 23.67 |
+| H3 G2 + MLP HiFi2 | 31.49 | 93.75 / 99.61 | 88.02 / 98.83 | 31.25 | 23.60 |
+
+- **LoFi truncates BFP8 weights.** LoFi multiplies 5 bits of the weight operand (SrcA) by 7 bits of the activation (SrcB) (tech_reports/matrix_engine/matrix_engine.md:64-71; llk_math_matmul.h:321-322: in1/weights go to SrcA). HiFi2 restores the full BFP8 weight, and HiFi4 adds nothing. With BFP4 weights, fidelity makes no difference, which is also why 2.1/2.2 measured LoFi = HiFi2.
+- **The LM head** uses ttnn defaults (HiFi2, bf16 dest accumulation). fp32 accumulation changes the result by at most 1 token, with no speed cost.
+- **Remaining gap.** H1 is about 8 tokens of 512 below the bit-exact weight emulation (99.22%). That is consistent with op-level rounding differences amplified by Qwen3.8's sensitivity: HF-3.8 itself moves 4 tokens between fp32 and bf16. It is not pursued further.
+- **CPU emulation** (bit-exact weights, HF ops), top-1 on 3.8 with gate/up BFP8:
+
+| Config | top-1 | Weight bytes/token/device |
+|---|---|---|
+| all BFP8 | 99.22 | 6.81 GB |
+| + lm_head BFP4 | 98.63 | |
+| + GDN out BFP4 | 96.88 | |
+| + MLP down BFP4 | 95.90 | |
+| + attention BFP4 | 95.70 | |
+| + GDN in BFP4 | 95.12 | |
+| + down + attention | 94.14 | 5.89 GB |
+| gate-only BFP4 | 94.14 | |
+| TT default (gate/up BFP4) | 91.80 | 5.38 GB |
+
+### Defaults at handoff (2026-10-09)
+All Tier-2 precision flags default to OFF (opt-in), pending the task-level evals on Qwen3.8 against the GPU numbers:
+
+| Flag | Default |
+|---|---|
+| `QWEN36_BFP4_MLP_DOWN` | 0 |
+| `QWEN36_BFP4_ATTN` | 0 |
+| `QWEN36_BFP4_GDN_IN` | 0 |
+| `QWEN36_MLP_GATEUP_BFP8` | 0 |
+| `QWEN36_MLP_FIDELITY` | lofi |
+| `QWEN36_LMHEAD_CFG` | default |
+
+With these defaults the model behaves exactly as at commit 755a0d6461d. See `QWEN38_HANDOFF.md` for the configs to evaluate (A/C/D), how to run the evals, and what remains.

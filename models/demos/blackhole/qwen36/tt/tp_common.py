@@ -28,6 +28,153 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+# Same as COMPUTE_HIFI2 except LoFi (used for BFP4 GDN in-proj in decode only).
+COMPUTE_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+
+LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
+_LMHEAD_LOGGED = False
+
+
+def lm_head_compute_config():
+    """Compute kernel config for LM-head matmuls, chosen by QWEN36_LMHEAD_CFG.
+    "default" (or unset): None (ttnn default: HiFi2, bf16 dest accumulation for bf16 output).
+    "hifi2_fp32" / "hifi4_fp32": fp32 dest accumulation, packer_l1_acc."""
+    global _LMHEAD_LOGGED
+    mode = os.environ.get(LMHEAD_CFG_ENV, "default").strip().lower()
+    if mode == "default":
+        cfg = None
+    elif mode in ("hifi2_fp32", "hifi4_fp32"):
+        cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2 if mode == "hifi2_fp32" else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    else:
+        raise ValueError(f"{LMHEAD_CFG_ENV}={mode!r} invalid (default|hifi2_fp32|hifi4_fp32)")
+    if not _LMHEAD_LOGGED:
+        _LMHEAD_LOGGED = True
+        logger.info(f"LM head compute config ({LMHEAD_CFG_ENV}) = {mode}")
+    return cfg
+
+
+def lm_head_kwargs():
+    """ttnn.linear kwargs for LM head: empty for "default" so behavior is bit-identical."""
+    cfg = lm_head_compute_config()
+    return {} if cfg is None else {"compute_kernel_config": cfg}
+
+
+BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
+_BFP4_GDN_IN_LOGGED = False
+
+
+def bfp4_gdn_in_enabled():
+    """QWEN36_BFP4_GDN_IN (default 0): GDN input-projection weights in bfloat4_b (+ LoFi in decode only).
+    Opt-in because BFP4 here costs about 1 pt of accuracy_512 top-1 (98.63 -> 97.66) and about 0.065 of
+    B32 decode PCC, for +3.6% decode. Logs the choice once per process."""
+    global _BFP4_GDN_IN_LOGGED
+    on = os.environ.get(BFP4_GDN_IN_ENV, "0") == "1"
+    if not _BFP4_GDN_IN_LOGGED:
+        _BFP4_GDN_IN_LOGGED = True
+        if on:
+            logger.info(f"GDN in-proj weights: BFP4 + LOFI decode ({BFP4_GDN_IN_ENV}=1)")
+        else:
+            logger.info(f"GDN in-proj weights: BFP8 ({BFP4_GDN_IN_ENV}=0, default; =1 for BFP4 + LoFi decode)")
+    return on
+
+
+BFP4_ATTN_ENV = "QWEN36_BFP4_ATTN"
+_BFP4_ATTN_LOGGED = False
+
+
+def bfp4_attn_enabled():
+    """QWEN36_BFP4_ATTN (default 0, opt-in pending task evals): attention QKV and wo weights in bfloat4_b
+    (+ LoFi in decode only). +2.0% decode; accuracy_512 top-1 -0.19 on Qwen3.6, larger on Qwen3.8 (see
+    QWEN38_HANDOFF.md). Logs the choice once per process."""
+    global _BFP4_ATTN_LOGGED
+    on = os.environ.get(BFP4_ATTN_ENV, "0") == "1"
+    if not _BFP4_ATTN_LOGGED:
+        _BFP4_ATTN_LOGGED = True
+        logger.info(f"Attention QKV/wo weights: {'BFP4 + LOFI decode' if on else 'BFP8'} ({BFP4_ATTN_ENV}={int(on)})")
+    return on
+
+
+BFP4_MLP_DOWN_ENV = "QWEN36_BFP4_MLP_DOWN"
+_BFP4_MLP_DOWN_LOGGED = False
+
+
+def bfp4_mlp_down_enabled():
+    """QWEN36_BFP4_MLP_DOWN (default 0, opt-in pending task evals): dense-MLP down_proj (w2) weights in bfloat4_b
+    instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8 (see QWEN38_HANDOFF.md)."""
+    return os.environ.get(BFP4_MLP_DOWN_ENV, "0") == "1"
+
+
+def resolve_mlp_down_dtype(down_dtype=None):
+    """Explicit `down_dtype` wins (MoE shared expert passes bfloat8_b); None -> decide from the flag.
+    Logs the dense-MLP choice once per process."""
+    global _BFP4_MLP_DOWN_LOGGED
+    if down_dtype is not None:
+        return down_dtype
+    on = bfp4_mlp_down_enabled()
+    if not _BFP4_MLP_DOWN_LOGGED:
+        _BFP4_MLP_DOWN_LOGGED = True
+        logger.info(f"MLP down weights: {'BFP4' if on else 'BFP8'} ({BFP4_MLP_DOWN_ENV}={'1' if on else '0'})")
+    return ttnn.bfloat4_b if on else ttnn.bfloat8_b
+
+
+BFP8_MLP_GATEUP_ENV = "QWEN36_MLP_GATEUP_BFP8"
+_BFP8_MLP_GATEUP_LOGGED = False
+
+
+def bfp8_mlp_gateup_enabled():
+    """QWEN36_MLP_GATEUP_BFP8 (default 0): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
+    return os.environ.get(BFP8_MLP_GATEUP_ENV, "0") == "1"
+
+
+def resolve_mlp_gateup_dtype(gateup_dtype=None):
+    """Explicit `gateup_dtype` wins (MoE shared expert passes bfloat4_b); None -> decide from the flag.
+    Logs the dense-MLP choice once per process."""
+    global _BFP8_MLP_GATEUP_LOGGED
+    if gateup_dtype is not None:
+        return gateup_dtype
+    on = bfp8_mlp_gateup_enabled()
+    if not _BFP8_MLP_GATEUP_LOGGED:
+        _BFP8_MLP_GATEUP_LOGGED = True
+        logger.info(f"MLP gate/up weights: {'BFP8' if on else 'BFP4'} ({BFP8_MLP_GATEUP_ENV}={'1' if on else '0'})")
+    return ttnn.bfloat8_b if on else ttnn.bfloat4_b
+
+
+MLP_FIDELITY_ENV = "QWEN36_MLP_FIDELITY"
+_MLP_FIDELITY_LOGGED = False
+
+
+def mlp_fidelity(math_fidelity=None):
+    """QWEN36_MLP_FIDELITY (default lofi): math fidelity of the dense-MLP matmuls (gate/up, down, fused swiglu AGMM;
+    prefill and decode). Values: lofi | hifi2 | hifi3 | hifi4. An explicit math_fidelity wins (MoE shared expert
+    passes LoFi). Logs the dense-MLP choice once per process."""
+    global _MLP_FIDELITY_LOGGED
+    if math_fidelity is not None:
+        return math_fidelity
+    name = os.environ.get(MLP_FIDELITY_ENV, "lofi").strip().lower()
+    table = {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi3": ttnn.MathFidelity.HiFi3,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }
+    if name not in table:
+        raise ValueError(f"{MLP_FIDELITY_ENV}={name!r} invalid; expected one of {sorted(table)}")
+    if not _MLP_FIDELITY_LOGGED:
+        _MLP_FIDELITY_LOGGED = True
+        logger.info(f"MLP math fidelity: {name} ({MLP_FIDELITY_ENV})")
+    return table[name]
+
 
 # Grid helpers
 def prefill_grid_default():

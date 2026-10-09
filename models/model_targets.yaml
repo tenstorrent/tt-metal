@@ -1503,7 +1503,7 @@ targets:
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
   qwen3.6-27b:
-    aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
+    aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B", "Qwen3.8-27B", "Qwen/Qwen3.8-27B"]
     skus:
       # bh_quietbox_2 normalizes to canonical p300x2 (2x P300 = 4 dies, labeled P150x4).
       # TTFT (prefill_time_to_first_token) is in ms; decode is batch_size=1 so t/s == t/s/u.

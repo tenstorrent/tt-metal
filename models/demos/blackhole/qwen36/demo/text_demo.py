@@ -178,6 +178,7 @@ def _warmup_prefill(model, device, token_ids):
 
 
 BLOCK_SIZE = 64
+ACCURACY_PREFILL_LEN = 512  # accuracy cases prefill this many reference tokens, then teacher-force the rest
 PREFILL_CHUNK = 2048
 # 256k ceiling (4096×64 tokens); _blocks_for sizes the cache per seqlen so short tests stay cheap.
 MAX_BLOCK_BUDGET = 4096
@@ -373,7 +374,7 @@ def test_demo_text(
 @run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("max_generated_tokens", [512], ids=["accuracy_512"])
+@pytest.mark.parametrize("max_generated_tokens", [512, 1536], ids=["accuracy_512", "accuracy_1536"])
 def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     """Top-1 / top-5 token accuracy against the committed HF reference (teacher forcing).
 
@@ -409,7 +410,9 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
 
     # TokenAccuracy prefills the first half of the reference and scores the second half; a missing
     # .refpt is its own assert, so the gate cannot silently skip.
-    token_acc = TokenAccuracy(model.args.model_name)
+    # The prefill is fixed at 512 tokens so a reference longer than 1024 (e.g. 2048 for accuracy_1536)
+    # scores more teacher-forced tokens instead of moving the split point.
+    token_acc = TokenAccuracy(model.args.model_name, split_point=ACCURACY_PREFILL_LEN)
     token_ids = token_acc.input_prompt.reshape(1, -1)
     prompt_len = token_ids.shape[1]
     max_generated_tokens = min(max_generated_tokens, len(token_acc.reference_tokens))

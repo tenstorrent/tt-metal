@@ -19,6 +19,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -595,7 +596,7 @@ class Qwen36Model:
     def _lm_head(self, x):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: plain matmul."""
-        logits = ttnn.linear(x, self.lm_head_weight)
+        logits = ttnn.linear(x, self.lm_head_weight, **_lm_head_kwargs())
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
@@ -1362,7 +1363,7 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         if self._ondev_argmax:
             # Pre-gather vocab-sharded logits; caller argmaxes shards, skips all-gather + readback.
-            logits = ttnn.linear(x, self.lm_head_weight)
+            logits = ttnn.linear(x, self.lm_head_weight, **_lm_head_kwargs())
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1389,7 +1390,7 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
-            logits = ttnn.linear(x, self.lm_head_weight)
+            logits = ttnn.linear(x, self.lm_head_weight, **_lm_head_kwargs())
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1805,7 +1806,7 @@ class Qwen36Model:
         ttnn.deallocate(hidden)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)  # [1, 1, 1, vocab/TP], pre-gather
+        logits = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())  # [1, 1, 1, vocab/TP], pre-gather
         ttnn.deallocate(x_last)
         idx, val = self.shard_argmax_max(logits)
         return idx, val, logits
@@ -4051,7 +4052,7 @@ class Qwen36Model:
                 xn_b = ttnn.reshape(xn, (1, Bg, bucket, xn.shape[-1]))
                 for i, u in enumerate(grp):
                     x_last = xn_b[:, i : i + 1, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
-                    lg = ttnn.linear(x_last, self.lm_head_weight)
+                    lg = ttnn.linear(x_last, self.lm_head_weight, **_lm_head_kwargs())
                     ttnn.deallocate(x_last)
                     host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp).reshape(1, 1, -1)[:, :, : self.args.vocab_size].clone()
