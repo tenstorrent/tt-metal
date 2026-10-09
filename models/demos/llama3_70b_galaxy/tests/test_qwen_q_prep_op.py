@@ -173,3 +173,90 @@ def test_qwen_q_prep_bit_exact(mesh_device, seq_len):
 
     for t in (q_ref, q_op, cos, sin, trans_mat):
         ttnn.deallocate(t)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+# The model's dispatch layout (text_qwen_demo.py): dispatch on a column -> 7x10 worker grid, which the ring SDPA
+# program config uses.
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1345000}], indirect=True
+)
+@pytest.mark.parametrize("seq_len", [40960])
+def test_qwen_ring_sdpa_ignores_unowned_q(mesh_device, seq_len):
+    """qwen_q_prep only rewrites each column's two owned Q slices (column_slices); the other six keep stale
+    pre-prep values. Prove ring SDPA never reads them: NaN-fill every non-owned slice on each column and check
+    that the ring SDPA output is bit-identical (and NaN-free) to a run whose non-owned slices hold finite data.
+    Uses the model's production long-prefill ring SDPA program config and compute kernel config."""
+    from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
+    from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+
+    torch.manual_seed(1)
+    rows, cols = list(mesh_device.shape)
+    assert (rows, cols) == (8, 4)
+    margs = TtQwenModelArgs(
+        mesh_device, max_batch_size=32, max_seq_len=seq_len, optimizations=LlamaOptimizations.performance
+    )
+    progcfg = margs.get_model_config()["SDPA_RING_PROGCFG"](seq_len, chunk_start_idx=0)
+    ckc = margs.compute_kernel_config_ring_sdpa_long
+    assert ckc is not None
+    sl = seq_len // (2 * cols)
+
+    q_clean = torch.randn(1, N_LOCAL_HEADS, seq_len, HEAD_DIM)
+    q_nan = q_clean.repeat(cols, 1, 1, 1)  # one copy per mesh column
+    for col in range(cols):
+        owned = column_slices(col, cols)
+        for s in range(2 * cols):
+            if s not in owned:
+                q_nan[col, :, s * sl : (s + 1) * sl] = float("nan")
+    col_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=[rows, cols])
+
+    def q_dev(t, mapper):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    q_a = q_dev(q_clean, ttnn.ReplicateTensorToMesh(mesh_device))
+    q_b = q_dev(q_nan, col_mapper)
+    k = _replicated(mesh_device, torch.randn(1, 1, seq_len, HEAD_DIM), ttnn.bfloat8_b)
+    v = _replicated(mesh_device, torch.randn(1, 1, seq_len, HEAD_DIM), ttnn.bfloat8_b)
+
+    def sdpa(q):
+        return ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            ring_size=cols,
+            scale=HEAD_DIM**-0.5,
+            compute_kernel_config=ckc,
+            program_config=progcfg,
+            page_table=None,
+            chunk_start_idx=None,
+        )
+
+    # The device copy really carries non-finite values in every non-owned slice (bf8 keeps NaN/Inf), finite elsewhere.
+    for i, t in enumerate(ttnn.get_device_tensors(q_b)):
+        qb = ttnn.to_torch(t)
+        owned = column_slices(i % cols, cols)
+        for s in range(2 * cols):
+            finite = torch.isfinite(qb[:, :, s * sl : (s + 1) * sl])
+            assert bool(finite.all()) if s in owned else not bool(finite.any()), f"device {i} slice {s}"
+
+    out_a = sdpa(q_a)
+    out_b = sdpa(q_b)
+    ttnn.synchronize_device(mesh_device)
+    bad = []
+    for i, (ta, tb) in enumerate(zip(ttnn.get_device_tensors(out_a), ttnn.get_device_tensors(out_b))):
+        a = ttnn.to_torch(ta)
+        b = ttnn.to_torch(tb)
+        if torch.isnan(b).any() or not torch.equal(a, b):
+            bad.append(f"device {i} col {i % cols}: nan={bool(torch.isnan(b).any())} equal={torch.equal(a, b)}")
+    assert not bad, "\n".join(bad[:16])
+    logger.info(f"S={seq_len}: ring SDPA output {tuple(out_a.shape)} identical with NaN-filled non-owned Q slices")
+    for t in (q_a, q_b, k, v, out_a, out_b):
+        ttnn.deallocate(t)
