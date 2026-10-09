@@ -1,0 +1,16 @@
+{
+  "state": "waiting",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "predecessor_unit": "qwen38-hf-layer-v1-20261009.service",
+  "predecessor_invocation": "aa7a2d34fdd74d538ba2725b99d43311",
+  "updated_at": "2026-10-09T07:06:06Z",
+  "predecessor": {
+    "MainPID": "1255121",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "aa7a2d34fdd74d538ba2725b99d43311"
+  }
+}

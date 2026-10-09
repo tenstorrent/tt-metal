@@ -883,3 +883,53 @@ future sweeps; the active immutable source was not edited.
   Original near-256K HTTP work and all three followers remain active.
 
 [Reproduction and remaining work](../galaxy-evidence/chunked-prefill-state-v1/README.md).
+
+## Oct 9, 06:50-07:08 UTC: completed HTTP sweep and queued model continuation test
+
+- Published the plugin-fix reproduction/evidence on the model branch at
+  `d1c6ec926d7`; the plugin implementation remains separately pushed at `e5b02d5`.
+  Verified all 652 indexed evidence paths were tracked and hash-matched.
+- Native physical-Galaxy HTTP finished all nine admitted cells at 06:48:56 UTC.
+  Near-256K/C32 measured 12.75 aggregate output tok/s including all prefills,
+  1.105 median stream tok/s/user and 191.36/306.23-second p50/p90 TTFT. Three
+  larger cells are KV-capacity guards, not failures or measured results.
+  Collected the complete graph, CSV and compressed raw receipts.
+- Added an opt-in 64-layer TP4 adapter diagnostic comparing eleven logit outputs
+  between independent and interleaved requests with identical chunk boundaries.
+  It exercises unaligned continuations, new arrivals, reordered rows, resident
+  decode and physical state permutations while keeping request-owned KV pages.
+  Host logits isolate this check; scheduler integration and final device RNG
+  remain additional requirements. No capability or serving setting was enabled.
+- Twelve new CPU tests passed locally. Native-host preflight passed 27 tests
+  and six subtests; the hardware case was explicitly skipped. G0/source binding
+  and the disabled chunking capability were also verified without a device.
+- Initial staging SSH was sandbox-denied before connecting; the approved retry
+  launched `qwen38-chunked-state-v1-20261009.service` at 07:05:06 UTC. PID
+  1290750 and its invocation were observed live waiting on the exact HF-layer
+  job. This preserves ordering after all existing hardware and CPU work.
+  The new unit is bounded to 24 hours, 160 GiB and eight CPU cores.
+- The native bandwidth follow-up continues making progress; one intermediate
+  opposite-placement, 15-page, depth-4 case reached 278.14 GB/s/chip. This is
+  not a final sweep winner or an attention/model uplift. Head-control G0/GPQA
+  remains queued. No new accuracy or release-qualified configuration exists.
+
+[HTTP sweep](../galaxy-evidence/native-http-sweep-v2/README.md),
+[continuation diagnostic](../galaxy-evidence/chunked-prefill-hardware-v1/README.md).
+
+### 07:10 UTC: delivery sweep completed; head control started automatically
+
+The original controller exited successfully after all three stages at 07:06:04.
+The preserved evaluation `passed=false` is not a hardware failure. Delivery
+completed 54 correctness variants and 168 timed cases including controls. Best
+delivered rates across the three sizes were 275.14, 278.14 and 279.84 GB/s/chip;
+opposite placement with 15-tile packets and depth four/eight won. Read-only
+controls remained 499.18-507.89 GB/s, with below 0.06% drift. This is still only
+about 55% of measured read-only delivery, without attention math or page tables.
+The mover remains unpromoted.
+
+Observed head-control PID 1103813 in its original invocation, loading layer 33
+of the first TP4 replica at 07:09. Its hardware phase began at 07:06:18, after
+the exact predecessor exited; all later followers remain live and waiting.
+No session connection is needed for that queue to continue.
+
+[Complete delivery results](../galaxy-evidence/delivery-extended-v2/README.md).

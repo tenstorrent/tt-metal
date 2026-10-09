@@ -1,0 +1,3 @@
+import os,sys
+f=open(sys.argv[1], 'a'); os.dup2(f.fileno(),1); os.dup2(f.fileno(),2)
+os.execvpe(sys.argv[2],sys.argv[2:],os.environ)

@@ -1,11 +1,16 @@
 {
-  "generated_at": "2026-10-09T06:55:58.203200+00:00",
+  "generated_at": "2026-10-09T07:11:07.749121+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "config/precision_accurate_decode_bfp8_head.json",
       "bytes": 984,
       "sha256": "e4f24f9d92b4bf109f51c2c796c858edd5d4866514a4aa2386048f512aefc2e1"
+    },
+    {
+      "path": "demo/probe_chunked_prefill.py",
+      "bytes": 8176,
+      "sha256": "6648ddacae732a5994f014d111ac7ecf76816d3eb45128e78964a6d578ab56fe"
     },
     {
       "path": "demo/probe_hf_head.py",
@@ -21,6 +26,11 @@
       "path": "demo/run_accuracy_followup.py",
       "bytes": 6208,
       "sha256": "9a05866c746915e322773461edb0df76b42992666b1bb396e2d90792bbc1395b"
+    },
+    {
+      "path": "demo/run_chunked_prefill_followup.py",
+      "bytes": 6860,
+      "sha256": "2cb79a2ea958b716aae6f86ba9a0005e109189f22f650350e8ea97578f82baae"
     },
     {
       "path": "demo/run_hf_layer_followup.py",
@@ -39,18 +49,18 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 69656,
-      "sha256": "7f63641edb8f32c3312900e3d8ee574cf6e79c1f67ce104ba0ec50b7d960e493"
+      "bytes": 72923,
+      "sha256": "90506f0f9f1c79c876b2987c89312840ee3f65f4622046a40f1e80a621e379b4"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 5311,
-      "sha256": "1adb26e2587f2223ed812def21f49e882e7d3fb2e551b57299ad85a4ac44df97"
+      "bytes": 6172,
+      "sha256": "9aefe97f2bbc5b75765bb64e49559b9c47298d795683bc8492cefb9029121c56"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 23285,
-      "sha256": "1634174c96812e1ba7b76082d1b05af7851c03f1568ecb70644dc33cc984d5b8"
+      "bytes": 24528,
+      "sha256": "08dbb18b10b1fa8a4d362a9198997e2772a1bf5281bc6a63c990e1810af5f1df"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -994,6 +1004,46 @@
       }
     },
     {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/README.md",
+      "bytes": 3450,
+      "sha256": "6cd6d1735396c05a1b5b55ff70c4ec25bfb229e7f481cd943295cfe745662a67"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/launch.json",
+      "bytes": 3898,
+      "sha256": "fba3905eb3efd97eef310d156f5b9472dce0d7d0bcb9439aaa795de87d39b197"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/preflight.log.gz",
+      "bytes": 589,
+      "sha256": "e69dc544d17533882ed913bcee288d905a4c1b1e1b1ae21d39d57d6dac5ed821"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/queue-at-launch.json",
+      "bytes": 468,
+      "sha256": "2e2b548830400f31983539e8675160c8285e13958b2c742e99be18b2fc058d0a"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/source-manifest.json",
+      "bytes": 20163,
+      "sha256": "49d8a9ee37c9633a98960a3e8cf0268232e5c40630c8ec149792be56318f03fe"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/source-preflight.log.gz",
+      "bytes": 387,
+      "sha256": "e1ac9f16f0e6db8bc9e18a578d1b55b62b35014936c15a44f23a9b7d7b7b3e69"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-hardware-v1/unit.xml.gz",
+      "bytes": 1203,
+      "sha256": "33e9c411efcf0b733cbeb5ccde89ce019b69f3e98a547b739a561eac4b421eae"
+    },
+    {
       "path": "galaxy-evidence/chunked-prefill-state-v1/README.md",
       "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
       "bytes": 3900,
@@ -1052,6 +1102,36 @@
       "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
       "bytes": 5829,
       "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/README.md",
+      "bytes": 2033,
+      "sha256": "c0f093d671d770d909042cc11a621dd27ae92b64f015532af0d3b0bdf85ffc4d"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "92fcdae5201088940bc21d43e6062006e76d2b7c3e65081f18feed7b0fc4f7e0"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/invocation.py.txt",
+      "bytes": 133,
+      "sha256": "bec2b570e96dde3114b8046c47cb5fff01376ab086ea09a0f49963f6111e3ca3"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/probe.json",
+      "bytes": 193483,
+      "sha256": "302ac95a7da3009eb6ce60c6ac480f36127525d253d1aa4dc7ab9ae0b7500b87"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/queue-terminal.json",
+      "bytes": 29654,
+      "sha256": "317672cd9bec9e9ae9a549e73b971ecf025fcc91781f063ff2139f3324b203ad"
+    },
+    {
+      "path": "galaxy-evidence/delivery-extended-v2/run.log.gz",
+      "bytes": 15986,
+      "sha256": "2b5299a1a6f36e1b3a618b66a9f35fa4bc269459f3562a2b53567c8f2de0908d"
     },
     {
       "path": "galaxy-evidence/delivery-pass-v2/README.md",
@@ -2493,6 +2573,41 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/README.md",
+      "bytes": 2222,
+      "sha256": "b82fb6ff0fe3fbb29d431b47f4e4eb1fafd9957926172b3c3c5cc14abd899436"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/index.html",
+      "bytes": 99813,
+      "sha256": "50e6b1f6cb9b8ad3fd268c03e660c3dc52e13fa540dde33b795cfc43ae3ce86f"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/sweep.csv",
+      "bytes": 1462,
+      "sha256": "931e89ad75edd47cfe579d3e8a8ab2d03ba2ecf0d0bcf9c452e20bb6096a3931"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/sweep.json.gz",
+      "bytes": 81139,
+      "sha256": "607452a0c7bce703b8fd4dace29f31a9a574a5e0006c7b5bb9102456cb1932bc"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/sweep.pdf",
+      "bytes": 33684,
+      "sha256": "2a642a3ff8a879dd099dd3f05086aa37baa6dbf05cf0cd4ad9020fe202995ceb"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/sweep.png",
+      "bytes": 163162,
+      "sha256": "06cd3f570da472e7b5dbb5c5adaef6d6ea330d4bd31aee5f94043455123897ce"
+    },
+    {
+      "path": "galaxy-evidence/native-http-sweep-v2/sweep.svg",
+      "bytes": 96344,
+      "sha256": "0cf2e8558dd1296f1c3ddc6ba193c9222f01ed46ad5770e44038fecf2f15d2cb"
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/README.md",
@@ -4602,6 +4717,11 @@
       }
     },
     {
+      "path": "tests/chunked_prefill_scenario.py",
+      "bytes": 2410,
+      "sha256": "ccd1855397aa8f71367886635f44d775098d3ff9cf4597b59d0df4e0f333e11e"
+    },
+    {
       "path": "tests/galaxy_http_sweep.py",
       "bytes": 7913,
       "sha256": "fe05c2da5a0f9fedb6a87bc09fddeb603bbaf45e2d4087f5a5eb96bb688031b8"
@@ -4612,6 +4732,11 @@
       "sha256": "bdf7923c362c6fb3c607b74da3d22eb022c149067e8b546a6a8da25870470589"
     },
     {
+      "path": "tests/test_chunked_prefill_hardware.py",
+      "bytes": 906,
+      "sha256": "b4cc3078549745d6a52f5b51eef134bc09a4c996910740e4834375ddeb25f81b"
+    },
+    {
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1015,
       "sha256": "5f3e9431a584feeb37f5ced8359e043d66ccfff224e0307df7b3e6a5f474c8b2"
@@ -4620,6 +4745,16 @@
       "path": "tests/unit/test_accuracy_followup.py",
       "bytes": 5278,
       "sha256": "47f7d808c00468c3e6b5a5d1f2eda0f39aae5d0bab0aab35383834418749ba38"
+    },
+    {
+      "path": "tests/unit/test_chunked_prefill_followup.py",
+      "bytes": 1642,
+      "sha256": "ebddf5003dc912f5f791b9e418d6bdf985e0467d30b93b31991e000f5cc1b9ae"
+    },
+    {
+      "path": "tests/unit/test_chunked_prefill_scenario.py",
+      "bytes": 2243,
+      "sha256": "3727fe41be4f20678cdec203dd5f7d8d2630e7d18d2c1bbf18e7054e09b537a9"
     },
     {
       "path": "tests/unit/test_hf_layer_followup.py",

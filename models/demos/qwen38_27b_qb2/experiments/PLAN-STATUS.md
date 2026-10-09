@@ -1,5 +1,22 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 07:10 UTC update: native physical-Galaxy HTTP completed all nine admitted
+cells; the three KV-capacity-guard cells remain untested. Fresh-prefill aggregate
+output rates range from 314.31 tok/s at 16K/C128 to 12.75 at near-256K/C32;
+these include all prompt work and must not be reported as decode-only rates.
+The bandwidth follow-up completed with 275-280 GB/s/chip delivered versus
+499-508 read-only; it remains unpromoted to attention. The head-control run
+began loading for eight-replica G0 at 07:06 UTC, with full GPQA following.
+A plugin continuation-slot defect is fixed and pushed, with original-code
+regressions failing and 167 fixed tests passing. Chunking remains disabled.
+A full-model continuation diagnostic is persistently queued after all existing
+hardware and CPU work; 27 host tests plus six subtests passed, hardware unrun.
+[HTTP results](../galaxy-evidence/native-http-sweep-v2/README.md),
+[plugin fix](../galaxy-evidence/chunked-prefill-state-v1/README.md),
+[queued model check](../galaxy-evidence/chunked-prefill-hardware-v1/README.md).
+[Delivery sweep](../galaxy-evidence/delivery-extended-v2/README.md).
+The updates below are historical snapshots; none closes the 177/198 GPQA gate.
+
 Oct 9 06:34 UTC update: a conditional B1 TP4/HF layer diagnostic is persistently
 queued after the CPU reference. It runs only if the complete head-control GPQA
 still misses 177/198. Sixteen CPU tests and native imports passed; hardware
@@ -46,9 +63,10 @@ pushed at `e0e05bad5` on `anatarajan/qwen38-galaxy-release-20261009`, with
 idle second host; no built image, container qualification or Helm deployment
 is claimed yet.
 
-The delivery diagnostic passes correctness but reaches only **245-249 GB/s/chip**
-including receiver work, versus 499-508 for read-only. It does not justify
-attention integration as a speedup yet. Full 64-layer profiling exceeded the
+The delivery diagnostic passes correctness and the latest placement/packet
+sweep reaches **275-280 GB/s/chip**, including receiver work, versus 499-508 for
+read-only. It does not justify attention integration as a speedup yet.
+Full 64-layer profiling exceeded the
 artifact-size bound and dropped profiler markers; P0 remains incomplete.
 
 Current user priorities: **32K ISL first, 16K second; 128K/256K remain active

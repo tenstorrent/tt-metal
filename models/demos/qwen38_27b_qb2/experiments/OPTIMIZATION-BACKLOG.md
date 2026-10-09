@@ -1,4 +1,4 @@
-# Remaining optimization opportunities, Oct 8 2026
+# Remaining optimization opportunities, Oct 9 2026
 
 Priority: 32K ISL, then 16K, with active 128K/256K checks and explicit tradeoffs.
 Optimize total committed output throughput. Current measured 32K/B32 point is
@@ -6,9 +6,22 @@ Optimize total committed output throughput. Current measured 32K/B32 point is
 path), with identical generated tokens in the full-model comparison. Its 2989.6
 output tok/s Galaxy projection is not a physical measurement.
 
+Release priority remains accuracy: the matched native full GPQA is 170/198,
+below 177/198. The higher-precision head control is loading before new scheduling
+hardware work. The shared-Q/K policy has not passed full reference qualification.
+
+The completed physical HTTP sweep exposes a separate serving bottleneck: long
+full-prefill steps repeatedly interrupt decode. At 32K/C128, median client
+stream speed is 2.705 tok/s/user and whole-burst output is 172.26 tok/s including
+prefill. A plugin continuation-slot prerequisite is fixed with a failing-before
+reproduction. Full-model state/position testing is queued; actual scheduler and
+device-sampling qualification must follow before enabling shorter chunks. This
+is scheduling between separate programs, not the mixed-row compute/memory
+overlap described later. Any throughput/TTFT tradeoff must be measured.
+
 | Priority | Work still open | Evidence and next useful test | Tradeoff or limit |
 |---|---|---|---|
-| 1 | Bank-local bulk KV reading with compute-worker delivery | Isolated read probe reaches 499-508 GB/s/chip; actual attention delivers roughly 70-75% of assumed peak as useful KV bytes/time. Remote delivery/backpressure correctness now passes, but delivered bandwidth is only 245-249 GB/s/chip. A 54-variant placement/packet/depth/backpressure follow-up is queued. Production page-table traversal and attention integration remain open. | Raw-read bandwidth excludes redistribution and attention math. Delivered bandwidth is currently below useful attention bandwidth; do not integrate this mover as a performance improvement yet. Gains should matter more at 128K/256K. Placement alone did not help tile-at-a-time reads. |
+| 1 | Bank-local bulk KV reading with compute-worker delivery | Isolated read probe reaches 499-508 GB/s/chip; actual attention delivers roughly 70-75% of assumed peak as useful KV bytes/time. All 54 delivery/backpressure variants passed, and larger packets with opposite receiver placement improved delivery to 275-280 GB/s/chip. Depth four/eight are nearly equal. Production page-table traversal and attention integration remain open. | Raw-read bandwidth excludes redistribution and attention math. Delivered bandwidth is currently below useful attention bandwidth; do not integrate this mover as a performance improvement yet. Gains should matter more at 128K/256K. Placement alone did not help tile-at-a-time reads. |
 | 2 | GDN output epilogue and layout fusion | Shared Q/K is complete at component and full-model boundaries; gated RMSNorm and SiLU(z), output layouts and preparation remain separate. Fuse while preserving FP32 recurrence and existing numerical gates. | Extra compute, L1 pressure and changed reduction order require long-horizon/real-weight checks. The public/native op and P1 latency gate are still open. |
 | 2 | Convolution, RoPE and decoder graph cleanup | Pre-shared profile at B32: packed convolution about 150 us per GDN layer, RoPE about 109 us per attention layer; tilize/reshape traffic is material. Keep compatible layouts in L1, remove redundant conversions and handle small/irregular convolution batches. | These stage sums are not all removable latency. Must count launches/programs properly; <=15 programs/layer is not achieved. Stronger relative benefit at 16K/32K. |
 | 3 | Expose tested B32 efficiently in serving; implement B64 projections | Fixed-shape B32 native model runs; resident serving buckets still 1/8/16. B64 is blocked by the fast DRAM-sharded projection's one-tile-row limit. Extend token-row handling, projection kernels and trace/state buckets. | Larger batches trade per-user latency and KV/workspace capacity for aggregate throughput. No measured B64 full-model speedup or capacity claim. |
