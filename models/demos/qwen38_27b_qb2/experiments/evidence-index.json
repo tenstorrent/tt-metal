@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T09:17:01.570983+00:00",
+  "generated_at": "2026-10-09T09:18:36.493033+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 91937,
-      "sha256": "9fe68efb93dcb9c01ed730b559b4f9d3475e6f6749403aa6e08b20e9e7a12bc8"
+      "bytes": 92331,
+      "sha256": "fa80fdc27e8ad7f8c6a3cc29ac2241650349b59fa2d44583b2621ef1e71e1606"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -2424,9 +2424,9 @@
       "sha256": "ac8a4b1a9e43099063b6d9a9b06dc5da4e7763fc2c55e874019784f03a5142f4"
     },
     {
-      "path": "galaxy-evidence/hf-decoder-controls-v2/v1-startup-failure.log",
-      "bytes": 338,
-      "sha256": "d05e1c5ec7e0a93e7584090f41ac63caab5f65645d657587042f06143c40be6b"
+      "path": "galaxy-evidence/hf-decoder-controls-v2/v1-startup-failure.log.gz",
+      "bytes": 232,
+      "sha256": "36958f851bb13a6ea2fc3cbea27546c5ef69be71099ec8cd3aa29bd13439ad20"
     },
     {
       "path": "galaxy-evidence/hf-layer-reference-v1/README.md",
@@ -2564,14 +2564,14 @@
       "sha256": "e6992b660b224b5a773bd829caab6f95481a6b7e7883b6e0525c5c052a5d196d"
     },
     {
-      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-failure.log",
-      "bytes": 118,
-      "sha256": "2db3adc9b1a154b5ebb2e0d1b987ea8bedc8a35eeaee1614c725b7df8df00b0c"
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-failure.log.gz",
+      "bytes": 122,
+      "sha256": "3abccf101136deb09624226f45b7f6844adb2537549732dbfec75f9e5704bd79"
     },
     {
-      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-load.log",
-      "bytes": 89,
-      "sha256": "01986df33622266d3a7e80cc93e8a9e2726d8b9ba3cc41a3500db72a3b806110"
+      "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-load.log.gz",
+      "bytes": 99,
+      "sha256": "284bf830540a5339091e03bd87a96acd0e7605d9bfa47efa56a0fe8374aa1109"
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-status.json",

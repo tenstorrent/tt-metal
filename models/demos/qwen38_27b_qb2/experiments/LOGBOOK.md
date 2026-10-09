@@ -1207,3 +1207,9 @@ No session connection is needed for that queue to continue.
 
 [Recovered reference and failures](../galaxy-evidence/hf-reference-recovery-v2/README.md),
 [persistent decoder controls](../galaxy-evidence/hf-decoder-controls-v2/README.md).
+
+- Publication inventory validation caught three collected `.log` files excluded
+  by the repository ignore rules after the initial staging. They were preserved
+  as deterministic gzip files and the index corrected before pushing. The first
+  local commit was made before that failed validation was inspected; the
+  follow-up commit repairs the publication inventory without rewriting history.
