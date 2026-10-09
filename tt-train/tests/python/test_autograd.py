@@ -709,9 +709,12 @@ def test_in_place_initializers_keep_the_storage_dtype(dtype):
 
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
 def test_assign_numpy_loads_in_the_storage_dtype(dtype):
-    """Loaders keep a parameter's dtype: an fp32 one gets the exact values, a bf16 one ml_dtypes' rounding."""
+    """Loaders keep a parameter's dtype: an fp32 one gets the exact values, a bf16 one ml_dtypes' rounding. The
+    source here is a read-only, transposed view, which the loaders must read in its logical order."""
     shape = (1, 1, 32, 32)
-    values = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    base = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    base.setflags(write=False)
+    values = base.transpose(0, 1, 3, 2)
     parameter = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=dtype)
 
     ttml.autograd.assign_numpy(parameter, values)
@@ -721,8 +724,8 @@ def test_assign_numpy_loads_in_the_storage_dtype(dtype):
     np.testing.assert_array_equal(parameter.to_numpy(precision=_NATIVE), expected)
 
 
-def test_linear_layer_unpickling_keeps_fp32_weights():
-    """A LinearLayer stored in fp32 gets its exact weights back from __setstate__."""
+def test_linear_layer_setstate_keeps_the_layer_dtype():
+    """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
     layer = ttml.modules.LinearLayer(32, 32)
     for tensor in (layer.weight.tensor, layer.bias.tensor):
         tensor.set_value(tensor.get_value(ttml.autograd.PreferredPrecision.FULL))

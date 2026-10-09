@@ -273,8 +273,7 @@ void py_module(nb::module_& m) {
                 if (use_grad) {
                     self.send(tensor.get_grad(), ctx, Rank{rank});
                 } else {
-                    // The value as stored, so sender and receiver agree on the dtype.
-                    self.send(tensor.get_value(ttml::autograd::PreferredPrecision::NATIVE), ctx, Rank{rank});
+                    self.send(tensor.get_value(), ctx, Rank{rank});
                 }
             },
             nb::arg("tensor"),
@@ -297,9 +296,9 @@ void py_module(nb::module_& m) {
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    // Received straight into the stored tensor, which keeps its dtype.
-                    auto value = tensor.get_value_for_update();
-                    (void)self.recv(value.tensor(), ctx, Rank{rank});
+                    // Transfers use the bf16 view at both ends; assign() keeps the dtype the tensor is stored in.
+                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
+                    tensor.assign(filled);
                 }
                 return tensor;
             },

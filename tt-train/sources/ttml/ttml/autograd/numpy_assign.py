@@ -23,7 +23,6 @@ def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=N
     dtype = tensor.get_value(cpp.autograd.PreferredPrecision.NATIVE).dtype
     if dtype not in _NUMPY_DTYPES:
         raise ValueError(f"assign_numpy: unsupported tensor dtype {dtype} (only FLOAT32 and BFLOAT16)")
-    values = cpp.autograd.Tensor.from_numpy(
-        array.astype(_NUMPY_DTYPES[dtype], copy=False), layout=layout, new_type=dtype, mapper=mapper
-    )
-    tensor.assign(values)
+    # A C-ordered, writable copy: from_numpy reads the buffer in C order and rejects read-only arrays.
+    values = np.array(array, dtype=_NUMPY_DTYPES[dtype], order="C")
+    tensor.assign(cpp.autograd.Tensor.from_numpy(values, layout=layout, new_type=dtype, mapper=mapper))

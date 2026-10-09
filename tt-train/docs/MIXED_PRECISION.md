@@ -62,9 +62,7 @@ These optimizers write in place, and all of them take views:
 Taking the view is checked at run time, not by the compiler, so every in-place write path has a test that reads the
 other view after a step (`AutogradTensorTest.*Tracks*` in `tests/autograd/autograd_tensor.cpp`). A new optimizer, or
 a new path in an existing one (for example a config option that changes which tensors the step writes), needs one too.
-`RemoteOptimizer` is the exception: its step needs a second host, so its write is covered by review only. The same
-holds for the Python `SocketManager.recv()`, which receives into the stored tensor through a view, and
-`SocketManager.send()`, which sends the stored tensor, so both ends of a transfer use the same dtype.
+`RemoteOptimizer` is the exception: its step needs a second host, so its write is covered by review only.
 
 ## Parameter dtypes the optimizers accept
 
@@ -83,11 +81,13 @@ file.
 
 - `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32;
   any other value, or any value for an empty tensor, is taken as is. The Python `Tensor.assign()` calls it, so the
-  in-place initializers in `ttml.init` keep each tensor's dtype, and so does `ttml.checkpointing`, which loads
-  parameters and optimizer state into the live tensors.
+  in-place initializers in `ttml.init` keep each tensor's dtype.
 - `ttml.autograd.assign_numpy()` loads a numpy array into a tensor in its stored dtype, converted on the host: an
-  fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. The safetensors loaders, the
-  SFT trainer's default checkpoint loader and `LinearLayer` unpickling use it.
+  fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
+  loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
+  checkpoint loader and `LinearLayer.__setstate__` use it.
+- The Python `SocketManager.recv()` receives the bf16 view, as the other end of the transfer sends it, and installs it
+  with `assign()`, so the tensor keeps the dtype it is stored in.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
