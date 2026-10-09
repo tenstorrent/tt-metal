@@ -155,10 +155,11 @@ class DeepseekV41ForCausalLM:
             os.environ.setdefault(
                 "DSV41_IDX_SWITCH", "131072"
             )  # the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1)
-        # device top-k candidates of the plain decode traces (temperature / top-p sampling). In a speculative launch they are OFF by default: with them on, the verify rounds of the same server run ~15% slower
-        # and accept ~6% fewer drafts (measured at B=32 k=3: round 132 ms / accepted 2.18 against 116 ms / 2.36 without); a sampled request that falls back to the ordinary decode (ISL beyond the speculative range)
-        # then needs DSV41_DEV_CAND_K=64.
-        os.environ.setdefault("DSV41_DEV_CAND_K", "0" if spec_k else "64")
+        # device top-k candidates of the plain decode traces (host-draw temperature / top-p sampling): OFF by default, the fastest configuration (greedy and speculative launches):
+        # the candidates cost ~4.8 ms per decode step, and in a speculative launch the verify rounds run ~15% slower and accept ~6% fewer drafts (measured at B=32 k=3: round 132 ms /
+        # accepted 2.18 against 116 ms / 2.36 without). A sampled request in a plain launch (or one that falls back to the ordinary decode, ISL beyond the speculative range) then needs
+        # DSV41_DEV_CAND_K=64 until the draw runs inside the trace.
+        os.environ.setdefault("DSV41_DEV_CAND_K", "0")
         if spec_k and os.environ.get("DSV41_VLLM_SPEC_SAMPLED", "1") == "1":
             os.environ.setdefault(
                 "DSV41_SPEC_CAND_K", "64"
