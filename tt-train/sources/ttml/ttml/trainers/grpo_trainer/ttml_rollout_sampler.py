@@ -198,8 +198,7 @@ class TTMLRolloutSampler(RolloutSampler):
     def _get_kv_cache(self, B_local: int) -> Any:
         """Return a KV cache sized for the current per-device batch.
 
-        Llama uses the C++ ``ttml.models.KvCache`` directly (matches
-        ``LlamaGRPOCompleter._get_kv_cache``); Qwen3 uses the Python
+        Llama uses the C++ ``ttml.models.KvCache`` directly; Qwen3 uses the Python
         ``ttml.models.qwen3.kv_cache.KVCache`` wrapper which lazy-inits on
         the first ``update`` call and is what the Qwen3 model expects as
         ``past_key_values=``.
@@ -261,11 +260,9 @@ class TTMLRolloutSampler(RolloutSampler):
         Kind-dispatched shape (matches each model's current decode mask):
 
           * Llama: ``[B, 1, TILE_SIZE=32, cache_len]``. Row 0 carries the
-            causal pattern; rows 1..31 stay zero. This matches
-            ``LlamaGRPOCompleter._create_causal_mask`` where only
-            ``mask_one_token[:query_len]`` gets filled — the padded query
-            rows are left zero and their SDPA outputs are discarded
-            downstream by the row-0 slice in :meth:`generate`.
+            causal pattern; rows 1..31 stay zero. The padded query rows'
+            SDPA outputs are discarded downstream by the row-0 slice in
+            :meth:`generate`.
           * Qwen3: ``[B, 1, 1, cache_len]``. Single query row.
 
         Only the REAL query row (row 0) carries an attention pattern: start
@@ -390,8 +387,7 @@ class TTMLRolloutSampler(RolloutSampler):
             enclosing ``B`` (which is the host batch count) would fail on any
             multi-device run because each shard holds only
             ``B_local = B // num_devices`` rows and its tensors are sized
-            accordingly. Matches the same ``[B_local, ...]`` reshape pattern used
-            in ``LlamaGRPOCompleter.compute_nlog_probs``.
+            accordingly.
 
             ``cross_entropy_loss`` requires target rank == 2 (see
             ``ttml::ops::cross_entropy_loss`` at
@@ -423,8 +419,7 @@ class TTMLRolloutSampler(RolloutSampler):
         nlog_columns: List[Any] = []
         # Rolling per-chunk token-column list that's fed to the async d2h at
         # every ``CHUNK`` boundary. Reset each boundary to bound the async
-        # readback payload — matches ``LlamaGRPOCompleter`` and
-        # ``Qwen3GRPOCompleter``.
+        # readback payload.
         chunk_columns: List[Any] = []
 
         # Async chunk state (used only for stop detection during decode).
@@ -477,8 +472,7 @@ class TTMLRolloutSampler(RolloutSampler):
 
                     # Llama's tile-pad trick: pad the single-token input up to a
                     # full tile so the model + attention kernel keep their query
-                    # tile shape. Real token lives at index 0; pads at 1..31 —
-                    # matches LlamaGRPOCompleter._completion_batched_impl.
+                    # tile shape. Real token lives at index 0; pads at 1..31.
                     if self._kind == "llama":
                         token_raw = ttnn.pad(
                             last_input.get_value(),

@@ -5,21 +5,17 @@
 
 import csv
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence, Iterator
-
-# The `grpo` package lives two levels up, in the examples directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from typing import Any, Iterator, Sequence
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
-from grpo.utils.llama_completer import LlamaCompletionCtx
-from grpo.utils.llama_completer import LlamaGRPOCompleter
+from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."
@@ -38,7 +34,8 @@ TRANSFORMER_CONFIG = get_model_config(_TRAINING_CONFIG.model_config)
 
 
 def iter_generated_completions(
-    llama: LlamaGRPOCompleter,
+    sampler: TTMLRolloutSampler,
+    tokenizer: Any,
     prompts: Sequence[str],
     batch_size: int = 32,
     num_generations: int = 1,
@@ -46,7 +43,8 @@ def iter_generated_completions(
     for start in range(0, len(prompts), batch_size):
         end = min(start + batch_size, len(prompts))
         prompt_batch = list(prompts[start:end])
-        batch_completions = llama.generate_str(prompt_batch)
+        batch = sampler.generate([tokenizer.encode(p) for p in prompt_batch])
+        batch_completions = [tokenizer.decode(c, skip_special_tokens=False) for c in batch.completions]
         if num_generations != 1:
             raise ValueError(f"Expected num_generations=1, got {num_generations}")
         for offset, completion in enumerate(batch_completions):
@@ -101,16 +99,8 @@ if __name__ == "__main__":
         )
         csv_writer.writeheader()
 
-        llama = LlamaGRPOCompleter(
-            ctx=LlamaCompletionCtx(
-                max_tokens_to_complete=MAX_COMPLETION_LENGTH,
-                temperature=TEMPERATURE,
-                completions_per_prompt=NUM_GENERATIONS,
-            ),
-            transformer_config=TRANSFORMER_CONFIG,
-            device_config=DEVICE_CONFIG,
-            model_source=MODEL_ID,
-        )
+        model, _ = setup_ttml_model(TRANSFORMER_CONFIG, DEVICE_CONFIG, MODEL_ID)
+        sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, TEMPERATURE, NUM_GENERATIONS)
 
         correct_answers = 0
         wrong_answers = 0
@@ -118,7 +108,7 @@ if __name__ == "__main__":
         start_time = time.perf_counter()
 
         for i, prompt, completion in iter_generated_completions(
-            llama, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
+            sampler, tokenizer, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
         ):
             correct, model_answer = compare_boolq_answers(completion, answers[i])
             total_chars += len(completion)

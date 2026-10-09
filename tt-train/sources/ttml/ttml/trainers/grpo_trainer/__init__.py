@@ -6,7 +6,6 @@ from .grpo_trainer import (
     ROLLOUT_MODES,
     ROLLOUT_SOURCES,
     VALID_ROLLOUT_COMBINATIONS,
-    GRPOCompleter,
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,

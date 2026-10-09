@@ -5,7 +5,6 @@
 from .callback import TrainerCallback
 from .sft_trainer import SFTConfig, SFTTrainer
 from .grpo_trainer import (
-    GRPOCompleter,
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,
