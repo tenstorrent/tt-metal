@@ -24,16 +24,6 @@
 #include "compute_streaming.hpp"
 #endif
 
-// Pops a constant the writer pushed once and compute read by index without popping. Waiting first makes the
-// pop safe on a core that never read it; dummy_unpack orders the pop after the wait on Quasar (a bare
-// wait_front -> pop_front traps the unpacker).
-ALWI void release_writer_constant(uint32_t dfb_id, uint32_t num_tiles) {
-    DataflowBuffer dfb(dfb_id);
-    dfb.wait_front(num_tiles);
-    dummy_unpack(dfb_id);
-    dfb.pop_front(num_tiles);
-}
-
 void kernel_main() {
     [[maybe_unused]] constexpr auto B = get_arg(args::B);
     [[maybe_unused]] constexpr auto NQH = get_arg(args::NQH);

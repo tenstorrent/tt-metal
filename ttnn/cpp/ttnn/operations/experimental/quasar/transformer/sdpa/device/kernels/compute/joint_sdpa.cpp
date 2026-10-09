@@ -104,4 +104,9 @@ void kernel_main() {
                 dfb::out);
         }
     }
+
+    // The writer pushes the identity scale and column identity tiles once; compute reads them by index for
+    // the whole kernel and never pops them. Release them so the buffers are left balanced.
+    release_writer_constant(dfb::identity_scale_in, 1);
+    release_writer_constant(dfb::col_identity, 1);
 }
