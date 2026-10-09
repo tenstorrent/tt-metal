@@ -115,6 +115,10 @@ std::uint32_t _start() {
             sem_internal::kCachedSemaphores);
         WAYPOINT("K");
         kernel_main();
+        // Drain every DFB the kernel used, now that no helper or nested scope can still be producing or consuming.
+#ifdef DFB_DRAIN_PENDING
+        DFB_DRAIN_PENDING();
+#endif
         WAYPOINT("KD");
         sem_internal::finish_dm_local_cached(sem_internal::kCachedSemaphores);
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
