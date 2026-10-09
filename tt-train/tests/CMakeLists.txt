@@ -7,6 +7,7 @@ set(SOURCES
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/random_tests.cpp
+    core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -56,6 +57,7 @@ set(SOURCES
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
+    ops/distributed/mesh_workload_cache_hit_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
