@@ -131,22 +131,22 @@ autograd::TensorPtr composite_layernorm(
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-    auto tensor_squared = ttnn::square(tensor->get_value());
-    auto mean_squared = core::zeros_like(mean);
+    auto centered_tensor = ttnn::subtract(tensor->get_value(), mean);
+    auto centered_tensor_squared = ttnn::square(centered_tensor);
+    auto variance = core::zeros_like(mean);
     ttnn::moreh_mean(
-        tensor_squared,
+        centered_tensor_squared,
         3,  // last dimension
         true,
         std::nullopt,
-        mean_squared,
+        variance,
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
-    auto variance = ttnn::subtract(mean_squared, ttnn::square(mean));
 
     const float eps = 1e-6F;
     auto rstd = ttnn::rsqrt(ttnn::add(variance, eps));
 
-    auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
+    auto normalized_tensor = ttnn::multiply(centered_tensor, rstd);
 
     auto output = ttnn::multiply(normalized_tensor, gamma->get_value());
     if (beta_opt.has_value()) {
