@@ -1,7 +1,7 @@
 {
   "model": "perplexity-ai/pplx-decider-v1-27b",
   "revision": "b01a5cbaca5391f73bd55103d4f27e8982cd5e60",
-  "stage": "1 functional layers (prefill only)",
+  "stage": "6 full model (prefill-only classifier); stage-1 fields below kept as recorded",
   "hardware": "1x Blackhole p150a, 8 DRAM banks, 31.83 GiB DRAM (measured: ttnn.get_memory_view)",
   "hf_advertised_context": 262144,
   "hf_advertised_context_source": "config.json text_config.max_position_embeddings",
@@ -59,5 +59,18 @@
     "setup_includes": "BFP8 weights, BF16 norms, fp32 DeltaNet zero state and scan constants, the BF16 K/V cache sized for max_seq_len (full_attention), RoPE tables (full_attention) and the BF16 [1,S,5120] input",
     "largest_free_block_per_bank_mib_after_pass": {"S8192": 3982, "S16384": 3952},
     "full_model_projection_inferred": "64 layers at S=8192 with this per-layer policy: 48 x 0.386 + 16 x 0.402 GiB (setup minus the 80 MiB input) = 24.9 GiB, plus the 2.37 GiB BF16 embedding table = 27.2 GiB of 31.83 GiB, leaving about 4.6 GiB for activations. Transient peak inside a pass was not measured. At 262144 tokens the BF16 K/V caches alone would be 16 x 1 GiB, which does not fit with BFP8 weights. A BFP8 K/V cache with BFP4 MLP weights might fit; this is not tested."
+  },
+  "full_model_dram_measured": {
+    "source": "ttnn.get_memory_view(device, DRAM) in tt/model.py dram_view(); stage-6 scratch probes, results in artifacts/pplx_decider/stage6/{load_times.json,dram_peak_S8192.json}",
+    "policy": "act_bf16__w_bfp8_all__hifi2 (BF16 activations, BFP8 projection weights, BF16 embedding / norms, BF16 K/V cache, fp32 DeltaNet state)",
+    "all_64_layers_resident": true,
+    "embedding_gib": 2.368,
+    "per_layer_after_load_gib": {"linear_attention": 0.3857, "full_attention": 0.4003},
+    "per_layer_note": "per-layer delta at load: weights plus the layer's persistent state (fp32 DeltaNet zero state and scan constants; BF16 paged K/V cache 2 x 16 MiB sized for 8192 tokens, page table, RoPE trans mat)",
+    "after_load_gib": {"allocated": 27.296, "free": 4.536, "total": 31.831, "largest_free_per_bank_mib": 577},
+    "s8192_peak_at_layer_boundaries_gib": {"allocated": 27.455, "free": 4.376, "largest_free_per_bank_mib": 532, "point": "after layer 0 with its input and output both live"},
+    "s8192_peak_note": "Measured at layer boundaries with ttnn.synchronize_device. The transient inside a layer (one 2048-token chunk of intermediates) is not observable with the allocator view; inferred to be a few hundred MiB from the stage-1 per-layer probe (+0.08 GiB after a full S=8192 layer pass). All 25 golden prompts incl. 7928 tokens and the 8192-bucket perf runs completed.",
+    "supported_context": 8192,
+    "limiting_reason": "app_contract (unchanged); 4.4 GiB stays free at the 8192 bucket"
   }
 }
