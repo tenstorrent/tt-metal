@@ -208,8 +208,8 @@ inline void calculate_sfpu_binary(
         sfpi::dst_reg++;
     };
 
-    if constexpr (BINOP == BinaryOp::POW) {
-        // Not unrolled: the long pow body is slower unrolled.
+    if constexpr (BINOP == BinaryOp::POW || (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en)) {
+        // Not unrolled: pow, and xlogy on a 32-bit DEST, measured slower unrolled.
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }
