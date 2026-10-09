@@ -251,7 +251,7 @@ static void RunTest(
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     // Wait for watcher to catch the assert with a timeout of 5s
     std::string exception;
