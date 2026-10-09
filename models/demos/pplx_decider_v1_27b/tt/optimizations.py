@@ -194,6 +194,87 @@ class Optimizations:
         )
 
 
+# ----------------------------------------------------------------------------------------------
+# Vision tower (stage 12A). Kept apart from ``ROLES`` / ``PrecisionPolicy`` so the text precision
+# JSONs (which must name every text role) are unchanged. Person decision 2026-10-09: the vision
+# tower is BF16 end to end (weights and activations), fp32 matmul accumulation, no BFP8/BFP4.
+# ----------------------------------------------------------------------------------------------
+
+# Matmul roles of the vision tower. Each vision projection weight belongs to exactly one role.
+VISION_ROLES = ("vision_patch", "vision_qkv", "vision_proj", "vision_fc1", "vision_fc2", "merger_fc1", "merger_fc2")
+
+
+@dataclass(frozen=True)
+class VisionPrecisionPolicy:
+    name: str = "vision_bf16__w_bf16__hifi4"
+    activation_dtype: str = "bfloat16"
+    weight_dtypes: dict = field(default_factory=lambda: {role: "bfloat16" for role in VISION_ROLES})
+    fidelities: dict = field(default_factory=lambda: {role: "HiFi4" for role in VISION_ROLES})
+    norm_weight_dtype: str = "bfloat16"
+    bias_dtype: str = "bfloat16"
+    norm_fidelity: str = "HiFi4"
+
+    def __post_init__(self):
+        for table in ("weight_dtypes", "fidelities"):
+            missing = [r for r in VISION_ROLES if r not in getattr(self, table)]
+            if missing:
+                raise ValueError(f"vision policy.{table} misses roles {missing}")
+        low = {r: d for r, d in self.weight_dtypes.items() if d != "bfloat16"}
+        if low or self.activation_dtype != "bfloat16":
+            raise ValueError(f"The vision tower is BF16 only (person decision); got {low or self.activation_dtype}")
+
+    def weight_dtype(self, role: str) -> ttnn.DataType:
+        return getattr(ttnn, self.weight_dtypes[role])
+
+    def describe(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class VisionOptimizations:
+    """Compute / memory / program configs for the vision tower on one device."""
+
+    mesh_device: object
+    policy: VisionPrecisionPolicy
+    compute_kernel_cfg: dict  # role -> compute kernel config
+    output_dtype: ttnn.DataType
+    output_memcfg: ttnn.MemoryConfig
+    core_grid: ttnn.CoreGrid
+    norm_compute_kernel_cfg: object
+    sdpa_q_chunk: int
+    sdpa_k_chunk: int
+    sdpa_grid: tuple[int, int]
+    sdpa_compute_kernel_cfg: object
+    rope_compute_kernel_cfg: object
+
+    @classmethod
+    def build(cls, mesh_device, *, policy: VisionPrecisionPolicy | None = None) -> "VisionOptimizations":
+        policy = policy or VisionPrecisionPolicy()
+        grid = mesh_device.compute_with_storage_grid_size()
+        return cls(
+            mesh_device=mesh_device,
+            policy=policy,
+            compute_kernel_cfg={role: _compute_cfg(policy.fidelities[role]) for role in VISION_ROLES},
+            output_dtype=getattr(ttnn, policy.activation_dtype),
+            output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(x=grid.x, y=grid.y),
+            norm_compute_kernel_cfg=_compute_cfg(policy.norm_fidelity),
+            sdpa_q_chunk=128,
+            sdpa_k_chunk=128,
+            sdpa_grid=(grid.x, grid.y),
+            sdpa_compute_kernel_cfg=_compute_cfg("HiFi4"),
+            rope_compute_kernel_cfg=_compute_cfg("HiFi4"),
+        )
+
+    def sdpa_program_config(self):
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_grid,
+            q_chunk_size=self.sdpa_q_chunk,
+            k_chunk_size=self.sdpa_k_chunk,
+            exp_approx_mode=False,
+        )
+
+
 def _compute_cfg(fidelity: str, *, fp32_dest_acc: bool = True):
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=getattr(ttnn.MathFidelity, fidelity),
