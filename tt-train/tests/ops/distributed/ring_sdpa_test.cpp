@@ -15,29 +15,29 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 static bool check_32_chips() {
-    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    auto all_chips = cluster_desc->get_all_chips();
-    return all_chips.size() == 32;
+    return ttml::test_utils::system_supports_mesh(tt::tt_metal::distributed::MeshShape(8, 4));
 }
 
 class GalaxyRingSDPATest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
         if (check_32_chips()) {
-            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
             ttml::ttnn_fixed::distributed::enable_fabric(32);
             ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
             ttml::autograd::ctx().set_seed(42);
@@ -50,6 +50,7 @@ public:
     }
     static void TearDownTestSuite() {
         if (check_32_chips()) {
+            ttml::autograd::ctx().reset_parallelism_context();
             ttml::autograd::ctx().close_device();
         }
     }
