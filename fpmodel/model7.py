@@ -64,13 +64,28 @@ CONSTANTS = {
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
 }
-# measured on the device, held fixed in the fit: name -> (value, source)
+# measured on the device, held fixed in the fit: name -> ({arch: value}, source). Measured on WH only so far; BH
+# values are fitted until measured there (a WH measurement is not a BH constant).
 PINNED = {
-    "dram_eff": (0.77, "DRAM read bandwidth microbenchmark, 222 of 288 GB/s"),
-    "launch_us": (0.5, "profiler: kernel start to end minus the K loops, instrumented matmul kernels"),
-    "rl_init": (340.0, "profiler: spill path per subblock-step, instrumented compute kernel"),
-    "u2d": (100.0, "profiler: fp32 unpack-to-dest handshake per tile"),
+    "dram_eff": ({"wh": 0.77}, "DRAM read bandwidth microbenchmark, 222 of 288 GB/s"),
+    "launch_us": ({"wh": 0.5}, "profiler: kernel start to end minus the K loops, instrumented matmul kernels"),
+    "rl_init": ({"wh": 340.0}, "profiler: spill path per subblock-step, instrumented compute kernel"),
+    "u2d": ({"wh": 100.0}, "profiler: fp32 unpack-to-dest handshake per tile"),
 }
+
+
+def pin(fit_module, arch):
+    """hold this arch's measured constants fixed in fit_module's bounds (restoring the defaults for the others)"""
+    for k, (vals, _) in PINNED.items():
+        if k not in PARAMS:
+            continue
+        if arch in vals:
+            v = vals[arch]
+            fit_module.LO[k], fit_module.HI[k] = v * 0.999, v * 1.001
+        else:
+            fit_module.LO[k], fit_module.HI[k] = LO.get(k, 1e-3), HI.get(k, 1e7)
+
+
 PARAMS = {k: v[0] for k, v in CONSTANTS.items() if v[2] is None or on(v[2])}
 LO = {"dram_eff": 0.2, "noc_eff": 0.1, "l1_frac": 0.05, "link_eff": 0.05, "bank_frac": 0.02}
 HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0, "link_eff": 1.0, "bank_frac": 1.0}
@@ -94,16 +109,19 @@ def geometry(d):
     R2, C2 = np.ceil(Mrows / pcM), np.ceil(Nt / pcN)  # 2D: a fused batch stacks its rows
     P0, P1 = np.ceil(Nt / pcN), np.ceil(Mrows / pcM)
     grid = (d.grid_x * d.grid_y).fillna(d.cores).to_numpy(float)
-    rblocks = B * np.ceil(Mt / pcM) * np.ceil(Nt / pcN)  # Reuse: whole (pcM x pcN) blocks spread over cores
+    # Reuse: output blocks of per_core_M x per_core_N over the batch-stacked rows, spread over cores; a block taller
+    # than one batch (per_core_M > Mt) is walked as per_core_M / Mt blocks of Mt rows (the factory's batch_scale_factor)
+    bsf = np.where(pcM > Mt, np.floor(pcM / Mt), 1.0)
+    rblocks = np.ceil(B * Mt / pcM) * np.ceil(Nt / pcN)
     rcores = np.minimum(rblocks, grid)
     g["cores"] = np.select([is2d, in0, in1, reuse], [R2 * C2, P0, P1, rcores], d.cores.to_numpy(float))
     g["rx0"] = np.select([is2d, in0], [C2 - 1, P0 - 1], 0.0)  # in0 multicast receivers
     g["rx1"] = np.select([is2d, in1], [R2 - 1, P1 - 1], 0.0)  # in1 multicast receivers
     g["rd0"] = np.select([is2d, in0, in1, reuse], [R2, 1, P1, rcores], 0.0)  # cores reading in0 from memory
     g["rd1"] = np.select([is2d, in0, in1, reuse], [C2, P0, 1, rcores], 0.0)  # cores reading in1 from memory
-    obh = np.where(reuse, pcM, obh)
+    obh = np.where(reuse, np.minimum(pcM, Mt), obh)
     obw = np.where(reuse, pcN, obw)
-    g["nob"] = np.where(reuse, np.ceil(rblocks / rcores), bloop * np.ceil(pcM / obh) * np.ceil(pcN / obw))
+    g["nob"] = np.where(reuse, np.ceil(rblocks / rcores) * bsf, bloop * np.ceil(pcM / obh) * np.ceil(pcN / obw))
     g["nK"] = np.ceil(Kt / kb)
     g["dbuf"] = np.where(reuse, True, bloop * g["nK"] > 1)
     g.update(Mt=Mt, Kt=Kt, Nt=Nt, B=B, kb=kb, obh=obh, obw=obw, sbh=sbh, sbw=sbw, fam=fam)
@@ -223,7 +241,9 @@ def predict(g, p, parts=False):
     # MultiCore: one output tile at a time, every input tile read with its own barrier
     mc = g["fam"] == "multicore"
     tiles_pc = np.ceil(g["B"] * g["Mt"] * g["Nt"] / np.maximum(g["cores"], 1))
-    mc_tile = np.maximum(g["Kt"] * 2 * (p["tile_rt"] + 2048 / noc), g["Kt"] * 16.0 * g["ph"])
+    tb2 = g["tb_a"] + g["tb_b"]  # one in0 tile and one in1 tile per K step, each read with its own barrier
+    mc_read = np.maximum(g["Kt"] * (2 * p["tile_rt"] + tb2 / noc), g["Kt"] * tb2 * g["cores"] / dram)
+    mc_tile = np.maximum(mc_read, g["Kt"] * 16.0 * g["ph"])
     core = np.where(mc, tiles_pc * (mc_tile + p.get("lat_write", 0.0)), core)
 
     t = p["launch_us"] * 1e3 + core / clk * 1e9

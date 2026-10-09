@@ -14,9 +14,6 @@ import fit
 fit.predict, fit.geometry, fit.PARAMS, fit.NAMES = M.predict, M.geometry, M.PARAMS, list(M.PARAMS)
 fit.LO.update(M.LO)
 fit.HI.update(M.HI)
-for k, (v, _) in M.PINNED.items():
-    if k in M.PARAMS:
-        fit.LO[k], fit.HI[k], M.PARAMS[k] = v * 0.999, v * 1.001, v
 from data import load, SETS, CAND, evaluate, rank_quality, gm
 
 tag = (os.environ.get("ABLATE", "") or "full") + ("+" + os.environ["EXTRA"] if os.environ.get("EXTRA") else "")
@@ -25,6 +22,7 @@ rows = {a: np.flatnonzero((d.arch_ == a).to_numpy()) for a in ("wh", "bh")}
 pred = np.full(len(d), np.nan)
 folds, allp = {a: [] for a in rows}, {}
 for a, rr in rows.items():
+    M.pin(fit, a)
     probs = d.problem_id.iloc[rr].unique()
     np.random.default_rng(0).shuffle(probs)
     for k in range(5):
@@ -70,13 +68,13 @@ const = {}
 for a in rows:
     F = pd.DataFrame(folds[a])
     for k in M.PARAMS:
-        lo, hi = fit.LO.get(k, 1e-3), fit.HI.get(k, 1e7)
+        lo, hi = M.LO.get(k, 1e-3), M.HI.get(k, 1e7)
         v = allp[a][k]
         const.setdefault(k, {})[a] = dict(
             value=round(float(v), 4),
             fold_spread=round(float(F[k].max() / max(F[k].min(), 1e-12)), 3),
-            pinned=k in M.PINNED,
-            at_bound=bool(k not in M.PINNED and (v <= lo * 1.02 or v >= hi / 1.02)),
+            pinned=a in M.PINNED.get(k, ({},))[0],
+            at_bound=bool(a not in M.PINNED.get(k, ({},))[0] and (v <= lo * 1.02 or v >= hi / 1.02)),
         )
 out = dict(ablate=tag, sets=sets, pairacc=round(acc[0], 4), med_err=round(acc[1], 4), kbias=kbias, constants=const)
 line = f"{tag:10s} " + "  ".join(f"{s} {v['regret']:.3f}/{v['regr']} {v['bins']}" for s, v in sets.items())
