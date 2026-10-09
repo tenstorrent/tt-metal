@@ -952,6 +952,12 @@ class OptimizedDecoder(LightweightModule):
                 return ttnn.linear(x, w, compute_kernel_config=ck, **kw)
             return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
         kt, nt = w.padded_shape[-2] // TILE, w.padded_shape[-1] // TILE
+        if self._NARROW_2D_MAX_N and 1 < nt <= self._NARROW_2D_MAX_N and T > TILE:
+            # narrow N (router 256, shared-expert gate/up 512): the 1D program puts one N tile on each of only 8-16
+            # cores, each multiplying every M row over the full K (compute-bound); the 2D grid also splits M
+            pc = self._prefill_2d_pc(x, w, kw.get("dtype"), ck)
+            if pc is not None:
+                return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
         gs = self.device.compute_with_storage_grid_size()
         pcn = -(-nt // (gs.x * gs.y))
         used = -(-nt // pcn)
@@ -972,6 +978,8 @@ class OptimizedDecoder(LightweightModule):
         return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
 
     _PREFILL_2D_AUTO = os.environ.get("TT_LAGUNA_PREFILL_2D_AUTO", "1") == "1"
+    # short prefill: linears with at most this many N tiles use the 2D program (0 = always 1D)
+    _NARROW_2D_MAX_N = int(os.environ.get("TT_LAGUNA_PREFILL_NARROW_2D", "16"))
     # CB bytes the 2D program may use: the serving process keeps persistent L1 buffers (decode state, traced
     # prefill buffers) at the top of L1; 1400 KB clashed with them at server warmup
     _L1_CB_BUDGET = int(os.environ.get("TT_LAGUNA_PREFILL_2D_L1_KB", "1100")) * 1024
