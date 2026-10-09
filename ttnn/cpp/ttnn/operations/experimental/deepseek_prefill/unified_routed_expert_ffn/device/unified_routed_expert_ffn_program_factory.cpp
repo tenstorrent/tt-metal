@@ -154,7 +154,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     //   above          : 4 rows (8K 888 -> 857 ms)
     uint32_t row_group = GRID_Y;
     if (op.stacked_packed_weights) {
-        row_group = op.m_tiles <= 64 ? 1u : (op.m_tiles <= 128 ? 2u : 4u);
+        // row groups run independent experts, so they can use every grid row (the single-group mode keeps the
+        // 8-row chunk geometry): 10 rows on an 11 x 10 grid, groups of 1 / 2 / 5 rows (8K prefill 4 -> 5-row
+        // groups). TT_ROUTED_EXPERT_ROW_GRID_Y overrides the row count.
+        const uint32_t dev_rows = t.x.device()->compute_with_storage_grid_size().y;
+        const char* env_rows = std::getenv("TT_ROUTED_EXPERT_ROW_GRID_Y");
+        GRID_Y = env_rows ? std::min<uint32_t>(std::stoul(env_rows), dev_rows) : dev_rows;
+        const uint32_t big = (GRID_Y % 4 == 0) ? 4u : (GRID_Y % 5 == 0 ? 5u : (GRID_Y % 3 == 0 ? 3u : 2u));
+        row_group = op.m_tiles <= 64 ? 1u : (op.m_tiles <= 128 ? 2u : big);
+        TT_FATAL(GRID_Y % row_group == 0, "row group {} must divide the {} grid rows", row_group, GRID_Y);
     }
     const bool row_experts = row_group < GRID_Y;
     // A row runs its expert's whole token range in chunks of up to this many tile-rows; every chunk re-streams the
