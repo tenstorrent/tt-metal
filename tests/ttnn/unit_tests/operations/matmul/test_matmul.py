@@ -17,6 +17,7 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
+
 # for setting up multi-device stress tests
 NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices() if os.environ.get(NUM_DEVICES_ENV_KEY, None) is not None else 1
