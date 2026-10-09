@@ -15,8 +15,9 @@ tt::tt_metal::ClusterType get_cluster_type() { return tt::tt_metal::GetClusterTy
 
 std::string serialize_cluster_descriptor() { return tt::tt_metal::SerializeClusterDescriptor(); }
 
-std::uint64_t get_chip_unique_id_from_fabric_node_id(std::uint32_t mesh_id, std::uint32_t chip_id) {
-    return *tt::tt_metal::internal::get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id);
+std::uint64_t get_chip_unique_id_from_fabric_node_id(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, std::uint32_t mesh_id, std::uint32_t chip_id) {
+    return *tt::tt_metal::internal::get_chip_unique_id_from_fabric_node_id(mesh_device, mesh_id, chip_id);
 }
 
 }  // namespace cluster

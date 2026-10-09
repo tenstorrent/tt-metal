@@ -252,7 +252,9 @@ def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
         for c in range(cols):
             coord = ttnn.MeshCoordinate(r, c)
             fnid = mesh_device.get_fabric_node_id(coord)
-            unique_id = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(fnid.mesh_id), int(fnid.chip_id)))
+            unique_id = int(
+                ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_device, int(fnid.mesh_id), int(fnid.chip_id))
+            )
             out.append((unique_id, int(fnid.mesh_id), int(fnid.chip_id)))
     return out
 
