@@ -756,6 +756,7 @@ ttnn/ttnn/download_sfpi.py
 
 # TTNN Graph Report
 tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/thirdparty-lights-on-software
+tests/ttnn/nightly/unit_tests/base_functionality/test_graph_report_resnet50.py @tenstorrent/thirdparty-lights-on-software
 ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software
 
 # models
