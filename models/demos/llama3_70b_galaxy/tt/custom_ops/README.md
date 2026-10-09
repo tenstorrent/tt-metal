@@ -1,0 +1,197 @@
+# Llama3-70B Galaxy (Qwen3-32B) model-local custom ops
+
+`ttnn.generic_op` kernels and their Python wrappers. Building the program from Python means a change
+to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
+`models/demos/wormhole/bge_m3/tt/custom_ops/README.md`.
+
+## Layout
+
+    custom_ops/
+        __init__.py              package surface
+        README.md                this file
+        qwen_q_prep/             Qwen long-prefill Q prep (typecast, q_norm, RoPE, typecast)
+            __init__.py, op.py
+            kernels/             qprep_common.hpp, norm_{reader,compute,handoff_writer}.cpp,
+                                 rope_{reader,compute,writer}.cpp
+
+## Conventions
+
+- A kernel path in `op.py` is relative to `TT_METAL_HOME`.
+- Each sub-package exposes a callable that takes and returns ttnn tensors.
+- An op validates its inputs and raises `ValueError` when they do not match. It does not fall back
+  to the stock ops.
+
+## Status
+
+`qwen_q_prep` runs in the model: `TtLlamaAttention._qwen_local_q_prep` calls it on the Qwen
+Wormhole long-prefill path (batch 1, S > 8192, prefetcher). `test_qwen_q_prep_op.py` passes
+`torch.equal` on all 32 devices at S=16384 and 40960, and the 40k gate numbers are unchanged.
+Measured: isolated wall 1.278 -> 0.889 ms at S=40960 (0.590 -> 0.984 ms at 16384, host-dispatch
+bound); b1 40k TTFT 3655.0 -> 3596.3 ms.
+
+## qwen_q_prep
+
+Replaces `TtLlamaAttention._qwen_local_q_prep` (`tt/llama_attention.py`, around line 1108), which runs
+these ops on each device: 2 x `ttnn.slice` + `ttnn.concat`, `ttnn.typecast` bf8 -> bf16,
+`q_norm` (`ttnn.rms_norm`), `ttnn.experimental.rotary_embedding_llama`, `ttnn.typecast`
+bf16 -> bf8, and `ttnn.experimental.paged_fill_cache`. The op runs one program per device and aims to
+give the same bits.
+
+### Contract
+
+`qwen_q_prep(q, cos, sin, trans_mat, gamma, *, eps, grid=None, handoff_depth=2) -> q`
+
+Per device of a `(rows, cols)` mesh, column `c` owns ring slices `c` and `2*cols-1-c` of `2*cols`:
+
+| Tensor | Shape, dtype, layout | Notes |
+| --- | --- | --- |
+| `q` | `[1, H, S, 128]` bf8, TILE, DRAM interleaved | Updated in place on the owned slices. Other slices are not touched. Returned. |
+| `cos`, `sin` | `[1, 1, S_rot, 128]` bf16, TILE, interleaved, `S_rot >= S` | The full prefill rot mats. Row `t` is position `t`. No per-layer slice. |
+| `trans_mat` | `[1, 1, 32, 32]` bf16, TILE, interleaved | `transformation_mats["prefill"]` |
+| `gamma` | `[1, 1, 4, 32]` bf16, ROW_MAJOR, interleaved | `q_norm.weight` |
+| `eps` | float | `q_norm.eps`. The reader truncates it to bf16, as the stock reader does. |
+
+`S % (2 * cols * 32) == 0`. For the 8x4 Galaxy that means `S % 256 == 0`, so every multiple of 8192 works.
+
+### Program
+
+The compute grid (7x10 here) is split into 35 pairs: N cores are rows 0-4, and R core `(x, y+5)`
+pairs with N core `(x, y)`. The owned tile rows (`2 * S/8/32 * H`, 2560 at S=40960) are dealt out to
+the pairs in contiguous ranges, head index fastest, so consecutive rows share one position.
+
+| Core | Reader | Compute | Writer |
+| --- | --- | --- | --- |
+| N | q bf8 tile rows from the full buffer, plus the scaler, eps and gamma | typecast + RMSNorm. HiFi2, fp32 DEST, the q_norm config. | Writes each bf16 row into the paired R core's `CB_NORMED`. |
+| R | cos/sin once per position, trans_mat once. Receives the rows from N. | RoPE + typecast. HiFi4, 16-bit DEST, `bfp8_pack_precise`. | Writes bf8 rows to the same q pages. |
+
+Why two core groups: the stock RMSNorm runs at HiFi2 with fp32 DEST, and the stock RoPE runs at
+HiFi4 with 16-bit DEST. In 16-bit DEST, each HiFi4 fidelity phase of the RoPE multiplies accumulates
+into a bf16 DEST, so RoPE in fp32 DEST would give different bits. A compute kernel has one fidelity
+and one DEST width.
+
+The handoff works per row `r` with two semaphores:
+
+1. The R reader reserves `CB_NORMED` slot `r % depth` and increments `SEM_CREDIT` on the N core.
+2. The N writer waits until `SEM_CREDIT >= r+1`, writes 8 KB to the R core's slot, and waits for the
+   write acks.
+3. The N writer increments `SEM_READY` on the R core.
+4. The R reader waits until `SEM_READY >= r+1`, then pushes the slot to its compute kernel.
+
+`CB_NORMED` is declared on every core, so it has one L1 address on all of them.
+
+Writing in place is safe. Each owned tile row is read by exactly one N core. The paired R core
+writes that row only after it has received the row from the N core, so the read is complete before
+the write. No other core reads or writes the row. Ring SDPA runs after the op.
+
+### Bit-identity argument, stage by stage
+
+| Stage | Mirrors | Confidence |
+| --- | --- | --- |
+| Slice + concat + paged_fill_cache | Tile-aligned page copies of bf8 tiles. The op reads and writes the same pages directly. The chain's page table maps block `2h+j` to `8h+slice`, `llama_attention.py` `_qwen_local_q_setup`. | High |
+| Typecast bf8 -> bf16 | `typecast_tile<Bfp8_b, Float16_b>` has no SFPU work (`tt_metal/hw/inc/api/compute/eltwise_unary/typecast.h:313`), so the stock op is copy + pack. Every bf8 value fits exactly in bf16, so the copy through fp32 DEST in `norm_compute.cpp` `typecast_row` packs the same bf16 tile. | High |
+| RMSNorm config | `RMSNorm.compute_kernel_config_hifi2` (`models/common/rmsnorm.py`): HiFi2, approx off, fp32 DEST. `ttnn.rms_norm` without a program config gives `LayerNormDefaultProgramConfig{use_welford=false}`, so the tile-reduction backend (`layernorm_stats_selector.hpp`) runs `layernorm.cpp` with RMSNORM + FUSE_GAMMA, Wt=4, block 4, and Float32 intermediates (`layernorm_op_multi_core.cpp:485-489, 1016-1024`). The gamma read is `reader_unary_interleaved_ln_rm_gb.cpp`. | High |
+| x^2 | `layernorm.cpp:207-208` reconfig, `:243` `ckl::square`, which is `mul_init(x, x, false)` + `mul_tiles` (`kernel_lib/eltwise/core/chain.inl:1184, 1244`). | High |
+| mean(x^2) | `layernorm.cpp:256` reconfig, `:261` `numeric::row_wise_mean` (`normalization/kernel_util/compute/numeric.h`): the swapped reconfig, `reduce_init<SUM, REDUCE_ROW>`, `reduce_tile` on tiles 0..3 into DST 0, then `mul_unary_tile(1/128)` on the SFPU. Same order, scaler tile and epsilon tile (`reduce_helpers_dataflow.inl`, `generate_bcast_scalar_metal2.hpp`). | High. Device confirmation needed (reduce order). |
+| rsqrt(var + eps) | `layernorm.cpp:268-275`: `add_init(ex2, eps, false)`, `add_tiles`, `rsqrt_tile<RsqrtMode::Default>` (ckl `Rsqrt<Exact>`). The init order follows bge `balanced_layernorm`, which is bitwise against stock. | High |
+| x * rstd * gamma | `layernorm.cpp:283-345`: col-bcast mul packed to the fp32 FUSION CB, then unpacked and row-bcast multiplied by gamma, then packed bf16. The fp32 round trip is kept, unlike the bge op. | High |
+| RoPE config | `rotary_embedding_llama_device_operation.cpp:246-247`: default HiFi4, fp32 DEST off. The interleaved factory has bf16 intermediates and `RELOAD_IMPL=1` at this shape (`rotary_embedding_llama_multi_core_program_factory.cpp`). | High |
+| RoPE sequence | `rotary_embedding_llama.cpp:85-89` (two hw_startups), `:122-130` matmul, `:132-142` `* sin` (`mul_init` with default `acc_to_dest=true`), `:144-158` `* cos` (no re-init), `:160-164` add. `rope_compute.cpp` makes the same calls in the same order. | High |
+| cos/sin reuse | The op keeps a cos/sin row for up to H consecutive rows instead of re-reading it per head. The L1 data is the same. | High |
+| Typecast bf16 -> bf8 | `typecast.cpp`: `fp32_dest_acc_en=false`, `bfp8_pack_precise=true`, and `typecast_tile<Float16_b, Bfp8_b>` is a no-op. The stock path packs the RoPE add from Float16_b DEST to bf16 (exact), copies it back to Float16_b DEST, and packs to bf8 with `pack_src_format=Float16_b` (`jit_build/data_format.cpp:329-331`). The op packs the add's DEST straight to bf8 with the same pack-source format. `bfp8_pack_precise` is kernel-wide but only changes bfp-format output CBs, and `CB_QOUT` is the only one. | Medium-high. Device confirmation needed. |
+
+`test_qwen_q_prep_op.py` checks all of the above at once with `torch.equal` on every device.
+
+### Expected time
+
+Per device at S=40960. The chain takes about 1.26 ms per layer:
+`keeps/08-qwen-local-q-prep.md`, 1.782 ms measured minus a 0.523 ms clone. The k04-2l profile shows
+each op in the chain running at 175-205 GB/s of DRAM traffic, so the chain is bound by DRAM bandwidth.
+
+| | Chain | qwen_q_prep |
+| --- | --- | --- |
+| DRAM bytes | about 256 MB | about 28 MB |
+| Ops / programs | 8 | 1 |
+
+The chain's 256 MB break down as follows:
+
+| Ops | MB |
+| --- | --- |
+| slices | 22 |
+| concat | 22 |
+| typecast in | 32 |
+| norm | 42 |
+| RoPE (x, plus cos/sin re-read per row) | 84 |
+| typecast out | 32 |
+| paged fill | 22 |
+
+The op's 28 MB are 11 MB of q read, 11 MB of q write, and 6 MB of cos/sin read. On top of that it
+moves 21 MB L1-to-L1 on chip.
+
+- The op is compute-bound, because each stage gets only 35 cores. The stock RMSNorm takes at most
+  5.8 µs per row and the stock RoPE at most 11.2 µs per row, and both of those are DRAM-bound. Each
+  pair handles 73 or 74 rows. That gives about 0.25-0.45 ms for the slower stage plus a short
+  pipeline fill.
+- Estimate: 0.3-0.5 ms against about 1.26 ms, a saving of about 0.8-1.0 ms per layer. Over 64
+  layers that is about 50-60 ms of b1 40k TTFT, or about 1.2-1.5%.
+
+These are estimates, not measurements. The test prints wall time for both paths.
+
+### llama_attention.py integration (applied)
+
+```diff
+--- a/models/demos/llama3_70b_galaxy/tt/llama_attention.py
++++ b/models/demos/llama3_70b_galaxy/tt/llama_attention.py
+@@ imports
+ import torch
+ import ttnn
+ from models.common.lightweightmodule import LightweightModule
+ from models.common.rmsnorm import RMSNorm
++from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
+@@ def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
+     def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
+         """Q prep on this column's two ring-SDPA slices only; returns the full bf8 Q buffer (other slices unused)."""
++        if self.qk_norm:
++            # One generic_op program per device (custom_ops/qwen_q_prep): reads the owned slices and the
++            # positions' cos/sin straight from the full buffers and rewrites the slices in place.
++            return qwen_q_prep(
++                q_pre_bf8,
++                rot_mats[0],
++                rot_mats[1],
++                self.transformation_mats["prefill"],
++                self.q_norm.weight,
++                eps=self.q_norm.eps,
++            )
+         starts, ends_q, page_table, (cos_local, sin_local) = self._qwen_local_q_setup(rot_mats, seq_len)
+```
+
+`_qwen_local_q_setup` is then used only when `qk_norm` is off, which is not the case for Qwen.
+For an A/B run, gate the new branch on an environment variable until the device test passes.
+
+### Open risks
+
+1. Nothing has been compiled. API names and signatures were checked against the headers in this
+   tree (bge custom ops use the same APIs), but expect a compile-fix round.
+2. The handoff protocol (semaphores and the remote `CB_NORMED` address) can hang if it is wrong. Two
+   things to check: that `get_write_ptr(CB_NORMED)` on the N core equals the R core's ring base, and
+   that the semaphores are initialised before any core starts.
+3. The 16-bit-DEST bf8 pack in `rope_compute.cpp` is the bit-identity step argued from the pack
+   formats alone. If it differs, add a bf16 CB and a separate copy + pack stage to mirror the
+   typecast exactly.
+4. The `MeshProgramDescriptor` has 4 column entries. On a program-cache hit, `generic_op` must take
+   the new buffer addresses from the runtime args, as the bge ops rely on. The test reuses buffers,
+   so a new address only shows up across layers in the model.
+5. If prefill runs under a sub-device manager whose worker cores exclude part of the grid, pass
+   `grid=`.
+6. The N:R split is fixed at 1:1. If one stage is much slower than the other, pairing 2 N cores to
+   1 R core (or the reverse) is the next lever. So is reading bf8 straight into the norm, which drops
+   the explicit typecast copy.
+7. Pre-existing and out of scope: `q_norm` is built without `eps`, so it uses the RMSNorm default
+   1e-5, not Qwen's 1e-6. The op takes `q_norm.eps`, so it stays identical to the chain either way.
+
+### Test
+
+    source python_env/bin/activate
+    pytest models/demos/llama3_70b_galaxy/tests/test_qwen_q_prep_op.py -s
+
+`test_qwen_q_prep_bit_exact[16384|40960]` needs the 8x4 mesh. `test_qwen_q_prep_plan_covers_owned_rows`
+checks the work split on the host only.
