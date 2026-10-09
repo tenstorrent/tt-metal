@@ -65,13 +65,14 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
 
 
 # Decode precision policy (decode-only weight copies; prefill keeps its own weights). The streamed matmuls run
-# custom_mm at LoFi with FP32 accumulation. Real-weight accuracy gate evidence (work_log.md): BFP4 QKV fails the gate,
-# BFP4 o_proj passes it but costs 7 points of top-1; BFP8 / BF16 router weights rank alike; experts are BFP4.
+# custom_mm at LoFi with FP32 accumulation. Measured against HF reference logits with real weights: BFP4 QKV fails the
+# accuracy check, BFP4 o_proj passes it but costs 7 points of top-1; BFP8 / BF16 router weights rank alike; experts
+# are BFP4.
 QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 
-# Streamed-op worker cores per DRAM bank (perf gate sweeps, work_log.md): dense projections are bank-bandwidth bound
+# Streamed-op worker cores per DRAM bank (swept on the full model): dense projections are bank-bandwidth bound
 # at 1; the routed gate|up (3 column pairs per bank) and down (12 columns per bank) gain from 3 and 2.
 QKV_STREAM_READERS = 1
 OPROJ_STREAM_READERS = 1
@@ -79,7 +80,7 @@ GATE_UP_STREAM_READERS = 3
 DOWN_STREAM_READERS = 2
 
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
-# devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (probes/bench_terminal.py: 1 and 2
+# devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2
 # reach ~504 GB/s, 4-5 are slower); weight columns buffered ahead while the fused final boundary runs.
 LM_HEAD_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 LM_HEAD_STREAM_READERS = 1
@@ -92,7 +93,7 @@ DECODE_GREEDY_SAMPLER = "split_argmax"
 # all_gathers.
 DECODE_TERMINAL_EXCHANGE = "fused"
 
-# Paged decode SDPA K chunk per layer type (probes/bench_sdpa.py, 8x8 grid): the 128-token sliding window is fastest
+# Paged decode SDPA K chunk per layer type (measured standalone, 8x8 grid): the 128-token sliding window is fastest
 # at 128; full attention at 256 (11.8 vs 13.0 us at 200 tokens, 109 vs 155 us at 64k; 512 only wins past ~8k).
 SDPA_DECODE_K_CHUNK_SLIDING = 128
 SDPA_DECODE_K_CHUNK_FULL = 256
@@ -109,7 +110,7 @@ def sdpa_decode_program_config(sliding_window):
 
 # Layer boundary all-reduce (fused_decode/boundary.py): "fabric" = the boundary op's own fabric multicast of the flat
 # partial sums; "ttnn" = ttnn.experimental.all_reduce_async on the flat partial, then the boundary's add + norm (the
-# measured alternative, work_log.md).
+# measured alternative).
 DECODE_BOUNDARY_CCL = "fabric"
 # Fused matmul + all-reduce send: the producing o_proj / MoE down stream op runs the boundary's fabric sender
 # (fused_decode/boundary.py DecodeBoundary.sending_program); the boundary op then only waits, adds and normalizes.

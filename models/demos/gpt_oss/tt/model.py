@@ -1333,6 +1333,12 @@ class Model:
 
     def read_output_decode(self, tt_out, sample_rows, blocking=True):
         """Read a prepared slot range without compiling or allocating device buffers."""
+        if self.decode_terminal is not None and self.decode_terminal.is_folded(tt_out):
+            # Folded logits of the fused decode terminal path hold one user (row 0) spread over all 32 rows, so
+            # there is no per-user row to select: read the whole tensor; process_output_decode unfolds it.
+            if list(sample_rows) != [0]:
+                raise ValueError(f"Fused decode serves one user (row 0); got sample rows {sample_rows}")
+            return tt_out.cpu(blocking=blocking, cq_id=0)
         return self._host_readback.read(tt_out, sample_rows, blocking=blocking)
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False, sample_rows=None):
@@ -1353,6 +1359,8 @@ class Model:
             self.decode_terminal.width,
         ]:
             # Folded logits of the fused decode terminal path (one user).
+            if sample_rows is not None and list(sample_rows) != [0]:
+                raise ValueError(f"Fused decode serves one user (row 0); got sample rows {sample_rows}")
             device_tensors = ttnn.get_device_tensors(tt_out)[: self.decode_terminal.tp]
             logits = self.decode_terminal.unfold_host([ttnn.to_torch(t) for t in device_tensors])
             return logits.reshape(1, S, -1)[:B]

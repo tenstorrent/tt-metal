@@ -143,7 +143,7 @@ class DecodeBoundary:
         }
         if ccl == "ttnn":
             # ttnn.experimental.all_reduce_async on the flat partial (elementwise, so layout-agnostic): one persistent
-            # scratch + semaphore per site, ring, 1 link (a 1-core payload; see the optimized-decoder stage).
+            # scratch + semaphore per site, ring, 1 link (a 1-core payload).
             scratch_config = flat_memory_config(mesh_device, hidden, self.ring * self.tiles)
             self.ar_sites = {
                 name: (
