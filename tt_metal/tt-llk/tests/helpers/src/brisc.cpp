@@ -109,7 +109,8 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a1, %[tend]\n\t"
         "li    t5, %[flush_cmd]\n\t"
         "li    s4, %[release]\n"
-        "1:\n\t" // arrive
+        "li    s5, 0\n" // park count: park 2 is the INIT entry park
+        "1:\n\t"        // arrive
         "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
@@ -138,6 +139,9 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "li    a3, 1024\n" // 64 L1 reads from address 0 (a4 = 0): every bank arbiter last granted BRISC
         "10:\n\t"
         "lw    a2, 0(a4)\n\tandi  a2, a2, 0\n\taddi  a4, a4, 16\n\tbne   a4, a3, 10b\n\t"
+        // the INIT entry park takes its own copy of the rest (40:), which releases the three INITs one after another so
+        // each INIT zone runs alone; every other park keeps this path unchanged (TILE_LOOP sees the same release)
+        "addi  s5, s5, 1\n\tli    a4, 2\n\tbeq   s5, a4, 40f\n\t"
         "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n\t" // TRISC 0-2 icaches
         "li    a4, 64\n"
         "11:\n\t"
@@ -162,6 +166,41 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
         "15:\n\t"
         "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
         "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "j     1b\n"
+        "40:\n\t" // INIT entry park: as above, then unpack, math and pack released %[stagger] spins apart
+        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n"
+        "41:\n\t"
+        "li    a4, 64\n"
+        "42:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 42b\n\t"
+        "lui   a3, %%hi(%[tstep])\n\t"
+        "addi  s3, a5, %[cntl1]\n"
+        "43:\n\t"
+        "sw    t5, 0(s3)\n\t"
+        "or    a4, a3, t3\n\t"
+        "sw    a4, %[cntl0](a5)\n\t"
+        "or    a2, a3, t4\n"
+        "44:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 44b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "45:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 45b\n\t"
+        "add   a3, a3, a0\n\tbne   a3, a1, 43b\n\t"
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "li    a4, 512\n"
+        "46:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 46b\n\t"
+        "sw    zero, 0(t1)\n\t"
+        "li    a4, %[stagger]\n"
+        "47:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 47b\n\t"
+        "sw    zero, 0(a7)\n\t"
+        "li    a4, %[stagger]\n"
+        "48:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 48b\n\t"
+        "sw    zero, 0(a6)\n\t"
         "j     1b\n"
         "9:\n\t" // TRISC 0 is done: done if all are, else serve
         "lw    a4, %[scratch](s2)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
@@ -190,8 +229,9 @@ __attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) 
           [req_wr_cmd] "i"(REQ | WR | REG_COMMAND),
           [flush_cmd] "i"(COMMAND_FLUSH | COMMAND_CONTINUE),
           [icinv] "i"(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32),
-          [release] "i"(RELEASE_ALL)
-        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "memory");
+          [release] "i"(RELEASE_ALL),
+          [stagger] "i"(1500)
+        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "s5", "memory");
 }
 } // namespace dbg_barrier
 #endif

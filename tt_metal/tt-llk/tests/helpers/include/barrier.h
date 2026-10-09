@@ -125,6 +125,24 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 constexpr int PARK_SIZED = 0;
 constexpr int PARK_LOOP  = 1;
 constexpr int PARK_PLAIN = 2;
+// INIT entry park of the INIT measurement build (LLK_PERF_INIT_ONLY): reads INIT's start time right after the release.
+constexpr int PARK_INIT_TS = 4;
+
+// The other parks of the INIT measurement build end before any INIT starts or after all have ended: no fill needed.
+constexpr int park_mode(int mode)
+{
+#if defined(LLK_PERF_INIT_ONLY)
+    return mode == PARK_INIT_TS ? mode : PARK_PLAIN;
+#else
+    return mode;
+#endif
+}
+#if defined(LLK_PERF_INIT_ONLY)
+inline std::uint32_t init_start_ts[2] = {0, 0};
+#define LLK_INIT_TS_SYM_ (&llk_barrier::init_start_ts[0])
+#else
+#define LLK_INIT_TS_SYM_ 0
+#endif
 
 #if defined(LLK_DBG_BARRIER) // Wormhole perf builds: BRISC restarts every thread from a flushed pipeline
 namespace detail
@@ -137,6 +155,58 @@ __attribute__((always_inline)) inline void park()
 {
     volatile std::uint32_t* reset_pc = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE) + TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID;
     std::uint32_t scratch;
+#if defined(LLK_PERF_INIT_ONLY)
+    if constexpr (MODE == PARK_INIT_TS)
+    {
+        std::uint32_t lo, hi;
+        asm volatile(
+            "la    %[s], 1f\n\t"
+            "sw    %[s], 0(%[rpc])\n\t"
+            "lw    %[s], 0(%[rpc])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            ".word 0x00100073\n\t"
+            ".rept 16\n\t"
+            ".word 0x00000013\n\t"
+            ".endr\n"
+            ".balign 512\n"
+            "1:\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lui   %[s], 0xffb12\n\t" // wall clock (RISCV_DEBUG_REG_WALL_CLOCK_L / _H)
+            "lw    %[lo], 0x1f0(%[s])\n\t"
+            "lw    %[hi], 0x1f8(%[s])\n\t"
+            "lui   %[s], %%hi(%[ts])\n\t"
+            "sw    %[lo], %%lo(%[ts])(%[s])\n\t"
+            "sw    %[hi], %%lo(%[ts] + 4)(%[s])\n\t"
+            : [s] "=&r"(scratch), [lo] "=&r"(lo), [hi] "=&r"(hi)
+            : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [ts] "i"(LLK_INIT_TS_SYM_)
+            : "memory");
+        return;
+    }
+    if constexpr (park_mode(MODE) == PARK_PLAIN)
+    {
+        asm volatile(
+            "la    %[s], 1f\n\t"
+            "sw    %[s], 0(%[rpc])\n\t"
+            "lw    %[s], 0(%[rpc])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            ".word 0x00100073\n\t"
+            ".rept 16\n\t"
+            ".word 0x00000013\n\t"
+            ".endr\n"
+            "1:\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            : [s] "=&r"(scratch)
+            : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base)
+            : "memory");
+        return;
+    }
+#endif
     asm volatile(
         "la    %[s], 1f\n\t"
         "sw    %[s], 0(%[rpc])\n\t"
@@ -166,7 +236,7 @@ __attribute__((always_inline)) inline void park()
 // The park body is an assembler macro, so the compiler sees a one line asm: its size estimate for the branches around
 // the park stays as without the barrier (it decides short or long branches from those estimates).
 asm(R"ASM(
-.macro llk_park mode, pcb, rpc, size
+.macro llk_park mode, pcb, rpc, size, ts
 .option push
 .option norelax
 2:
@@ -205,6 +275,24 @@ asm(R"ASM(
     lw    t1, 4(sp)
     addi  sp, sp, 16
 .else
+.if \mode == 4
+.option pop
+    .balign \size
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    sw    t2, 8(sp)
+    lui   t2, 0xffb12
+    lw    t0, 0x1f0(t2)
+    lw    t1, 0x1f8(t2)
+    lui   t2, %hi(\ts)
+    sw    t0, %lo(\ts)(t2)
+    sw    t1, %lo(\ts + 4)(t2)
+    lw    t2, 8(sp)
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.else
 .if \mode == 0
     .rept (\size - 20 - (. - 2b)) / 4
     nop
@@ -218,6 +306,7 @@ asm(R"ASM(
     addi  sp, sp, 16
 .option pop
 .endif
+.endif
 .endm
 )ASM");
 
@@ -226,9 +315,10 @@ asm(R"ASM(
 template <int MODE = PARK_SIZED>
 __attribute__((always_inline)) inline void park()
 {
-    asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size]"
+    asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size], %[ts]"
                  :
-                 : [mode] "i"(MODE),
+                 : [mode] "i"(park_mode(MODE)),
+                   [ts] "i"(LLK_INIT_TS_SYM_),
                    [size] "i"(THREAD_ID == 1 ? 512 : 1024), // math: BP hash and its 256 B icache repeat every 512 B
                    [pcb] "i"(PC_BUF_BASE),
                    [rpc] "i"(TENSIX_CFG_BASE + 4 * (TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID))
