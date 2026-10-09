@@ -12,6 +12,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 import torch
+from accuracy.baseline import ARCH_ABBR
 from helpers.accuracy_metrics import compute_pointwise_metrics
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -80,7 +81,7 @@ OUTPUT_COLUMNS: List[str] = [
     "is_finite_golden",
 ]
 
-_ARCH_ABBR = {"wormhole": "wh", "blackhole": "bh", "quasar": "qsr"}
+_ARCH_ABBR = ARCH_ABBR
 _FMT_ABBR = {
     "Float32": "fp32",
     "Float16": "fp16",
