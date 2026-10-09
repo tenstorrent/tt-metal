@@ -289,6 +289,9 @@ class MultichipDecoder(OptimizedDecoder):
         # 2 fabric buffers per channel for that all_gather: 24.0 -> 22.3 us per 1-row decode all-reduce on p150x4
         nb = int(os.environ.get("TT_LAGUNA_AG_BUFFERS", "2"))
         self._ag_kw = {"num_buffers_per_channel": nb} if nb > 0 else {}
+        # batch-1 decode: all-reduce only row 0 of the partials, fused with the residual add (allreduce_rows.py)
+        self._ar_rows = _parse_binary_env("TT_LAGUNA_AR_ROWS", True)
+        self._defer_reduce = False
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
         # batched decode (2..32 tokens) router: per-token rank<K as well, instead of the 1-core top-k chain
@@ -424,7 +427,7 @@ class MultichipDecoder(OptimizedDecoder):
         residual, so the path is byte-identical to the BF16 baseline). A lower CCL
         dtype casts the partial before the collective and casts the reduced result back to
         BF16 for the residual add — swept as a yes/no switch in the datatype sweep."""
-        if self.D == 1:
+        if self.D == 1 or self._defer_reduce:  # deferred: the caller all-reduces the partial (_reduce_rows_add)
             return x
         if getattr(self, "_sp_active", False):
             # sequence-parallel prefill (see prefill_forward): reduce and keep this chip's rows only
@@ -462,6 +465,45 @@ class MultichipDecoder(OptimizedDecoder):
         xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
         out = ttnn.all_reduce(xin, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
         return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
+
+    def _rows_ok(self, B, partial, residual):
+        """allreduce_rows applies: batch-1 decode on a mesh, bf16 TILE partial and residual, bf16 collective."""
+        return (
+            self._ar_rows
+            and self.D > 1
+            and B == 1
+            and getattr(self.policy, "ccl", ttnn.bfloat16) == ttnn.bfloat16
+            and partial.dtype == ttnn.bfloat16
+            and residual.dtype == ttnn.bfloat16
+            and partial.layout == ttnn.TILE_LAYOUT
+            and residual.layout == ttnn.TILE_LAYOUT
+        )
+
+    def _reduce_rows_add(self, partial, residual, memory_config):
+        """residual + all-reduce(partial) for a batch-1 decode partial: row 0 packed to a 6 KB row-major row, gathered,
+        summed with the residual's row 0 in fp32 (allreduce_rows.py). 13.4 vs 25.2 us for tile all_gather +
+        fast_reduce + add on the p150x4 ring."""
+        from .allreduce_rows import pack_row0, sum_rows_add
+
+        if os.environ.get("TT_LAGUNA_AR_ROWS_DEBUG") == "1":
+            for nm, t in (("partial", partial), ("residual", residual)):
+                print(f"[ar_rows] {nm} shape={t.shape} padded={t.padded_shape} dtype={t.dtype} tile={t.tile} "
+                      f"mem={t.memory_config()}", flush=True)
+            print(f"[ar_rows] out mem={memory_config}", flush=True)
+        row = pack_row0(partial)
+        gathered = ttnn.all_gather(
+            row,
+            dim=1,
+            cluster_axis=self.tp_axis,
+            topology=self.ccl_topology,
+            num_links=self.num_links,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            **self._ag_kw,
+        )
+        ttnn.deallocate(row)
+        out = sum_rows_add(gathered, residual, memory_config)
+        ttnn.deallocate(gathered)
+        return out
 
     # ---- construction ------------------------------------------------------ #
     @classmethod
@@ -1905,21 +1947,34 @@ class MultichipDecoder(OptimizedDecoder):
     def _decode_tail(self, o, residual, B, next_norm_cores):
         """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""
         cfg = self.cfg
-        if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
-            o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
-        o = self._reduce(o)  # row-parallel partial -> replicated
-        # the post-attention residual add writes straight into the width-sharded layout the post-attention
-        # norm reads, so its interleaved->sharded is a no-op
         res_cores = _decode_shard_cores(cfg.hidden, cfg.hidden) if self._sharded_residual and B <= TILE else None
         res_mem = _width_sharded_l1(TILE, cfg.hidden, res_cores) if res_cores else None
-        h = ttnn.add(residual, o, memory_config=res_mem)
+        rows = self._rows_ok(B, o, residual)
+        if rows:
+            h = self._reduce_rows_add(o, residual, res_mem)
+        else:
+            if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
+                o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
+            o = self._reduce(o)  # row-parallel partial -> replicated
+            # the post-attention residual add writes straight into the width-sharded layout the post-attention
+            # norm reads, so its interleaved->sharded is a no-op
+            h = ttnn.add(residual, o, memory_config=res_mem)
         ln2 = self._rms(h, self.w["post_ln"], cores=res_cores)
-        mlp_out = self._mlp(ln2, B, sharded=True)
         # the layer output goes straight into the NEXT layer's input-norm layout when that is h's own shard
         # spec (a sharded add whose output spec differs from its sharded input's gave PCC 0)
         out_mem = ttnn.DRAM_MEMORY_CONFIG if res_mem else None
         if res_mem is not None and next_norm_cores == res_cores:
             out_mem = res_mem
+        if rows:
+            self._defer_reduce = True  # the MLP returns its row-parallel partial
+            try:
+                partial = self._mlp(ln2, B, sharded=True)
+            finally:
+                self._defer_reduce = False
+            if self._rows_ok(B, partial, h):
+                return self._reduce_rows_add(partial, h, out_mem)
+            return ttnn.add(h, self._reduce(partial), memory_config=out_mem)
+        mlp_out = self._mlp(ln2, B, sharded=True)
         return ttnn.add(h, mlp_out, memory_config=out_mem)
 
     def _per_head_norm_decode(self, x, weight):
