@@ -25,11 +25,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 }
@@ -39,7 +39,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu_exp.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/experimental/ckernel_sfpu_gated_reduce.h"
+
+#define TRISC_MATH
+#include "experimental/llk_sfpu/ckernel_sfpu_gated_reduce.h"
+#undef TRISC_MATH
 
 using namespace ckernel;
 
@@ -50,11 +53,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
     constexpr int iterations   = GATED_REDUCE_ROWS <= 4 ? 2 : GATED_REDUCE_ROWS <= 8 ? 4 : 8;
     constexpr auto vector_mode = GATED_REDUCE_ROWS <= 16 ? VectorMode::R : VectorMode::RC;
+    constexpr auto gated_reduce = sfpu::calculate_gated_reduce<
+        GATED_REDUCE_GATE,
+        GATED_REDUCE_UP,
+        GATED_REDUCE_GATE_SCALE,
+        GATED_REDUCE_UP_SCALE,
+        GATED_REDUCE_OUT_SCALE,
+        is_fp32_dest_acc_en,
+        iterations>;
     for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
@@ -67,25 +78,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Approximate exp overwrites LREG12 (vConstFloatPrgm0). Reinitializing
             // sigmoid must restore the 2.0 constant used by its reciprocal.
-            sfpu::exp_init<true, 0x3f800000 /* scale = 1.0f */, true, is_fp32_dest_acc_en>();
+            sfpu::exp_init<true /*APPROXIMATION_MODE*/, 0x3f800000 /*scale*/, true /*CLAMP_NEGATIVE*/, is_fp32_dest_acc_en>();
         }
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::silu>();
-        sfpu::sigmoid_init<false>();
+        sfpu::sigmoid_init<false /*APPROXIMATION_MODE*/>();
+        // Swap the scales in the last block to exercise their independent runtime arguments.
         const auto block     = base / block_tiles;
         const auto scale     = block == 2 ? params.GATED_OUT_SCALE_BITS : params.GATED_SCALE_BITS;
         const auto out_scale = block == 2 ? params.GATED_SCALE_BITS : params.GATED_OUT_SCALE_BITS;
         // First block has two experts; next has guards on both sides; last is a partial batch.
-        for (std::uint32_t gate = block == 0 ? 0 : block; gate + 1 < block_tiles; gate += 2)
+        for (std::uint32_t gate = block; gate + 1 < block_tiles; gate += 2)
         {
-            _llk_math_eltwise_unary_sfpu_params_(
-                sfpu::calculate_gated_reduce < GATED_REDUCE_GATE,
-                GATED_REDUCE_UP,
-                (GATED_REDUCE_SCALE_FLAGS & 1) != 0,
-                (GATED_REDUCE_SCALE_FLAGS & 2) != 0,
-                (GATED_REDUCE_SCALE_FLAGS & 4) != 0,
-                is_fp32_dest_acc_en,
-                iterations >
-                , gate, vector_mode, scale, out_scale, params.GATED_LIMIT_BITS, params.GATED_ALPHA_BITS);
+            _llk_math_eltwise_unary_sfpu_params_(gated_reduce, gate, vector_mode, scale, out_scale, params.GATED_LIMIT_BITS, params.GATED_ALPHA_BITS);
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
@@ -102,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /*zero_output*/>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
     for (std::uint32_t base = 0; base < params.TILE_CNT; base += block_tiles)
     {

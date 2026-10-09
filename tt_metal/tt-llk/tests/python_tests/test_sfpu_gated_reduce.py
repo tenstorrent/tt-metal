@@ -10,11 +10,17 @@ an approximate-exp initializer overwrites its reciprocal constant.
 
 import struct
 
+import pytest
 import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import GatedReduceGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    GatedReduceScale,
+    format_dict,
+)
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -115,37 +121,50 @@ def _run(
     ), "Up/guard tiles or inactive gate rows were modified"
     # Elementwise comparisons catch one-sided clamp mistakes even on near-zero
     # negative gates; PCC alone would hide these behind the large positive outputs.
-    rtol, atol = (0.012, 2e-5) if dest_acc == DestAccumulation.No else (2e-4, 2e-6)
+    if dest_acc == DestAccumulation.No:
+        rtol, atol = 0.012, 2e-5
+    elif formats.output_format == DataFormat.Float16_b:
+        # FP32 sigmoid differences near a BF16 midpoint can change the packed result by one ulp.
+        rtol, atol = 0.008, 2e-6
+    else:
+        rtol, atol = 2e-4, 2e-6
     torch.testing.assert_close(actual[active], expected[active], rtol=rtol, atol=atol)
     if rounding:
         torch.testing.assert_close(actual[active], expected[active], rtol=0, atol=0)
 
 
 @parametrize(
-    formats=[BF16],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     gate=["Silu", "ClampedSilu"],
     up=["Identity", "Clamp"],
-    flags=list(range(8)),
+    flags=[GatedReduceScale(flags) for flags in range(GatedReduceScale.All + 1)],
 )
-def test_gated_reduce_modes(formats, dest_acc, gate, up, flags):
-    _run(formats, dest_acc, gate, up, flags)
+def test_gated_reduce_modes(dest_acc, gate, up, flags):
+    _run(BF16, dest_acc, gate, up, flags)
 
 
 @parametrize(
-    formats=[BF16_TO_FP32],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     rows=[4, 8, 16, 32],
     sync=[DestSync.Half, DestSync.Full],
 )
-def test_gated_reduce_geometry(formats, dest_acc, rows, sync):
-    _run(formats, dest_acc, "ClampedSilu", "Clamp", 7, rows, sync)
+def test_gated_reduce_geometry(dest_acc, rows, sync):
+    _run(
+        BF16_TO_FP32, dest_acc, "ClampedSilu", "Clamp", GatedReduceScale.All, rows, sync
+    )
 
 
-@parametrize(formats=[FP32], gate=["Silu", "ClampedSilu"])
-def test_gated_reduce_fp32_input(formats, gate):
-    _run(formats, DestAccumulation.Yes, gate, "Clamp", 7)
+@pytest.mark.parametrize("gate", ["Silu", "ClampedSilu"])
+def test_gated_reduce_fp32_input(gate):
+    _run(FP32, DestAccumulation.Yes, gate, "Clamp", GatedReduceScale.All)
 
 
 def test_gated_reduce_round_once():
-    _run(BF16, DestAccumulation.No, "Silu", "Identity", 7, rounding=True)
+    _run(
+        BF16,
+        DestAccumulation.No,
+        "Silu",
+        "Identity",
+        GatedReduceScale.All,
+        rounding=True,
+    )

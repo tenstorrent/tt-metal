@@ -23,6 +23,7 @@ from .llk_params import (
     EltwiseBinaryReuseDestType,
     FastMode,
     FusedSort,
+    GatedReduceScale,
     ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
@@ -2179,14 +2180,16 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 class GATED_REDUCE_PARAMS(TemplateParameter):
     gate: str
     up: str
-    scale_flags: int
+    scale_flags: GatedReduceScale
     live_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define GATED_REDUCE_GATE ckernel::sfpu::GatedReduceGate::{self.gate}\n"
             f"#define GATED_REDUCE_UP ckernel::sfpu::GatedReduceUp::{self.up}\n"
-            f"constexpr int GATED_REDUCE_SCALE_FLAGS = {self.scale_flags};\n"
+            f"constexpr bool GATED_REDUCE_GATE_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Gate)).lower()};\n"
+            f"constexpr bool GATED_REDUCE_UP_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Up)).lower()};\n"
+            f"constexpr bool GATED_REDUCE_OUT_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Out)).lower()};\n"
             f"constexpr int GATED_REDUCE_ROWS = {self.live_rows};"
         )
 

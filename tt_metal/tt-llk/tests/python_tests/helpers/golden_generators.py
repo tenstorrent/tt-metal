@@ -14,6 +14,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
+    GatedReduceScale,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -5969,9 +5970,9 @@ class GatedReduceGolden:
     ):
         gate = gate.float()
         up = up.float()
-        if scale_flags & 1:
+        if scale_flags & GatedReduceScale.Gate:
             gate = gate * scale
-        if scale_flags & 2:
+        if scale_flags & GatedReduceScale.Up:
             up = up * scale
         if gate_mode == "ClampedSilu":
             gate = gate.clamp(max=limit)
@@ -5981,7 +5982,7 @@ class GatedReduceGolden:
         if up_mode == "Clamp":
             up = up.clamp(-limit, limit)
         result = activated * up
-        if scale_flags & 4:
+        if scale_flags & GatedReduceScale.Out:
             result = result * out_scale
         return round_to_dest_width(result, dest_acc)
 

@@ -32,7 +32,7 @@ enum class GatedReduceUp : std::uint32_t
 } // namespace sfpu
 } // namespace ckernel
 
-#if defined(TRISC_PACK) || defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(LLK_TRISC_PACK)
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
 #include "ckernel_sfpu_sigmoid.h"
 
 namespace ckernel
@@ -43,11 +43,24 @@ namespace sfpu
 /**
  * @brief Fuse scaling, gate/up activation and multiplication of adjacent DEST tiles.
  *
+ * @tparam GATE: Gate activation, values = <Silu/ClampedSilu>.
+ * @tparam UP: Up activation, values = <Identity/Clamp>.
+ * @tparam GATE_SCALE: Multiply gate by scale_bits before its activation.
+ * @tparam UP_SCALE: Multiply up by the same scale_bits before its activation.
+ * @tparam OUT_SCALE: Multiply the gate/up product by out_scale_bits.
+ * @tparam is_fp32_dest_acc_en: Match the configured DEST precision; false rounds the result to BF16.
+ * @tparam ITERATIONS: SFPU loop iterations per face when invoked through unary SFPU dispatch.
+ * @param scale_bits: FP32 bits of the shared gate/up input scale; ignored for each disabled scale flag.
+ * @param out_scale_bits: FP32 bits of the output scale; ignored when OUT_SCALE is false.
+ * @param limit_bits: FP32 bits of the shared upper gate clamp and symmetric up clamp limit.
+ * @param alpha_bits: FP32 bits of the sigmoid input multiplier for ClampedSilu; ignored for Silu.
  * @note Initialize the shared unary SFPU state and call sigmoid_init<false>() first.
  *       Point the SFPU base at the gate slot; the following Tile32x32 slot contains up.
  *       Only the gate slot is written. Keep both slots in the acquired DEST section.
- *       Scalar arguments are FP32 bit patterns; ClampedSilu reads limit and alpha,
- *       Clamp reads limit. Disabled scale arguments are ignored.
+ *       With unary dispatch, use 8 iterations and VectorMode::RC for a full tile,
+ *       or 2/4/8 iterations and VectorMode::R for 4/8/16 active rows respectively.
+ *       Keep the traversal within the gate/up pair. ClampedSilu reads limit_bits
+ *       and alpha_bits; Clamp reads limit_bits.
  */
 template <GatedReduceGate GATE, GatedReduceUp UP, bool GATE_SCALE, bool UP_SCALE, bool OUT_SCALE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_gated_reduce(std::uint32_t scale_bits, std::uint32_t out_scale_bits, std::uint32_t limit_bits, std::uint32_t alpha_bits)
