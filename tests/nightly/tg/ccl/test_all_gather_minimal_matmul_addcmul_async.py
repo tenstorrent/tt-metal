@@ -69,8 +69,10 @@ def test_all_gather_minimal_matmul_addcmul(
 def _assert_addcmul_quality(mesh_device, check_result):
     for c in range(1):
         for i in range(mesh_device.get_num_devices()):
-            assert check_result[0][c][i]["pcc"] > 0.999_500
-            assert check_result[0][c][i]["relative_rmse"] < 0.02
+            pcc = check_result[0][c][i]["pcc"]
+            relative_rmse = check_result[0][c][i]["relative_rmse"]
+            assert pcc > 0.999_500, f"device {i}, chunk {c}: expected PCC > 0.999500, got {pcc}"
+            assert relative_rmse < 0.02, f"device {i}, chunk {c}: expected relative RMSE < 0.02, got {relative_rmse}"
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
