@@ -1848,7 +1848,12 @@ class LagunaForCausalLM:
         st = self._prefill_state() if device_sampling else None
         last_logits = []
         sampled = []
+        packed = self._prefill_packed(tokens, ranges, plans, page_table, page_tables_per_layer, kv_cache,
+                                      sampling_params, st)
         for u, ((request_start, _request_end, _request_len), plan) in enumerate(zip(ranges, plans)):
+            if u in packed:
+                (sampled if device_sampling else last_logits).append(packed[u])
+                continue
             final_hidden = None
             final_real_len = None
             final_bucket_len = None
@@ -1942,6 +1947,83 @@ class LagunaForCausalLM:
             toks = torch.tensor(sampled, dtype=torch.int64).reshape(batch, 1)
             return toks, None
         return torch.stack(last_logits, dim=0)  # [num_reqs, 1, vocab]
+
+    _PACKED_PREFILL = os.environ.get("TT_LAGUNA_PACKED_PREFILL", "0") == "1"
+
+    def _packed_prefill_groups(self, ranges, plans):
+        """Cold single-chunk requests with the same power-of-two bucket L <= PIPE_CHUNK, packed n at a time
+        (n a power of two, n * L a warmed bucket <= 8192) in request order. Returns [(users, L)]."""
+        if not self._PACKED_PREFILL or self._DFLASH_SERVING_ENABLED or bool(self._PREFIX_CACHE_ENABLED):
+            return []
+        if self._spec_mode == "1" or int(getattr(self, "D", 0)) != 4:
+            return []
+        buckets = set(self._prefill_bucket_lens())
+        pipe = int(self.model.layers[0].PIPE_CHUNK)
+        by_len = {}
+        for u, ((start, _end, _len), plan) in enumerate(zip(ranges, plans)):
+            if start != 0 or len(plan) != 1 or int(plan[0].relative_start) != 0:
+                continue
+            L = int(plan[0].bucket_len)
+            if L > pipe or L & (L - 1):
+                continue
+            by_len.setdefault(L, []).append(u)
+        groups = []
+        for L, users in by_len.items():
+            i = 0
+            while len(users) - i >= 2:
+                n = 1
+                while n * 2 <= len(users) - i and n * 2 * L <= 8192 and n * 2 * L in buckets:
+                    n *= 2
+                if n < 2:
+                    break
+                groups.append((users[i : i + n], L))
+                i += n
+        return groups
+
+    def _prefill_packed(self, tokens, ranges, plans, page_table, page_tables_per_layer, kv_cache, sampling_params, st):
+        """Run the packable cold requests (see _packed_prefill_groups) through one packed forward per group.
+        Returns {request index: sampled token (device sampling) or [1, vocab] host logits}."""
+        out = {}
+        for users, L in self._packed_prefill_groups(ranges, plans):
+            n = len(users)
+            T = n * L
+            row_table = None
+            if page_table is not None:
+                full = torch.as_tensor(page_table, dtype=torch.int32)
+                full = full.reshape(-1, full.shape[-1])
+                row_table = full[users]
+            row_tables = None
+            if page_tables_per_layer is not None:
+                row_tables = []
+                for t in page_tables_per_layer:
+                    t = torch.as_tensor(t, dtype=torch.int32)
+                    row_tables.append(t.reshape(-1, t.shape[-1])[users])
+            _pt, fill_pt = self._prepare_prefill_page_tables(
+                row_table,
+                row_tables,
+                kv_cache,
+                [ranges[u] for u in users],
+                [L] * n,
+                operation=f"packed prefill of {n} x {L}",
+            )
+            ids = torch.zeros(T, dtype=torch.int64)
+            for j, u in enumerate(users):
+                start, end, length = ranges[u]
+                ids[j * L : j * L + length] = torch.as_tensor(tokens[u, start:end])
+            x = self.model.embed_prefill(self.gen._tokens_to_device(ids))
+            h = self.model.prefill_layers_packed(x, kv_cache, fill_pt, L, n)
+            for j, u in enumerate(users):
+                shards = self._last_token_shards(h, j * L + int(ranges[u][2]), T)
+                if st is not None:
+                    self._refresh_prefill_sampling(st, sampling_params, u)
+                    st["sampler"].decode_forward(
+                        shards, k=st["k"], p=st["p"], temp=st["t"], seeds=st["seeds"], tt_out_tok=st["tok"]
+                    )
+                    out[u] = self.gen._read_token(st["tok"], 1)[0]
+                else:
+                    out[u] = self.model.logits_to_host(shards).reshape(1, self.vocab)
+            self.gen.counters["packed_prefill_users"] = self.gen.counters.get("packed_prefill_users", 0) + n
+        return out
 
     def _row_logits(self, h, row, L, st):
         """LM-head over a single row of the ON-DEVICE prefill hidden ``h`` ([1,L,H], replicated),
@@ -3443,6 +3525,37 @@ class LagunaForCausalLM:
                     start_pos=[start],
                     sampling_params=greedy,
                 )
+        # Packed cold prefill (TT_LAGUNA_PACKED_PREFILL): compile every (L, n) a serving step can pack before the
+        # decode trace exists -- n dummy L-token prompts in one prefill_forward call take the packed path.
+        if self._PACKED_PREFILL:
+            pipe = int(self.model.layers[0].PIPE_CHUNK)
+            buckets = set(self._prefill_bucket_lens())
+            for L in sorted(b for b in buckets if b <= pipe and not b & (b - 1)):
+                n = 2
+                while n <= int(self.max_batch_size) and n * L <= 8192 and n * L in buckets:
+                    nb = (L + bs - 1) // bs
+                    if n * nb > total_blocks:
+                        break
+                    dummy = torch.zeros((n, L), dtype=torch.int64)
+                    greedy_n = None
+                    if greedy is not None:
+                        from types import SimpleNamespace
+
+                        greedy_n = SimpleNamespace(temperature=[0.0] * n, top_k=[0] * n, top_p=[1.0] * n, seed=[None] * n)
+                    rows = torch.zeros((n, prefill_w), dtype=torch.int32)
+                    for j in range(n):
+                        rows[j, :nb] = torch.arange(j * nb, (j + 1) * nb, dtype=torch.int32)
+                    if hybrid:
+                        ptl = []
+                        for kv in kv_cache:
+                            pool = int(kv["blocks_per_user"])
+                            ptl.append(torch.where(rows < pool, rows, torch.zeros_like(rows)))
+                        self.prefill_forward(dummy, page_tables_per_layer=ptl, kv_cache=kv_cache,
+                                             prompt_lens=[L] * n, start_pos=[0] * n, sampling_params=greedy_n)
+                    else:
+                        self.prefill_forward(dummy, page_table=rows, kv_cache=kv_cache,
+                                             prompt_lens=[L] * n, start_pos=[0] * n, sampling_params=greedy_n)
+                    n *= 2
         # W1 fix — warm the serving ROW-COUNT dimension of the prefill page table. Serving batches up to
         # ``max_num_seqs`` new requests into ONE prefill call (page_table ``[num_reqs, prefill_w]``), and
         # Both attention/fill persistent helpers are SHAPE-KEYED — an unseen

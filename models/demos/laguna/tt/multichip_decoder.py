@@ -1383,6 +1383,37 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, seq, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
+    def prefill_forward_packed(self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats):
+        """Cold prefill of ``num_segs`` users packed along the sequence: x is [1, num_segs * seg_len, H], user j in
+        rows [j * seg_len, (j + 1) * seg_len). Everything but attention runs once over all rows (one MoE weight
+        pass for every user); each user's q/k/v slice fills its own row ``j`` of ``fill_page_table`` and runs its
+        own causal SDPA from position 0. ``rope_mats`` holds positions 0..seg_len-1 repeated per user."""
+        cfg = self.cfg
+        T = int(seg_len) * int(num_segs)
+        residual = x_BSH
+        ln = self._rms(x_BSH, self.w["input_ln"])
+        q, k, v = self._qkv_roped(ln, T, 0, rope=rope_mats)
+        cdt = kv_cache["dtype"]
+        outs = []
+        for j in range(int(num_segs)):
+            a, b = j * seg_len, (j + 1) * seg_len
+            qj = ttnn.slice(q, [0, 0, a, 0], [1, cfg.num_heads, b, cfg.head_dim])
+            kj = ttnn.slice(k, [0, 0, a, 0], [1, cfg.num_kv_heads, b, cfg.head_dim])
+            vj = ttnn.slice(v, [0, 0, a, 0], [1, cfg.num_kv_heads, b, cfg.head_dim])
+            ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(kj, cdt), fill_page_table, batch_idx=j)
+            ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(vj, cdt), fill_page_table, batch_idx=j)
+            outs.append(self._prefill_attention(qj, kj, vj, kv_cache, None, j, 0, seg_len))
+        attn = ttnn.concat(outs, dim=2) if len(outs) > 1 else outs[0]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        attn = self._gate(attn, ln)
+        o = ttnn.linear(attn, self.w["wo"], compute_kernel_config=self._ck_o)
+        o = self._reduce(o)
+        h = ttnn.add(residual, o)
+        ln2 = self._rms(h, self.w["post_ln"])
+        mlp_out = ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden))
+        return ttnn.add(h, mlp_out)
+
     def _prefill_pipelined(
         self,
         x_BSH,

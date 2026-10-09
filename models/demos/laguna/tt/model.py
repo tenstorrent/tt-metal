@@ -405,6 +405,28 @@ class LagunaModel:
             )
         return h
 
+    def prefill_layers_packed(self, hidden_1SH, kv_cache, fill_page_table, seg_len, num_segs):
+        """Cold prefill of ``num_segs`` users of ``seg_len`` tokens each, packed along the sequence (see
+        MultichipDecoder.prefill_forward_packed). ``fill_page_table`` has one row per user (or one such table per
+        layer)."""
+        fill_per_layer = isinstance(fill_page_table, (list, tuple))
+        rope_ctx = {}
+        for dec in self.layers:
+            kind = dec.cfg.attention_type
+            if kind in rope_ctx:
+                continue
+            cos = dec._rope_prefill(0, seg_len)
+            sin = dec._rope_prefill(0, seg_len, sin=True)
+            if num_segs > 1:
+                cos = ttnn.concat([cos] * int(num_segs), dim=2)
+                sin = ttnn.concat([sin] * int(num_segs), dim=2)
+            rope_ctx[kind] = (cos, sin)
+        h = hidden_1SH
+        for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
+            fill_pt = fill_page_table[i] if fill_per_layer else fill_page_table
+            h = dec.prefill_forward_packed(h, kv, fill_pt, seg_len, num_segs, rope_ctx[dec.cfg.attention_type])
+        return h
+
     def _validate_dflash_target_capture(self, enable_experimental):
         """Fail closed before the separate DFlash capture path touches a layer."""
 
