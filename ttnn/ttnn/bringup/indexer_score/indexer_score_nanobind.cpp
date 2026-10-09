@@ -106,6 +106,12 @@ void bind_indexer_score(nb::module_& mod) {
                 across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
                 remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
                 Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
+            key_stride: int (default 1; bring-up fork). R keys-per-token pooling: the K sequence is 1/R of the
+                query token sequence, key j pools tokens [R*j, R*j + R) and is visible to query token p iff
+                R*j + R - 1 <= p (pool-causal). T, kv_len, the K rows and the block-cyclic key stripe
+                (block_cyclic_chunk_local / R keys per chip per chunk) are in KEY units; chunk_start_idx, q rows
+                and block_cyclic_chunk_local stay in TOKEN units. R in {1, 2, 4, 8}; 1 = the source behaviour.
+                Query rows that see no key (p < R - 1) are all -inf.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -122,7 +128,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt,
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("key_stride") = 1);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.bringup.">(
         mod,
@@ -279,6 +286,11 @@ void bind_indexer_score(nb::module_& mod) {
                 decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
                 pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
                 that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
+            key_stride: int (default 1; bring-up fork). Pooled keys, see indexer_score_dsa: T, kv_len, k_local
+                and k rows in KEY units, chunk_start_idx / q rows / block_cyclic_chunk_local in TOKEN units (each
+                chip's key stripe per chunk is block_cyclic_chunk_local / key_stride keys). R > 1 supports the
+                host-scalar path only: chunk_start_idx_tensor, valid_end_tensor and cache_batch_idx_tensor must be
+                unset.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -306,7 +318,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("valid_end_tensor") = nb::none(),
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
-        nb::arg("index_cache_layer_idx") = 0);
+        nb::arg("index_cache_layer_idx") = 0,
+        nb::arg("key_stride") = 1);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

@@ -41,10 +41,18 @@ MC = ttnn.DRAM_MEMORY_CONFIG
 # multiply, fidelity honoured): one fused op, no [S/n, kv] fp32 per-head intermediates in DRAM
 SCORE_MODE = os.environ.get("GLM_INDEXER_SCORE", "bringup")
 SCORE_Q_CHUNK = int(os.environ.get("GLM_INDEXER_Q_CHUNK", "64"))
+# GLM_INDEXER_RING=1 (split layout + own-row keys only): the non-flash pattern. The pooled-key cache is striped over
+# the 8 chips, block-cyclic per chunk (chip d holds, for chunk c, pools c*S/4 + d*S/32 .. at its local rows
+# c*S/32 ..): each chip writes the pools of its own rows, no gather and no replicated copy; the score is
+# ttnn.bringup.ring_indexer_score_dsa over the full-mesh snake ring with key_stride 4 (pool-causal mask in the op).
+RING = os.environ.get("GLM_INDEXER_RING", "1") == "1"  # applies only where the model passes ring=True
+RING_LOCAL_ROWS_ALIGN = (
+    2560  # local cache rows: a multiple of every chunk's per-chip stripe (2048/5120/8192 -> 64/160/256)
+)
 
 
 class TtIndexer:
-    def __init__(self, mesh, w: dict, cfg, max_seq: int, chunks):
+    def __init__(self, mesh, w: dict, cfg, max_seq: int, chunks, ring: bool = False):
         self.mesh = mesh
         self.nh, self.hd = cfg.index_n_heads, cfg.index_head_dim
         assert cfg.index_kpool == KP and cfg.index_topk == KP * TOPK_POOLS
@@ -69,7 +77,21 @@ class TtIndexer:
         self.kn_b = replicate(mesh, w["k_norm_b"].float().reshape(1, 1, 1, -1).to(torch.bfloat16))
         self.ape = replicate(mesh, w["ape"].float().reshape(1, 1, 1, KP * self.hd), dtype=ttnn.float32)
         self.cache_rows = max_seq // KP + ttnn.TILE_SIZE
-        self.cache = pooled_key_cache(mesh, cfg, max_seq)
+        self.ring = ring and RING
+        if self.ring:
+            local = -(-max_seq // KP // self.ndev // RING_LOCAL_ROWS_ALIGN) * RING_LOCAL_ROWS_ALIGN
+            self.ring_local_rows = local
+            self.cache = ttnn.zeros(
+                (1, 1, local, self.hd), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=MC
+            )
+            self.stripe = None  # pools per chip per chunk (S/32), fixed by the first chunk of a sequence
+            self._pending = None  # natural-order prefix from load_state, striped once the chunk size is known
+            from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+            self.tt_ccl = get_tt_ccl(mesh)
+            self.ring_links = int(os.environ.get("GLM_INDEXER_RING_LINKS", "1"))
+        else:
+            self.cache = pooled_key_cache(mesh, cfg, max_seq)
         self.consts = {s: self._chunk_consts(s) for s in sorted(set(chunks))}
 
     # ---- load-time constants, one set per chunk size (each chip holds its own S/4 rows)
@@ -163,6 +185,8 @@ class TtIndexer:
         """x (attn_norm) [1, 1, S, H], q_resid [1, 1, S, 1536], both replicated bf16 TILE; start a multiple of 4.
         q_local: q_resid is already this chip's [1, 1, S/4, 1536] rows (the split residual layout).
         Returns this chip's [1, 1, S/4, 2176] uint32 ROW_MAJOR token ids (0xFFFFFFFF = none). Updates the cache."""
+        if self.ring:
+            return self._call_ring(x, q_resid, start, q_local, x_local)
         # x_local: x is this chip's [1, 1, S/n, H] rows (split layout): keys pooled on the chip's own rows (S/n is a
         # whole number of pools), then all-gathered into the replicated cache - no full-row x, no 8x key projections
         s = x.shape[-2] * (self.ndev if x_local else 1)
@@ -230,6 +254,10 @@ class TtIndexer:
         ids = ttnn.experimental.topk_large_indices(ranked, k=TOPK_POOLS)  # [1, 1, S/4, 512] uint32, pool ids
         ttnn.deallocate(ranked)
 
+        return self._ids_to_tokens(ids, c, start)
+
+    def _ids_to_tokens(self, ids, c, start):
+        """Top pool ids [1, 1, S/n, 512] uint32 -> [1, 1, S/n, 2176] token ids (pools x 4 + the tail block)."""
         idf = ttnn.typecast(ttnn.to_layout(ids, ttnn.TILE_LAYOUT), ttnn.float32, memory_config=MC)
         ttnn.deallocate(ids)
         b4 = ttnn.multiply(idf, float(KP), memory_config=MC)
@@ -248,6 +276,102 @@ class TtIndexer:
         orm = ttnn.to_layout(oi, ttnn.ROW_MAJOR_LAYOUT, memory_config=MC)
         ttnn.deallocate(oi)
         return ttnn.bitcast(orm, ttnn.uint32)
+
+    # ---- ring (striped cache) path
+    def _set_stripe(self, stripe: int, start: int) -> None:
+        if start == 0 or self.stripe is None:
+            self.stripe = stripe
+        assert stripe == self.stripe, f"ring indexer: chunk changed mid-sequence (stripe {stripe} vs {self.stripe})"
+        assert self.ring_local_rows % stripe == 0, (self.ring_local_rows, stripe)
+        if self._pending is not None:
+            self._upload_striped(*self._pending)
+            self._pending = None
+
+    def _query_heads(self, q_resid, q_local):
+        qr = q_resid if q_local else self._local_rows(q_resid)
+        q = ttnn.linear(
+            qr,
+            self.wq,
+            dtype=ttnn.bfloat16,
+            program_config=linear_config(qr, self.wq, ttnn.bfloat16),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
+        if qr is not q_resid:
+            ttnn.deallocate(qr)
+        qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
+        )
+        ttnn.deallocate(q)
+        return qh
+
+    def _call_ring(self, x, q_resid, start, q_local, x_local):
+        assert x_local and q_local, "the ring indexer needs the split layout with own-row keys (GLM_DSA_LOCAL=1)"
+        sq = x.shape[-2]
+        s = sq * self.ndev
+        assert start % s == 0, f"chunk start {start} must be a multiple of S={s}"
+        c = self.consts[s]
+        stripe = sq // KP
+        self._set_stripe(stripe, start)
+        kv = (start + s) // KP
+        assert (start // s + 1) * stripe <= self.ring_local_rows, f"chunk end {start + s} past the ring cache"
+        own = self._pooled_keys(x, sq)  # [1, 1, S/32, 128]: the pools of this chip's rows
+        ttnn.fill_cache(self.cache, own, batch_idx=0, update_idx=(start // s) * stripe)
+        ttnn.deallocate(own)
+        qh = self._query_heads(q_resid, q_local)
+        wts = ttnn.linear(
+            x,
+            self.wp,
+            dtype=ttnn.bfloat16,
+            program_config=linear_config(x, self.wp, ttnn.bfloat16),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
+        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=self.cache, sp_axis=None)
+        pc = ttnn.bringup.IndexerScoreProgramConfig(
+            q_chunk_size=min(SCORE_Q_CHUNK, sq), k_chunk_size=32, head_group_size=0
+        )
+        sc = ttnn.bringup.ring_indexer_score_dsa(
+            qh,
+            k_full,
+            wts,
+            self.cache,
+            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=None),
+            cluster_axis=None,
+            topology=ttnn.Topology.Ring,
+            num_links=self.ring_links,
+            chunk_start_idx=start,
+            program_config=pc,
+            compute_kernel_config=self.score_cfg,
+            kv_len=kv,
+            block_cyclic_chunk_local=sq,
+            key_stride=KP,
+        )  # [1, 1, S/8, T] bf16 row-major, pool-causal -inf, columns >= kv unspecified
+        ttnn.deallocate(qh)
+        ttnn.deallocate(wts)
+        ranked = ttnn.slice(sc, (0, 0, 0, 0), (1, 1, sq, kv), memory_config=MC)
+        ttnn.deallocate(sc)
+        ids = ttnn.experimental.topk_large_indices(ranked, k=TOPK_POOLS)
+        ttnn.deallocate(ranked)
+        return self._ids_to_tokens(ids, c, start)
+
+    def _upload_striped(self, pk: torch.Tensor, n: int) -> None:
+        """Natural pooled keys [n, 128] -> each chip's block-cyclic stripe (local row r of chip d holds pool
+        (r // stripe) * n_dev * stripe + d * stripe + r % stripe)."""
+        st, nd, L = self.stripe, self.ndev, self.ring_local_rows
+        nat = torch.zeros(L * nd, self.hd)
+        nat[:n] = pk[:n]
+        dev = nat.reshape(L // st, nd, st, self.hd).permute(1, 0, 2, 3).reshape(nd, 1, L, self.hd)
+        d = ttnn.from_torch(
+            dev.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=MC,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+        ttnn.copy(d, self.cache)
+        ttnn.deallocate(d)
 
     def _scores_op(self, qh, wts, kv):
         """indexer_score_dsa over the whole cache, unmasked below kv -> [1, 1, S/4, kv] bf16 TILE. The op packs each
@@ -307,6 +431,7 @@ class TtIndexer:
     # ---- state at the harness boundary (prefix load / read-back; never inside the forward)
     def bind_cache(self, cache: ttnn.Tensor) -> None:
         """Read and write another pooled-key cache of the same shape (pooled_key_cache; one per serving slot)."""
+        assert not self.ring, "serving slots use the replicated pooled-key cache: run with GLM_INDEXER_RING=0"
         assert tuple(cache.shape) == tuple(self.cache.shape), (cache.shape, self.cache.shape)
         self.cache = cache
 
@@ -314,6 +439,12 @@ class TtIndexer:
         """Pooled keys [n, 128] (reference layout, rows [0, length / 4) valid) -> the device cache."""
         pk = tensors["index_key"].float()
         n = pk.shape[0] if length is None else length // KP
+        if self.ring:  # striped once the chunk size (stripe) is known: the next forward
+            self._pending = (pk, n)
+            if self.stripe is not None:
+                self._upload_striped(pk, n)
+                self._pending = None
+            return
         host = torch.zeros(1, 1, self.cache_rows, self.hd)
         host[0, 0, :n] = pk[:n]
         d = replicate(self.mesh, host.to(torch.bfloat16))
@@ -321,7 +452,19 @@ class TtIndexer:
         ttnn.deallocate(d)
 
     def state_torch(self) -> dict:
-        """The pooled-key cache [max_seq / 4 + 32, 128] (chip 0's copy; replicated)."""
+        """The pooled-key cache [max_seq / 4 + 32, 128] (chip 0's copy; replicated). Ring: the chips' stripes
+        un-striped into natural pool order."""
+        if self.ring:
+            assert self.stripe is not None, "ring indexer state read before any chunk"
+            st, nd, L = self.stripe, self.ndev, self.ring_local_rows
+            dev = torch.stack(
+                [ttnn.to_torch(t).reshape(L, self.hd).float() for t in ttnn.get_device_tensors(self.cache)]
+            )  # [n_dev, L, 128]
+            nat = dev.reshape(nd, L // st, st, self.hd).permute(1, 0, 2, 3).reshape(L * nd, self.hd)
+            rows = self.cache_rows
+            out = torch.zeros(rows, self.hd)
+            out[: min(rows, nat.shape[0])] = nat[:rows]
+            return {"index_key": out}
         return {"index_key": ttnn.to_torch(ttnn.get_device_tensors(self.cache)[0]).reshape(self.cache_rows, -1).float()}
 
 
@@ -336,7 +479,8 @@ def pooled_key_cache(mesh, cfg, max_seq: int) -> ttnn.Tensor:
     )
 
 
-def build_indexer(mesh, loader, cfg, layer: int, max_seq: int, chunks) -> TtIndexer:
+def build_indexer(mesh, loader, cfg, layer: int, max_seq: int, chunks, ring: bool = False) -> TtIndexer:
+    """ring: the striped pooled-key cache + ring score (the model's split layout with own-row keys; GLM_INDEXER_RING)."""
     p = f"{PREFIX}layers.{layer}.self_attn.indexer."
     w = {
         "wk": loader.weight(p + "wk.weight"),
@@ -347,4 +491,4 @@ def build_indexer(mesh, loader, cfg, layer: int, max_seq: int, chunks) -> TtInde
         "k_norm_w": loader.weight(p + "k_norm.weight"),
         "k_norm_b": loader.weight(p + "k_norm.bias"),
     }
-    return TtIndexer(mesh, w, cfg, max_seq, chunks)
+    return TtIndexer(mesh, w, cfg, max_seq, chunks, ring=ring)

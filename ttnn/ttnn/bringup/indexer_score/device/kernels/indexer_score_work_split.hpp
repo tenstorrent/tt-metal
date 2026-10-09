@@ -30,16 +30,37 @@ constexpr uint32_t causal_diag_tile(
     return chunk_start_tiles + q_row_abs + (q_row_abs >= straddle_q_tile ? straddle_jump_tiles : 0);
 }
 
+/** Key stride R (bring-up fork): the causal diagonal in KEY tiles for a q tile row whose first query token
+ *  sits at token position P = token_diag_tile * 32 (causal_diag_tile, always in token units). Query token p
+ *  sees key j iff R*j + R - 1 <= p, i.e. j < floor((p + 1) / R). Row r of the q tile (p = P + r, R | 32) sees
+ *  j < P/R + floor((r + 1) / R): keys < P/R are visible to every row, keys >= P/R + 32/R to none, and the 32/R
+ *  keys in between are a staircase that starts at an offset (P/R) % 32 = pattern * (32/R) inside ONE key tile
+ *  (never crossing a tile edge since pattern * 32/R + 32/R <= 32). So:
+ *    tile    = P / R / 32 = token_diag_tile / R   (key tiles < tile visible, > tile fully masked)
+ *    pattern = token_diag_tile % R                (cb_mask staircase index used on the diagonal key tile)
+ *  R == 1 reduces to {token_diag_tile, 0}: the source diagonal tile and its strict-upper mask. */
+struct KeyDiagonal {
+    uint32_t tile;
+    uint32_t pattern;
+};
+constexpr KeyDiagonal key_diagonal(uint32_t token_diag_tile, uint32_t key_stride) {
+    return {token_diag_tile / key_stride, token_diag_tile % key_stride};
+}
+
 /** Unmasked prefix k-tiles of q-tile-row q_row_abs in a unit (start k_tile_start, k_tiles_in_unit
- *  valid). Tiles [0, this) are below the diagonal (no mask); diagonal and beyond are masked. */
+ *  valid). Tiles [0, this) are below the diagonal (no mask); diagonal and beyond are masked. k tiles are
+ *  KEY tiles; key_stride maps the token diagonal onto them (1 = the source behaviour). */
 constexpr uint32_t valid_prefix_tiles(
     uint32_t q_row_abs,
     uint32_t k_tile_start,
     uint32_t k_tiles_in_unit,
     uint32_t chunk_start_tiles,
     uint32_t straddle_q_tile,
-    uint32_t straddle_jump_tiles) {
-    const uint32_t diag_tile = causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    uint32_t straddle_jump_tiles,
+    uint32_t key_stride = 1) {
+    const uint32_t diag_tile =
+        key_diagonal(causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles), key_stride)
+            .tile;
     const uint32_t v = diag_tile > k_tile_start ? diag_tile - k_tile_start : 0;
     return v < k_tiles_in_unit ? v : k_tiles_in_unit;
 }

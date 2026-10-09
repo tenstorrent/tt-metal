@@ -128,10 +128,17 @@ struct operation_attributes_t {
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // Bring-up fork (glm53_flash_d_p): key stride R. 1 = one key per query token (source behaviour). R > 1 = the
+    // K sequence is 1/R of the query token sequence: key j pools tokens [R*j, R*j + R) and is visible to query
+    // token p iff R*j + R - 1 <= p (pool-causal). Every key-side quantity (T, kv_len, the K cache and gathered
+    // buffer rows, the block-cyclic key stripe) is in KEY units; chunk_start_idx, q rows, block_cyclic.chunk_local
+    // and the causal geometry stay in TOKEN units. HASHED: it sizes cb_mask (R + 1 tiles) and sets a kernel define.
+    uint32_t key_stride{1};
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
+    // In key units: a chunk_local-token stripe holds chunk_local / key_stride keys.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {
-        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / (key_stripe_split * key_stride) : 0;
     }
 };
 

@@ -10,7 +10,9 @@ starts as random garbage, and each chip's scores [Sq, T] are checked against a f
 q / k / gates:
 - every future column (t > the row's position) is -inf and every causal column finite (exact);
 - causal columns: PCC and the relative L2 error, per chip.
-Don't-care: nothing (kv_len = T, so every column of every row is written)."""
+Don't-care: nothing (kv_len = T, so every column of every row is written).
+
+Key-stride (pooled-key, full-mesh) cases run in tests/unit/test_key_stride_ring.py."""
 
 import importlib.util
 from pathlib import Path
@@ -63,8 +65,12 @@ def _pcc(a, b):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
-    [(tuple(c["mesh"]), _device_params(c), c) for c in CASES if c["op"] == "ring_indexer_score_dsa"],
-    ids=[c["id"] for c in CASES if c["op"] == "ring_indexer_score_dsa"],
+    [
+        (tuple(c["mesh"]), _device_params(c), c)
+        for c in CASES
+        if c["op"] == "ring_indexer_score_dsa" and "key_stride" not in c
+    ],
+    ids=[c["id"] for c in CASES if c["op"] == "ring_indexer_score_dsa" and "key_stride" not in c],
     indirect=["mesh_device", "device_params"],
 )
 def test_ring_indexer_score_dsa(mesh_device, device_params, case):

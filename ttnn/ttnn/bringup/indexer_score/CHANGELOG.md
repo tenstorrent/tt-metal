@@ -85,3 +85,34 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2 (keep the fork's bug fixes current)
 - Files: `device/indexer_score_device_operation.cpp`, `device/indexer_score_host_common.hpp`,
   `device/kernels/writer_indexer_score.cpp`, `device/ring_indexer_score_dsa_program_factory.cpp`
+
+### Key stride (pooled keys, pool-causal mask)
+- What: new argument `key_stride: int = 1` (R) on `indexer_score_dsa` and `ring_indexer_score_dsa`. R > 1: the K
+  sequence is 1/R of the query token sequence; key j pools tokens [R*j, R*j + R) and is visible to query token p iff
+  R*j + R - 1 <= p. T, kv_len, the K cache / gathered buffer rows and the block-cyclic key stripe
+  (block_cyclic_chunk_local / R keys per chip per chunk) are in KEY units; chunk_start_idx, q rows,
+  block_cyclic_chunk_local and the causal geometry stay in TOKEN units. The token diagonal of a q tile maps to key
+  tile diag/R with staircase pattern diag%R (`key_diagonal`, kernels/indexer_score_work_split.hpp); the reader
+  builds R staircase tiles + the -inf tile (cb_mask R + 1 tiles; -inf iff col >= pattern*32/R + (row+1)/R), compute
+  stamps them on the diagonal key tile, the invP remap and the ring's gather extent use the key stripe. Validation in
+  key units (chunk_start_idx/R < T and < kv_len; chunk_local % (R*32) == 0; T % (sp*chunk_local/R) == 0), R in
+  {1, 2, 4, 8}, DSA only, host-scalar path only (chunk_start_idx_tensor / valid_end_tensor / cache_batch_idx_tensor
+  rejected with R > 1); an omitted chunk_start_idx deduces R*T - chunk. key_stride is hashed; the kernel define
+  INDEXER_SCORE_KEY_STRIDE is set only for R > 1. Default (1) = the source behaviour: same kernels, defines, compile
+  args and CBs (cb_mask 2 tiles, indices 0 = diagonal, 1 = -inf).
+- Why: GLM-5.3 Flash's DSA indexer scores pooled keys (4 tokens per key) with a pool-level causal mask; the op could
+  only score one key per token, so the model ran it unmasked plus a separate mask op.
+- Tests: tests/unit/test_key_stride.py (single device, R 4 and 2, contiguous K, starts 0/32/96/640/1792 tokens,
+  runtime kv_len, k_chunk 32/64: -inf placement exact, rel L2 0.0018-0.0019 vs float32 at HiFi4 + fp32 DEST);
+  tests/unit/test_key_stride_ring.py (2x4 LoudBox, full-mesh snake ring, R 4, block_cyclic_chunk_local 640, chunk
+  starts 5120 / 10240: every chip pcc 0.9999985, rel 0.00186; metadata path refused); the tests/cases.py
+  glm53_flash_d_p entry. R = 1: the carried source tests (131 pass, the one expected divergence), test_fp32_dest.py
+  and the hy4 ring case unchanged.
+- Needed by: glm53_flash_d_p indexer ring
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp / .hpp,
+  device/indexer_score_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.cpp,
+  device/kernels/indexer_score_work_split.hpp, device/kernels/indexer_score_cb.hpp,
+  device/kernels/indexer_score_common.hpp, device/kernels/compute_indexer_score.cpp,
+  device/kernels/reader_indexer_score.cpp, indexer_score_nanobind.cpp, tests/reference.py, tests/cases.py,
+  tests/test_indexer_score.py (skips key-stride cases), tests/unit/test_key_stride.py,
+  tests/unit/test_key_stride_ring.py

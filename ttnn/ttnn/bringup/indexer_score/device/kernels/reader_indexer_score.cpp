@@ -204,11 +204,46 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     cb.push_back(ntiles);
 }
 
+// Bring-up fork (glm53_flash_d_p): mask tiles for the key-stride (pooled-key) causal diagonal.
+/** Fill bf16 tile `tile_id` of `cb_id` with key-stride staircase `pattern` (0 <= pattern < R):
+ *  element (row r, col c) = -inf iff c >= pattern * (32/R) + floor((r + 1) / R), else 0.
+ *  This is the pool-causal mask of the diagonal KEY tile (see iscore::key_diagonal): query row r of a q tile
+ *  whose first token sits at key offset pattern * 32/R sees keys [0, pattern * 32/R + floor((r + 1)/R)).
+ *  bf16 tile layout: 4 faces of 16x16 (face 0 rows 0-15 cols 0-15, face 1 rows 0-15 cols 16-31, face 2 rows
+ *  16-31 cols 0-15, face 3 rows 16-31 cols 16-31), each face row-major. Built once per kernel run. */
+template <uint32_t tile_bytes, uint32_t R>
+inline void fill_key_stride_staircase_tile_bf16(uint32_t cb_id, uint32_t pattern, uint32_t tile_id) {
+    static_assert(tile_bytes == 32 * 32 * 2, "key-stride mask tiles are bf16");
+    static_assert(R >= 1 && 32 % R == 0, "key stride must divide the tile width");
+    constexpr uint16_t kNegInf = 0xFF80;
+    constexpr uint32_t kFace = 16;
+    CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint16_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
+    const uint32_t base = pattern * (32 / R);
+    for (uint32_t r = 0; r < 32; ++r) {
+        const uint32_t first_masked = base + (r + 1) / R;
+        for (uint32_t c = 0; c < 32; ++c) {
+            const uint32_t face = (r / kFace) * 2 + (c / kFace);
+            const uint32_t idx = face * kFace * kFace + (r % kFace) * kFace + (c % kFace);
+            ptr[idx] = c >= first_masked ? kNegInf : uint16_t{0};
+        }
+    }
+}
+
 inline void build_mask_tiles(Noc noc) {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(num_mask_tiles);
-    fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
-    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
+    if constexpr (key_stride == 1) {
+        fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
+        fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
+    } else {
+        // Key stride R > 1: R pool-causal staircases (one per diagonal offset), then the full -inf tile.
+        for (uint32_t pattern = 0; pattern < key_stride; ++pattern) {
+            fill_key_stride_staircase_tile_bf16<bf16_tile_bytes, key_stride>(cb_mask, pattern, /*tile_id=*/pattern);
+        }
+        fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/neginf_mask_tile);
+    }
     cb.push_back(num_mask_tiles);
 }
 

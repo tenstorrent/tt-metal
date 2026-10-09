@@ -60,7 +60,8 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> kv_len,
         std::vector<uint32_t> seq_shard_axes,
         std::optional<BlockCyclicLayout> block_cyclic,
-        uint32_t key_stripe_split = 1);
+        uint32_t key_stripe_split = 1,
+        uint32_t key_stride = 1);
 };
 
 }  // namespace ttnn::operations::bringup::indexer_score
@@ -106,7 +107,10 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    // Bring-up fork: key stride R (keys pool R query tokens; key j visible to token p iff R*j + R - 1 <= p).
+    // T / kv_len / K rows in keys, chunk_start_idx and q rows in tokens. 1 = the source behaviour.
+    uint32_t key_stride = 1);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -175,6 +179,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
+    uint32_t index_cache_layer_idx = 0,
+    // Bring-up fork: key stride R; see indexer_score_dsa. Host-scalar path only (no metadata tensors) when R > 1.
+    uint32_t key_stride = 1);
 
 }  // namespace ttnn::experimental::bringup

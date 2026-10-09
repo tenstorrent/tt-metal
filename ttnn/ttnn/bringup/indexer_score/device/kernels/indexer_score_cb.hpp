@@ -27,8 +27,10 @@ enum CbArg : uint32_t {
     num_cb_args
 };
 
-// Two mask tiles in cb_mask: index 0 = diagonal strict-upper -inf, index 1 = full -inf.
-constexpr uint32_t num_mask_tiles = 2;
+// Mask tiles in cb_mask for key stride R: indices 0..R-1 = the diagonal patterns (R == 1: the strict-upper -inf
+// tile; R > 1: the pool-causal staircases, see fill_key_stride_staircase_tile_bf16), index R = full -inf. R == 1
+// is the source layout: index 0 = diagonal strict-upper -inf, index 1 = full -inf.
+constexpr uint32_t num_mask_tiles_for(uint32_t key_stride) { return key_stride + 1; }
 
 // Per-direction multicast role, written by the factory into the reader's runtime args. Single-sourced
 // here so host and device can't drift on the encoding.

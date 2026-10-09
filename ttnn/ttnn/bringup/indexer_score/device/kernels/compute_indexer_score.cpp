@@ -214,13 +214,15 @@ inline void accumulate_heads(uint32_t q_row, uint32_t k_col, uint32_t acc_slot) 
 }
 
 /** Stamp the causal mask for absolute column `k_tile` onto acc slot `slot` (in place, no repush):
- *   - diagonal (k_tile == diag_tile): L1-ACCUMULATE the strict-upper -inf tile, keeping the lower tri.
+ *   - diagonal (k_tile == diag.tile): L1-ACCUMULATE the diagonal pattern tile (R == 1: strict-upper -inf;
+ *     key stride R > 1: staircase diag.pattern), keeping the visible part.
  *   - past diagonal (incl. pad cols >= Tt): OVERWRITE with -inf, so stale-k garbage is discarded rather
  *     than turned to nan by `garbage + -inf`. */
 template <uint32_t acc_cb, uint32_t mask_cb>
-inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, uint32_t diag_tile) {
-    const bool is_diag = (k_tile == diag_tile);
-    const uint32_t midx = is_diag ? 0u : 1u;  // 0 = diag strict-upper -inf, 1 = full -inf
+inline void stamp_mask_tile(uint32_t slot, uint32_t k_tile, iscore::KeyDiagonal diag) {
+    const bool is_diag = (k_tile == diag.tile);
+    // R == 1: 0 = diag strict-upper -inf, 1 = full -inf (source indices). R > 1: staircase pattern, R = -inf.
+    const uint32_t midx = is_diag ? diag.pattern : neginf_mask_tile;
     copy_init(mask_cb);
     pack_reconfig_l1_acc(is_diag ? 1 : 0);  // diag accumulates (keeps score); full -inf overwrites
     tile_regs_acquire();
@@ -422,12 +424,12 @@ inline void stamp_masked_suffix(
     uint32_t straddle_jump_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
     const uint32_t q_row_abs = span.q_tile_start() + q_row;
-    const uint32_t diag_tile =
-        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const iscore::KeyDiagonal diag = iscore::key_diagonal(
+        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles), key_stride);
     const uint32_t valid =
         row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
     for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
-        stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag_tile);
+        stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag);
     }
 }
 
@@ -444,8 +446,9 @@ inline void stamp_masked_shard_major(
     uint32_t straddle_q_tile,
     uint32_t straddle_jump_tiles) {
     const uint32_t q_row_abs = shard_span.q_tile_start() + q_row;
-    const uint32_t diag_tile =
-        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const iscore::KeyDiagonal diag = iscore::key_diagonal(
+        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles), key_stride);
+    const uint32_t diag_tile = diag.tile;  // key tile holding this q tile row's causal diagonal
     const uint32_t capacity = shard_span.capacity_tiles();
     if constexpr (!shard_block_cyclic || shard_key_stripes == shard_physical_sp) {
         uint32_t valid = 0;
@@ -454,13 +457,13 @@ inline void stamp_masked_shard_major(
         }
         for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
             const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
-            stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+            stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag);
         }
     } else {
         for (uint32_t k_col = 0; k_col < k_tiles_per_unit; ++k_col) {
             const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
             if (k_col >= k_tiles_in_unit || logical_tile >= shard_span.valid_k_len_tiles || logical_tile >= diag_tile) {
-                stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+                stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag);
             }
         }
     }

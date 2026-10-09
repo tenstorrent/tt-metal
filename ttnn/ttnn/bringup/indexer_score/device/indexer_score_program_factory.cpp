@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <unordered_map>
 #include <string>
 #include <utility>
@@ -209,7 +210,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, num_mask_tiles_for(args.key_stride), tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
@@ -354,11 +355,22 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         {"schedule_cols", cols_used},
         {"schedule_rotate", 0u}};
     const std::string kdir = "ttnn/ttnn/bringup/indexer_score/device/kernels/";
+    // Bring-up fork: key stride R > 1 selects the staircase mask tiles (reader) and the key diagonal (compute).
+    // Absent for R == 1, so those programs keep the source defines.
+    std::map<std::string, std::string> key_stride_defines;
+    if (args.key_stride > 1) {
+        key_stride_defines.emplace("INDEXER_SCORE_KEY_STRIDE", std::to_string(args.key_stride));
+    }
+    std::map<std::string, std::string> compute_defines = key_stride_defines;
+    if (fp32_dest_acc_en) {
+        // Bring-up fork: fp32 DEST (opt-in); the define is absent in the default bf16 program.
+        compute_defines.emplace("INDEXER_SCORE_FP32_DEST", "1");
+    }
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
         kdir + "reader_indexer_score.cpp",
         core_ranges,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct, {}, schedule_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct, key_stride_defines, schedule_args));
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         kdir + "writer_indexer_score.cpp",
@@ -374,9 +386,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_ct,
-            // Bring-up fork: fp32 DEST (opt-in); the define is absent in the default bf16 program.
-            .defines = fp32_dest_acc_en ? std::map<std::string, std::string>{{"INDEXER_SCORE_FP32_DEST", "1"}}
-                                        : std::map<std::string, std::string>{},
+            .defines = compute_defines,
             .named_compile_args = schedule_args});
 
     // One core identity per kernel; geometry and multicast axes are shared.

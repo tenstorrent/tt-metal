@@ -156,18 +156,26 @@ void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args
         attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
         "chunk_start_idx {} must be tile-aligned",
         attrs.chunk_start_idx);
+    // chunk_start_idx is in TOKEN units; T and kv_len are in KEY units (key_stride tokens per key; 1 = source).
+    const uint32_t chunk_start_keys = attrs.chunk_start_idx / attrs.key_stride;
     TT_FATAL(
-        attrs.chunk_start_idx < T,
-        "chunk_start_idx {} starts at or past T={} (the allocated k length): nothing would be scored",
+        chunk_start_keys < T,
+        "chunk_start_idx {} (key {} at key_stride {}) starts at or past T={} (the allocated k length): nothing "
+        "would be scored",
         attrs.chunk_start_idx,
+        chunk_start_keys,
+        attrs.key_stride,
         T);
     if (attrs.kv_len.has_value()) {
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(
-            attrs.chunk_start_idx < kv_len,
-            "chunk_start_idx {} starts at or past kv_len={} (the valid key prefix): nothing would be scored. "
-            "The causal window may END past kv_len (pad query rows), but the chunk must BEGIN inside it",
+            chunk_start_keys < kv_len,
+            "chunk_start_idx {} (key {} at key_stride {}) starts at or past kv_len={} (the valid key prefix): "
+            "nothing would be scored. The causal window may END past kv_len (pad query rows), but the chunk must "
+            "BEGIN inside it",
             attrs.chunk_start_idx,
+            chunk_start_keys,
+            attrs.key_stride,
             kv_len);
     }
 }
@@ -180,8 +188,10 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         return;
     }
     const uint32_t sp = attrs.block_cyclic->sp;
-    const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
-    const uint32_t chunk_global = sp * chunk_local;
+    const uint32_t chunk_local = attrs.block_cyclic->chunk_local;  // TOKEN units (the query sharding)
+    const uint32_t R = attrs.key_stride;
+    // The cache holds keys: one global chunk of sp*chunk_local tokens is sp*chunk_local/R keys (R == 1: source).
+    const uint32_t chunk_global = sp * chunk_local / R;
     const uint32_t T = t.k.logical_shape()[2];
     const uint32_t Sq = t.q.logical_shape()[2];
     TT_FATAL(sp >= 1, "block-cyclic sp must be >= 1 (got {})", sp);
@@ -189,9 +199,18 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         chunk_local > 0 && chunk_local % tt::constants::TILE_WIDTH == 0,
         "block_cyclic_chunk_local ({}) must be > 0 and tile-aligned",
         chunk_local);
+    // Key stride: each chip's per-chunk key stripe (chunk_local/R keys) must be whole tiles.
+    TT_FATAL(
+        chunk_local % (R * tt::constants::TILE_WIDTH) == 0,
+        "block_cyclic_chunk_local ({}) must be a multiple of key_stride*{} ({}) so each chip's key stripe is "
+        "tile-aligned",
+        chunk_local,
+        tt::constants::TILE_WIDTH,
+        R * tt::constants::TILE_WIDTH);
     TT_FATAL(
         T % chunk_global == 0,
-        "global chunk {} (= sp*chunk_local) must divide T {} (the cache must be a whole number of global chunks)",
+        "global key chunk {} (= sp*chunk_local/key_stride) must divide T {} (the cache must be a whole number of "
+        "global chunks)",
         chunk_global,
         T);
     TT_FATAL(
@@ -203,9 +222,10 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
     // The split only refines the invP divisors, so the global chunk (and the T check above) is unchanged.
     TT_FATAL(attrs.key_stripe_split >= 1, "key_stripe_split must be >= 1 (got {})", attrs.key_stripe_split);
     TT_FATAL(
-        chunk_local % (attrs.key_stripe_split * tt::constants::TILE_WIDTH) == 0,
-        "block_cyclic_chunk_local ({}) must split evenly into {} tile-aligned key stripes",
+        (chunk_local / R) % (attrs.key_stripe_split * tt::constants::TILE_WIDTH) == 0,
+        "block_cyclic_chunk_local ({}) / key_stride ({}) must split evenly into {} tile-aligned key stripes",
         chunk_local,
+        R,
         attrs.key_stripe_split);
     // Fused ring: k_local is this rank's TP-REBUILT slab, so it must hold whole stripes -- a partial one would
     // desync the reader's invP (which addresses stripe s at s * sll/key_stripe_split) from the actual rows.
@@ -218,6 +238,29 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
             sll,
             attrs.key_stripe_split);
     }
+}
+
+// Key stride (bring-up fork): structural, hashed, so miss-only. The pool-causal staircase needs R | TILE_WIDTH;
+// only the DSA scoring path and the host-scalar chunk start are wired for R > 1.
+void validate_key_stride(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const uint32_t R = attrs.key_stride;
+    TT_FATAL(
+        R >= 1 && R <= 8 && tt::constants::TILE_WIDTH % R == 0,
+        "indexer_score key_stride must be 1, 2, 4 or 8 (got {})",
+        R);
+    if (R == 1) {
+        return;
+    }
+    TT_FATAL(
+        attrs.apply_relu && attrs.num_groups == 1 && attrs.block_size == 0 && !attrs.synthesize_gate,
+        "indexer_score key_stride {} > 1 is supported only for DSA scoring (indexer_score_dsa / "
+        "ring_indexer_score_dsa)",
+        R);
+    TT_FATAL(
+        !t.has_chunk_start_metadata() && !t.has_valid_end_metadata() && !t.has_cache_slot_metadata(),
+        "indexer_score key_stride {} > 1 supports only the host-scalar path: chunk_start_idx_tensor, valid_end_tensor "
+        "and cache_batch_idx_tensor must be unset",
+        R);
 }
 
 // Semaphore identity is hash-excluded and rebound on cache hits. Different mesh devices can also allocate the
@@ -451,6 +494,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_mesh_cols,
         fused_route_plan_hash,
         attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        attrs.key_stride,        // bring-up fork: mask CB size + kernel define (1 = source behaviour)
         tensor_args);
 }
 
@@ -498,6 +542,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     // slot/kv_len runtime values are re-checked every dispatch.
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
+    validate_key_stride(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
     validate_metadata_mode(attrs, tensor_args);
@@ -768,12 +813,13 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint32_t Tt = k_shape[2] / tt::constants::TILE_WIDTH;
     const uint32_t chunk_t = attrs.chunk_start_idx / tt::constants::TILE_WIDTH;
 
-    // Causal-valid output tiles V = sum_rows min(kv_len_tiles, chunk_t + row + 1) (masked future excluded;
-    // matches the test's sp7_valid_tiles()). kv_len caps per-row valid columns; nullopt == full Tt.
+    // Causal-valid output tiles V = sum_rows min(kv_len_tiles, (chunk_t + row)/R + 1) (masked future excluded;
+    // matches the test's sp7_valid_tiles() at R == 1). The key diagonal of q tile row (chunk_t + row) sits in key
+    // tile (chunk_t + row)/R (key_diagonal). kv_len caps per-row valid columns; nullopt == full Tt.
     const uint32_t kv_len_tiles = attrs.kv_len.has_value() ? attrs.kv_len.value() / tt::constants::TILE_WIDTH : Tt;
     uint64_t valid_tiles = 0;
     for (uint32_t s = 0; s < Sqt; ++s) {
-        valid_tiles += std::min<uint64_t>(kv_len_tiles, (uint64_t)chunk_t + s + 1);
+        valid_tiles += std::min<uint64_t>(kv_len_tiles, ((uint64_t)chunk_t + s) / attrs.key_stride + 1);
     }
 
     // Per valid 32x32 tile per head: (32*32) outputs x 2*D FLOPs; summed over heads/tiles/batch
@@ -829,7 +875,8 @@ IndexerScoreDeviceOperation::invoke(
     std::optional<uint32_t> kv_len,
     std::vector<uint32_t> seq_shard_axes,
     std::optional<BlockCyclicLayout> block_cyclic,
-    uint32_t key_stripe_split) {
+    uint32_t key_stripe_split,
+    uint32_t key_stride) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -844,7 +891,8 @@ IndexerScoreDeviceOperation::invoke(
             .cache_batch_idx = cache_batch_idx,
             .kv_len = kv_len,
             .block_cyclic = block_cyclic,
-            .key_stripe_split = key_stripe_split},
+            .key_stripe_split = key_stripe_split,
+            .key_stride = key_stride},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -907,7 +955,10 @@ ttnn::Tensor launch_indexer_score(
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0) {
+    uint32_t index_cache_layer_idx = 0,
+    // Bring-up fork: keys per query token = 1/key_stride (pool-causal). 1 = the source behaviour.
+    uint32_t key_stride = 1) {
+    TT_FATAL(key_stride >= 1, "indexer_score: key_stride must be >= 1 (got {})", key_stride);
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -1045,6 +1096,7 @@ ttnn::Tensor launch_indexer_score(
 
     // base = the absolute chunk_start of this op's rank 0. Omit it -> deduce the start of the gathered chunk:
     //   * block-cyclic: the gathered chunk IS the global chunk (sp*chunk_local) -> base = T - chunk.
+    //   * key stride R: T counts keys, the chunk counts tokens -> R*T - chunk (R == 1: unchanged).
     //   * contiguous: the gathered chunk is seq_ring*Sq. Normally seq_ring is the SP ring; for the identity
     //     block-cyclic SP=1 + TP sub-shard it is the TP ring instead.
     // The deduced window ends at T (incompatible with a growing kv_len < T -- pass chunk_start_idx there).
@@ -1055,7 +1107,7 @@ ttnn::Tensor launch_indexer_score(
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
-        const uint32_t T = k.logical_shape()[2];
+        const uint32_t T = k.logical_shape()[2] * key_stride;  // token extent covered by the T keys
         if (block_cyclic.has_value()) {
             const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
             TT_FATAL(
@@ -1109,7 +1161,8 @@ ttnn::Tensor launch_indexer_score(
         kv_len,
         std::move(seq_shard_axes),
         block_cyclic,
-        key_stripe_split);
+        key_stripe_split,
+        key_stride);
     // Attach the fused-ring config + local shard (both nullopt on the classic path -> byte-identical behavior).
     operation_attributes.fused_ring = std::move(fused_ring);
     tensor_args.k_local = std::move(k_local);
@@ -1135,7 +1188,8 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    uint32_t key_stride) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -1155,7 +1209,15 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        block_cyclic_cache_tp_sharded);
+        block_cyclic_cache_tp_sharded,
+        /*k_local=*/std::nullopt,
+        /*fused_ring=*/std::nullopt,
+        /*chunk_start_idx_tensor=*/std::nullopt,
+        /*valid_end_tensor=*/std::nullopt,
+        /*cache_batch_idx_tensor=*/std::nullopt,
+        /*index_cache_num_layers=*/1,
+        /*index_cache_layer_idx=*/0,
+        key_stride);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -1222,7 +1284,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& valid_end_tensor,
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
-    uint32_t index_cache_layer_idx) {
+    uint32_t index_cache_layer_idx,
+    uint32_t key_stride) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1332,7 +1395,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         valid_end_tensor,
         cache_batch_idx_tensor,
         index_cache_num_layers,
-        index_cache_layer_idx);
+        index_cache_layer_idx,
+        key_stride);
 }
 
 }  // namespace ttnn::experimental::bringup

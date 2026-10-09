@@ -50,8 +50,19 @@ constexpr uint32_t cb_pool_scratch = get_compile_time_arg_val(num_dim_args + isc
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;
 
-// Mask tile count, as a bare name for the kernels (defined in indexer_score_cb.hpp).
-constexpr uint32_t num_mask_tiles = iscore::num_mask_tiles;
+// Key stride R (bring-up fork): the host sets INDEXER_SCORE_KEY_STRIDE only when R > 1, so the R == 1 programs
+// keep the source defines. See operation_attributes_t::key_stride.
+#ifdef INDEXER_SCORE_KEY_STRIDE
+constexpr uint32_t key_stride = INDEXER_SCORE_KEY_STRIDE;
+#else
+constexpr uint32_t key_stride = 1;
+#endif
+static_assert(key_stride >= 1 && 32 % key_stride == 0, "indexer_score key_stride must divide the tile width");
+
+// Mask tile count, as a bare name for the kernels (defined in indexer_score_cb.hpp): R diagonal patterns + -inf.
+constexpr uint32_t num_mask_tiles = iscore::num_mask_tiles_for(key_stride);
+// cb_mask index of the full -inf tile (1 when R == 1, as in the source).
+constexpr uint32_t neginf_mask_tile = key_stride;
 
 // True when heads don't all fit L1 resident, so they stream in groups.
 constexpr bool stream_heads = heads_per_group < num_heads;
@@ -80,7 +91,7 @@ inline uint32_t row_valid_prefix(
     uint32_t straddle_q_tile,
     uint32_t straddle_jump_tiles) {
     return iscore::valid_prefix_tiles(
-        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, key_stride);
 }
 
 /** (group, band) cell cursor. group = absolute q-row-group index; band = absolute k-band index; the

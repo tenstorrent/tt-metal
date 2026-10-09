@@ -55,4 +55,44 @@ CASES = [
         "pcc": 0.9999,
         "rel": 0.004,
     },
+    {
+        # GLM-5.3 Flash DSA indexer on the LoudBox 2x4 mesh, pooled keys (key_stride 4): one full-mesh snake ring
+        # (cluster_axis None, Ring), each chip holds 640 query tokens of a 5120-token chunk and, per chunk, a
+        # 160-key stripe (block_cyclic_chunk_local 640 tokens / 4) of the block-cyclic pooled index-key cache.
+        # Planned call (glm53_flash_d_p indexer ring), not yet captured from the model: sig None. T is shortened to
+        # three chunks (3840 keys); each listed chunk start runs with kv_len = (start + 5120) / 4 keys.
+        "id": "glm53_flash_d_p-2x4-ring-fullmesh-keystride4-q640-t3840-h32-d128-fp32dest",
+        "model": "glm53_flash_d_p",
+        "task": "indexer ring (key_stride)",
+        "sig": None,
+        "op": "ring_indexer_score_dsa",
+        "mesh": [2, 4],
+        "device_params": {"fabric_config": "FABRIC_2D"},
+        "heads": 32,
+        "head_dim": 128,
+        "q_rows": 640,
+        "t": 3840,
+        "k_local_rows": 480,
+        "dtype": "BFLOAT16",
+        "layout": "TILE",
+        "num_semaphores": 2,
+        "cluster_axis": None,
+        "topology": "Ring",
+        "num_links": 1,
+        "key_stride": 4,
+        "chunk_starts": [5120, 10240],
+        "block_cyclic_chunk_local": 640,
+        "program_config": {"q_chunk_size": 64, "k_chunk_size": 32, "head_group_size": 0},
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "gate_scale": 1.0 / 64,
+        "seed": 0,
+        "pcc": 0.9999,
+        "rel": 0.004,
+    },
 ]

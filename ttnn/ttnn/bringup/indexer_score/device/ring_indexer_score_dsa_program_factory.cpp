@@ -76,7 +76,8 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     if (args.key_stripe_split > 1) {
         return std::nullopt;
     }
-    const uint32_t chunk_local = args.block_cyclic->chunk_local;
+    // Key units (kv_len and k_local rows are keys): a chunk_local-token stripe holds chunk_local/key_stride keys.
+    const uint32_t chunk_local = args.key_stripe_chunk();
     const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
     const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
     const uint32_t valid_local_rows = valid_slabs * chunk_local;
@@ -273,7 +274,7 @@ ProgramDescriptor build_ring_program_descriptor(
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, num_mask_tiles_for(args.key_stride), tt::DataFormat::Float16_b, bf16_tile);
     // cb_qk stages the batched relu(q.kT) strip for the gate-mul phase.
     make_cb(cb_qk_arg, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
     // cb_out_strip holds the untilized output, double-buffered (2*KC; no block-pool on the DSA path).
@@ -494,6 +495,12 @@ ProgramDescriptor build_ring_program_descriptor(
         // Bring-up fork: fp32 DEST (opt-in). The define is absent in the default bf16 program.
         compute_kernel.defines.emplace_back("INDEXER_SCORE_FP32_DEST", "1");
     }
+    if (args.key_stride > 1) {
+        // Bring-up fork: key stride R > 1 (staircase mask tiles in the reader, key diagonal in compute). Absent
+        // for R == 1, so those programs keep the source defines.
+        reader_kernel.defines.emplace_back("INDEXER_SCORE_KEY_STRIDE", std::to_string(args.key_stride));
+        compute_kernel.defines.emplace_back("INDEXER_SCORE_KEY_STRIDE", std::to_string(args.key_stride));
+    }
 
     const KernelDescriptor::NamedCompileTimeArgs schedule_args{
         {"schedule_blocks", num_blocks},
@@ -689,7 +696,7 @@ ProgramDescriptor build_ring_program_descriptor(
         /*kv_actual_isl=*/
         args.key_stripe_split > 1 ? std::optional<ttnn::Tensor>{} : tensors.chunk_start_idx_tensor,
         /*chunk_local_tiles=*/
-        has_meta ? args.block_cyclic->chunk_local / tt::constants::TILE_HEIGHT : 0,
+        has_meta ? args.block_cyclic->chunk_local / args.key_stride / tt::constants::TILE_HEIGHT : 0,
         /*kv_cache_num_layers=*/args.index_cache_num_layers,
         /*kv_cache_layer_idx=*/args.index_cache_layer_idx,
         // This consumer uses midpoint/completion readiness rather than diametric split forwarding.
