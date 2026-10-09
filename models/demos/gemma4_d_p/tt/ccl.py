@@ -137,6 +137,10 @@ class CCLManager:
                 device=self.mesh_device,
                 memory_config=memory_config,
             )
+            # Each device runs its zero fill in its own queue, but peers write into this buffer over fabric as soon
+            # as they reach their first use of it. A peer that runs ahead can land rows before a lagging device's
+            # fill, which then zeroes them. Finish the fill on every device before anything targets the buffer.
+            ttnn.synchronize_device(self.mesh_device)
         return self._ring_gather_buffers[cache_key]
 
     def get_rs_semaphore(self):
