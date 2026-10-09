@@ -4,19 +4,35 @@
 
 """V4.1 single-token decode on the Galaxy after a real-weight prefill, against the vendored CPU reference.
 
-Prefills ``V41_DECODE_PROMPT`` tokens of real text (odd by default, so the ratio-2 compressor carry is consumed by
-the first step) with the layer schedule ``V41_DECODE_LAYERS`` on the device (``TtV41Transformer.prefill``) and on
+Prefills ``V41_DECODE_PROMPT`` tokens of real text (odd by default, so the ratio-2 compressor carry is
+consumed by
+the first step) with the layer schedule ``V41_DECODE_LAYERS`` on the device (``TtV41Transformer.prefill``) and
+on
 the CPU reference (``Transformer.forward(tokens, 0)``), then decodes ``V41_DECODE_STEPS`` tokens step by step
-(``TtV41Decoder.decode`` against ``Transformer.forward(token, start_pos)``), teacher-forced on the reference's greedy
-token. Per step it reports the greedy agreement, the logits PCC and every block's output PCC; after the prefill the
-compressor carry against the reference's ``kv_state`` / ``score_state``. With ``V41_DECODE_TRACE=1`` (default) the
-decoder captures the step per position parity after ``V41_DECODE_WARMUP`` eager steps and replays it: each step
+(``TtV41Decoder.decode`` against ``Transformer.forward(token, start_pos)``), teacher-forced on the reference's
+greedy
+token. Per step it reports the greedy agreement, the logits PCC and every block's output PCC; after the
+prefill the
+compressor carry against the reference's ``kv_state`` / ``score_state``. With ``V41_DECODE_TRACE=1`` (default)
+the
+decoder captures the step per position parity after ``V41_DECODE_WARMUP`` eager steps and replays it: each
+step
 reports its mode and, for replays, the device time of the replay. With ``V41_DECODE_REF=0`` (schedules the
-reference cannot run: checkpoint Engram layers) the device decodes alone, teacher-forced on the text's own next tokens
-(``book_top1``: the depth test's next-token accuracy, through the decode step), or free-running on its greedy token
+reference cannot run: checkpoint Engram layers) the device decodes alone, teacher-forced on the text's own
+next tokens
+(``book_top1``: the depth test's next-token accuracy, through the decode step), or free-running on its greedy
+token
 with ``V41_DECODE_FREE=1``; both report the text.
 
-Results go to the log as ``V41_DECODE_RESULT {json}`` and to ``V41_DECODE_OUT`` when set. Reported, not gated here: a NaN or a crash fails the test, a low PCC does not.
+With ``V41_DECODE_PROFILE=1`` (under ``python -m tracy -r -p -v -m pytest ...`` with
+``TT_METAL_DEVICE_PROFILER=1``) the
+device profiler is read after the prefill and after every block of every step, so no step overflows the
+device's
+marker buffers, and the last step runs between the ``start`` / ``stop`` signposts (its ops are the
+measurement).
+
+Results go to the log as ``V41_DECODE_RESULT {json}`` and to ``V41_DECODE_OUT`` when set. Reported, not gated
+here: a NaN or a crash fails the test, a low PCC does not.
 """
 
 import json
@@ -39,6 +55,14 @@ from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_m
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
+try:
+    from tracy import signpost
+except ModuleNotFoundError:  # not under the tracy wrapper
+
+    def signpost(_name: str) -> None:
+        pass
+
+
 DEFAULT_LAYERS = "0,2,3,20,21,24"
 TRACE_REGION = 512 * 1024 * 1024  # as test_v41_trace.py; two captures of the step
 
@@ -51,7 +75,8 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _reference_forward(ref: v41.Transformer, ids: torch.Tensor, start_pos: int) -> torch.Tensor:
-    """``Transformer.forward`` under the bf16 default dtype it was built with (``testing.prefill``) -> fp32 logits
+    """``Transformer.forward`` under the bf16 default dtype it was built with (``testing.prefill``) -> fp32
+    logits
     ``[vocab]`` of the last position."""
     with v41.set_dtype(torch.bfloat16):
         _, logits, _ = ref.forward(ids, start_pos)
@@ -59,7 +84,8 @@ def _reference_forward(ref: v41.Transformer, ids: torch.Tensor, start_pos: int) 
 
 
 def _streams_to_host(x: ttnn.Tensor, tp: int, hc: int) -> torch.Tensor:
-    """Row 0 of the decode tile's streams ``[1, 1, 32, hc * hidden/tp]`` (mesh row 0's TP shards) -> ``[hc, hidden]``."""
+    """Row 0 of the decode tile's streams ``[1, 1, 32, hc * hidden/tp]`` (mesh row 0's TP shards) -> ``[hc,
+    hidden]``."""
     shards = ttnn.get_device_tensors(x)
     parts = [ttnn.to_torch(shards[j])[0, 0, 0].float().view(hc, -1) for j in range(tp)]
     return torch.cat(parts, dim=-1)
@@ -76,6 +102,7 @@ def test_v41_decode(mesh_device, device_params):
     free_run = os.environ.get("V41_DECODE_FREE", "0") == "1"
     trace = os.environ.get("V41_DECODE_TRACE", "1") == "1"
     warmup = int(os.environ.get("V41_DECODE_WARMUP", 4))
+    profile = os.environ.get("V41_DECODE_PROFILE", "0") == "1"
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -93,6 +120,7 @@ def test_v41_decode(mesh_device, device_params):
         "free_run": free_run,
         "trace": trace,
         "warmup": warmup,
+        "profile": profile,
         "mesh": list(mesh_device.shape),
         "fabric": str(device_params.get("fabric_config")),
     }
@@ -139,6 +167,8 @@ def test_v41_decode(mesh_device, device_params):
     result["prefill_s"] = round(time.time() - t0, 3)
     dev_logits = logits[-1]
     assert not torch.isnan(dev_logits).any(), "NaN in the device prefill logits"
+    if profile:
+        ttnn.ReadDeviceProfiler(mesh_device)
     decoder.begin(tokens, state)
     if ref is not None:
         t0 = time.time()
@@ -164,7 +194,8 @@ def test_v41_decode(mesh_device, device_params):
     ref_blocks = {}
     hooks = []
     if ref is not None:
-        # every block's output to the host, for the per-block PCC: 40 reads per step, only worth it with a reference
+        # every block's output to the host, for the per-block PCC: 40 reads per step, only worth it with a
+        # reference
         decoder.on_block = lambda layer, x: captured.__setitem__(layer, _streams_to_host(x, tp, C.HC_MULT))
         for pos, layer in enumerate(layers):
             hooks.append(
@@ -172,6 +203,15 @@ def test_v41_decode(mesh_device, device_params):
                     lambda mod, args, out, layer=layer: ref_blocks.__setitem__(layer, out[0][0, 0].float())
                 )
             )
+    if profile:
+        previous = decoder.on_block
+
+        def drain(layer, x):
+            if previous is not None:
+                previous(layer, x)
+            ttnn.ReadDeviceProfiler(mesh_device)
+
+        decoder.on_block = drain
     token = int((ref_logits if ref is not None else dev_logits).argmax())
     if ref is None and not free_run:
         token = int(book[0])  # teacher forcing on the text
@@ -180,9 +220,15 @@ def test_v41_decode(mesh_device, device_params):
         for i in range(steps):
             p = state.start
             captured.clear()
+            if profile and i == steps - 1:
+                signpost("start")
             t0 = time.time()
             dev_logits = decoder.decode(token, state)
             wall = time.time() - t0
+            if profile:
+                ttnn.ReadDeviceProfiler(mesh_device)
+                if i == steps - 1:
+                    signpost("stop")
             assert not torch.isnan(dev_logits).any(), f"NaN in the device logits at position {p}"
             entry = {"pos": p, "token": token, "dev_argmax": int(dev_logits.argmax()), "wall_s": round(wall, 3)}
             entry.update(decoder.last)
