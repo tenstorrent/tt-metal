@@ -74,6 +74,7 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
+from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -94,6 +95,7 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MODALITY_NUM,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -287,6 +289,8 @@ class _BucketState:
     adaln: StateTensor = field(default_factory=StateTensor)
     tsi: StateTensor = field(default_factory=StateTensor)
     assembly_idx: StateTensor = field(default_factory=StateTensor)
+    adaln_tile_map: StateTensor = field(default_factory=StateTensor)
+    adaln_expanded: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
 
 
@@ -2691,8 +2695,8 @@ class MiniMaxH3Pipeline:
         if transformer is None:
             return False
         run_blocks = type(transformer).run_blocks
-        tracer = run_blocks._tracers_keyed.get(transformer, {}).get(rung)
-        return tracer is not None and tracer.trace_captured
+        tracers = run_blocks._tracers_keyed.get(transformer, {})
+        return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
 
     def release_traces(self) -> None:
         decoder = self._audio_decoder
@@ -2835,8 +2839,30 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
+        tilerow_kwargs = {}
         if not precomputed:
-            state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+            row_adaln = adaln_indices(layout.token_tags, row_slot)
+            state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+            # The norms read their modulation through a per-tile-row map built once per request; a request with more
+            # run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
+            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+            try:
+                tile_map, expanded = tilerow_remap(
+                    padded_adaln,
+                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                    sp_factor=self.sp_factor,
+                    max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+                )
+            except ValueError as err:
+                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+                tile_map = None
+            if tile_map is not None:
+                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+                tilerow_kwargs = {
+                    "adaln_tile_map": state.adaln_tile_map.value,
+                    "adaln_expanded_indices": state.adaln_expanded.value,
+                }
             state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
@@ -2943,6 +2969,7 @@ class MiniMaxH3Pipeline:
                     pad_to=rung,
                     traced=traced,
                     **endpoint_kwargs,
+                    **tilerow_kwargs,
                 )
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))

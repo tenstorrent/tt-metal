@@ -39,7 +39,8 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals,
-    const bool preserve_rope_rounding) {
+    const bool preserve_rope_rounding,
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map) {
     return ttnn::prim::dit_fused_distributed_rmsnorm(
         input_tensor,
         cluster_axis,
@@ -62,7 +63,8 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
         compute_kernel_config,
         norm_type,
         reciprocals,
-        preserve_rope_rounding);
+        preserve_rope_rounding,
+        affine_tile_row_map);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
@@ -135,7 +137,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool preserve_rope_rounding) {
+    const bool preserve_rope_rounding,
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -158,7 +161,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
         compute_kernel_config,
         DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt,
-        preserve_rope_rounding);
+        preserve_rope_rounding,
+        affine_tile_row_map);
 }
 
 ttnn::Tensor dit_fused_distributed_layernorm(
@@ -203,7 +207,8 @@ ttnn::Tensor dit_fused_distributed_layernorm(
         compute_kernel_config,
         DitFusedNormType::LAYERNORM,
         reciprocals,
-        /*preserve_rope_rounding=*/false);
+        /*preserve_rope_rounding=*/false,
+        /*affine_tile_row_map=*/std::nullopt);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(

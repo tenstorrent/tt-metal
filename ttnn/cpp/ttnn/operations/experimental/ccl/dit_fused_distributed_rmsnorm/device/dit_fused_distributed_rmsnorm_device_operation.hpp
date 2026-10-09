@@ -67,6 +67,7 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
     const std::optional<const Tensor>& reciprocals = std::nullopt,
-    bool preserve_rope_rounding = false);
+    bool preserve_rope_rounding = false,
+    const std::optional<const Tensor>& affine_tile_row_map = std::nullopt);
 
 }  // namespace ttnn::prim
