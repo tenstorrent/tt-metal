@@ -1,0 +1,43 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--collect",
+    "--unit=qwen38-gpqa-completion-audit-v1-20261009",
+    "--property=RuntimeMaxSec=68400",
+    "--property=MemoryMax=1G",
+    "--property=CPUQuota=100%",
+    "--property=TasksMax=64",
+    "--property=TimeoutStopSec=15",
+    "--property=KillMode=control-group",
+    "--property=UMask=0077",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-control-v1/run.log",
+    "--property=StandardError=inherit",
+    "--setenv=PYTHONDONTWRITEBYTECODE=1",
+    "/usr/bin/python3",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-source-v1/run_gpqa_audit_followup.py",
+    "--audit-source",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-source-v1/gpqa_response_audit.py",
+    "--audit-sha256",
+    "b52e9079ee462846713f81a33b448b5af4f21eb6a48cdfe562662cafcb726b08",
+    "--unit",
+    "qwen38-accuracy-head-v1-20261009.service",
+    "--invocation",
+    "ff89c12d6a9b4feaa268d7eff48b4132",
+    "--receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-head-v1/queue.json",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-head-v1/native-control/evaluation/gpqa",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-completion-audit-v1"
+  ],
+  "unit": "qwen38-gpqa-completion-audit-v1-20261009.service",
+  "observed_pid": 1345569,
+  "observed_invocation": "7172e4b27dbd47868376e12d70fa2815",
+  "observed_at": "2026-10-09T07:53:06Z",
+  "tests": {
+    "passed": 22,
+    "failed": 0
+  },
+  "hardware_opened": false
+}

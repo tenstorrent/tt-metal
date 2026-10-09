@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T07:41:01.577792+00:00",
+  "generated_at": "2026-10-09T08:10:21.596832+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -33,6 +33,11 @@
       "sha256": "2cb79a2ea958b716aae6f86ba9a0005e109189f22f650350e8ea97578f82baae"
     },
     {
+      "path": "demo/run_gpqa_audit_followup.py",
+      "bytes": 5201,
+      "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"
+    },
+    {
       "path": "demo/run_hf_layer_followup.py",
       "bytes": 7799,
       "sha256": "b6e429c6333f59be0804092f7dfb05ae8ce7a4307c9950ded85223e160ec4658"
@@ -49,8 +54,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 76896,
-      "sha256": "d72557cfd693ab8821562370a61a9193868ac4afd99af9cc6b7df1d726e7dd40"
+      "bytes": 80408,
+      "sha256": "1cfc163164d07ce5ad09dfb04bf1d9a554049f70831ce87c61825a5b43166f91"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -59,8 +64,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 25041,
-      "sha256": "40151b2bc0af8c9917562cee56aba09d037fed95dea35329b597bcd83be0a784"
+      "bytes": 26209,
+      "sha256": "b9f76227420d57a7b4af5f51e69aabacc9749f4302be631cce9d291f79cf4c60"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2052,6 +2057,26 @@
       }
     },
     {
+      "path": "galaxy-evidence/gpqa-completion-audit-v1/README.md",
+      "bytes": 2108,
+      "sha256": "6a7c6092e300067fa241ed0d12e85a45a10a5f83a53f996aeed5b20b55ef3220"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-completion-audit-v1/launch.json",
+      "bytes": 1594,
+      "sha256": "659687353a555e0596dea89d471a369456b517f8ac52f4f8bc3e2d4640f05240"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-completion-audit-v1/source-manifest.json",
+      "bytes": 210,
+      "sha256": "8a87c39e738142900f2b0f08c191b5f13757314baae75ab3c048ccbe5a9dd99a"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-completion-audit-v1/status.json",
+      "bytes": 505,
+      "sha256": "27c3ccb164770e088dfe21a43061e15e652991411a13fd21a3fa6bb4f78ce78c"
+    },
+    {
       "path": "galaxy-evidence/gpqa-full-dp8-prepared-v1/inputs.jsonl",
       "bytes": 17710,
       "sha256": "4b27688ca435ac4a69cad6bcb61a247287aa508cb4f95bc466c6372d3815edc9"
@@ -2234,6 +2259,41 @@
       "sha256": "6b78eef295c691232effd7e9bea16a8e6bb30a581e4c586c4cf17fc9efd87edb"
     },
     {
+      "path": "galaxy-evidence/head-g0-v1/README.md",
+      "bytes": 2124,
+      "sha256": "40875104365dd23a6ba599f3650bbe006665d18251dacd6dd0bddc3ed0093daf"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/api.json",
+      "bytes": 38600,
+      "sha256": "7abddbea071f802b42bee4c5738481efaa92f9a708410734515fa9238f2368bd"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/full-model.json",
+      "bytes": 261153,
+      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/hardware.xml.gz",
+      "bytes": 309,
+      "sha256": "38e63b0b725bdcb6f0044d937044b1332fbc5d5d510dc826ab4b748c78d8847e"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/manifest.json",
+      "bytes": 3566,
+      "sha256": "06bff5035c32ef414eae177d87182d4fd1a5b00b2cfc6108a8d7f2126d076478"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/runtime-model-spec.json",
+      "bytes": 6190,
+      "sha256": "98c45dc46c53eb4690a1759c7164f826601422f439b605e2f9faed44c6c754b6"
+    },
+    {
+      "path": "galaxy-evidence/head-g0-v1/values.yaml",
+      "bytes": 2927,
+      "sha256": "bc092c9a88895da3ccc343642ff365f40c33d5340f422dd1ac72f41f8f24564e"
+    },
+    {
       "path": "galaxy-evidence/helm-health-v1/README.md",
       "bytes": 2940,
       "sha256": "6600b069c7fe29d833b57199a1d86cc135ce4c9aeac5975e38f3a4b070b6aa25"
@@ -2362,6 +2422,31 @@
       "path": "galaxy-evidence/image-build-v5/state.json",
       "bytes": 1261,
       "sha256": "e403bf4707db3ec442cafd7bee34d4bccac3896c10f741a82e382543be0fd9ff"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/README.md",
+      "bytes": 1918,
+      "sha256": "295a6c5388ee718cb26b7e1b319157b5c439f3716fb1d2c7f3f204a1b9558b12"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/context-manifest.json",
+      "bytes": 4483,
+      "sha256": "c3121bcde3c9409f5a56306a00838ef3aac723ac885c1d024f5e1d8410cc0db6"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/controller.py.txt",
+      "bytes": 6903,
+      "sha256": "412b88270aa5e36c9a7ff03e1bc0ca8fc968d07a5ab5c1073f0dc15531ba87c6"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/launch.json",
+      "bytes": 636,
+      "sha256": "7b6db66cabd142846ffd4cec7bcc0919de4a35165de5e03de993d3e71dc4dae4"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v6/state.json",
+      "bytes": 552,
+      "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8"
     },
     {
       "path": "galaxy-evidence/kernel-diagnostics-v1/README.md",
@@ -4795,6 +4880,11 @@
       "path": "tests/unit/test_chunked_prefill_scenario.py",
       "bytes": 2243,
       "sha256": "3727fe41be4f20678cdec203dd5f7d8d2630e7d18d2c1bbf18e7054e09b537a9"
+    },
+    {
+      "path": "tests/unit/test_gpqa_audit_followup.py",
+      "bytes": 2008,
+      "sha256": "e10f13dcf6d3cea4c676c490393e42a153ac51f7a985959ccda92390e8ebf149"
     },
     {
       "path": "tests/unit/test_hf_layer_followup.py",

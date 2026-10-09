@@ -1,5 +1,23 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 08:09 UTC update: the higher-precision-head full GPQA is running with
+116/198 completed, 110 correct and zero truncations. This partial result is
+not a final score or qualification. All six serving API checks passed,
+including multi-turn and concurrent greedy repeatability at concurrency 128.
+The latest completed native GPQA remains 170/198; Tau3 remains 3/12. The exact
+head service invocation is still active and the completion audit is waiting.
+
+Oct 9 08:02 UTC update: the BFP8/HiFi2-head policy passed all eight G0 replicas
+and advanced to serving startup. Its short-context B1 decode cost is 1.61-1.76%
+above the native head, not a long-context estimate. Its separate exact-SHA
+image build is persistent on .34. A read-only completion audit is queued after
+full GPQA, preserving the harness score but requiring 177 naturally completed
+correct answers out of all 198. Prior cutoffs all scored zero, so the existing
+170/198 result is unchanged. No head GPQA or container qualification yet.
+[G0](../galaxy-evidence/head-g0-v1/README.md),
+[audit](../galaxy-evidence/gpqa-completion-audit-v1/README.md),
+[build](../galaxy-evidence/image-build-v6/README.md).
+
 Oct 9 07:39 UTC update: found and fixed the Qwen Helm overlay's authenticated
 liveness failure. Pinned vLLM returns 401 on unauthenticated `/v1/models`;
 all probes now use `/health`, with inference authentication preserved. Nineteen

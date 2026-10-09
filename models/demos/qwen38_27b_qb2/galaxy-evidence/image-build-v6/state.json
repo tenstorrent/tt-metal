@@ -1,0 +1,14 @@
+{
+  "state": "building",
+  "started_at": 1791532756.4674478,
+  "builder": "qwen38-release-builder-20261009-v6",
+  "devices_exposed": false,
+  "root": "/home/ttuser/qwen38-release-build-20261009-v6",
+  "output": "/dev/shm/qwen38-release-image-20261009-v6",
+  "survives_disconnect": true,
+  "survives_reboot": false,
+  "memory_limit_gib": 192,
+  "cpus": 24,
+  "buildkit_image": "moby/buildkit@sha256:f9fad9251904053271e79f96b918e67f0750f34cd621f439b0c341b66ca31359",
+  "probe_sha256": "358b3fa15254b385918153e4472e86465f2b51e948d1c3d41ffcb9f78f9bd205"
+}

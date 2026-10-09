@@ -1,0 +1,129 @@
+"""Bounded image-only build; never exposes Tenstorrent devices to the builder."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = Path(sys.argv[1]).resolve()
+OUTPUT = Path('/dev/shm/qwen38-release-image-20261009-v6')
+NAME = 'qwen38-release-builder-20261009-v6'
+BUILDKIT = 'moby/buildkit@sha256:f9fad9251904053271e79f96b918e67f0750f34cd621f439b0c341b66ca31359'
+
+def run(argv, timeout=60, capture=False, check=True):
+    print('RUN', json.dumps(argv), flush=True)
+    return subprocess.run(argv, check=check, timeout=timeout, text=True, capture_output=capture)
+
+def terminate(_sig, _frame):
+    raise SystemExit('Image build service stopping')
+
+signal.signal(signal.SIGTERM, terminate)
+record = {'state': 'starting', 'started_at': time.time(), 'builder': NAME, 'devices_exposed': False,
+          'root': str(ROOT), 'output': str(OUTPUT), 'survives_disconnect': True, 'survives_reboot': False,
+          'memory_limit_gib': 192, 'cpus': 24, 'buildkit_image': BUILDKIT}
+
+def save():
+    target = ROOT / 'state.json'
+    temporary = ROOT / 'state.json.tmp'
+    temporary.write_text(json.dumps(record, indent=2) + '\n')
+    temporary.replace(target)
+
+created = False
+try:
+    save()
+    assert shutil.disk_usage('/').free > 20 * 1024**3
+    assert shutil.disk_usage('/dev/shm').free > 220 * 1024**3
+    assert not OUTPUT.exists(), OUTPUT
+    expected = json.loads((ROOT / 'context-manifest.json').read_text())
+    for name, digest in expected['files'].items():
+        assert hashlib.sha256((ROOT / 'context' / name).read_bytes()).hexdigest() == digest, name
+    manifest = json.loads((ROOT / 'context/qwen38-bundle/manifest.json').read_text())
+    exists = run(['docker', 'container', 'inspect', NAME], capture=True, check=False)
+    assert exists.returncode != 0, 'Refusing to replace an existing container'
+    OUTPUT.mkdir(mode=0o700)
+    run(['docker', 'pull', BUILDKIT], timeout=600)
+    run(['docker', 'run', '-d', '--name', NAME, '--label', 'qwen38.task=release-build-20261009-v6',
+         '--memory=192g', '--memory-swap=192g', '--cpus=24', '--pids-limit=8192',
+         '--user=0:0', '--cgroupns=private', '--cap-add=SYS_ADMIN', '--entrypoint=/bin/sh',
+         '--env', 'BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock',
+         '--security-opt', 'seccomp=unconfined', '--security-opt', 'apparmor=unconfined',
+         '--security-opt', 'systempaths=unconfined',
+         '--tmpfs', '/var/lib/buildkit:rw,exec,size=170g,uid=0,gid=0,mode=0700',
+         '--mount', f'type=bind,src={ROOT}/context,dst=/context,readonly',
+         '--mount', f'type=bind,src={OUTPUT},dst=/output',
+         BUILDKIT, '-ec', 'printf \'%s\\n\' \'#!/bin/sh\' \'exec /usr/bin/buildkit-runc --rootless=true "$@"\' > /tmp/qwen38-runc; chmod 755 /tmp/qwen38-runc; exec buildkitd --rootless --root=/var/lib/buildkit --addr=unix:///run/buildkit/buildkitd.sock --oci-worker-binary=/tmp/qwen38-runc --oci-worker-gc=false'], timeout=90)
+    created = True
+    for _ in range(30):
+        result = run(['docker', 'exec', NAME, 'buildctl', 'debug', 'workers'], timeout=5, capture=True, check=False)
+        if result.returncode == 0:
+            print(result.stdout, flush=True)
+            break
+        if run(['docker', 'inspect', '-f', '{{.State.Running}}', NAME], capture=True).stdout.strip() != 'true':
+            raise RuntimeError('BuildKit stopped during startup')
+        time.sleep(2)
+    else:
+        raise TimeoutError('BuildKit readiness')
+    record['state'] = 'building'
+    save()
+    command = ['docker', 'exec', NAME, 'buildctl', 'build', '--frontend', 'dockerfile.v0',
+               '--local', 'context=/context', '--local', 'dockerfile=/context',
+               '--opt', 'filename=vllm-tt-metal/qwen38-galaxy.Dockerfile',
+               '--opt', 'platform=linux/amd64', '--opt', 'build-arg:BUILD_JOBS=24',
+               '--opt', 'build-arg:TTIS_SHA=' + expected['ttis_sha'],
+               '--output', 'type=oci,dest=/output/qwen38-image.oci.tar',
+               '--metadata-file', '/output/build-metadata.json', '--progress', 'plain']
+    for key in ('BASE_IMAGE', 'METAL_SHA', 'MODEL_SHA', 'PLUGIN_SHA'):
+        command += ['--opt', f'build-arg:{key}={manifest[key.lower()]}']
+    probe = ROOT / 'context/build-env-probe.Dockerfile'
+    probe.write_text('FROM busybox@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4\nRUN touch /qwen-build-probe && chown 1000:1000 /qwen-build-probe\nUSER 1000\nRUN test -w /qwen-build-probe\n')
+    record['probe_sha256'] = hashlib.sha256(probe.read_bytes()).hexdigest()
+    save()
+    run(['docker', 'exec', NAME, 'buildctl', 'build', '--frontend', 'dockerfile.v0',
+         '--local', 'context=/context', '--local', 'dockerfile=/context',
+         '--opt', 'filename=build-env-probe.Dockerfile', '--progress', 'plain'], timeout=180)
+    print('BUILD_ENVIRONMENT_PROBE_PASS', flush=True)
+    run(command, timeout=13800)
+    metadata = json.loads((OUTPUT / 'build-metadata.json').read_text())
+    (ROOT / 'build-metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+    archive = OUTPUT / 'qwen38-image.oci.tar'
+    record.update(state='preserving_unqualified', metadata=metadata, image_bytes=archive.stat().st_size)
+    save()
+    assert shutil.disk_usage('/').free > archive.stat().st_size + 8 * 1024**3
+    durable = ROOT / 'artifact'
+    durable.mkdir(mode=0o700)
+    partial = durable / 'qwen38-image.oci.tar.partial'
+    destination = durable / 'qwen38-image.oci.tar'
+    source_digest = hashlib.sha256()
+    with archive.open('rb') as source, partial.open('xb') as target:
+        for chunk in iter(lambda: source.read(32 * 1024**2), b''):
+            source_digest.update(chunk)
+            target.write(chunk)
+        target.flush()
+        os.fsync(target.fileno())
+    target_digest = hashlib.sha256()
+    with partial.open('rb') as saved:
+        for chunk in iter(lambda: saved.read(32 * 1024**2), b''):
+            target_digest.update(chunk)
+    assert source_digest.digest() == target_digest.digest()
+    assert partial.stat().st_size == archive.stat().st_size
+    partial.rename(destination)
+    directory_fd = os.open(durable, os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    record.update(state='built_unqualified', finished_at=time.time(), archive_sha256=source_digest.hexdigest(),
+                  durable_archive=str(destination), artifact_survives_reboot=True)
+except BaseException as error:
+    record.update(state='failed', error=repr(error), finished_at=time.time())
+    raise
+finally:
+    save()
+    if created:
+        with (ROOT / 'buildkit.log').open('w') as log:
+            subprocess.run(['docker', 'logs', NAME], stdout=log, stderr=subprocess.STDOUT, timeout=30)
+        subprocess.run(['docker', 'stop', '-t', '30', NAME], timeout=45, check=False)

@@ -1,0 +1,188 @@
+{
+  "model_id": "qwen38-27b-qb2-galaxy-experimental",
+  "impl": {
+    "impl_id": "qwen38_27b_qb2",
+    "impl_name": "qwen38-27b-qb2",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/demos/qwen38_27b_qb2"
+  },
+  "hf_model_repo": "Qwen/Qwen3.8-27B",
+  "model_name": "Qwen3.8-27B",
+  "inference_engine": "vLLM",
+  "device_type": "BLACKHOLE_GALAXY",
+  "device_model_spec": {
+    "device": "BLACKHOLE_GALAXY",
+    "max_concurrency": 128,
+    "max_context": 262144,
+    "max_tokens_all_users_override": 8404736,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [],
+    "vllm_args": {
+      "model": "/mnt/hf-cache",
+      "block_size": "32",
+      "max_model_len": "262144",
+      "max_num_seqs": "16",
+      "max_num_batched_tokens": "262144",
+      "additional_config": {
+        "_tt_standard_dp_visible_groups": [
+          "0,4,12,8",
+          "1,5,13,9",
+          "2,6,14,10",
+          "3,7,15,11",
+          "27,31,23,19",
+          "26,30,22,18",
+          "25,29,21,17",
+          "24,28,20,16"
+        ],
+        "_tt_standard_dp_mesh_grids": {
+          "0,4,12,8": [
+            1,
+            4
+          ],
+          "1,5,13,9": [
+            1,
+            4
+          ],
+          "2,6,14,10": [
+            1,
+            4
+          ],
+          "3,7,15,11": [
+            1,
+            4
+          ],
+          "27,31,23,19": [
+            1,
+            4
+          ],
+          "26,30,22,18": [
+            1,
+            4
+          ],
+          "25,29,21,17": [
+            1,
+            4
+          ],
+          "24,28,20,16": [
+            1,
+            4
+          ]
+        },
+        "tt": {
+          "fabric_config": "FABRIC_1D",
+          "fabric_max_packet_payload_size_bytes": 8192,
+          "l1_small_size": 24576,
+          "sample_on_device_mode": "all",
+          "trace_mode": "decode_only",
+          "trace_region_size": 200000000
+        }
+      },
+      "served_model_name": "Qwen/Qwen3.8-27B",
+      "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "hf-overrides": {
+        "architectures": [
+          "TTQwen38ForCausalLM"
+        ]
+      },
+      "host": "0.0.0.0",
+      "port": "8000",
+      "data_parallel_size": 8,
+      "max-logprobs": "-1",
+      "async-scheduling": true,
+      "no-enable-prefix-caching": true,
+      "no-enable-chunked-prefill": true,
+      "no-enable-log-requests": true,
+      "no-enable-log-outputs": true,
+      "reasoning_parser": "qwen3",
+      "tool_call_parser": "qwen3_coder",
+      "enable_auto_tool_choice": true
+    },
+    "override_tt_config": {},
+    "env_vars": {
+      "MESH_DEVICE": "(8, 4)",
+      "ARCH_NAME": "blackhole",
+      "QWEN_DECODE_BUCKETS": "1",
+      "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+      "QWEN_COMPACT_DECODE_MLP": "1",
+      "QWEN_BATCHED_DECODE_ROPE": "1",
+      "QWEN_COMPACT_DECODE_ATTENTION": "1",
+      "QWEN_VLLM_KV_POOL_TOKENS": "1050592",
+      "QWEN_BATCHED_PREFILL": "1",
+      "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+      "QWEN_PREFILL_BATCHED_HEAD": "1",
+      "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+      "QWEN_PREFILL_STARTUP_WARMUP": "1",
+      "QWEN_PREFILL_MAX_BATCH_TOKENS": "32768",
+      "QWEN_VLLM_HOST_COMPATIBILITY": "1",
+      "QWEN_PRECISION_CONFIG": "/home/container_app_user/tt-metal/models/demos/qwen38_27b_qb2/config/precision_accurate_decode_bfp8_head.json",
+      "QWEN_EXPECTED_PRECISION_SHA256": "592f5046560986713e5e2bd1fc3cb8fad105602915a7555a92c11c181aaa37ed",
+      "EXTRA_MODELS_DIR": "/home/container_app_user/tt-metal/models/demos",
+      "HF_HUB_OFFLINE": "1",
+      "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "false",
+      "VLLM_NO_USAGE_STATS": "1",
+      "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES": "0",
+      "DISABLE_METAL_OP_TIMEOUT": "1"
+    },
+    "tensor_cache_timeout": 3600.0,
+    "system_requirements": null,
+    "known_issues": [],
+    "eval_max_retries": null,
+    "image_benchmark_num_batches": 3
+  },
+  "system_requirements": null,
+  "env_vars": {
+    "VLLM_TARGET_DEVICE": "tt",
+    "MESH_DEVICE": "(8, 4)",
+    "ARCH_NAME": "blackhole",
+    "QWEN_DECODE_BUCKETS": "1",
+    "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+    "QWEN_COMPACT_DECODE_MLP": "1",
+    "QWEN_BATCHED_DECODE_ROPE": "1",
+    "QWEN_COMPACT_DECODE_ATTENTION": "1",
+    "QWEN_VLLM_KV_POOL_TOKENS": "1050592",
+    "QWEN_BATCHED_PREFILL": "1",
+    "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+    "QWEN_PREFILL_BATCHED_HEAD": "1",
+    "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+    "QWEN_PREFILL_STARTUP_WARMUP": "1",
+    "QWEN_PREFILL_MAX_BATCH_TOKENS": "32768",
+    "QWEN_VLLM_HOST_COMPATIBILITY": "1",
+    "QWEN_PRECISION_CONFIG": "/home/container_app_user/tt-metal/models/demos/qwen38_27b_qb2/config/precision_accurate_decode_bfp8_head.json",
+    "QWEN_EXPECTED_PRECISION_SHA256": "592f5046560986713e5e2bd1fc3cb8fad105602915a7555a92c11c181aaa37ed",
+    "EXTRA_MODELS_DIR": "/home/container_app_user/tt-metal/models/demos",
+    "HF_HUB_OFFLINE": "1",
+    "VLLM_DEBUG_LOG_API_SERVER_RESPONSE": "false",
+    "VLLM_NO_USAGE_STATS": "1",
+    "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES": "0",
+    "DISABLE_METAL_OP_TIMEOUT": "1"
+  },
+  "tt_metal_commit": "a08819ddbe23077f8037d3802303939064868ff6",
+  "vllm_commit": "b7e4292e4193cba20abe9c7c68ce489201b2e36b",
+  "hf_weights_repo": "Qwen/Qwen3.8-27B",
+  "param_count": 27,
+  "min_disk_gb": 74,
+  "min_ram_gb": 67.5,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": null,
+  "docker_image": null,
+  "status": "EXPERIMENTAL",
+  "code_link": "https://github.com/tenstorrent/tt-metal/tree/a08819ddbe23077f8037d3802303939064868ff6/models/demos/qwen38_27b_qb2",
+  "override_tt_config": {},
+  "supported_modalities": [
+    "text"
+  ],
+  "subdevice_type": "P150X4",
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "pinned_checkpoint": true,
+    "model_source_commit": "d3e8d6021f7aadcb28ba3903d79bd04b288a2819",
+    "qualification": "G0 only; accuracy and container hardware validation pending",
+    "reasoning_parser_name": "qwen3",
+    "tool_call_parser_name": "qwen3_coder"
+  },
+  "cli_args": {}
+}

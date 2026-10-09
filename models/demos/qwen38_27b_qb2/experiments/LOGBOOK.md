@@ -992,3 +992,54 @@ No session connection is needed for that queue to continue.
   the queued HF layer comparison is still needed to localize the remaining gap.
 
 [Helm probe evidence and corrected values](../galaxy-evidence/helm-health-v1/README.md).
+
+## Oct 9, 07:43-08:02 UTC: head G0 passed; completion audit and image build queued
+
+- Reviewed adapter sampling and recurrent-slot transitions. Existing seeded
+  continuity tests cover remaps, intervening prefill and host/device sampling
+  transitions. Source review did not establish a new cause of the GPQA gap.
+- Found a reporting distinction: the harness can score a correct final-answer
+  parser match before a length cutoff. All completed measured runs had zero
+  such credits, so 170/198 remains unchanged. Added a separate completion score
+  to the saved-response audit, preserving the original harness result and all
+  198 denominator rows. The stricter qualification requires 177 naturally
+  completed correct answers; it does not rewrite old answers or rewards.
+- Twenty-two CPU tests pass, including rejection of a 177-point raw pass with
+  one cutoff credit. Added a bounded read-only audit follower tied to the exact
+  head service invocation. Source hashes match local and remote bytes; PID
+  1345569, invocation `7172e4b27dbd47868376e12d70fa2815`, is live waiting.
+  It opens no devices and leaves all existing frozen controllers unchanged.
+- Head G0 passed at about 07:50:53 UTC: eight replicas, one passing JUnit test,
+  44m20s, maximum concurrent/isolated TPOT ratio 1.000006. Same-shape short-
+  context B1 timing changed from 286.27 to 281.33 aggregate decode tok/s;
+  per-replica TPOT increased 1.61-1.76%. This is not a long-context cost claim.
+- Collected the actual head G0 and prepared a new exact-source experimental
+  bundle at model revision `d3e8d6021f7`. Serving startup followed automatically.
+  Shared-memory wait warnings were followed by active warmup completions around
+  07:59:48-07:59:54; they were not treated as proof of a hang or restart authority.
+- Started the separate v6 head-image build on idle .34 at TTIS `2485b039b`.
+  PID 3806410, invocation `95040bf8652248bca40bb52f13caeb76`, is active.
+  Existing no-device bounds remain: four hours, 192 GiB, 24 CPUs, removable
+  RAM build workspace. Added final host-disk preservation with complete source/
+  destination checksum comparison and file/directory fsync, retaining 8 GiB.
+- Staging first hit a sandbox network denial. A receipt-newline edit then
+  produced a remote syntax error before any mutation; the corrected payload
+  compiled and launched exactly one build. No existing job or native artifact
+  was replaced. GPQA, image completion and container qualification remain open.
+
+[Head G0 and bundle](../galaxy-evidence/head-g0-v1/README.md),
+[completion audit](../galaxy-evidence/gpqa-completion-audit-v1/README.md),
+[head image build](../galaxy-evidence/image-build-v6/README.md).
+
+## Oct 9, 08:09 UTC: serving checks passed; head GPQA progressing
+
+- Collected the API receipt: all six checks passed, including multi-turn chat
+  and concurrent greedy repeatability at concurrency 128. This does not prove
+  long-context capacity, model accuracy, or container/Helm qualification.
+- Verified the exact head-control invocation is still active at PID 1103813.
+  Full GPQA reports 116/198 complete, 110 correct and zero truncations at
+  08:09:23 UTC. Fast-completing answers are not a representative final score;
+  the unchanged requirement is 177 naturally completed correct answers.
+- The completion audit is still waiting for the same invocation to finish.
+  Tau3 has no newer result: 3/12, including six timeout/step-limit outcomes.
+  The last completed native GPQA remains 170/198 with one incorrect cutoff.

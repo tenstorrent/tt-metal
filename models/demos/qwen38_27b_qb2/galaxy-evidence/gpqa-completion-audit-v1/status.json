@@ -1,0 +1,17 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-accuracy-head-v1-20261009.service",
+  "predecessor_invocation": "ff89c12d6a9b4feaa268d7eff48b4132",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791532371.227255,
+  "updated_at": 1791532851.7956817,
+  "last_service": {
+    "MainPID": "1103813",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "ff89c12d6a9b4feaa268d7eff48b4132"
+  }
+}

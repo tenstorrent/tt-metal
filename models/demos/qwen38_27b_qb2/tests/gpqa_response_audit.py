@@ -103,13 +103,18 @@ def audit(receipts, raw_directory, *, count, max_output_tokens, max_model_len):
 
     stopped = [r for r in rows if r["finish_reason"] == "stop"]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "receipt_sha256": sha256(receipt_bytes),
         "selected_count": count,
         "max_output_tokens": max_output_tokens,
         "max_model_len": max_model_len,
         "all_private_responses_match_scored_receipts": True,
         "full_score": {"correct": sum(r["correct"] for r in rows), "total": count},
+        # Preserve the harness result. A parser match can precede a length
+        # cutoff, so separately report the stricter completed-response gate.
+        # Incomplete rows stay in this denominator and contribute zero credit.
+        "completed_response_score": {"correct": sum(r["correct"] for r in stopped), "total": count},
+        "incomplete_credited_by_harness": sum(r["correct"] for r in rows if r["finish_reason"] != "stop"),
         "limits": dict(Counter(r["limit"] for r in rows)),
         "groups": {
             "length_limited": group([r for r in rows if r["finish_reason"] == "length"]),
@@ -119,11 +124,49 @@ def audit(receipts, raw_directory, *, count, max_output_tokens, max_model_len):
         },
         "interpretation": (
             "All selected rows remain in the full-score denominator. Subset metrics are diagnostics, not an "
-            "alternative benchmark score. Lack of exact repetition does not establish correct reasoning. "
+            "alternative benchmark score. The completed-response score retains that same denominator but "
+            "awards no credit to incomplete responses. The original harness score is unchanged. "
+            "Lack of exact repetition does not establish correct reasoning. "
             "Declared limits must be checked against the original launch configuration."
         ),
         "rows": rows,
     }
+
+
+def qualify(summary, report):
+    """Keep the published harness score, with a separate complete-answer gate."""
+    result = summary["gpqa_result"]
+    if (
+        report["selected_count"] != 198
+        or report["max_output_tokens"] != 65536
+        or report["max_model_len"] != 262144
+        or result.get("completed_samples") != 198
+        or result.get("dataset_samples") != 198
+        or result.get("full_dataset") is not True
+        or result.get("max_output_tokens") != 65536
+        or result.get("accuracy_threshold") != 0.892
+    ):
+        raise ValueError("Qualification requires the unchanged full 198-question 64K-output protocol")
+    correct = report["full_score"]["correct"]
+    if (
+        result.get("correct") != correct
+        or result.get("accuracy") != correct / 198
+        or result.get("passed") != (correct >= 177)
+        or result.get("truncated_samples") != report["groups"]["length_limited"]["count"]
+        or result.get("truncated_correct") != report["groups"]["length_limited"]["correct"]
+    ):
+        raise ValueError("Published summary disagrees with the complete saved-response audit")
+    completed = report["completed_response_score"]["correct"]
+    return dict(
+        required_correct=177,
+        selected_count=198,
+        harness_correct=correct,
+        harness_passed=correct >= 177,
+        completed_response_correct=completed,
+        completed_response_passed=completed >= 177,
+        incomplete_credited_by_harness=report["incomplete_credited_by_harness"],
+        proves_container_or_release_qualification=False,
+    )
 
 
 def main():
@@ -134,6 +177,7 @@ def main():
     parser.add_argument("--max-output-tokens", type=int, required=True)
     parser.add_argument("--max-model-len", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--summary", type=Path, help="Cross-check the full 64K-output qualification summary")
     args = parser.parse_args()
     report = audit(
         args.receipts,
@@ -142,6 +186,9 @@ def main():
         max_output_tokens=args.max_output_tokens,
         max_model_len=args.max_model_len,
     )
+    if args.summary is not None:
+        report["summary_sha256"] = sha256(args.summary.read_bytes())
+        report["qualification"] = qualify(json.loads(args.summary.read_text()), report)
     with args.output.open("x") as stream:
         json.dump(report, stream, indent=2)
         stream.write("\n")
