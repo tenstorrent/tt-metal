@@ -46,14 +46,26 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
-// With the barrier, INIT and the code after the measured loop run out of line at the end of the kernel code (sections.ld)
-// on 512 B, so changes to them cannot move the loop; by value, so nothing the loop uses escapes, and noipa keeps them out.
-#if defined(LLK_DBG_BARRIER)
+// LLK_PERF_OOL threads run INIT and the code after the loop out of line at the end of the kernel code (sections.ld), by
+// value and noipa, so changes to them cannot move the loop. The other threads keep INIT inline.
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
 #define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
 #define LLK_INIT_END   ()
 #else
 #define LLK_INIT_BEGIN
 #define LLK_INIT_END
+#endif
+
+// Kernels with inline INIT: the code after the loop out of line, so it cannot move the loop, and opaque INIT copies of
+// values INIT and the loop share, so INIT's code cannot change the loop's registers.
+#if defined(LLK_DBG_BARRIER)
+#define LLK_POST_LOOP_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_POST_LOOP_END   ()
+#define LLK_PERF_OPAQUE(v)  asm volatile("" : "+r"(v))
+#else
+#define LLK_POST_LOOP_BEGIN
+#define LLK_POST_LOOP_END
+#define LLK_PERF_OPAQUE(v)
 #endif
 
 inline void _perf_unpack_set_valid(std::uint32_t source)

@@ -94,7 +94,7 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    llk_barrier::rendezvous(llk_barrier::is_action_thread());
+    llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
 }
 
 __attribute__((always_inline)) inline void reset()
@@ -167,10 +167,12 @@ public:
     zone_scoped& operator=(const zone_scoped&) = delete;
     zone_scoped& operator=(zone_scoped&&)      = delete;
 
+    // Zones other than TILE_LOOP are marked likely, so their start and end stay inline before the TILE_LOOP park instead
+    // of next to TILE_LOOP's own blocks at the end of the kernel, where a change to them moved TILE_LOOP's clock reads.
     inline __attribute__((always_inline)) zone_scoped()
     {
         ckernel::fence_compiler();
-        if (!is_buffer_full())
+        if (LOOP_PAD ? !is_buffer_full() : __builtin_expect(!is_buffer_full(), 1))
         {
             is_opened = true;
             zone_reserve();
@@ -182,14 +184,16 @@ public:
     ~zone_scoped()
     {
         ckernel::fence_compiler();
-        if (is_opened)
+        if (LOOP_PAD ? is_opened : __builtin_expect(is_opened, 1))
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
 #if defined(LLK_DBG_BARRIER) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
+#if defined(LLK_PERF_OOL)
             // llk_loop_end_pad bytes of NOPs after the TILE_LOOP end read move the code after it against the loop (perf/layout.py)
             asm volatile(".ifndef llk_loop_end_pad\n\t.set llk_loop_end_pad, 0\n.endif\n.rept (llk_loop_end_pad / 4) * %[on]\n\tnop\n\t.endr"
                          :
                          : [on] "i"(LOOP_PAD ? 1 : 0));
+#endif
             std::uint32_t id;
             asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(id16));
             zone_record(static_cast<std::uint16_t>(id), start_timestamp, end_timestamp);

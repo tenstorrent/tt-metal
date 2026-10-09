@@ -114,14 +114,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         if constexpr (tilize_en)
         {
             _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
         }
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif
