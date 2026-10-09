@@ -58,17 +58,18 @@ ALWI void deepseek_mul_tiles_bcast_scalar(
 
 // Reuse one scalar SrcB across a block of full 32x32 tiles. The caller owns
 // destination acquisition and must keep the block within that allocation.
+// The multiply runs the fidelity phases of the kernel's MATH_FIDELITY.
 ALWI void mul_tiles_bcast_scalar_block_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH(SAN_HOOK(unsupported()));
-    MATH((_llk_math_eltwise_mul_scalar_block_init_()));
+    MATH((_llk_math_eltwise_mul_scalar_block_init_<MATH_FIDELITY>()));
     UNPACK((llk_unpack_AB_scalar_block_init(icb0, icb1)));
 }
 
 ALWI void mul_tiles_bcast_scalar_block(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t block_size) {
     MATH(SAN_HOOK(unsupported()));
-    MATH((_llk_math_eltwise_mul_scalar_block_(idst, block_size)));
+    MATH((_llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(idst, block_size)));
     UNPACK((llk_unpack_AB_scalar_block(icb0, icb1, itile0, itile1, block_size)));
 }
 
