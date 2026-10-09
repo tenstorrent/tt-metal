@@ -14,8 +14,10 @@
 // computed before this block's corners are combined, so the reader has it as
 // soon as it needs it.
 //
-// For each (block, kernel position) the reader then lands the four corners as
-// one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3],
+// Two readers split the kernel positions, even and odd, and each gets its own
+// copy of the geometry and its own corner and scalar buffers, which this kernel
+// drains alternately. For each (block, kernel position) a reader lands the four
+// corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3],
 // plus one scalar tile per corner holding that corner's weight in column 0.
 // This kernel tilizes the block on the unpacker, then multiplies each corner's
 // tiles by its scalar column and sums the four in L1:
@@ -57,6 +59,11 @@ constexpr uint32_t IN_H_FP32 = get_compile_time_arg_val(10);
 constexpr uint32_t IN_H_LESS_ONE_FP32 = get_compile_time_arg_val(11);
 constexpr uint32_t IN_W_FP32 = get_compile_time_arg_val(12);
 constexpr uint32_t IN_W_LESS_ONE_FP32 = get_compile_time_arg_val(13);
+// The second reader's buffers, for the odd kernel positions; the ones above serve the even ones.
+constexpr uint32_t odd_corner_block_cb_index = get_compile_time_arg_val(14);
+constexpr uint32_t odd_scalar_cb_index = get_compile_time_arg_val(15);
+constexpr uint32_t odd_geom_index_cb_index = get_compile_time_arg_val(16);
+constexpr uint32_t odd_geom_weight_cb_index = get_compile_time_arg_val(17);
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 
@@ -97,7 +104,12 @@ inline void in_range(uint32_t dst, uint32_t scratch, uint32_t lo_fp32, uint32_t 
 // corner row or column lies outside the input; a corner's weight is the product of its two
 // axis weights and the mask. Eight dest tiles are live at once, which full-sync dest holds
 // in fp32.
-void compute_geometry(CircularBuffer& geom_in_cb, CircularBuffer& index_cb, CircularBuffer& weight_cb) {
+void compute_geometry(
+    CircularBuffer& geom_in_cb,
+    CircularBuffer& index_cb,
+    CircularBuffer& weight_cb,
+    CircularBuffer& odd_index_cb,
+    CircularBuffer& odd_weight_cb) {
     geom_in_cb.wait_front(GEOM_IN_TILES);
     reconfig_data_format_srca(geom_in_cb_index);
     copy_init(geom_in_cb_index);
@@ -168,17 +180,24 @@ void compute_geometry(CircularBuffer& geom_in_cb, CircularBuffer& index_cb, Circ
 
     index_cb.reserve_back(1);
     weight_cb.reserve_back(CORNERS);
+    odd_index_cb.reserve_back(1);
+    odd_weight_cb.reserve_back(CORNERS);
     tile_regs_wait();
     pack_reconfig_data_format(geom_index_cb_index);
     pack_tile(2, geom_index_cb_index);
+    pack_tile(2, odd_geom_index_cb_index);
     pack_reconfig_data_format(geom_weight_cb_index);
-    pack_tile(4, geom_weight_cb_index);
-    pack_tile(7, geom_weight_cb_index);
-    pack_tile(1, geom_weight_cb_index);
-    pack_tile(0, geom_weight_cb_index);
+    for (const uint32_t cb : {geom_weight_cb_index, odd_geom_weight_cb_index}) {
+        pack_tile(4, cb);
+        pack_tile(7, cb);
+        pack_tile(1, cb);
+        pack_tile(0, cb);
+    }
     tile_regs_release();
     index_cb.push_back(1);
     weight_cb.push_back(CORNERS);
+    odd_index_cb.push_back(1);
+    odd_weight_cb.push_back(CORNERS);
 }
 
 }  // namespace
@@ -187,37 +206,42 @@ void kernel_main() {
     compute_kernel_hw_startup(corner_block_cb_index, scalar_cb_index, output_cb_index);
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
-    CircularBuffer corner_block_cb(corner_block_cb_index);
     CircularBuffer tiled_cb(tiled_cb_index);
-    CircularBuffer scalar_cb(scalar_cb_index);
     CircularBuffer output_cb(output_cb_index);
     CircularBuffer geom_in_cb(geom_in_cb_index);
     CircularBuffer index_cb(geom_index_cb_index);
     CircularBuffer weight_cb(geom_weight_cb_index);
+    CircularBuffer odd_index_cb(odd_geom_index_cb_index);
+    CircularBuffer odd_weight_cb(odd_geom_weight_cb_index);
     // Written once by the reader and kept for every block.
     CircularBuffer(geom_kernel_cb_index).wait_front(2);
 
     if (num_blocks > 0) {
-        compute_geometry(geom_in_cb, index_cb, weight_cb);
+        compute_geometry(geom_in_cb, index_cb, weight_cb, odd_index_cb, odd_weight_cb);
     }
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if (block + 1 < num_blocks) {
-            compute_geometry(geom_in_cb, index_cb, weight_cb);
+            compute_geometry(geom_in_cb, index_cb, weight_cb, odd_index_cb, odd_weight_cb);
         }
         reconfig_data_format_srca(corner_block_cb_index);
         pack_reconfig_data_format(tiled_cb_index);
         for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+            const uint32_t corner_cb_index = (kk & 1) ? odd_corner_block_cb_index : corner_block_cb_index;
+            const uint32_t scalar_index = (kk & 1) ? odd_scalar_cb_index : scalar_cb_index;
+            CircularBuffer corner_block_cb(corner_cb_index);
+            CircularBuffer scalar_cb(scalar_index);
+
             // The packer must overwrite tiled_cb, not accumulate into it.
             pack_reconfig_l1_acc(0);
-            tilize_init(corner_block_cb_index, BLOCK_TILES, tiled_cb_index);
+            tilize_init(corner_cb_index, BLOCK_TILES, tiled_cb_index);
             corner_block_cb.wait_front(BLOCK_TILES);
             tiled_cb.reserve_back(BLOCK_TILES);
-            tilize_block(corner_block_cb_index, BLOCK_TILES, tiled_cb_index);
+            tilize_block(corner_cb_index, BLOCK_TILES, tiled_cb_index);
             tiled_cb.push_back(BLOCK_TILES);
             corner_block_cb.pop_front(BLOCK_TILES);
-            tilize_uninit(corner_block_cb_index, tiled_cb_index);
+            tilize_uninit(corner_cb_index, tiled_cb_index);
 
-            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_cb_index);
+            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
             tiled_cb.wait_front(BLOCK_TILES);
             // The four corners accumulate into these tiles in L1, so they stay reserved throughout.
             output_cb.reserve_back(channel_tiles);
@@ -226,8 +250,7 @@ void kernel_main() {
                 scalar_cb.wait_front(1);
                 for (uint32_t t = 0; t < channel_tiles; ++t) {
                     tile_regs_acquire();
-                    mul_tiles_bcast<BroadcastType::COL>(
-                        tiled_cb_index, scalar_cb_index, corner * channel_tiles + t, 0, 0);
+                    mul_tiles_bcast<BroadcastType::COL>(tiled_cb_index, scalar_index, corner * channel_tiles + t, 0, 0);
                     tile_regs_commit();
                     tile_regs_wait();
                     // Packs to slot t explicitly; the default would advance the write
