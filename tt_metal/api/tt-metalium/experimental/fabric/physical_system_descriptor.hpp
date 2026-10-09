@@ -18,7 +18,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
-#include <tt_stl/strong_type.hpp>
 #include <umd/device/utils/semver.hpp>
 
 namespace YAML {

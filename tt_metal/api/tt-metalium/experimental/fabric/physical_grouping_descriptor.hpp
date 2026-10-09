@@ -21,6 +21,7 @@
 #include <unordered_set>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>

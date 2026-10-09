@@ -11,7 +11,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include <fmt/format.h>
+#include <fmt/base.h>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
