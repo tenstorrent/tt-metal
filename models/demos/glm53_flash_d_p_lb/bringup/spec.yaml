@@ -20,6 +20,7 @@ box:
   chip_dram_gb: 32
   device_params:
     fabric_config: FABRIC_2D
+    fabric_payload_bytes: 14400    # fabric packet payload, as MiMo (14 KiB + 64); router default 4352
     l1_small_size: 24576
   test_timeout_s: 14400            # first load converts 42 layers of bfp4 experts into the tensorbin cache (~1 h)
 target:
