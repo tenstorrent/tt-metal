@@ -24,8 +24,11 @@ memory::memory() {
 
 memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     ElfFile elf;
-
     elf.ReadImage(path);
+    *this = from_elf(elf, path, loading);
+}
+
+memory memory::from_elf(ElfFile& elf, const std::string& path, Loading loading) {
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
 
@@ -45,7 +48,10 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
         }
     }
 
-    pack_from_segments(path, elf.GetSegments());
+    memory m;
+    m.loading_ = loading;
+    m.pack_from_segments(path, elf.GetSegments());
+    return m;
 }
 
 memory memory::from_segments(const std::vector<ElfFile::Segment>& segments, Loading loading) {

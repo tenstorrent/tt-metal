@@ -388,21 +388,21 @@ void move_common_entries(
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
     all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
+    std::set<tt::tt_metal::CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
+        all_cores_set.insert(tt::tt_metal::CoreRange(worker_core));
     }
-    all_worker_cores = CoreRangeSet(all_cores_set);
+    all_worker_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
 }
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
     const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);

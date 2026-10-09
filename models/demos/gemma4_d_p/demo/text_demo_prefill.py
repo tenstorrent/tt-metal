@@ -337,7 +337,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
 
     hf_model_id = _hf_model_id()
@@ -394,7 +394,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 
     with _shared_device_weights():
         for chunk_size in chunk_sizes:
-            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len):
+            if geometry_error := prefill_chunk_geometry_error(
+                chunk_size, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree
+            ):
                 logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
                 continue
             logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")
@@ -419,9 +421,18 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
-def _perf_signposts(layer_type, chunk_idx):
+def layer_perf_ci_cells(n_chunks):
+    """Chunk indices measured by chunk_idx="ci": first, second, middle and last global chunk; first two sliding."""
+    in_range = set(range(n_chunks))
+    return {
+        "global": tuple(sorted({0, 1, n_chunks // 2 - 1, n_chunks - 1} & in_range)),
+        "local": tuple(sorted({0, 1} & in_range)),
+    }
+
+
+def _perf_signposts(layer_type, chunk_size, chunk_idx):
     """Return profiler signposts for one layer and chunk."""
-    base = f"gemma4-layer-{layer_type}-chunk{chunk_idx}"
+    base = f"gemma4-layer-{layer_type}-sz{chunk_size}-chunk{chunk_idx}"
     return f"{base}-start", f"{base}-stop"
 
 
@@ -433,7 +444,7 @@ def _perf_signposts(layer_type, chunk_idx):
 @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
 @pytest.mark.parametrize(
     "chunk_idx",
-    [*range(max(LAYER_PERF_CONTEXT_LENGTHS) // min(PREFILL_CHUNK_SIZES)), "all"],
+    [*range(max(LAYER_PERF_CONTEXT_LENGTHS) // min(PREFILL_CHUNK_SIZES)), "all", "ci"],
     ids=lambda c: f"chunk{c}",
 )
 def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_size, context_len, reset_seeds, request):
@@ -443,21 +454,29 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
-    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
+    from models.demos.gemma4_d_p.scripts.layer_perf_report import write_manifest
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
     n_chunks = context_len // chunk_size
-    if chunk_idx != "all" and not 0 <= int(chunk_idx) < n_chunks:
-        pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
-
-    chunk_idxs = list(range(n_chunks)) if chunk_idx == "all" else [int(chunk_idx)]
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
+    if chunk_idx == "ci":
+        ci_cells = layer_perf_ci_cells(n_chunks)
+        cells_by_type = {lt: ci_cells[lt] for lt in layer_types}
+    elif chunk_idx == "all":
+        cells_by_type = {lt: tuple(range(n_chunks)) for lt in layer_types}
+    else:
+        cells_by_type = {lt: (int(chunk_idx),) for lt in layer_types}
+    if outside := sorted({i for idxs in cells_by_type.values() for i in idxs if not 0 <= i < n_chunks}):
+        pytest.skip(f"chunks {outside} are outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
+
+    chunk_idxs = sorted({i for idxs in cells_by_type.values() for i in idxs})
+    cells = [(lt, idx) for idx in chunk_idxs for lt in layer_types if idx in cells_by_type[lt]]
     model_layer_types = {"global": "full_attention", "local": "sliding_attention"}
 
     hf_model_id = _hf_model_id()
@@ -474,7 +493,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
     logger.info(
         f"[layer_perf_chunk] ctx={context_len} chunk={chunk_size} n_chunks={n_chunks} cp={cp} | "
-        f"cells={len(chunk_idxs) * len(layer_types)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
+        f"cells={len(cells)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
         f"types=({type_desc})"
     )
 
@@ -524,32 +543,26 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     def _make_forward(lt):
         """Build (prepare, forward) for one layer type.
 
-        prepare runs the once-per-chunk inputs of the model: the token embedding, the RoPE
-        lookups and their packing. forward runs the layer on them. They are traced separately so the measured trace
+        prepare runs the once-per-chunk inputs of the model: the token embedding and the packed RoPE
+        lookups. forward runs the layer on them. They are traced separately so the measured trace
         holds only the layer; in the model the prepare ops run once per chunk, not once per layer."""
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
         model_layer_type = model_layer_types[lt]
-        assert model_layer_type in model.rope_caches_2d, (
-            f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "
+        assert model_layer_type in model.packed_rope_tables, (
+            f"model has no RoPE tables for {lt} (built without _hf_text_config?) — "
             f"per-chunk RoPE would be wrong, refusing to measure"
         )
-        cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
-        pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def prepare():
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
-            cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
-            sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
-            packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
-            return embeds, (cos, sin), packed_rope
+            return embeds, model.lookup_packed_rope(model_layer_type)
 
         def forward(inputs, chunk_start):
-            embeds, rope_mats, packed_rope = inputs
+            embeds, packed_rope = inputs
             return layer(
                 hidden_states=embeds,
-                rope_mats=rope_mats,
                 prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
@@ -559,9 +572,9 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         return prepare, forward
 
     traces, prep_traces, outs = {}, {}, {}
-    capture_at = chunk_idxs[0]
     for lt in layer_types:
         prepare, fwd = _make_forward(lt)
+        capture_at = cells_by_type[lt][0]
         t0 = time.time()
         compile_out = fwd(prepare(), _stage(capture_at))
         ttnn.synchronize_device(mesh_device)
@@ -608,36 +621,35 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
     results = []
     try:
-        for idx in chunk_idxs:
-            for lt in layer_types:
-                sp_start, sp_stop = _perf_signposts(lt, idx)
+        for lt, idx in cells:
+            sp_start, sp_stop = _perf_signposts(lt, chunk_size, idx)
 
-                chunk_start = _stage(idx)
-                ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-                signpost(sp_start)
-                t_i = time.time()
-                ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-                measured_s = time.time() - t_i
-                signpost(sp_stop)
+            chunk_start = _stage(idx)
+            ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            signpost(sp_start)
+            t_i = time.time()
+            ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            measured_s = time.time() - t_i
+            signpost(sp_stop)
 
-                results.append(
-                    {
-                        "chunk_idx": idx,
-                        "layer_type": lt,
-                        "layer_idx": layer_idxs[lt],
-                        "chunk_start": chunk_start,
-                        "measured_ms": measured_s * 1000,
-                        "start_signpost": sp_start,
-                        "stop_signpost": sp_stop,
-                    }
-                )
-                logger.info(
-                    f"[layer_perf_chunk] RESULT type={lt} chunk={idx} ring_depth={idx} "
-                    f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
-                    f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
-                )
+            results.append(
+                {
+                    "chunk_idx": idx,
+                    "layer_type": lt,
+                    "layer_idx": layer_idxs[lt],
+                    "chunk_start": chunk_start,
+                    "measured_ms": measured_s * 1000,
+                    "start_signpost": sp_start,
+                    "stop_signpost": sp_stop,
+                }
+            )
+            logger.info(
+                f"[layer_perf_chunk] RESULT type={lt} chunk={idx} ring_depth={idx} "
+                f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
+                f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
+            )
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_config)
     finally:
@@ -646,6 +658,13 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
+    write_manifest(
+        request.node.callspec.id,
+        results,
+        context_len=context_len,
+        chunk_size=chunk_size,
+        mesh_shape=tuple(mesh_device.shape),
+    )
 
     n_local = model_args.layer_types.count("sliding_attention")
     n_global = model_args.layer_types.count("full_attention")

@@ -5,11 +5,9 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
-#include <utility>
 #include <unordered_set>
 
 #include <tt-metalium/buffer.hpp>

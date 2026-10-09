@@ -36,6 +36,8 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     subblock_w=2,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """
     Test dit_minimal_matmul_addcmul_fused: output = addcmul_input1 + (scalar * matmul_output * addcmul_input2).
@@ -71,8 +73,12 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     # Convert to ttnn tensors
     tt_matmul_input = ttnn.from_torch(torch_matmul_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_matmul_weight = ttnn.from_torch(torch_matmul_weight, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_addcmul_a = ttnn.from_torch(torch_addcmul_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=tt_gate_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_addcmul_a = ttnn.from_torch(
+        torch_addcmul_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=residual_memory_config
+    )
+    tt_addcmul_b = ttnn.from_torch(
+        torch_addcmul_b, dtype=tt_gate_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=gate_memory_config
+    )
     tt_bias = None
     if torch_bias is not None:
         tt_bias = ttnn.from_torch(torch_bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -115,16 +121,27 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
 @pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "no_bias"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
-    """Basic functionality test with small shapes."""
+@pytest.mark.parametrize("M, N", [(256, 1024), (1024, 256)], ids=["in1_reader", "in0_reader"])
+@pytest.mark.parametrize(
+    "residual_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["residual_dram", "residual_l1"]
+)
+@pytest.mark.parametrize(
+    "gate_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["gate_dram", "gate_l1"]
+)
+def test_dit_minimal_matmul_addcmul_fused_basic(
+    device, use_bias, dtype, M, N, residual_memory_config, gate_memory_config
+):
+    """Distinct ternary bindings must compile in both reader kernels (M > N transposes the grid)."""
     check_result = run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
-        M=256,
+        M=M,
         K=512,
-        N=1024,
+        N=N,
         scalar=1.0,
         dtype=dtype,
         use_bias=use_bias,
+        residual_memory_config=residual_memory_config,
+        gate_memory_config=gate_memory_config,
     )
     assert check_result["pcc"] > 0.9995
     assert check_result["relative_rmse"] < 0.02

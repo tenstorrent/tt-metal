@@ -214,13 +214,16 @@ class Llama(AbstractModuleBase):
         )
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
-        # down-proj): every block adds into the residual stream, so its variance grows
-        # ~linearly with depth. Std is the usual 1/sqrt(fan_in) damped by 1/sqrt(num_layers),
-        # which keeps residual-stream variance depth-independent. fan_in differs between the
-        # two: hidden_size for out-proj, intermediate_size for down-proj.
+        # down-proj): each of them adds its output into the residual stream, so the stream's
+        # variance at init grows ~linearly with the number of such additions.
+        # Std is the usual 1/sqrt(fan_in) damped by 1/sqrt(N), where N is the total number of
+        # residual additions. Each block adds into the stream twice (after attention and after
+        # the MLP), so N = 2 * num_hidden_layers. fan_in differs between the two: hidden_size
+        # for out-proj, intermediate_size for down-proj.
         intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
-        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * config.num_hidden_layers))
-        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * config.num_hidden_layers))
+        num_residual_writes = 2 * config.num_hidden_layers
+        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * num_residual_writes))
+        down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * num_residual_writes))
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(

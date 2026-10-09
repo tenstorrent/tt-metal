@@ -15,7 +15,6 @@ from typing import Optional
 
 from ttnn.decorators import set_golden_comparison_config
 
-
 # Head dims (k_dim, v_dim) are supplied by each test, not baked in here. MASKED_INDEX is the op's sentinel.
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
 SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
@@ -487,7 +486,8 @@ def _decode_attention(
 
     outputs = []
     for batch_index in range(batch):
-        position = int(positions[batch_index % len(positions)])
+        # The non-causal decode reader attends the whole cache; cur_pos only bounds causal decode.
+        position = int(positions[batch_index % len(positions)]) if is_causal else input_tensor_k.shape[-2] - 1
         if position < 0:
             outputs.append(query.new_zeros((1, num_heads, 1, input_tensor_v.shape[-1])))
             continue
@@ -1238,6 +1238,35 @@ def _ring_stats_scratch(input_tensor_q, joint_tensor_q=None):
     return set_golden_comparison_config(stats, method="skip", scope="all")
 
 
+def _circular_cache_in_logical_order(cache, *, chunk_length, query_start, is_causal, sliding_window_size):
+    """Unroll a circular KV cache of chunk-sized slabs, where chunk group g lives in slab g % num_slabs.
+    Evicted groups become zeros, so the attention window must not reach them.
+    """
+
+    if query_start is None or sliding_window_size is None:
+        raise ValueError("circular_kv_cache requires kv_actual_isl and sliding_window_size")
+    capacity = cache.shape[-2]
+    if capacity % chunk_length:
+        raise ValueError(f"Circular cache length {capacity} is not a multiple of the chunk length {chunk_length}")
+    num_slabs = capacity // chunk_length
+    num_groups = math.ceil((query_start + chunk_length) / chunk_length)
+    first_resident_group = max(0, num_groups - num_slabs)
+    window = int(sliding_window_size)
+    earliest_attended_key = query_start - (window - 1 if is_causal else window // 2)
+    if earliest_attended_key < first_resident_group * chunk_length:
+        raise ValueError(
+            f"The sliding window reaches key {earliest_attended_key}, which the circular cache already evicted"
+        )
+
+    logical = cache.new_zeros((*cache.shape[:-2], num_groups * chunk_length, cache.shape[-1]))
+    for group in range(first_resident_group, num_groups):
+        slab = group % num_slabs
+        logical[..., group * chunk_length : (group + 1) * chunk_length, :] = cache[
+            ..., slab * chunk_length : (slab + 1) * chunk_length, :
+        ]
+    return logical
+
+
 def _ring_joint_golden(
     input_tensor_q,
     input_tensor_k,
@@ -1269,11 +1298,6 @@ def _ring_joint_golden(
         raise ValueError(f"Only joint_strategy='rear' is supported, got {joint_strategy!r}")
     if is_cross and is_causal:
         raise ValueError("is_cross=True requires non-causal attention")
-    if circular_kv_cache:
-        raise NotImplementedError(
-            "The ring golden does not model the device's block-cyclic circular KV layout; "
-            "use a logically ordered cache or omit comparison for this mode"
-        )
 
     stats = _ring_stats_scratch(input_tensor_q, joint_tensor_q)
     input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
@@ -1287,6 +1311,17 @@ def _ring_joint_golden(
         kv_cache_num_layers=kv_cache_num_layers,
         kv_cache_layer_idx=kv_cache_layer_idx,
     )
+    if circular_kv_cache:
+        input_tensor_k, input_tensor_v = (
+            _circular_cache_in_logical_order(
+                cache,
+                chunk_length=input_tensor_q.shape[-2],
+                query_start=actual_kv_length,
+                is_causal=is_causal,
+                sliding_window_size=sliding_window_size,
+            )
+            for cache in (input_tensor_k, input_tensor_v)
+        )
 
     logical_n = int(_scalar(logical_n, input_tensor_k.shape[-2]))
     if logical_n < 0:
@@ -1336,6 +1371,27 @@ def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
     return _ring_joint_golden(*args, **kwargs)
 
 
+def _ring_mla_split_kv_global_order(input_tensor_kv, query_length, kv_sources):
+    """Reorder a split-KV cache from source-major shard order into global sequence order.
+
+    Split KV stores global region g, of query_length // kv_sources rows, on source g % kv_sources
+    at local row (g // kv_sources) * region. Composed shards hold whole sources back to back.
+    """
+    import torch
+
+    if query_length % kv_sources != 0:
+        raise ValueError(f"Split-KV query length {query_length} is not divisible by {kv_sources} KV sources")
+    region = query_length // kv_sources
+    rows = input_tensor_kv.shape[-2]
+    if rows % kv_sources != 0 or (rows // kv_sources) % region != 0:
+        raise ValueError(f"Split-KV cache of {rows} rows is not {kv_sources} sources of whole {region}-row regions")
+    source_rows = rows // kv_sources
+    regions = torch.arange(rows // region)
+    starts = (regions % kv_sources) * source_rows + (regions // kv_sources) * region
+    index = (starts.unsqueeze(1) + torch.arange(region)).reshape(-1).to(input_tensor_kv.device)
+    return input_tensor_kv.index_select(-2, index)
+
+
 def ring_mla_golden(
     input_tensor_q,
     input_tensor_kv,
@@ -1349,8 +1405,14 @@ def ring_mla_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    _ttnn_ring_mla_kv_sources=None,
     **_,
 ):
+    # Split KV: Q composes to the whole chunk in sequence order, while KV composes source-major.
+    if _ttnn_ring_mla_kv_sources is not None:
+        input_tensor_kv = _ring_mla_split_kv_global_order(
+            input_tensor_kv, input_tensor_q.shape[-2], int(_ttnn_ring_mla_kv_sources)
+        )
     input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_kv,
         input_tensor_kv,
@@ -1457,40 +1519,52 @@ def recurrent_gated_delta_rule(
     initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
+    *,
+    output_per_token_state: bool = False,
+    dtype=None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
-    Token-by-token recurrent gated delta rule. Used for decode (T=1).
+    Token-by-token recurrent gated delta rule (FLA's naive_recurrent_gated_delta_rule, same argument order).
+    Used for decode (T = 1) and speculative verify (T = K + 1).
 
     For each timestep t:
-      1. Decay the state:  h = h * exp(g_t)
+      1. Decay the state:  h = h * exp(g_t)      (g_t a scalar per head, or a vector over K when g has rank 4: KDA)
       2. Read from state:  v_read = sum_k(h * k_t)
       3. Compute delta:    delta = (v_t - v_read) * beta_t
       4. Write to state:   h = h + outer(k_t, delta)
-      5. Query state:      o_t = h @ q_t
+      5. Query state:      o_t = h @ q_t          (the post-update state)
 
     Args:
-        q: [B, T, H, K] query
+        q: [B, T, H, K] query; H may divide HV (GQA: value head hv reads key head hv // (HV // H))
         k: [B, T, H, K] key
-        v: [B, T, H, V] value
-        beta: [B, T, H] write strength (sigmoid output)
-        g: [B, T, H] log-space decay gate
-        scale: attention scale factor, defaults to 1/sqrt(K)
-        initial_state: [B, H, K, V] previous recurrent state
+        v: [B, T, HV, V] value
+        beta: [B, T, HV] write strength (sigmoid output)
+        g: [B, T, HV] log-space decay gate, or [B, T, HV, K] per-key log decays (KDA)
+        scale: query scale, defaults to 1/sqrt(K); applied after the optional L2 norm
+        initial_state: [B, HV, K, V] previous recurrent state
         output_final_state: whether to return the final state
-        use_qk_l2norm: apply L2 normalization to q, k
+        use_qk_l2norm: apply l2_norm (eps 1e-6 inside the root) to q and k, in the compute dtype
+        output_per_token_state: return the state after every token, [B, T, HV, K, V], instead of the final state
+        dtype: compute dtype, torch.float32 by default (torch.float64 for a high-precision reference)
 
     Returns:
-        output: [B, T, H, V]
-        final_state: [B, H, K, V] or None
+        output: [B, T, HV, V]
+        state: [B, HV, K, V] (output_final_state), [B, T, HV, K, V] (output_per_token_state), else None
     """
     import torch
 
+    dtype = torch.float32 if dtype is None else dtype
     if use_qk_l2norm:
-        q = l2_norm(q, dim=-1)
-        k = l2_norm(k, dim=-1)
+        q = l2_norm(q.to(dtype), dim=-1)
+        k = l2_norm(k.to(dtype), dim=-1)
+    num_value_heads = v.shape[2]
+    if q.shape[2] != num_value_heads:
+        groups = num_value_heads // q.shape[2]
+        q = q.repeat_interleave(groups, dim=2)
+        k = k.repeat_interleave(groups, dim=2)
 
-    # Transpose to [B, H, T, D] for head-first processing
-    q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v, beta, g)]
+    # Transpose to [B, H, T, ...] for head-first processing
+    q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(dtype) for x in (q, k, v, beta, g)]
 
     B, H, T, K = k.shape
     V = v.shape[-1]
@@ -1499,10 +1573,12 @@ def recurrent_gated_delta_rule(
         scale = K**-0.5
     q = q * scale
 
-    o = torch.zeros(B, H, T, V, device=v.device, dtype=v.dtype)
-    h = torch.zeros(B, H, K, V, device=v.device, dtype=v.dtype)
+    o = torch.zeros(B, H, T, V, device=v.device, dtype=dtype)
+    h = torch.zeros(B, H, K, V, device=v.device, dtype=dtype)
     if initial_state is not None:
-        h = initial_state.to(torch.float32)
+        h = initial_state.to(dtype)
+    states = torch.zeros(B, T, H, K, V, device=v.device, dtype=dtype) if output_per_token_state else None
+    per_key_decay = g.dim() == 4  # [B, H, T, K]
 
     for i in range(T):
         b_q = q[:, :, i]  # [B, H, K]
@@ -1511,7 +1587,8 @@ def recurrent_gated_delta_rule(
         b_beta = beta[:, :, i]  # [B, H]
 
         # 1. Decay the state
-        h = h.clone() * g[:, :, i].exp()[..., None, None]
+        decay = g[:, :, i].exp()
+        h = h.clone() * (decay[..., :, None] if per_key_decay else decay[..., None, None])
 
         # 2. Read from state: contract over K dimension
         b_v = b_v - (h.clone() * b_k[..., None]).sum(-2)
@@ -1524,12 +1601,19 @@ def recurrent_gated_delta_rule(
 
         # 5. Query the state
         o[:, :, i] = torch.einsum("bhd,bhdm->bhm", b_q, h)
+        if states is not None:
+            states[:, i] = h
 
-    final_state = h if output_final_state else None
+    if output_per_token_state:
+        state = states
+    elif output_final_state:
+        state = h
+    else:
+        state = None
 
     # Transpose back to [B, T, H, V]
     o = o.transpose(1, 2).contiguous()
-    return o, final_state
+    return o, state
 
 
 def chunk_gated_delta_rule(
@@ -1702,6 +1786,36 @@ def chunk_gated_delta_rule_golden(
     if output_head_major:
         output = output.permute(0, 2, 1, 3).reshape(-1, output.shape[1], output.shape[-1])
     return output, final_state
+
+
+def fused_recurrent_gated_delta_rule_golden(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    *,
+    scale=None,
+    initial_state=None,
+    output_final_state=False,
+    output_per_token_state=False,
+    use_qk_l2norm=False,
+    **_,
+):
+    """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over the
+    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested."""
+    return recurrent_gated_delta_rule(
+        q,
+        k,
+        v,
+        beta,
+        g,
+        scale=scale,
+        initial_state=initial_state,
+        output_final_state=output_final_state or output_per_token_state,
+        use_qk_l2norm=use_qk_l2norm,
+        output_per_token_state=output_per_token_state,
+    )
 
 
 def gated_delta_attn_seq_golden(

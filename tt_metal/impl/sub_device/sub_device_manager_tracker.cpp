@@ -104,7 +104,6 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
             mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
                 /*reset_launch_msg_state=*/cq_id + 1 == num_hw_cqs,
                 num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
                 sub_device_manager->get_core_go_message_mapping(),
                 ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
