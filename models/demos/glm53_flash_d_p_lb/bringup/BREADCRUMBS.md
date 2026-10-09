@@ -273,3 +273,12 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   (last-chunk top1 0.41 vs 0.65; GLM_MLA_BMM_L1=0 restores 0.6519). Not used - suspect the batched multi-core-reuse
   path with more blocks (256) than cores (110); to investigate before retrying.
 - Warm-prefill noise: the same code measured 7.09 and 7.40 s on different runs today; compare changes back to back.
+- Root cause of the batched-matmul breakage (supersedes the note above), localized with minimal repros in 16-22 s
+  runs: ttnn's batched MatmulMultiCoreReuseProgramConfig (per-batch weights) is wrong whenever a core gets more than
+  one output block (tests/test_mla_bmm_repro.py::test_mla_bmm_blocks: rel 5..25 vs fp32 for B*Mt/per_core_M > 110
+  cores, 4.6e-3 at 64 blocks). The earlier single-chip sweep looked correct only because a same-shape auto matmul ran
+  first and left the right data in L1. mm_configs.bmm now only emits one-block-per-core configs: o w_uv per_core_M 20
+  (0.899 -> 0.276 ms per DSA layer, rel 1.4e-3 vs auto in the model); q w_uk has none that fits L1 (auto).
+- Tools: tests/test_ab_layers.py (in-model A/B over a few layers, runtime module switches, base-vs-base determinism
+  check; start 0 so KDA restarts from its zero state), tests/test_mla_bmm_repro.py (single chip / mesh repro, live-input
+  replay via GLM_MLA_CHECK_DUMP, predecessor-op and block-count sweeps), mla_attention.CHECK_BMM (per-op config vs auto).
