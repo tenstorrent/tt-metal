@@ -323,6 +323,8 @@ private:
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
+    // Resolved once at construction so I/O never reads the mesh view; see validate_host_socket_access.
+    bool rank_owns_endpoint_ = true;
     bool is_owner_ = true;
     std::string descriptor_path_;
     HDSocketConnectorState* connector_state_ = nullptr;
