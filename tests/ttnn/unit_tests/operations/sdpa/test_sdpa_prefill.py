@@ -817,3 +817,21 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert out_torch.shape == ref_torch.shape == (b, s, dim)
     n_diff = int((out_torch[:, :valid] != ref_torch[:, :valid]).sum())
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
+
+
+def test_chunked_sdpa_rejects_zero_chunk_sizes(expect_error, device):
+    """SDPAProgramConfig chunk sizes default to 0, which only precision recipes resolve (op-selected
+    blocking). Legacy entry points must reject 0 in validation instead of dividing by it."""
+    b, nh, s, d, block = 1, 1, 128, 64, 32
+    blocks = s // block
+    q = ttnn.from_torch(torch.randn(b, nh, 64, d), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    paged = ttnn.from_torch(
+        torch.randn(blocks, nh, block, d), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    page_table = ttnn.from_torch(
+        torch.arange(blocks, dtype=torch.int32).reshape(b, blocks), device=device, dtype=ttnn.int32
+    )
+    config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=device.compute_with_storage_grid_size())
+    assert config.q_chunk_size == 0 and config.k_chunk_size == 0
+    with expect_error(RuntimeError, ""):
+        ttnn.transformer.chunked_scaled_dot_product_attention(q, paged, paged, page_table, 0, program_config=config)

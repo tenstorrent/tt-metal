@@ -28,6 +28,24 @@ FORCE_INLINE void generate_bcast_col_scalar(CircularBuffer cb, uint32_t scalar) 
     cb.push_back(1);
 }
 
+// W-bcast scalar with every other element zero, so the tile is also a clean ones-column matmul operand.
+FORCE_INLINE void generate_bcast_col_scalar_zeroed(CircularBuffer cb, uint32_t scalar) {
+    const uint16_t scalar_val = scalar >> 16;
+    cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+    for (int i = 0; i < 512; ++i) {
+        words[i] = 0;
+    }
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr());
+    for (int k = 0; k < 4; k += 2) {
+        uint32_t idx = k << 8;
+        for (int j = 0; j < 256; j += 16) {
+            ptr[idx + j] = scalar_val;
+        }
+    }
+    cb.push_back(1);
+}
+
 // H-bcast scalar
 // Tile is assumed to have 16-bit elements
 // Scalar is assumed to be a 16-bit value double packed into a u32
