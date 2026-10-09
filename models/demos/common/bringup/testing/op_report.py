@@ -63,6 +63,10 @@ INDEXER_OPS = {
     "experimental.ring_indexer_score_dsa",
 }
 LOCAL_OPS = {"mesh_partition"}  # mesh ops that move no data between chips
+# ttnn CCLs that choose their own link count: ttnn.all_gather ignores num_links (and topology) and uses every link on
+# the axis (all_gather_device_operation.cpp, get_num_links(mesh, axis)); reduce_scatter / all_reduce do the same when
+# num_links is None
+AUTO_LINK_OPS = {"all_gather", "reduce_scatter", "all_reduce"}
 
 
 def family(op: str) -> str:
@@ -138,8 +142,9 @@ def compute_cost(call: dict) -> dict | None:
     return None
 
 
-def ccl_cost(call: dict, mesh_shape: tuple) -> dict | None:
-    """Worst-chip ingress / egress bytes of one CCL call and its link count (links x receive directions)."""
+def ccl_cost(call: dict, mesh_shape: tuple, axis_links: dict | None = None) -> dict | None:
+    """Worst-chip ingress / egress bytes of one CCL call and its link count (links x receive directions).
+    axis_links: the system's link count per mesh axis, for the ttnn CCLs that pick their own (AUTO_LINK_OPS)."""
     op, ins, outs, kw = call["op"], call["ins"], call["outs"], call["kw"]
     if family(op) != "ccl" or not ins:
         return None
@@ -151,13 +156,22 @@ def ccl_cost(call: dict, mesh_shape: tuple) -> dict | None:
     else:
         G = mesh_shape[int(axis)]
     links = kw.get("num_links")
-    if links is None:
+    auto = op in AUTO_LINK_OPS and (op == "all_gather" or links is None)
+    if auto:
+        axes = [int(axis)] if axis is not None else list(range(len(mesh_shape)))
+        if axis_links:
+            links = min(axis_links.get(a, 1) for a in axes)
+            assumed.append("ttnn CCL picks its own links: all links on the axis")
+        else:
+            links = 1
+            assumed.append("ttnn CCL picks its own links; axis link count unknown: 1")
+    elif links is None:
         links = 1
         assumed.append("num_links unset: 1")
     topo = kw.get("topology")
-    if topo is None:
+    if topo is None or (auto and op == "all_gather"):
         topo = "Linear"
-        assumed.append("topology unset: Linear")
+        assumed.append("topology unset / ignored: Linear (open axis)")
     dirs = 2 if "Ring" in str(topo) else 1
     b_in = _nbytes(ins[0])
     b_out = _nbytes(outs[0]) if outs else 0.0
@@ -200,6 +214,7 @@ def build(
     layer_weights: dict | None = None,
     context_calls: list[dict] | None = None,
     context_label: str = "",
+    axis_links: dict | None = None,
 ) -> dict:
     """Group the calls and compute every column (see the module docstring). Returns a JSON-able dict."""
     peaks = ARCH.get(arch, ARCH["blackhole"])
@@ -211,7 +226,7 @@ def build(
 
     groups = defaultdict(list)
     for c in calls:
-        cc = ccl_cost(c, mesh_shape) if family(c["op"]) == "ccl" else None
+        cc = ccl_cost(c, mesh_shape, axis_links) if family(c["op"]) == "ccl" else None
         geo = f" [axis {cc['axis']}, {cc['links']}L, {cc['topology']}]" if cc else ""
         groups[(c["op"], signature(c) + geo)].append(c)
 
@@ -221,7 +236,7 @@ def build(
 
     ctx = defaultdict(list)
     for c in context_calls or []:
-        cc = ccl_cost(c, mesh_shape) if family(c["op"]) == "ccl" else None
+        cc = ccl_cost(c, mesh_shape, axis_links) if family(c["op"]) == "ccl" else None
         geo = f" [axis {cc['axis']}, {cc['links']}L, {cc['topology']}]" if cc else ""
         ctx[(c["op"], signature(c) + geo)].append(c)
 
@@ -257,10 +272,10 @@ def build(
                 tflops=fl / (total / 1e3) / 1e12 if total else 0.0,
                 assumed=cost["assumed"],
             )
-        cc = ccl_cost(rows[0], mesh_shape)
+        cc = ccl_cost(rows[0], mesh_shape, axis_links)
         if cc:
-            ing = sum(ccl_cost(c, mesh_shape)["ingress"] * wi for c, wi in zip(rows, wts))
-            eg = sum(ccl_cost(c, mesh_shape)["egress"] * wi for c, wi in zip(rows, wts))
+            ing = sum(ccl_cost(c, mesh_shape, axis_links)["ingress"] * wi for c, wi in zip(rows, wts))
+            eg = sum(ccl_cost(c, mesh_shape, axis_links)["egress"] * wi for c, wi in zip(rows, wts))
             sec = total / 1e3
             row.update(
                 ingress_gb_s=ing / sec / 1e9 if sec else 0.0,
@@ -310,6 +325,7 @@ def build(
             "dram_gb_s": peaks["dram_gb_s"],
         },
         "layer_weights": {str(k): v for k, v in w.items()},
+        "axis_links": {str(k): v for k, v in (axis_links or {}).items()},
         "total_ms": grand,
         "family_ms": dict(fam),
         "rows": out_rows,
@@ -416,3 +432,36 @@ def render(rep: dict, title: str = "", top: int | None = None) -> str:
 def save(rep: dict, path) -> None:
     with open(path, "w") as f:
         json.dump(rep, f, indent=1, default=str)
+
+
+def save_calls(path, **payload) -> None:
+    """The raw per-call records and build() arguments, so the report can be re-rendered without the device."""
+    with open(path, "w") as f:
+        json.dump(payload, f, default=str)
+
+
+def from_calls_file(path) -> tuple[dict, str]:
+    with open(path) as f:
+        d = json.load(f)
+    weights = {int(k): v for k, v in (d.get("layer_weights") or {}).items()}
+    links = {int(k): v for k, v in (d.get("axis_links") or {}).items()}
+    for c in d["calls"] + (d.get("context_calls") or []):
+        c["ns_dev"] = {int(k): v for k, v in c["ns_dev"].items()}
+    rep = build(
+        d["calls"],
+        tuple(d["mesh"]),
+        tuple(d["grid"]),
+        arch=d.get("arch", "blackhole"),
+        layer_weights=weights,
+        context_calls=d.get("context_calls"),
+        context_label=d.get("context_label", ""),
+        axis_links=links,
+    )
+    return rep, d.get("title", "")
+
+
+if __name__ == "__main__":  # python -m models.demos.common.bringup.testing.op_report <op_calls.json> [top]
+    import sys
+
+    rep, title = from_calls_file(sys.argv[1])
+    print(render(rep, title=title, top=int(sys.argv[2]) if len(sys.argv) > 2 else None))
