@@ -57,4 +57,13 @@ void kernel_main() {
             }
         }
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // id_per_dim is program-local L1 written through the DM caches (Scratchpad hands out the cached address).
+    // Write the dirty lines back and drop them before the kernel ends: left in the shared L2, they outlive this
+    // program and a later flush or eviction writes them over whatever buffer the next program puts at this
+    // address (a decode RMSNorm's reduce-scaler tile, zeroing E[x^2]).
+    const uint32_t q_scratch = id_per_dim.get_base_address();
+    flush_l2_cache_range(q_scratch, id_per_dim.size_in_bytes());
+    invalidate_l2_cache_range(q_scratch, id_per_dim.size_in_bytes());
+#endif
 }
