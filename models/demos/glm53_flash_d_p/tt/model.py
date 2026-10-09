@@ -181,7 +181,7 @@ class TtGlmBlock:
             from models.demos.glm53_flash_d_p.tt.q_a import build_q_a
 
             self.q_a = build_q_a(mesh, loader, cfg, layer)
-            self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks)
+            self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks, ring=split and DSA_LOCAL)
             self.attn = build_mla(mesh, loader, cfg, layer, max_seq)
             self.stateful += [self.indexer, self.attn]
             if split and DSA_LOCAL:
