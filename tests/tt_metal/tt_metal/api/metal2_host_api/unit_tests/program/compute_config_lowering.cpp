@@ -76,7 +76,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaul
     EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
     EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
-    EXPECT_FALSE(built.enable_trisc2_rvv);  // config_1xx unset
+    EXPECT_FALSE(built.enable_trisc2_rvv);  // config_12x unset
 }
 
 // The generation-specific RVV opt-ins must reach the internal configs. MakeProgramFromSpec also
@@ -86,7 +86,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             std::get<ComputeHardwareConfig>(kernel.hw_config).config_2xx =
-                ComputeHardwareConfig::Compute2XXConfig{.enable_trisc0_rvv = true};
+                ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
         }
     }
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -96,12 +96,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
     EXPECT_TRUE(built.enable_trisc0_rvv);
 }
 
-TEST_F(ProgramSpecTestBlackhole, CPU_Config1xxTrisc2RvvMapsToInternal) {
+TEST_F(ProgramSpecTestBlackhole, CPU_Config12xTrisc2RvvMapsToInternal) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
-            std::get<ComputeHardwareConfig>(kernel.hw_config).config_1xx =
-                ComputeHardwareConfig::Compute1XXConfig{.enable_trisc2_rvv = true};
+            std::get<ComputeHardwareConfig>(kernel.hw_config).config_12x =
+                ComputeHardwareConfig::Compute12XConfig{.enable_pack_rvv = true};
         }
     }
     Program program = MakeProgramFromSpec(*mesh_device_, spec);

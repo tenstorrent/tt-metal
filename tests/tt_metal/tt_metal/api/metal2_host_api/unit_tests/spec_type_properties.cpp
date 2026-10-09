@@ -76,6 +76,8 @@ static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be 
 static_assert(
     hashable_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must be hashable via ttsl reflection");
 static_assert(
+    hashable_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must be hashable via ttsl reflection");
+static_assert(
     hashable_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must be hashable via ttsl reflection");
 
 // Per-spec advanced options
@@ -143,6 +145,8 @@ static_assert(
 static_assert(std::is_aggregate_v<ComputeHardwareConfig>, "ComputeHardwareConfig must remain an aggregate");
 static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute1XXConfig>, "Compute1XXConfig must remain an aggregate");
+static_assert(
+    std::is_aggregate_v<ComputeHardwareConfig::Compute12XConfig>, "Compute12XConfig must remain an aggregate");
 static_assert(
     std::is_aggregate_v<ComputeHardwareConfig::Compute2XXConfig>, "Compute2XXConfig must remain an aggregate");
 static_assert(

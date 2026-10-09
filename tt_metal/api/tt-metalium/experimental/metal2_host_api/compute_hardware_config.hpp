@@ -127,20 +127,22 @@ struct ComputeHardwareConfig {
         // the Pack stage. Select either precise (slower) or approximate (faster).
         // NOTE: This setting has no effect on non-BFP formats.
         Precision bfp_pack_precision_mode = Precision::Approximate;
-
-        // Compile the kernel's TRISC2 (pack) binary with the RISC-V Vector extension
-        // enabled. Blackhole only (program compile fails on Wormhole). The unpack and math TRISC
-        // compiles are unchanged, and the vector unit is reachable only through explicit intrinsics.
-        bool enable_trisc2_rvv = false;
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
+    // ---- TT-1.2.x specific (Blackhole) ----
+    struct Compute12XConfig {
+        // Enable the RISC-V vector extension when compiling the compute kernel's Pack binary.
+        // Use this only if you need vector intrinsics in kernel code.
+        bool enable_pack_rvv = false;
+    };
+    std::optional<Compute12XConfig> config_12x = std::nullopt;
+
     // ---- TT-2.x.x specific (Quasar and derivatives) ----
     struct Compute2XXConfig {
-        // Compile the kernel's TRISC0 (unpack) binaries with the RISC-V Vector extension enabled.
-        // On Quasar the vector unit is wired to TRISC0 only; it is needed by kernels that push data
-        // through the vector unit. Other TRISC compiles are unchanged.
-        bool enable_trisc0_rvv = false;
+        // Enable the RISC-V vector extension when compiling the compute kernel's Unpack binary.
+        // Use this only if you need vector intrinsics in kernel code.
+        bool enable_unpack_rvv = false;
     };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
