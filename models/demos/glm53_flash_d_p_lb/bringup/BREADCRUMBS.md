@@ -239,3 +239,13 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Warm 56k prefill 7.66 -> 7.42 s (7595 tok/s). Component tests: KDA attention / dense MLP / shared expert / q_a /
   router pass. MLA attention component fails its norm gate (rel 0.017 > 0.012, norm ratio 0.98..0.99) with configs on
   and off alike: HiFi2 (HiFi4 passes, rel 0.0044); attention HiFi4 does not move KV PCC (above), kept HiFi2.
+
+## DSA layers on the chip's own rows (2026-10-09), GLM_DSA_LOCAL=1 default
+
+- Was: attn_norm all-gathered to all S rows on every chip, then every chip ran the indexer key / gate projections +
+  pooling and the MLA kv_a + norm on all 5120 rows (8x duplicated) into its replicated caches. Now attn_norm, q_a, the
+  pooled keys (640 rows = 160 whole pools) and the latent run on the chip's rows; pooled keys ([160, 128]) and latent
+  ([640, 512]) are all-gathered (axis 1, then 0: natural row order) into the replicated caches.
+- Warm 56k prefill 7.42 -> 7.03 s (8007 tok/s); last-chunk top1 vs text 0.652 (0.646 before).
+- Not done: GLM non-flash's full pattern (striped caches + ring_indexer_score_dsa + sparse_sdpa on a striped latent)
+  would also drop the replicated caches (latent ~57 MB per DSA layer per chip at 56k); no further time saving expected.

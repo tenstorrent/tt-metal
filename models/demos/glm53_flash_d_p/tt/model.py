@@ -41,6 +41,9 @@ import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 
 CACHE_ROOT_EMBED = "embed_bf16"
+# DSA layers (split layout): attn_norm, q_a, pooled keys and the MLA latent on the chip's own rows, keys / latent
+# all-gathered into the caches (no full-row attn_norm gather, no 8x duplicated key / latent projections)
+DSA_LOCAL = os.environ.get("GLM_DSA_LOCAL", "1") != "0"
 
 
 def block_graph(cfg, layer: int):
@@ -181,7 +184,16 @@ class TtGlmBlock:
             self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks)
             self.attn = build_mla(mesh, loader, cfg, layer, max_seq)
             self.stateful += [self.indexer, self.attn]
-            if split:
+            if split and DSA_LOCAL:
+                # attn_norm, q_a, the indexer's pooled keys and the MLA latent all on the chip's own S/n rows; the pooled
+                # keys and the latent are all-gathered into the replicated caches (GLM_DSA_LOCAL=0: the full-row path)
+                steps.update(
+                    attn_norm=lambda ctx, x: norm["attn_norm"](x),
+                    q_a=lambda ctx, x: self.q_a(x),
+                    indexer=lambda ctx, x, qr: self.indexer(x, qr, ctx.start, q_local=True, x_local=True),
+                    attention=lambda ctx, x, qr, idx: self.attn(x, qr, idx, ctx.start, split=True, x_local=True),
+                )
+            elif split:
                 # attn_norm on the chip's rows, then gathered: the indexer's pooled keys and the MLA latent need all
                 # S rows; q_a and the queries take the chip's own rows (no output gather after the MLA).
                 def attn_norm_all(ctx, x):
