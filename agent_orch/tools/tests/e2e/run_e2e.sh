@@ -27,7 +27,7 @@ budget: {max_attempts: 9, max_hours: 1, max_usd: 100}
 search: {policy: fresh, W: 2, R: 2, max_rounds: 3, round_root: ${ROUND_ROOT:-origin}}
 YAML
 echo "# toy brief" > agent_orch/campaigns/toy/brief.md
-git add -A; git commit -qm "toy repo"
+git add -A; git commit -qm "toy repo"; git tag secret-old-results  # must not reach the campaign repo
 D="$R/agent_orch/bin/dream"
 "$D" check toy
 STUB_DELAY=12 "$D" start toy
@@ -75,6 +75,10 @@ print("round 2 root:", r2)
 before = subprocess.run(["git", "-C", str(S / "toy"), "for-each-ref", "refs/dream/toy/n/"], capture_output=True,
                         text=True).stdout
 assert before == "", "nodes leaked into the user's repo before fetch"
+crefs = subprocess.run(["git", "-C", str(H / "repo.git"), "for-each-ref", "--format=%(refname)"], capture_output=True,
+                       text=True).stdout.split()
+own = ("refs/dream/toy/", "refs/heads/dream/toy/best")
+assert crefs and all(r.startswith(own) for r in crefs), f"foreign refs in the campaign repo: {crefs}"
 flagged = [n["id"] for n in nodes if n.get("flags")]
 assert flagged == ["r02-b01-a01"], f"audit flags: {flagged}"
 assert "isolation" in (H / "history.md").read_text()
@@ -84,7 +88,7 @@ refs = subprocess.run(["git", "-C", str(S / "toy"), "for-each-ref", "--format=%(
 assert "refs/dream/toy/ledger" in refs and any("/n/" in r for r in refs), refs
 tags = subprocess.run(["git", "-C", str(S / "toy"), "tag"], capture_output=True, text=True).stdout.strip()
 branches = subprocess.run(["git", "-C", str(S / "toy"), "branch", "--list"], capture_output=True, text=True).stdout
-assert tags == "", "no tags created"
+assert tags == "secret-old-results", f"the campaign created tags: {tags}"
 assert "dream/toy/best" in branches and branches.count("\n") == 2, branches
 diff = subprocess.run(["git", "-C", str(S / "toy"), "diff", "--stat", "HEAD", "dream/toy/best"], capture_output=True,
                       text=True).stdout

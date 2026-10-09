@@ -343,7 +343,7 @@ def cmd_check(a):
             f"if [ ! -d {q(cr)} ]; then git init -q --bare {q(cr)} && "
             f'echo "$(git rev-parse --path-format=absolute --git-common-dir)/objects" > {q(cr)}/objects/info/alternates'
             f" && git -C {q(cr)} config dream.mainRepo {q(t.repo)}; fi && "
-            f"git -C {q(cr)} fetch -q {q(t.repo)} refs/dream/{n}/base:refs/dream/{n}/base "
+            f"git -C {q(cr)} fetch -q --no-tags {q(t.repo)} refs/dream/{n}/base:refs/dream/{n}/base "
             f"refs/dream/{n}/root:refs/dream/{n}/root && "
             f"( [ -d {q(t.ctl)} ] || git -C {q(cr)} worktree add -q --detach {q(t.ctl)} refs/dream/{n}/root )"
         )
@@ -444,7 +444,16 @@ def cmd_watch(a):
             print("WARN status unavailable; retrying", flush=True)
             time.sleep(a.interval)
             continue
-        key = (st.get("state"), st.get("updated"), st.get("report_mtime"))
+        # what changed for a reader; not report_mtime, which every _report call (ours included) bumps
+        b = st.get("budget") or {}
+        key = (
+            st.get("state"),
+            st.get("message"),
+            b.get("attempts"),
+            b.get("usd"),
+            (st.get("best") or {}).get("node"),
+            st.get("rounds_done"),
+        )
         if key != last:
             last = key
             fetch_report(t, out)
@@ -643,6 +652,7 @@ def m_status(a):
     if st.get("state") == "running" and not alive:
         st["state"], st["message"] = "crashed", "the driver is not running (crashed or killed); `dream resume`"
     out = {**st, "alive": alive, "has_baseline": load_baseline(c) is not None}
+    out["rounds_done"] = len(list(c.ledger.glob("rounds/r*/summary.md"))) if c.ledger.exists() else 0
     if c.ledger.exists():
         out["budget"] = budget(c, Clock(c))
         best = global_best(c)
