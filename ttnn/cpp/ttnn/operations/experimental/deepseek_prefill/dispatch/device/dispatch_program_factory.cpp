@@ -1086,7 +1086,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         "metadata_temp_buffer");
 
     // LOCAL_TOKEN_SPLIT parallel prefix (no fabric): c_10 holds this core's per-expert route histogram (page 0)
-    // and a staging page for an earlier core's (page 1); one semaphore counts the earlier cores that published.
+    // and the ids of the experts the table maps (page 1); one semaphore counts the earlier cores that published.
     uint32_t hist_sem_id = 0;
     if (!use_fabric) {
         const uint32_t hist_page = tt::round_up(operation_attributes.num_routed_experts * 4, l1_alignment);

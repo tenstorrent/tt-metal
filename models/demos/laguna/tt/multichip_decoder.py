@@ -997,6 +997,9 @@ class MultichipDecoder(OptimizedDecoder):
         # LOCAL_TOKEN_SPLIT); the tile-input path keeps dc_links senders
         self._dispatch_rm = os.environ.get("TT_LAGUNA_DISPATCH_RM", "1") == "1"
         d_cores = int(os.environ.get("TT_LAGUNA_DISPATCH_CORES", "64")) if self._dispatch_rm else dc_links
+        # short buckets: fewer cores (each core first adds up every earlier core's route histogram, so the last of
+        # 64 cores starts ~1 us x 63 late; at 128 tokens each core has only 2 tokens to move). 0 = always d_cores
+        d_tpc = int(os.environ.get("TT_LAGUNA_DISPATCH_TOKENS_PER_CORE", "0")) if self._dispatch_rm else 0
         bucket_modules = {}
         for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
             # Worst case: every one of T*K routes is local, plus at most 31
@@ -1014,7 +1017,7 @@ class MultichipDecoder(OptimizedDecoder):
                     seq_len_per_chip=seq_len,
                     emb_dim=self.cfg.hidden,
                     cluster_axis=0,
-                    num_links=d_cores,
+                    num_links=min(d_cores, max(1, seq_len // d_tpc)) if d_tpc > 0 else d_cores,
                     topology=ttnn.Topology.Linear,
                 ),
                 "combine": TtCombineModule(
