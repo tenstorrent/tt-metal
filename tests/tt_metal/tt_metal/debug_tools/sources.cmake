@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
+    debug_event/test_debug_event_meta.cpp
     device_print/test_compilation_failures.cpp
     device_print/test_multi_kernel_print.cpp
     device_print/test_dram_print_output.cpp
