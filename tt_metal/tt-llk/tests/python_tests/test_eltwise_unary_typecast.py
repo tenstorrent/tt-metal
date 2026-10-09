@@ -10,7 +10,11 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
+import math
+import struct
+
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -224,6 +228,110 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
         input_dimensions,
         StimuliSpec(distribution=distribution, seed=52787),
         max_ulp=0,
+    )
+
+
+_FP32_EXP_BIAS = 127
+_FP32_MANTISSA_BITS = 23
+_FP32_SIGN_BIT = 1 << 31
+
+
+def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
+    """Positive fp32 bit pattern for 1.mantissa * 2^unbiased_exp."""
+    return ((unbiased_exp + _FP32_EXP_BIAS) << _FP32_MANTISSA_BITS) | mantissa
+
+
+def _fp32_unbiased_exp(bits: int) -> int:
+    return ((bits >> _FP32_MANTISSA_BITS) & 0xFF) - _FP32_EXP_BIAS
+
+
+def _fp32_to_uint8_wrap(bits: int) -> int:
+    """Exact uint8 wrap of an fp32 bit pattern: trunc toward zero, low byte.
+
+    Python ints keep every binade exact (the shared golden goes through int64,
+    which overflows from 2^63 up); inf/NaN produce 0, as the kernel does.
+    """
+    value = struct.unpack("<f", struct.pack("<I", bits))[0]
+    if not math.isfinite(value):
+        return 0
+    return math.trunc(value) % 256
+
+
+def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
+    """fp32 bit patterns covering every binade at or above 2^24 with nonzero low
+    mantissa bits, both signs, plus the issue's two named inputs and small values."""
+    patterns = [
+        _fp32_bits(
+            55, 0x000001
+        ),  # 2^55 + 2^32 (shift amount 32 wraps to 0 -> low byte 1)
+        _fp32_bits(60, 0x000001),  # 2^60 + 2^37
+    ]
+    mantissas = (0x000001, 0x0000FF, 0x00007F, 0x123457, 0x5A5A5B, 0x7FFFFF)
+    for unbiased_exp in range(24, 128):
+        for mantissa in mantissas:
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
+    patterns += [0x7F800000, 0x7FC00000]  # +inf, NaN
+    # Small whole and fractional values keep the in-range path pinned too.
+    for unbiased_exp in range(-2, 24):
+        for mantissa in (0x000000, 0x400001, 0x7FFFFF):
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
+    patterns += [p | _FP32_SIGN_BIT for p in patterns]
+    return patterns
+
+
+# Blackhole only: the Wormhole calculate_typecast_fp32_to_uint8 still shifts by
+# (exp - 23) & 31 (https://github.com/tenstorrent/tt-llk/issues/1701 item 15).
+@blackhole_only
+def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
+    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
+    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
+    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 64]
+    patterns = _fp32_to_uint8_wide_exponent_bits()
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    # The stimuli generator calls a custom distribution once per face, so place
+    # the bit patterns over the whole operand afterwards.
+    assert len(patterns) <= src_A.numel()
+    bits = patterns + [0] * (src_A.numel() - len(patterns))
+    src_A = (
+        torch.tensor([b - (1 << 32) if b >> 31 else b for b in bits], dtype=torch.int32)
+        .view(torch.float32)
+        .to(src_A.dtype)
+    )
+    src_bits = [
+        b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
+    ]
+    golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) & 0xFF for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    failing_exponents = sorted({_fp32_unbiased_exp(b) for b, _, _ in mismatches})
+    assert not mismatches, (
+        f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
+        f"{failing_exponents}; first (input bits, expected, got): "
+        f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
     )
 
 
@@ -476,37 +584,18 @@ def test_eltwise_unary_typecast_float_to_int32_edges(
     )
 
 
-def _run_typecast(
+def _build_typecast_config(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
-    spec_A: StimuliSpec,
+    src_A: torch.Tensor,
+    tile_cnt_A: int,
+    src_B: torch.Tensor,
+    tile_cnt_B: int,
     *,
-    max_ulp: int | None = None,
     twos_complement: bool = False,
-    golden_fn=None,
-):
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-        spec_B=spec_A,
-    )
-
-    if golden_fn is None:
-        generate_golden = get_golden_generator(TypecastGolden)
-        golden_tensor = generate_golden(
-            src_A,
-            formats.input_format,
-            formats.output_format,
-            input_dimensions,
-        )
-    else:
-        golden_tensor = golden_fn(src_A)
-
+) -> TestConfig:
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
     #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
@@ -581,6 +670,52 @@ def _run_typecast(
         )
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = pack_src
+
+    return configuration
+
+
+def _run_typecast(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    spec_A: StimuliSpec,
+    *,
+    max_ulp: int | None = None,
+    twos_complement: bool = False,
+    golden_fn=None,
+):
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
+        spec_B=spec_A,
+    )
+
+    if golden_fn is None:
+        generate_golden = get_golden_generator(TypecastGolden)
+        golden_tensor = generate_golden(
+            src_A,
+            formats.input_format,
+            formats.output_format,
+            input_dimensions,
+        )
+    else:
+        golden_tensor = golden_fn(src_A)
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+        twos_complement=twos_complement,
+    )
 
     res_from_L1 = configuration.run().result
 
