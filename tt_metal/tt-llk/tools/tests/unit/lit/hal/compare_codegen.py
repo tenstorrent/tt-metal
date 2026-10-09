@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare each function with its reference_ counterpart, including relocations."""
+"""Compare function pairs in an objdump text file, including relocations."""
 
 import argparse
 import difflib
 import re
-import subprocess
 import sys
 
 
@@ -26,14 +25,9 @@ def read_labels(lines):
     return labels
 
 
-def read_codegen(objdump, path):
-    dump = subprocess.run(
-        [objdump, "-t", "--special-syms", "-drz", path],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    lines = dump.splitlines()
+def read_codegen(path):
+    with open(path, encoding="utf-8") as dump:
+        lines = dump.read().splitlines()
     labels = read_labels(lines)
     actual = {}
     reference = {}
@@ -73,23 +67,20 @@ def read_codegen(objdump, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--objdump", required=True)
-    parser.add_argument("object")
+    parser.add_argument("dump", help="text output from objdump -t --special-syms -drz")
     args = parser.parse_args()
 
     try:
-        actual, reference = read_codegen(args.objdump, args.object)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        actual, reference = read_codegen(args.dump)
+    except (OSError, ValueError) as error:
         print(error, file=sys.stderr)
-        if isinstance(error, subprocess.CalledProcessError):
-            print(error.stderr, file=sys.stderr)
         return 1
 
     failed = False
     for name in sorted(actual.keys() | reference.keys()):
         if name not in actual or name not in reference:
             missing = name if name not in actual else f"reference_{name}"
-            print(f"{args.object}: missing function {missing}", file=sys.stderr)
+            print(f"{args.dump}: missing function {missing}", file=sys.stderr)
             failed = True
         elif actual[name] != reference[name]:
             diff = difflib.unified_diff(

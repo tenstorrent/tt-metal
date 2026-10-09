@@ -15,6 +15,7 @@ Blackhole CFG runtime tests place each HAL function next to a `reference_`
 function using explicit `TT_*`/`TTI_*` instructions or MMIO operations. Read the
 two C++ bodies to see the expected behavior.
 
-`%{blackhole_compare_codegen}` compares the disassembled function pairs,
+Tests write `objdump -t --special-syms -drz` output to a text file, then pass it
+to `%{blackhole_compare_codegen}`. The script compares the function pairs,
 including instruction bytes and operands and relocation types, targets, and
 addends.
