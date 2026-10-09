@@ -28,9 +28,6 @@ constexpr auto kUpCbIndex = tt::CBIndex::c_1;     // up branch
 constexpr auto kDhCbIndex = tt::CBIndex::c_2;     // upstream grad dL/dh
 constexpr auto kDGateCbIndex = tt::CBIndex::c_3;  // output: grad wrt gate branch
 constexpr auto kDUpCbIndex = tt::CBIndex::c_4;    // output: grad wrt up branch
-constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
-constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
-constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
 
 }  // namespace
 
@@ -105,9 +102,6 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
     create_circular_buffer(program, all_cores, kDhCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kDGateCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kDUpCbIndex, data_format, tile_size_bytes, twice_block);
-    create_circular_buffer(program, all_cores, kSigmoidCbIndex, data_format, tile_size_bytes, twice_block);
-    create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
-    create_circular_buffer(program, all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block);
 
     auto* const packed_buf = packed.buffer();
     auto* const dh_buf = dh.buffer();

@@ -17,9 +17,6 @@ constexpr uint32_t cb_up = tt::CBIndex::c_1;     // up branch
 constexpr uint32_t cb_dh = tt::CBIndex::c_2;     // upstream grad dL/dh
 constexpr uint32_t cb_dgate = tt::CBIndex::c_3;  // out: grad wrt gate branch
 constexpr uint32_t cb_dup = tt::CBIndex::c_4;    // out: grad wrt up branch
-constexpr uint32_t cb_sigmoid = tt::CBIndex::c_5;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_6;
-constexpr uint32_t cb_silu_grad = tt::CBIndex::c_7;
 
 void kernel_main() {
     compute_kernel_hw_startup(cb_gate, cb_up, cb_dgate);
@@ -30,16 +27,7 @@ void kernel_main() {
         cb_wait_front(cb_up, block_size);
         cb_wait_front(cb_dh, block_size);
 
-        swiglu_gate_bw_block<
-            cb_gate,
-            cb_up,
-            cb_dh,
-            cb_dgate,
-            cb_dup,
-            cb_sigmoid,
-            cb_scratch,
-            cb_silu_grad,
-            block_size>();
+        swiglu_gate_bw_block<cb_gate, cb_up, cb_dh, cb_dgate, cb_dup, block_size>();
 
         cb_pop_front(cb_gate, block_size);
         cb_pop_front(cb_up, block_size);
