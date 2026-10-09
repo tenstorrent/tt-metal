@@ -7,7 +7,7 @@ from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
-from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
+from .dense_sp import dense_cache_read_ok, dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
 from .msa import index_branch_forward, msa_sp_attention_cache_read, msa_sp_attention_nocache
 from .operations import (
@@ -63,8 +63,8 @@ def attention_forward(
         user_id: cache slot index for the per-layer cache write
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
-            >0 selects the MSA cache-read path; dense SP layers read from the cache whenever it holds more
-            than this chunk.
+            >0 selects the MSA cache-read path; dense SP layers read from the cache whenever ring_joint can
+            (dense_cache_read_ok).
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -170,7 +170,7 @@ def attention_forward(
     #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
     #     full-context path at sp=1. cached_len > 0 reads the accumulated prefix from the cache instead.
     #   Dense layers (0-2): plain causal GQA SDPA at sp=1; under SP, ring_joint (dense_sp.py), reading K/V
-    #     from the cache whenever it holds more than this chunk.
+    #     from the cache whenever ring_joint can (dense_cache_read_ok).
     if config.is_sparse:
         with zone("index_branch"):
             tt_iq, tt_ik = index_branch_forward(
@@ -235,9 +235,7 @@ def attention_forward(
         # SP dense: ring_joint, each device's query shard attending the sequence reconstructed across the
         # SP ring. q/k/v are the per-device shards (seq_len = S/sp rows).
         sp = mesh_device.shape[mesh_config.sp_axis]
-        # ring_joint's KV-pad rotation needs Q.seq < K.seq per device, so a cache that holds only this
-        # chunk takes the no-cache path.
-        cache_read = kv_cache is not None and kv_cache.max_seq_len // sp > seq_len
+        cache_read = dense_cache_read_ok(kv_cache, seq_len, sp)
         grid = mesh_device.compute_with_storage_grid_size()
         sp_prog = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
@@ -284,8 +282,8 @@ def attention_forward(
                     write_chunk=False,
                 )
         else:
-            # No cache, or one that holds only this chunk: ring_joint over this chunk's own K/V.
-            assert cached_len == 0, f"cached_len {cached_len} needs a KV cache"
+            # No cache ring_joint can read: ring_joint over this chunk's own K/V.
+            assert cached_len == 0, f"cached_len {cached_len} needs a KV cache that dense_cache_read_ok accepts"
             with zone("ring_joint_sdpa"):
                 tt_sdpa_out = dense_sp_attention_nocache(
                     tt_q,

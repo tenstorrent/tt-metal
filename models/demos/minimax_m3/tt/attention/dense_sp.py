@@ -20,6 +20,18 @@ is that mechanism as a callable model forward. The model runs it at q_chunk=128 
 import ttnn
 
 
+def dense_cache_read_ok(kv_cache, seq_len, sp):
+    """Whether dense_sp_attention can read this chunk's K/V from kv_cache (seq_len = per-device Q rows).
+
+    ring_joint's KV-pad rotation needs the per-device cache to be a whole number (>= 2) of Q-sized slabs, and
+    dense_sp_attention's ring-gather buffers are bf8, which the op requires to match the cache dtype.
+    """
+    if kv_cache is None:
+        return False
+    cache_local = kv_cache.max_seq_len // sp
+    return kv_cache.k.dtype == ttnn.bfloat8_b and cache_local > seq_len and cache_local % seq_len == 0
+
+
 def dense_sp_attention(
     tt_q,
     cache_k,
@@ -137,8 +149,8 @@ def dense_sp_attention_nocache(
     """Cache-less dense SP attention: ring_joint over the chunk's OWN SP-sharded K/V (NO persistent cache).
 
     Each device's query shard attends to the full `logical_n` sequence reconstructed across the SP ring
-    (grouped V, no inflation, is_balanced=False). For callers without a KV cache, or with one that holds only
-    this chunk; otherwise every chunk, cold or not, uses dense_sp_attention (cache-read). Validated op-level by
+    (grouped V, no inflation, is_balanced=False). For callers without a KV cache, or with one that
+    dense_cache_read_ok rejects; otherwise every chunk, cold or not, uses dense_sp_attention (cache-read). Validated op-level by
     tests/unit/test_ring_joint_sp_vs_ref.py. Returns the per-device query-shard output.
 
     n_kv is the GLOBAL KV-head count (e.g. 4); the ring-gather persistent buffer shards it across the TP
