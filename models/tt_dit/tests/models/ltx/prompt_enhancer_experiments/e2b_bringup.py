@@ -39,6 +39,9 @@ processes. Two more timing knobs:
   compared against its first completed repeat (``first_divergence_vs_baseline``).
 - ``E2B_STRICT=1``: fail the test (non-zero pytest exit) on a load/setup failure, any recorded error or a
   reference mismatch.
+- ``E2B_FEEDBACK_POISON=1``: when decode token feedback is on (``GEMMA4_DEVICE_PLI=1``), pass token 0
+  and position 0 from the host on every step that does not reload inputs. Output must not change, which
+  shows the step really runs from the device-resident token and positions.
 - ``E2B_BASELINE_MIN_MATCH=N`` (with ``E2B_BASELINE_JSON`` and ``E2B_STRICT=1``): also fail when a repeat
   diverges from the baseline stream before token N.
 
@@ -437,6 +440,7 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
     profile = os.environ.get("E2B_PROFILE", "0") == "1"
     profile_decode_steps = int(os.environ.get("E2B_PROFILE_DECODE_STEPS", "3"))
     strict = os.environ.get("E2B_STRICT", "0") == "1"
+    feedback_poison = os.environ.get("E2B_FEEDBACK_POISON", "0") == "1"
     baseline_min_match = int(os.environ.get("E2B_BASELINE_MIN_MATCH", "0"))
     if profile:
         new_tokens = 1 + profile_decode_steps  # step 0 apart, then the signposted window
@@ -504,9 +508,19 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
         can_sample = model_can_sample_on_device(generator.model[0])
         results["can_sample_on_device"] = can_sample
         results["device_pli"] = bool(getattr(generator.model[0], "_device_pli", False))
-        results["decode_token_feedback"] = bool(
-            getattr(generator.model[0], "_tt_supports_decode_token_feedback", False)
-        )
+        feedback_on = bool(getattr(generator.model[0], "_tt_supports_decode_token_feedback", False))
+        results["decode_token_feedback"] = feedback_on
+        results["config"]["feedback_poison"] = feedback_poison
+        # Count host input staging per repeat: with token feedback a warm traced repeat restages once (step 0).
+        host_prep_calls = [0]
+        model0 = generator.model[0]
+        orig_prep = model0.prepare_decode_inputs_host
+
+        def counted_prep(*args, **kwargs):
+            host_prep_calls[0] += 1
+            return orig_prep(*args, **kwargs)
+
+        model0.prepare_decode_inputs_host = counted_prep
         results["sampling_dp"] = getattr(generator.model[0], "sampling_dp", None)
         stop_tokens = set(tokenizer.stop_tokens)
         dump()
@@ -557,8 +571,13 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
             dump()
             continue
         sampling_params = device_sampling_params if device_sample else None
+        # Token feedback: after step 0 the traced step reads the sampled token and the
+        # advanced positions straight from its device inputs, no host restage.
+        use_feedback = feedback_on and enable_trace and device_sample
+        arm_res["token_feedback"] = use_feedback
         for rep in range(repeats):
             rep_res = {"repeat": rep}
+            host_prep_calls[0] = 0
             arm_res["repeats"].append(rep_res)
             try:
                 if temperature > 0:
@@ -592,16 +611,20 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
                 for step in range(new_tokens):
                     if stop_at is not None and not ignore_stop:
                         break
+                    reload = step == 0 or not use_feedback
+                    host_tok, host_pos = torch.tensor([[tok]]), current_pos
+                    if feedback_poison and not reload:
+                        host_tok, host_pos = torch.tensor([[0]]), torch.zeros_like(current_pos)
                     ts = time.perf_counter()
                     out, _ = generator.decode_forward(
-                        torch.tensor([[tok]]),
-                        current_pos,
+                        host_tok,
+                        host_pos,
                         enable_trace=enable_trace,
                         page_table=page_table,
                         kv_cache=tt_kv_cache,
                         sampling_params=sampling_params,
-                        # E2B's per-layer inputs are host-computed per token, so inputs reload every step.
-                        reload_inputs=True,
+                        # Host PLI needs the token on host every step; with token feedback only step 0 restages.
+                        reload_inputs=reload,
                         reload_page_table=False,
                         # Prefill sampled on host, so the device sampler gets its params at decode step 0.
                         reload_sampling_params=device_sample and step == 0,
@@ -625,6 +648,7 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
                     if stop_at is None and tok in stop_tokens:
                         stop_at = len(new_ids) - 1
                 rep_res["decode_s"] = round(time.perf_counter() - t_dec, 4)
+                rep_res["host_prep_calls"] = host_prep_calls[0]
                 if measured and step_times:
                     signpost("stop")
                     rep_res["signposted_decode_steps"] = len(step_times) - 1

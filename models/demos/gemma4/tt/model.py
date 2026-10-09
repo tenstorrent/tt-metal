@@ -307,7 +307,11 @@ class Gemma4Model:
         self._device_pli_requested = bool(self.hidden_size_per_layer_input) and os.environ.get(
             "GEMMA4_DEVICE_PLI", "0"
         ).lower() in ("1", "true", "yes")
-        self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
+        # With device PLI the next step's PLI comes from the device token, so PLI
+        # models can keep token/position continuity on device like non-PLI ones.
+        self._tt_vllm_always_refresh_decode_trace_inputs = (
+            bool(self.hidden_size_per_layer_input) and not self._device_pli_requested
+        ) or force_refresh
         self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
 

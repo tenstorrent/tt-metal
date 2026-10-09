@@ -1,4 +1,4 @@
-# Device-PLI hand-off: Phase 1 done, Phase 2 in progress
+# Device-PLI hand-off: Phases 1 and 2 done
 
 2026-10-09. Branch `rsalman-e2b-device-pli` on `tenstorrent/tt-metal`, based on
 `rsalman-ltx-prompt-enhancing` @ `f78531d`. Tree on the cluster:
@@ -40,6 +40,7 @@ Full plan: https://claude.ai/artifact/Ss6fYA8Bk5b9gt7ALQCehy
 | `8712e1c` | `LTX_ENHANCER_TRACE=1` knob, `AB_HOST_PARITY=0` gate | traced rewrite in-pipeline **55 tok/s** |
 | `b392577` | **Phase 1: device PLI** behind `GEMMA4_DEVICE_PLI=1` | trace-device **17.4 → 14.5 ms/step** (65.5 tok/s), see below |
 | `2fbc3ce` | `GEMMA4_IMPL_SURVEY.md` | comparison of other Gemma4 implementations, ranked next steps |
+| (Phase 2) | **on-device token feedback** with device PLI | trace-device **13.5 ms/step**, p90 13.5 (74 tok/s); 1 host restage per request |
 
 Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timing`. The first four rows were measured on `bh-glx-110-d07u02`.
 
@@ -77,7 +78,7 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
   | b02u08 | 17.4 ms median, 17.1 min (job 128881) | **14.4–14.7 ms median, 14.1 min** (job 128889) |
   | d07u02 | 20.1–20.8 ms (job 128880, noisy) | 13.8 ms (job 128888) |
 
-## Phase 2: on-device token feedback (in progress)
+## Phase 2: on-device token feedback (done)
 
 - **Change:** with `GEMMA4_DEVICE_PLI=1`, `_tt_vllm_always_refresh_decode_trace_inputs` is False for PLI models (model.py ~l.310).
   - This turns on the non-PLI feedback path: a `[1,1,1,32]` token buffer that the sampler writes into, and `plus_one` on the device positions.
@@ -86,6 +87,18 @@ Numbers come from 188-step greedy runs of `e2b_bringup.py::test_e2b_decode_timin
   - It counts `prepare_decode_inputs_host` calls per repeat.
   - `E2B_FEEDBACK_POISON=1` passes token 0 / position 0 from the host on every feedback step. The output must not change.
 - **Gate (`metal-galaxy-e2b-feedback.sh`):** feedback tokens must equal the device-PLI restage stream over 188 steps, and in-run equal trace-host. The poisoned run must also equal it.
+- **Result (job 128893, b02u08):**
+  - Feedback, restage, trace-host and the poisoned run all produced identical tokens over 188 steps, in every repeat.
+  - Host staging per warm repeat: 1 call (step 0), down from 188. The cold repeat has 3: compile, trace prep, step 0.
+  - trace-device: 14.5 ms (restage) → **13.49 ms median, p90 13.51 ms**.
+- **What the timing means:** the steady step time is now flat, so the loop is probably device-bound. That puts device time per step at about 13.5 ms, not the unverified ~11 ms.
+  - The harness still reads each token back before queuing the next step.
+  - Remaining gains therefore come from device time (see the survey), plus lagged readback (plan Phase 3). Lagged readback can only hide host work and readback latency.
+- `GEMMA4_ALWAYS_REFRESH_DECODE=1` gives back the Phase 1 behaviour.
+- **Not covered:**
+  - vLLM: `generator_vllm.py` still disables async decode for PLI models.
+  - `text_demo.py` E2B with the flag.
+  - Temperature > 0 with feedback.
 
 ## Open bug (do NOT re-debug blind; file or hand to runtime)
 
