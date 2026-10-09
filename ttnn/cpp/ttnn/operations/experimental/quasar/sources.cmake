@@ -13,6 +13,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     move/move.hpp
     untilize_with_unpadding/untilize_with_unpadding.hpp
     slice/slice.hpp
+    concat/concat.hpp
     transpose/transpose.hpp
     reshard/reshard.hpp
     halo/halo.hpp
@@ -77,6 +78,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     slice/device/slice_program_factory_rm.cpp
     slice/device/slice_program_factory_rm_sharded.cpp
     slice/device/slice_program_factory_rm_stride.cpp
+    # concat (generic TensorAccessor factory only; zero-copy sharded and tiled-unaligned factories not ported)
+    concat/concat.cpp
+    concat/device/concat_device_operation.cpp
+    concat/device/concat_program_factory.cpp
     # padded_slice (RM Metal-2 port; used by conv2d DRAM slicing on Quasar)
     padded_slice/padded_slice.cpp
     padded_slice/device/padded_slice_device_operation.cpp
@@ -249,6 +254,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     move/move_nanobind.cpp
     untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
     slice/slice_nanobind.cpp
+    concat/concat_nanobind.cpp
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
     pool_generic/generic_pools_nanobind.cpp
