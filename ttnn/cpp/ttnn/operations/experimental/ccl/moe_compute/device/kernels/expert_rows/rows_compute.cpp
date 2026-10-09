@@ -4,9 +4,13 @@
 
 // expert rows, compute of one core of one expert group. Per job (one expert, at most 32 routed rows):
 //  P1: for each of this core's W0/W1 column groups: [g0 u0 g1 u1] = x_job . [W0 j0, W1 j0, W0 j1, W1 j1] over all
-//      hidden tiles, activation on the packer's SFPU, a(j0), a(j1) -> cb_a.
-//  P2: a2 (every intermediate column of the job, from the exchange) . W2 for each of this core's 4-tile output groups,
-//      the W2 rows in moe_compute's per-core rotated order -> cb_rows (bf16 tiles; the writer sends the real rows).
+//      hidden tiles, activation on the packer's SFPU, a(j0), a(j1) -> cb_a; a half block-column (the last group of a
+//      ring position with an odd column count in the compact layout) is [g0 u0] = x_job . [W0 j0, W1 j0] -> a(j0).
+//  P2: a2 (every intermediate column of the job, from the exchange) . W2 for each of this core's 4-tile output groups
+//      (2 tiles for the half-width last a2a iteration), the W2 rows in moe_compute's per-core rotated order -> cb_rows
+//      (4 bf16 tiles; the writer sends the real rows).
+// Each output tile sums the same K rows in the same order as the ring program (compute.cpp), at ct_dim 2 where it
+// uses 2.
 // Order P1(0), P1(1), P2(0), P1(2), P2(1), ..., P2(J - 1).
 // A job of several row tiles (M > 1) streams its weights once for all its row tiles: P1 walks x in chunks of KC hidden
 // tiles (chunk-major weights) and P2 walks each output group's W2 rows in chunks of KC2; between chunks each (group,
@@ -86,6 +90,12 @@ void kernel_main() {
     const uint32_t ng = get_arg_val<uint32_t>(0);  // W0/W1 column groups of this core
     const uint32_t nq = get_arg_val<uint32_t>(1);  // W2 output groups of this core
     const uint32_t r = get_arg_val<uint32_t>(2);   // ring position of this core's bank (W2 row rotation)
+    // the last W0/W1 group is a half block-column, the last W2 group the half-width last a2a iteration
+    const bool half_col = get_arg_val<uint32_t>(3) == 1;
+    const bool half_out = get_arg_val<uint32_t>(4) == 1;
+    // tiles per K row (matmul ct_dim) of column group u and of output group q: 4, or 2 for a half group
+    auto p1_width = [&](uint32_t u) -> uint32_t { return half_col && u + 1 == ng ? 2 : 4; };
+    auto p2_width = [&](uint32_t q) -> uint32_t { return half_out && q + 1 == nq ? 2 : 4; };
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_a);
     if constexpr (has_bias) {
@@ -134,25 +144,46 @@ void kernel_main() {
             packing_part = part;
         }
     };
-    // DEST 0..3 <- this (group, row tile)'s partials of the previous chunk, in the order they were packed
-    auto reload = [&](uint32_t cb_in0) {
+    // cb_part holds one 4-tile slot per (group, row tile) whatever the group's width (a half group fills 2 of them):
+    // every reserve then starts at a multiple of 4 tiles of the CB (4 M groups tiles) and none runs past its end
+    constexpr uint32_t PART_SLOT = 4;
+    // DEST 0..w-1 <- this (group, row tile)'s partials of the previous chunk, in the order they were packed; then the
+    // matmul of a group w tiles wide
+    auto reload = [&](uint32_t cb_in0, uint32_t w) {
         reconfig_data_format_srca(cb_w, cb_part);
         copy_init(cb_part);
-        cb_wait_front(cb_part, 4);
-        for (uint32_t t = 0; t < 4; ++t) {
+        cb_wait_front(cb_part, PART_SLOT);
+        for (uint32_t t = 0; t < w; ++t) {
             copy_tile(cb_part, t, t);
         }
-        cb_pop_front(cb_part, 4);
+        cb_pop_front(cb_part, PART_SLOT);
         reconfig_data_format_srca(cb_part, cb_w);
-        matmul_block_init(cb_in0, cb_w, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+        matmul_block_init(cb_in0, cb_w, /*transpose=*/false, /*ct_dim=*/w, /*rt_dim=*/1, /*kt_dim=*/1);
     };
-    auto pack_part = [&]() {
+    auto pack_part = [&](uint32_t w) {
         tile_regs_wait();
-        cb_reserve_back(cb_part, 4);
-        for (uint32_t t = 0; t < 4; ++t) {
+        cb_reserve_back(cb_part, PART_SLOT);
+        for (uint32_t t = 0; t < w; ++t) {
             pack_tile<true>(t, cb_part, t);
         }
-        cb_push_back(cb_part, 4);
+        cb_push_back(cb_part, PART_SLOT);
+    };
+    // the activation of a group w tiles wide on the packer's SFPU (DEST 0..w-1), its a tiles -> cb_a [at, at + w / 2)
+    // (as compute.cpp's compute_w0_w1_block_column: wait for math plus a CFG stall before the SFPU's DEST offset)
+    auto pack_activation = [&](uint32_t w, uint32_t at) {
+        PACK(TTI_SEMWAIT(
+            p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
+        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+        if (w == 4) {
+            ::moe_activation::PackActivation<activation, /*kPairs=*/2>::compute();
+        } else {
+            ::moe_activation::PackActivation<activation, /*kPairs=*/1>::compute();
+        }
+        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        pack_tile<true>(0, cb_a, at);
+        if (w == 4) {
+            pack_tile<true>(2, cb_a, at + 1);
+        }
     };
     auto rows_of = [&](uint32_t e) { return read_tile_value(cb_ctl, 0, 1 + e); };
     constexpr auto col_lut = [] {
@@ -186,33 +217,28 @@ void kernel_main() {
                 cb_reserve_back(cb_a, M * a_tiles);
             }
             for (uint32_t u = 0; u < ng; ++u) {
+                const uint32_t w = p1_width(u);
                 tile_regs_acquire();
                 if (c > 0) {
-                    reload(cb_x);
+                    reload(cb_x, w);
+                } else if (w != 4) {
+                    matmul_block_init(cb_x, cb_w, /*transpose=*/false, /*ct_dim=*/w, /*rt_dim=*/1, /*kt_dim=*/1);
                 }
                 for (uint32_t kt = 0; kt < kc; ++kt) {
-                    matmul_block(cb_x, cb_w, kt, ws.take(4), 0, false, 4, 1, 1);
+                    matmul_block(cb_x, cb_w, kt, ws.take(w), 0, false, w, 1, 1);
                 }
                 if constexpr (has_bias) {
                     if (last) {
-                        matmul_block(cb_ones, cb_w, 0, ws.take(4), 0, false, 4, 1, 1);
+                        matmul_block(cb_ones, cb_w, 0, ws.take(w), 0, false, w, 1, 1);
                     }
                 }
                 ws.end_run();
-                blocks += (4 * (kc + (has_bias && last ? 1 : 0)) + BT - 1) / BT;
+                blocks += (w * (kc + (has_bias && last ? 1 : 0)) + BT - 1) / BT;
                 tile_regs_commit();
                 if (last) {
-                    PACK(TTI_SEMWAIT(
-                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                        semaphore::t6_sem(semaphore::MATH_PACK),
-                        p_stall::STALL_ON_ZERO));
-                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-                    ::moe_activation::PackActivation<activation, /*kPairs=*/2>::compute();
-                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                    pack_tile<true>(0, cb_a, 2 * u);
-                    pack_tile<true>(2, cb_a, 2 * u + 1);
+                    pack_activation(w, 2 * u);
                 } else {
-                    pack_part();
+                    pack_part(w);
                 }
                 tile_regs_release();
             }
@@ -225,7 +251,12 @@ void kernel_main() {
         pack_target(false);
         cb_wait_front(cb_a2, M * Nt);
         matmul_block_init(cb_a2, cb_w, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+        uint32_t blocks = 0;
         for (uint32_t q = 0; q < nq; ++q) {
+            const uint32_t w = p2_width(q);
+            if (w != 4) {
+                matmul_block_init(cb_a2, cb_w, /*transpose=*/false, /*ct_dim=*/w, /*rt_dim=*/1, /*kt_dim=*/1);
+            }
             tile_regs_acquire();
             uint32_t src = r, col = col_lut[r], left = cols_lut[r];
             for (uint32_t i = 0; i < Nt; ++i) {
@@ -234,14 +265,15 @@ void kernel_main() {
                     left = cols_lut[src];
                     col = col_lut[src];
                 }
-                matmul_block(cb_a2, cb_w, col, ws.take(4), 0, false, 4, 1, 1);
+                matmul_block(cb_a2, cb_w, col, ws.take(w), 0, false, w, 1, 1);
                 ++col;
                 --left;
             }
             if constexpr (has_bias) {
-                matmul_block(cb_ones, cb_w, 0, ws.take(4), 0, false, 4, 1, 1);
+                matmul_block(cb_ones, cb_w, 0, ws.take(w), 0, false, w, 1, 1);
             }
             ws.end_run();
+            blocks += (w * (Nt + (has_bias ? 1 : 0)) + BT - 1) / BT;
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_rows, 4);
@@ -252,7 +284,7 @@ void kernel_main() {
             tile_regs_release();
         }
         cb_pop_front(cb_a2, M * Nt);
-        pop_padding(nq * ((4 * (Nt + (has_bias ? 1 : 0)) + BT - 1) / BT));
+        pop_padding(blocks);
     };
     // P1 of a job of m row tiles: x chunk slot = [hidden tile of the chunk][row tile]; a -> cb_a [row tile][a_tiles]
     auto phase1_chunked = [&](uint32_t m) {
@@ -269,35 +301,29 @@ void kernel_main() {
                 cb_reserve_back(cb_a, M * a_tiles);
             }
             for (uint32_t u = 0; u < ng; ++u) {
+                const uint32_t w = p1_width(u);
+                if (c == 0 && w != 4) {
+                    matmul_block_init(cb_x, cb_w, /*transpose=*/false, /*ct_dim=*/w, /*rt_dim=*/1, /*kt_dim=*/1);
+                }
                 cb_wait_front(cb_w, UNIT);
                 for (uint32_t rt = 0; rt < m; ++rt) {
                     tile_regs_acquire();
                     if (c > 0) {
-                        reload(cb_x);
+                        reload(cb_x, w);
                     }
                     for (uint32_t kt = 0; kt < kc; ++kt) {
-                        matmul_block(cb_x, cb_w, kt * m + rt, 4 * kt, 0, false, 4, 1, 1);
+                        matmul_block(cb_x, cb_w, kt * m + rt, w * kt, 0, false, w, 1, 1);
                     }
                     if constexpr (has_bias) {
                         if (last) {
-                            matmul_block(cb_ones, cb_w, 0, 4 * kc, 0, false, 4, 1, 1);
+                            matmul_block(cb_ones, cb_w, 0, w * kc, 0, false, w, 1, 1);
                         }
                     }
                     tile_regs_commit();
                     if (last) {
-                        // as phase1_single(): wait for math plus a CFG stall before the SFPU's DEST offset
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-                        ::moe_activation::PackActivation<activation, /*kPairs=*/2>::compute();
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                        pack_tile<true>(0, cb_a, rt * a_tiles + 2 * u);
-                        pack_tile<true>(2, cb_a, rt * a_tiles + 2 * u + 1);
+                        pack_activation(w, rt * a_tiles + 2 * u);
                     } else {
-                        pack_part();
+                        pack_part(w);
                     }
                     tile_regs_release();
                 }
@@ -312,6 +338,10 @@ void kernel_main() {
         cb_wait_front(cb_a2, M * Nt);
         matmul_block_init(cb_a2, cb_w, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
         for (uint32_t q = 0; q < nq; ++q) {
+            const uint32_t w = p2_width(q);
+            if (w != 4) {
+                matmul_block_init(cb_a2, cb_w, /*transpose=*/false, /*ct_dim=*/w, /*rt_dim=*/1, /*kt_dim=*/1);
+            }
             // W2 rows: this ring position's columns first, then the previous ring positions' (prepare_w2 order)
             uint32_t src0 = r, col0 = col_lut[r], left0 = cols_lut[r];
             for (uint32_t p = 0; p < C2; ++p) {
@@ -323,7 +353,7 @@ void kernel_main() {
                 for (uint32_t rt = 0; rt < m; ++rt) {
                     tile_regs_acquire();
                     if (p > 0) {
-                        reload(cb_a2);
+                        reload(cb_a2, w);
                     }
                     src = src0;
                     col = col0;
@@ -334,13 +364,13 @@ void kernel_main() {
                             left = cols_lut[src];
                             col = col_lut[src];
                         }
-                        matmul_block(cb_a2, cb_w, rt * Nt + col, 4 * i, 0, false, 4, 1, 1);
+                        matmul_block(cb_a2, cb_w, rt * Nt + col, w * i, 0, false, w, 1, 1);
                         ++col;
                         --left;
                     }
                     if constexpr (has_bias) {
                         if (last) {
-                            matmul_block(cb_ones, cb_w, 0, 4 * rows, 0, false, 4, 1, 1);
+                            matmul_block(cb_ones, cb_w, 0, w * rows, 0, false, w, 1, 1);
                         }
                     }
                     tile_regs_commit();
@@ -352,7 +382,7 @@ void kernel_main() {
                         }
                         cb_push_back(cb_rows, 4);
                     } else {
-                        pack_part();
+                        pack_part(w);
                     }
                     tile_regs_release();
                 }
