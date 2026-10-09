@@ -5,7 +5,6 @@
 from typing import Callable
 import math
 
-import ml_dtypes
 
 import ttnn
 import ttml
@@ -60,19 +59,11 @@ class LinearLayer(AbstractModuleBase):
         }
 
     def __setstate__(self, state):
-        self.weight.tensor.set_value(
-            ttml.autograd.Tensor.from_numpy(
-                state["weight"].astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-            ).get_value()
-        )
+        ttml.autograd.assign_numpy(self.weight.tensor, state["weight"])
         if state["bias"] is not None:
             if self.bias is None:
                 raise ValueError("LinearLayer bias was improperly initialized when deserializing from Pickle")
-            self.bias.tensor.set_value(
-                ttml.autograd.Tensor.from_numpy(
-                    state["bias"].astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-                ).get_value()
-            )
+            ttml.autograd.assign_numpy(self.bias.tensor, state["bias"])
 
     def forward(self, x):
         """Compute linear projection of x."""

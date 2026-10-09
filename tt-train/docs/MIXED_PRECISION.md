@@ -62,7 +62,9 @@ These optimizers write in place, and all of them take views:
 Taking the view is checked at run time, not by the compiler, so every in-place write path has a test that reads the
 other view after a step (`AutogradTensorTest.*Tracks*` in `tests/autograd/autograd_tensor.cpp`). A new optimizer, or
 a new path in an existing one (for example a config option that changes which tensors the step writes), needs one too.
-`RemoteOptimizer` is the exception: its step needs a second host, so its write is covered by review only.
+`RemoteOptimizer` is the exception: its step needs a second host, so its write is covered by review only. The same
+holds for the Python `SocketManager.recv()`, which receives into the stored tensor through a view, and
+`SocketManager.send()`, which sends the stored tensor, so both ends of a transfer use the same dtype.
 
 ## Parameter dtypes the optimizers accept
 
@@ -81,13 +83,23 @@ file.
 
 - `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32;
   any other value, or any value for an empty tensor, is taken as is. The Python `Tensor.assign()` calls it, so the
-  safetensors loaders and the in-place initializers in `ttml.init` keep each tensor's dtype, and so does
-  `ttml.checkpointing`, which loads parameters and optimizer state into the live tensors.
+  in-place initializers in `ttml.init` keep each tensor's dtype, and so does `ttml.checkpointing`, which loads
+  parameters and optimizer state into the live tensors.
+- `ttml.autograd.assign_numpy()` loads a numpy array into a tensor in its stored dtype, converted on the host: an
+  fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. The safetensors loaders, the
+  SFT trainer's default checkpoint loader and `LinearLayer` unpickling use it.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
 - Gradients load as bf16, whatever dtype they were saved in: backward produces bf16 gradients, and the fused AdamW
   and SGD kernels accept only bf16.
+
+## Reading values from Python
+
+- `Tensor.to_numpy()` reads the tensor as stored. A bf16 tensor gives a float32 array by default, converted on the
+  host, so the read leaves no fp32 copy on the device. `precision=` reads one view instead, and `new_type=` picks
+  the array's dtype.
+- `Tensor.dtype()` and `Tensor.to_string()` describe the tensor as stored.
 
 ## Why this design
 

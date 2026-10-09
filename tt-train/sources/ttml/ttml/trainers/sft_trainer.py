@@ -443,8 +443,6 @@ class SFTTrainer:
             self.step = step
             return step
 
-        import ml_dtypes
-
         with open(path, "rb") as f:
             ckpt = pickle.load(f)
         step = int(ckpt["step"])
@@ -454,11 +452,7 @@ class SFTTrainer:
         for name, arr in model_state.items():
             if name not in params:
                 continue
-            arr_bf16 = arr.astype(ml_dtypes.bfloat16)
-            restored = ttml.autograd.Tensor.from_numpy(
-                arr_bf16, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-            )
-            params[name].assign(restored)
+            ttml.autograd.assign_numpy(params[name], arr)
 
         self.step = step
         return step

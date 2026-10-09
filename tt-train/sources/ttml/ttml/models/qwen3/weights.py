@@ -13,8 +13,8 @@ Contents:
 
   - Weight permutation / inverse-permutation helpers (HF <-> ttml layout)
   - ``build_weight_mapping_single``: HF -> ttml parameter name mapping
-  - ``torch_to_ttml``: torch tensor -> bfloat16 TILE ttml tensor, with an
-    optional ``mapper`` for FSDP-distributed upload
+  - ``torch_to_ttml``: torch tensor -> TILE ttml tensor (bfloat16 unless ``dtype``
+    says otherwise), with an optional ``mapper`` for FSDP-distributed upload
   - ``load_weights_from_hf``: HF state-dict -> ttml Qwen3 model, supporting both
     the single-device / replicated path (``sharded=False``) and the
     FSDP-sharded, already-materialized path (``sharded=True``)
@@ -230,8 +230,10 @@ def expected_fused_load_shape(config, hf_name: str, tie_word_embeddings: bool = 
 # =====================================================================
 
 
-def torch_to_ttml(t: torch.Tensor, mapper: Any = None) -> "ttml.autograd.Tensor":
-    """Convert a torch tensor to a bfloat16 TILE tensor on the active device.
+def torch_to_ttml(
+    t: torch.Tensor, mapper: Any = None, dtype: ttnn.DataType = ttnn.DataType.BFLOAT16
+) -> "ttml.autograd.Tensor":
+    """Convert a torch tensor to a TILE tensor of ``dtype`` (bfloat16 by default) on the active device.
 
     When ``mapper`` is ``None`` the tensor is uploaded to a single device (or
     replicated by the default mesh behaviour) -- the original eager path. When a
@@ -244,9 +246,9 @@ def torch_to_ttml(t: torch.Tensor, mapper: Any = None) -> "ttml.autograd.Tensor"
     """
     if mapper is not None:
         full_np = t.float().numpy()
-        return ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+        return ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, dtype, mapper)
     device = ttml.autograd.AutoContext.get_instance().get_device()
-    ttnn_host = ttnn.from_torch(t, dtype=ttnn.bfloat16)
+    ttnn_host = ttnn.from_torch(t, dtype=dtype)
     ttnn_dev = ttnn.to_device(ttnn_host, device)
     ttnn_tiled = ttnn.tilize_with_zero_padding(ttnn_dev)
     return ttml.autograd.create_tensor(ttnn_tiled)
@@ -417,13 +419,13 @@ def load_weights_from_hf(
             # the device transfer below runs serially in the main thread (TTNN
             # device ops are not thread-safe -- see the note in ``_prepare_hf_weights``).
             param = ttml_params[ttml_name]
-            if sharded:
-                # ``prepared`` is the padded GLOBAL-shape host weight (see above).
-                # Distribute it with the param's precomputed mapper (FSDP-shard or
-                # replicate), then swap the value in place to preserve FSDP markers.
-                param.set_value(torch_to_ttml(prepared, mapper=sharded_mappers[ttml_name]).get_value())
-            else:
-                param.assign(torch_to_ttml(prepared))
+            # Built in the dtype the param is stored in, so an fp32 param keeps the exact values.
+            dtype = param.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
+            # When sharded, ``prepared`` is the padded GLOBAL-shape host weight (see above), distributed with the
+            # param's precomputed mapper (FSDP-shard or replicate). assign() swaps the value in place, which keeps
+            # the FSDP markers.
+            mapper = sharded_mappers[ttml_name] if sharded else None
+            param.assign(torch_to_ttml(prepared, mapper=mapper, dtype=dtype))
             loaded += 1
 
     print(f"  Qwen3 weight loading: {loaded} loaded, {len(skipped)} skipped")
