@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
-#include <map>
 #include <set>
 
 #include <tt-logger/tt-logger.hpp>
@@ -62,43 +61,50 @@ constexpr uint32_t kChunkA2Slots = 1;
 
 uint32_t r64(uint32_t v) { return tt::align(v, 64u); }
 
-// moe_compute's prepared layout of one ring position (prepare_w0_w1 / prepare_w2, moe_ring_common.h)
+// moe_compute's prepared weights (prepare_w0_w1 / prepare_w2, moe_ring_common.h) as the expert rows reader addresses
+// them, in tiles. W0/W1, per (layer, expert): the ring positions' slices back to back (ShardLayout::w01_start), each
+// its column pairs (4 tiles per K row) at a stride of pair_tiles, then, for an odd count in the compact layout, one
+// half block-column (one column, 2 tiles per K row); that stream is cut into one piece of piece_tiles per DRAM bank,
+// so a slice can go on in the next bank (with equal even counts and 14-tile transactions, piece r is position r's
+// slice). W2, per (layer, expert): w2_tiles in position r's own bank, its output groups (4 tiles per K row) at a stride
+// of w2_group_tiles, the last of the w2_groups 2 output tiles wide when w2_last_half. The K padding at the end of each
+// group is not read.
+struct PreparedLayout {
+    uint32_t piece_tiles = 0, pair_tiles = 0;
+    uint32_t w2_tiles = 0, w2_group_tiles = 0, w2_groups = 0;
+    bool w2_last_half = false;
+};
+
+PreparedLayout prepared_layout(uint32_t Ht, uint32_t Nt, bool has_bias, uint32_t ring) {
+    const uint32_t txn = moe_ring::tiles_per_txn_for_shape(Ht, Nt, has_bias, ring);
+    const uint32_t block = moe_ring::W0_W1_TXNS_PER_BLOCK * txn;
+    const uint32_t kd = Ht + (has_bias ? 1 : 0), nd = Nt + (has_bias ? 1 : 0);
+    PreparedLayout l;
+    l.piece_tiles = moe_ring::w0_w1_bank_blocks_per_expert(kd, Nt, ring, ring, txn) * block;
+    l.pair_tiles = tt::div_up(kd, moe_ring::block_tiles_h(txn)) * block;
+    l.w2_tiles = moe_ring::w2_core_blocks_per_expert(Ht, nd, ring, txn) * block;
+    l.w2_group_tiles = tt::div_up(nd, moe_ring::block_tiles_h(txn)) * block;
+    l.w2_groups = moe_ring::w2_num_a2a_iters(Ht, ring);
+    l.w2_last_half = moe_ring::w2_last_a2a_iter_half(Ht, ring, txn);
+    return l;
+}
+
+// moe_compute's prepared layout of one ring position
 struct ShardLayout {
     uint32_t cols = 0, col_start = 0;       // real intermediate columns
     uint32_t out_tiles = 0, out_start = 0;  // W2 output tiles
+    uint32_t w01_start = 0;                 // first tile of its W0/W1 slice in the (layer, expert) stream
+    bool half_col = false;                  // its last column is a half block-column
     uint32_t groups() const { return tt::div_up(cols, 2u); }
     uint32_t out_groups() const { return tt::div_up(out_tiles, kOutGroupTiles); }
 };
 
-// The prepared weights as the expert rows reader addresses them: bank r holds ring position r's whole W0/W1 column
-// pairs (w01_groups per (layer, expert), K padded to k_pad tiles) and its W2 output groups (w2_groups, N padded to
-// n_pad tiles). moe_compute stores this per-core stride layout when every ring core stores the same even column count
-// with 14-tile transactions (moe_ring_common.h); its compact layouts (odd or unequal column counts, 20-tile
-// transactions) lay the cores' slices across bank boundaries with half-width block-columns, which per_core_stride
-// marks false.
-struct PreparedLayout {
-    uint32_t k_pad = 0, n_pad = 0;
-    uint32_t w01_groups = 0, w2_groups = 0;
-    bool per_core_stride = false;
-};
-
-PreparedLayout prepared_layout(uint32_t Ht, uint32_t Nt, bool has_bias, uint32_t ring) {
-    const uint32_t tiles_per_txn = moe_ring::tiles_per_txn_for_shape(Ht, Nt, has_bias, ring);
-    const uint32_t block_h = moe_ring::block_tiles_h(tiles_per_txn);
-    const uint32_t cols = moe_ring::w0_w1_stored_cols(Nt, 0, ring);
-    PreparedLayout l;
-    l.k_pad = tt::round_up(Ht + (has_bias ? 1 : 0), block_h);
-    l.n_pad = tt::round_up(Nt + (has_bias ? 1 : 0), block_h);
-    l.w01_groups = cols / 2;
-    l.w2_groups = moe_ring::w2_num_a2a_iters(Ht, ring);
-    l.per_core_stride = tiles_per_txn == moe_ring::DEFAULT_TILES_PER_TXN && cols % 2 == 0;
-    for (uint32_t r = 1; r < ring; ++r) {
-        l.per_core_stride = l.per_core_stride && moe_ring::w0_w1_stored_cols(Nt, r, ring) == cols;
-    }
-    return l;
-}
-
-std::vector<ShardLayout> shard_layouts(uint32_t Ht, uint32_t Nt, uint32_t ring) {
+std::vector<ShardLayout> shard_layouts(uint32_t Ht, uint32_t Nt, bool has_bias, uint32_t ring) {
+    const uint32_t txn = moe_ring::tiles_per_txn_for_shape(Ht, Nt, has_bias, ring);
+    const uint32_t kd = Ht + (has_bias ? 1 : 0);
+    const uint32_t col_blocks = tt::div_up(kd, moe_ring::block_tiles_h(txn));
+    const uint32_t half_col_blocks = tt::div_up(kd, moe_ring::half_block_tiles_h(txn));
+    const bool compact = moe_ring::w0_w1_compact_for_shape(Nt, ring);
     std::vector<ShardLayout> layouts(ring);
     uint32_t col = 0, out = 0;
     for (uint32_t r = 0; r < ring; ++r) {
@@ -108,9 +114,16 @@ std::vector<ShardLayout> shard_layouts(uint32_t Ht, uint32_t Nt, uint32_t ring) 
         layouts[r].out_tiles = moe_ring::w2_shard_tiles(Ht, r, Nt, ring);
         layouts[r].out_start = out;
         out += layouts[r].out_tiles;
+        layouts[r].w01_start = moe_ring::w0_w1_core_block_offset(Nt, r, ring, col_blocks, half_col_blocks) *
+                               moe_ring::W0_W1_TXNS_PER_BLOCK * txn;
+        layouts[r].half_col = compact && layouts[r].cols % 2 == 1;
     }
     return layouts;
 }
+
+// Tiles per K row of W0/W1 column group u of `groups` (a half block-column holds one column) and of W2 output group q
+// of `groups` (the half-width last a2a iteration two output tiles).
+uint32_t group_width(uint32_t u, uint32_t groups, bool half_last) { return half_last && u + 1 == groups ? 2 : 4; }
 
 MoEExpertRowsRoutingLayout routing_layout(const MoEExpertRowsShape& s, uint32_t np, uint32_t spc, uint32_t groups) {
     MoEExpertRowsRoutingLayout o;
@@ -344,27 +357,41 @@ JobCost job_cost(const MoEExpertRowsShape& s, const MoEExpertRowsPlan& p, uint32
     const uint32_t Ht = s.hidden_size / tt::constants::TILE_WIDTH;
     const uint32_t Nt = s.intermediate_size / tt::constants::TILE_WIDTH;
     const uint32_t kd = Ht + (s.has_bias ? 1 : 0), nd = Nt + (s.has_bias ? 1 : 0);
+    const auto layouts = shard_layouts(Ht, Nt, s.has_bias, banks);
+    const PreparedLayout prepared = prepared_layout(Ht, Nt, s.has_bias, banks);
     JobCost jc;
-    std::map<uint32_t, double> bank_tiles;
+    // tiles each bank (shard) streams for one job: group 0's W0/W1 runs split at the bank pieces, W2 in its own bank
+    std::vector<double> bank_tiles(banks, 0.0);
     for (const auto& c : p.cores) {
-        const double tiles = 4.0 * (c.ng * kd + c.nq * nd);
+        // weight tiles per K row over the core's column groups and output groups (a half group is 2 wide)
+        const double p1_width = 4.0 * c.ng - (c.half_col ? 2.0 : 0.0);
+        const double p2_width = 4.0 * c.nq - (c.half_out ? 2.0 : 0.0);
+        const double tiles = p1_width * kd + p2_width * nd;
         if (tiles > jc.busiest) {
             jc.busiest = tiles;
             if (p.row_tiles > 1) {
                 const uint32_t kc1 = std::min(Ht, p.chunk_tiles * p.row_tiles);
                 jc.reloads =
-                    4.0 * (c.ng * (tt::div_up(Ht, p.chunk_tiles) - 1) + c.nq * (tt::div_up(Nt, p.w2_chunk_rows) - 1));
-                jc.single_reloads = 4.0 * c.ng * (tt::div_up(Ht, kc1) - 1);
+                    p1_width * (tt::div_up(Ht, p.chunk_tiles) - 1) + p2_width * (tt::div_up(Nt, p.w2_chunk_rows) - 1);
+                jc.single_reloads = p1_width * (tt::div_up(Ht, kc1) - 1);
             }
         }
         if (c.group == 0) {
-            bank_tiles[c.bank] += tiles;
+            const ShardLayout& l = layouts[c.ring_pos];
+            for (uint32_t u = c.g0; u < c.g0 + c.ng; ++u) {
+                uint32_t at = l.w01_start + u * prepared.pair_tiles;
+                for (uint32_t left = group_width(u, l.groups(), l.half_col) * kd; left > 0;) {
+                    const uint32_t piece = at / prepared.piece_tiles;
+                    const uint32_t take = std::min(left, (piece + 1) * prepared.piece_tiles - at);
+                    bank_tiles[piece] += take;
+                    at += take;
+                    left -= take;
+                }
+            }
+            bank_tiles[c.ring_pos] += p2_width * nd;
         }
     }
-    double busiest_bank = 0;
-    for (const auto& [bank, tiles] : bank_tiles) {
-        busiest_bank = std::max(busiest_bank, tiles);
-    }
+    const double busiest_bank = *std::max_element(bank_tiles.begin(), bank_tiles.end());
     jc.stream_s = busiest_bank * banks * tt::tile_size(tt::DataFormat::Bfp4_b) / dram_peak_bytes_per_s(arch);
     return jc;
 }
@@ -467,7 +494,8 @@ std::optional<MoEExpertRowsPlan> plan_moe_expert_rows(
         refusal = "a NoC packet holds less than one K row of four weight tiles";
         return std::nullopt;
     }
-    const auto layout = shard_layouts(Ht, Nt, ring);
+    const auto layout = shard_layouts(Ht, Nt, s.has_bias, ring);
+    const PreparedLayout prepared = prepared_layout(Ht, Nt, s.has_bias, ring);
     uint32_t most_groups = 0;
     for (const auto& l : layout) {
         if (l.cols == 0) {
@@ -480,14 +508,8 @@ std::optional<MoEExpertRowsPlan> plan_moe_expert_rows(
         }
         most_groups = std::max(most_groups, l.groups());
     }
-    if (!prepared_layout(Ht, Nt, s.has_bias, ring).per_core_stride) {
-        refusal = "the prepared weights are in a compact layout, which the expert rows reader does not address";
-        return std::nullopt;
-    }
     const uint32_t tps = s.tokens / s.num_sources;
     const uint32_t bias = s.has_bias ? 1 : 0;
-    const uint32_t p1_run = 4 * (Ht + bias);
-    const uint32_t p2_run = 4 * (Nt + bias);
     // jobs of at most 32 M rows of one expert: at most one partial job per expert plus the full ones
     const uint32_t jobs_max = s.local_experts + s.tokens * s.top_k / (kJobRows * row_tiles);
 
@@ -510,16 +532,47 @@ std::optional<MoEExpertRowsPlan> plan_moe_expert_rows(
             std::vector<MoEExpertRowsCore> members;
             for (uint32_t r = 0; r < ring; ++r) {
                 const ShardLayout& l = layout[r];
-                const uint32_t kb = std::min(k, l.groups());
-                std::vector<uint32_t> per(kb), load(kb), outs(kb, 0);
-                for (uint32_t m = 0; m < kb; ++m) {
+                const uint32_t kb = std::min(k, l.groups()), nq = l.out_groups();
+                std::vector<uint32_t> per(kb);
+                std::vector<uint64_t> p1_tiles(kb), out_prefix(nq + 1, 0);
+                for (uint32_t m = 0, u = 0; m < kb; ++m) {
                     per[m] = l.groups() / kb + (m < l.groups() % kb ? 1 : 0);
-                    load[m] = per[m] * p1_run;
+                    for (const uint32_t end = u + per[m]; u < end; ++u) {
+                        p1_tiles[m] += group_width(u, l.groups(), l.half_col) * (Ht + bias);
+                    }
                 }
-                for (uint32_t q = 0; q < l.out_groups(); ++q) {
-                    const uint32_t m = std::min_element(load.begin(), load.end()) - load.begin();
-                    ++outs[m];
-                    load[m] += p2_run;
+                for (uint32_t q = 0; q < nq; ++q) {
+                    out_prefix[q + 1] =
+                        out_prefix[q] + group_width(q, prepared.w2_groups, prepared.w2_last_half) * (Nt + bias);
+                }
+                // W2 output groups per member: contiguous runs in member order on top of its W0/W1 tiles, the busiest
+                // member least loaded, then the least sum of squared loads; earlier members take more on a tie (with
+                // equal runs, the least-loaded-member greedy deal). best[m][j]: (busiest, sum of squares) of members
+                // 0..m-1 taking groups [0, j); first[m][j]: member m - 1's first group there.
+                using Cost = std::pair<uint64_t, uint64_t>;
+                constexpr Cost kNone = {std::numeric_limits<uint64_t>::max(), 0};
+                std::vector<std::vector<Cost>> best(kb + 1, std::vector<Cost>(nq + 1, kNone));
+                std::vector<std::vector<uint32_t>> first(kb + 1, std::vector<uint32_t>(nq + 1, 0));
+                best[0][0] = {0, 0};
+                for (uint32_t m = 1; m <= kb; ++m) {
+                    for (uint32_t j = 0; j <= nq; ++j) {
+                        for (uint32_t i = 0; i <= j; ++i) {
+                            if (best[m - 1][i] == kNone) {
+                                continue;
+                            }
+                            const uint64_t load = p1_tiles[m - 1] + out_prefix[j] - out_prefix[i];
+                            const Cost c = {std::max(best[m - 1][i].first, load), best[m - 1][i].second + load * load};
+                            if (c <= best[m][j]) {
+                                best[m][j] = c;
+                                first[m][j] = i;
+                            }
+                        }
+                    }
+                }
+                std::vector<uint32_t> outs(kb);
+                for (uint32_t m = kb, j = nq; m > 0; --m) {
+                    outs[m - 1] = j - first[m][j];
+                    j = first[m][j];
                 }
                 uint32_t g0 = 0, q0 = 0;
                 for (uint32_t m = 0; m < kb; ++m) {
@@ -528,10 +581,12 @@ std::optional<MoEExpertRowsPlan> plan_moe_expert_rows(
                     c.bank = shard_banks[r];
                     c.g0 = g0;
                     c.ng = per[m];
+                    c.half_col = l.half_col && g0 + per[m] == l.groups();
                     c.c0 = l.col_start + 2 * g0;
                     c.na = std::min(l.cols - 2 * g0, 2 * per[m]);
                     c.q0 = q0;
                     c.nq = outs[m];
+                    c.half_out = prepared.w2_last_half && outs[m] > 0 && q0 + outs[m] == prepared.w2_groups;
                     c.n0 = l.out_start + kOutGroupTiles * q0;
                     c.nout = outs[m] ? std::min(l.out_tiles - kOutGroupTiles * q0, kOutGroupTiles * outs[m]) : 0;
                     members.push_back(c);
@@ -791,6 +846,7 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
                                  shard_layouts(
                                      shape.hidden_size / tt::constants::TILE_WIDTH,
                                      shape.intermediate_size / tt::constants::TILE_WIDTH,
+                                     shape.has_bias,
                                      shard_banks_of(w01).size()),
                                  tt::constants::TILE_WIDTH * 2)
                                  .bytes;
@@ -907,7 +963,9 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
     for (uint32_t r = 0; r < ring; ++r) {
         ring_cols = std::max(ring_cols, moe_ring::w0_w1_stored_cols(Nt, r, ring));
     }
-    const double ring_tiles = 2.0 * kd * ring_cols + 4.0 * moe_ring::w2_num_a2a_iters(Ht, ring) * nd;
+    const PreparedLayout prepared = prepared_layout(Ht, Nt, shape.has_bias, ring);
+    const double ring_tiles =
+        2.0 * kd * ring_cols + (4.0 * prepared.w2_groups - (prepared.w2_last_half ? 2.0 : 0.0)) * nd;
     const double t_ring = jobs * (std::max(cost.stream_s, ring_tiles * tile_s) + ring * kRingHopCycles / clock_hz);
     double t_expert_rows = cost.t;
     if (args.path != MoEComputePath::ComputeOnly) {
@@ -1068,23 +1126,23 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     const ttnn::Tensor& rows_tensor = tensor_return_value[0];
     const ttnn::Tensor& table_tensor = tensor_return_value[1];
 
-    // prepared layout strides (tiles)
+    // prepared layout (tiles)
     const uint32_t wtile = tt::tile_size(tt::DataFormat::Bfp4_b);
-    const uint32_t kd = Ht + (s.has_bias ? 1 : 0), nd = Nt + (s.has_bias ? 1 : 0);
     const PreparedLayout layout = prepared_layout(Ht, Nt, s.has_bias, ring);
-    const uint32_t kp = layout.k_pad, npad = layout.n_pad;
-    const uint32_t p1_groups = layout.w01_groups, p2_groups = layout.w2_groups;
-    const auto& w01_shape = tensor_args.w0_w1_tensor.logical_shape();
-    const auto& w2_shape = tensor_args.w2_tensor.logical_shape();
+    const auto shards = shard_layouts(Ht, Nt, s.has_bias, ring);
+    // tiles of one shard per (layer, expert): the prepared tensors' last three dims
+    auto shard_expert_tiles = [](const ttnn::Shape& shape) {
+        return shape[-3] * (shape[-2] / tt::constants::TILE_HEIGHT) * (shape[-1] / tt::constants::TILE_WIDTH);
+    };
     TT_FATAL(
-        w01_shape[-3] == p1_groups && w01_shape[-2] == kp * tt::constants::TILE_HEIGHT && w2_shape[-3] == p2_groups &&
-            w2_shape[-2] == npad * tt::constants::TILE_HEIGHT,
+        shard_expert_tiles(tensor_args.w0_w1_tensor.logical_shape()) == layout.piece_tiles &&
+            shard_expert_tiles(tensor_args.w2_tensor.logical_shape()) == layout.w2_tiles,
         "moe_compute expert rows: weights do not have the prepared layout of H {} / N {} on {} banks",
         s.hidden_size,
         s.intermediate_size,
         ring);
-    const uint32_t layer_w01 = args.layer_id * s.local_experts * p1_groups * kp * 4;
-    const uint32_t layer_w2 = args.layer_id * s.local_experts * p2_groups * npad * 4;
+    const uint32_t layer_w01 = args.layer_id * s.local_experts * layout.piece_tiles;
+    const uint32_t layer_w2 = args.layer_id * s.local_experts * layout.w2_tiles;
 
     std::vector<CoreCoord> all_cores;
     for (const auto& c : plan.cores) {
@@ -1117,7 +1175,8 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (spill) {
-        // partials go back into DEST exactly: FP32 tiles unpacked straight to DEST, 16-bit tiles through SrcA
+        // partials go back into DEST exactly: FP32 tiles unpacked straight to DEST, 16-bit tiles through SrcA; a
+        // 4-tile slot per (column group, row tile), also for a half group (rows_compute.cpp)
         const tt::DataFormat part_fmt = args.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         const uint32_t part_tile = tt::tile_size(part_fmt);
         make_cb(CB_PART, M * std::max(plan.a_tiles, 2u) * kOutGroupTiles / 2 * part_tile, part_fmt, part_tile);
@@ -1211,12 +1270,10 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
         {"rt_table_bytes", rt.table_bytes()},
         {"rt_jobs", rt.jobs},
         {"rt_areas", rt.areas},
-        {"w0_w1_run_tiles", 4 * kd},
-        {"w0_w1_group_tiles", 4 * kp},
-        {"w0_w1_groups_per_core", p1_groups},
-        {"w2_run_tiles", 4 * nd},
-        {"w2_group_tiles", 4 * npad},
-        {"w2_groups_per_core", p2_groups},
+        {"w0_w1_group_tiles", layout.pair_tiles},
+        {"w0_w1_piece_tiles", layout.piece_tiles},
+        {"w2_group_tiles", layout.w2_group_tiles},
+        {"w2_slice_tiles", layout.w2_tiles},
     };
     std::vector<uint32_t> reader_ct_pos;
     tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_indices_tensor.buffer()).append_to(reader_ct_pos);
@@ -1319,6 +1376,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     reader_common.insert(reader_common.end(), vc.xs.begin(), vc.xs.end());
     reader_common.insert(reader_common.end(), vc.ys.begin(), vc.ys.end());
     reader_common.insert(reader_common.end(), all_mask.begin(), all_mask.end());
+    reader_common.insert(reader_common.end(), shard_banks.begin(), shard_banks.end());
     std::vector<uint32_t> writer_common = vc.xs;
     writer_common.insert(writer_common.end(), vc.ys.begin(), vc.ys.end());
     tt::tt_metal::SetCommonRuntimeArgs(program, reader, reader_common);
@@ -1341,7 +1399,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
             table_tensor.buffer()->address(),
             static_cast<uint32_t>(tensor_args.w0_w1_tensor.buffer()->address() + layer_w01 * wtile),
             static_cast<uint32_t>(tensor_args.w2_tensor.buffer()->address() + layer_w2 * wtile),
-            c.g0,
+            shards[c.ring_pos].w01_start + c.g0 * layout.pair_tiles,
             c.ng,
             c.q0,
             c.nq,
@@ -1350,7 +1408,9 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
             np,
             static_cast<uint32_t>(root.x),
             static_cast<uint32_t>(root.y),
-            device_id};
+            device_id,
+            c.half_col ? 1u : 0u,
+            c.half_out ? 1u : 0u};
         tt::tt_metal::SetRuntimeArgs(program, reader, c.core, rd);
 
         std::vector<uint32_t> wr = {
@@ -1367,7 +1427,8 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
         wr.insert(wr.end(), gm.begin(), gm.end());
         tt::tt_metal::SetRuntimeArgs(program, writer, c.core, wr);
 
-        tt::tt_metal::SetRuntimeArgs(program, compute, c.core, {c.ng, c.nq, c.ring_pos});
+        tt::tt_metal::SetRuntimeArgs(
+            program, compute, c.core, {c.ng, c.nq, c.ring_pos, c.half_col ? 1u : 0u, c.half_out ? 1u : 0u});
     }
     return {
         std::move(program), shared_variables_t{.reader_kernel = reader, .writer_kernel = writer, .cores = all_cores}};
@@ -1384,8 +1445,8 @@ void MoEExpertRowsFactory::override_runtime_arguments(
     const uint32_t ring = shard_banks_of(tensor_args.w0_w1_tensor).size();
     const uint32_t wtile = tt::tile_size(tt::DataFormat::Bfp4_b);
     const PreparedLayout layout = prepared_layout(Ht, Nt, s.has_bias, ring);
-    const uint32_t layer_w01 = args.layer_id * s.local_experts * layout.w01_groups * layout.k_pad * 4;
-    const uint32_t layer_w2 = args.layer_id * s.local_experts * layout.w2_groups * layout.n_pad * 4;
+    const uint32_t layer_w01 = args.layer_id * s.local_experts * layout.piece_tiles;
+    const uint32_t layer_w2 = args.layer_id * s.local_experts * layout.w2_tiles;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
         for (uint32_t i = 0; i < shared.cores.size(); ++i) {
@@ -1535,7 +1596,7 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
         // Each combine column (width shard) is fed by the feeders whose W2 width slice overlaps it; with a ring size
         // that is not a multiple of the column count a slice straddles columns (as in the ring program's dm1)
         const uint32_t Ht = H / tt::constants::TILE_WIDTH;
-        const auto layouts = shard_layouts(Ht, args.intermediate_size / tt::constants::TILE_WIDTH, ring);
+        const auto layouts = shard_layouts(Ht, args.intermediate_size / tt::constants::TILE_WIDTH, args.has_bias, ring);
         std::vector<std::vector<CoreCoord>> feeders_by_column(dp);
         for (uint32_t r = 0; r < ring; ++r) {
             const uint32_t begin = moe_ring::w2_combine_col_begin(layouts[r].out_start, Ht / dp);
