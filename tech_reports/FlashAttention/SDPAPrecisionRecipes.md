@@ -174,15 +174,10 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
 - A routed call is the named recipe, bit for bit, with the blocking below. `compute_kernel_config` and
   `exp_approx_mode` are ignored as for any recipe call. ACCURATE is the recipe that keeps FP32 scores and state, the
   closest match to an FP32-DEST request; FP32 DEST was often a shared linear config rather than an SDPA choice.
-- Routed dense, chunked and MLA calls choose their blocking on the whole compute grid
+- Routed dense, chunked, MLA and joint calls choose their blocking on the whole compute grid
   ([Blocking](#blocking)): `program_config` chunk sizes and grids were tuned for the legacy kernels, and the chooser
-  beats them (table below). One exception: when the keys fit
-  one K chunk (up to 512, no causal / window / chunked key range), a caller's Q chunk larger than the chosen one is
-  kept, with the keys as one K chunk, when it fits; the chooser's per-core model does not see the K/V each extra Q
-  chunk reads again from DRAM (bge_m3 B8 S512: Q256/K512 0.454 ms, chosen Q128/K512 0.490). Joint, ring, exp ring
-  and ring-distributed calls keep the caller's chunks and grid when the recipe supports them (and, joint, they fit
-  L1; otherwise the op chooses): the chooser gains nothing measurable on the joint callers, and can pick an odd
-  STANDARD Q chunk whose packed-K/V joint program overflows the kernel config buffer.
+  beats them or ties (table below). Ring, exp ring and ring-distributed calls keep the caller's chunks and grid when
+  the recipe supports them.
   `max_cores_per_head_batch` is kept; `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still
   need an explicit `precision`.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).
@@ -195,7 +190,7 @@ the blocking above, the legacy column the same call before routing):
 |---|---|---|
 | tt_transformers prefill: causal, 32/8 heads, D128, BFP8 Q/K/V, S4096, Q256/K256 on 8x8, HiFi4 + FP32 | 7.60 | 2.38 |
 | same, S8192 | 29.40 | 7.78 |
-| tt_transformers chunked prefill: Q2048 at 6144, paged BFP8 cache (64-row blocks), tensor start | 12.74 | 5.52 |
+| tt_transformers chunked prefill: Q2048 at 6144, paged BFP8 cache (64-row blocks), tensor start | 12.74 | 3.99 |
 | Gemma-style: causal + window 1024, scale 1, 16/8 heads, D256, S8192, Q128/K128 | 12.65 | 2.62 |
 | bge_m3: 16 heads, D64, S8192, padding mask, Q128/K256, LoFi + FP32 | 10.03 | 7.61 |
 | bge_m3: B8, S512, padding mask, Q256/K256, HiFi4 + FP32 | 0.470 | 0.468 |
@@ -204,7 +199,7 @@ the blocking above, the legacy column the same call before routing):
 | Qwen3-VL vision: 16 heads, D96, S4096, Q128/K128 | 4.63 | 2.03 |
 | qwen_image joint: 24 heads, D128, N4096 + L128, Q512/K256, HiFi2 + FP32 (ACCURATE) | 10.63 | 3.48 |
 | qwen_image joint, BF16 DEST (STANDARD) | 6.18 | 1.36 |
-| Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.33 | 1.60 |
+| Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.33 | 1.55 |
 
 The routed FP32-DEST calls are faster than the legacy FP32 loop, the small encoders included (nomic S512) or level
 with it (bge_m3 B8 S512: the same device time, 0.452 ms traced, bound by reading the head-broadcast mask once per
@@ -279,8 +274,9 @@ ACCURATE at D64 stays slower than the legacy FP32 kernel (its FP32 softmax costs
 - **`output_concat_heads`** writes [B, 1, Sq, H·Dv] from the writer (the same tiles at concatenated addresses).
 
 Each is a compile-time switch that is off unless the call uses it; builds without them are unchanged. The largest
-program (STANDARD fused Q256/K512 with a sink) holds 65,968 B of code and data for the 70,656 B kernel config buffer
-(without the sink 63,572 B).
+programs are STANDARD's fused ones with BFP8 K/V: Q256/K512 D128 with a sink takes 68,880 B of the 70,656 B kernel
+config buffer (plain 66,464 B), Q256/K256 D64 with a sink 70,368 B; see [Blocking](#blocking) for the geometries the
+chooser avoids.
 
 ## Blocking
 
@@ -290,8 +286,15 @@ or a chunk size of 0 in `SDPAProgramConfig`. For exp ring it also chooses the SD
 It uses a roofline cost model fitted to Blackhole timings, plus pipeline fill/drain terms that dominate
 short-K cross attention. Causal, sliding-window and chunked calls cost the K chunks each Q chunk actually processes,
 dealt over the grid as the kernels deal them, plus fitted per-K-chunk streaming, per-edge-chunk and per-Q-chunk
-terms; sliding windows also consider 128-row K chunks. Explicit chunk sizes are honored ([routed](#routing) calls choose theirs). Blocking never changes a recipe's
-arithmetic, only its rounding order. Without a recipe, chunk sizes must be explicit.
+terms; sliding windows also consider 128-row K chunks. A chunked prefill whose start is a device tensor is costed at
+the latest start its K/V length allows (one program serves every start). With more batch/heads than cores, every Q
+chunk reads its head's K/V from DRAM (no forwarding chain), which a fitted term adds (bge_m3 B8 S512: Q256/K512
+0.455 ms, where the roofline alone picked Q128 at 0.488). The chooser never picks a geometry whose program is known
+to overflow the kernel config buffer (`recipe_program_fits`: STANDARD odd Q chunks of 7+ tiles with a joint segment,
+a sink or a K tail, or a head dim of odd tile count; packed K/V with a head dim of odd tile count and one of those
+features; measured program sizes are listed there). Explicit chunk sizes are honored ([routed](#routing) calls choose
+theirs). Blocking never changes a recipe's arithmetic, only its rounding order. Without a recipe, chunk sizes must be
+explicit.
 
 ## Ring and exp ring attention
 
