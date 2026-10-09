@@ -197,6 +197,7 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
 
 uint32_t add_semaphore_descriptor(
     ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, tt::CoreType core_type) {
+    TT_FATAL(!cores.ranges().empty(), "Expected a non-empty CoreRangeSet");
     constexpr uint32_t kSemaphoresPerCore = 16;
     std::bitset<kSemaphoresPerCore> used;
     for (const auto& sem : desc.semaphores) {
