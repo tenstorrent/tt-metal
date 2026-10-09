@@ -176,3 +176,11 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   (rel L2 0.0050 -> 0.0025, row-norm ratio min 0.9911 -> 0.9976; the HiFi2 failure predates the fused score). Full
   model: perf same (9.34 s), KV PCC same within 1e-4 (kv_latent 0.96660 / 0.98397, index_key 0.98760 / 0.99511),
   56k top1 0.8696 (HiFi2 0.8767; last chunk 0.7136 vs 0.7416). Left at the attention fidelity (HiFi2) by default.
+
+## MLP / shared-expert reduce-scatter: MiMo fabric_reduce_scatter in bf16 (2026-10-09), GLM_SCATTER_OP=fabric_bf16 default
+
+- scatter_rows (tt/common.py; dense MLP and shared expert outputs) was two fp32 ttnn.reduce_scatter (axis 0 + 1,
+  ~1.8 ms per MoE layer). Now: typecast to bf16 + ttnn.bringup.fabric_reduce_scatter on axis 0 then 1.
+- Warm 56k prefill 9.34 -> 8.95 s (6290 tok/s). s4096 KV PCC min/mean kv_latent 0.96653 / 0.98409 (fp32 0.96674 /
+  0.98401), index_key 0.98813 / 0.99491 (0.98806 / 0.99516), kda_conv min 0.9620 (0.9653); final hidden 0.9445 both.
+  56k top1 0.8804 (fp32 0.8767, unified 0.8814). GLM_SCATTER_OP=ttnn restores the fp32 path.
