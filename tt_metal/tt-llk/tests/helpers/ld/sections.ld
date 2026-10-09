@@ -77,6 +77,7 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
     *(.llk_init_text) /* out of line INIT blocks (perf.h), last so they move nothing */
+    *(.llk_quiet_text) /* the PACK_ISOLATE peers' hold (profiler.h quiet_wait), after them for the same reason */
   } > REGION_CODE
   .fini :
   {
@@ -143,6 +144,8 @@ SECTIONS
     *(.dynbss)
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
+    . = ALIGN(4);
+    *(.llk_quiet_data) /* profiler.h quiet peers, last so no other variable moves */
     . = ALIGN(4);
     __ldm_bss_end = .;
   } > REGION_DATA
