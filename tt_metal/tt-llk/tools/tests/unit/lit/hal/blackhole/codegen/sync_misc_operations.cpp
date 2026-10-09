@@ -96,17 +96,6 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_semaph
     return TT_OP_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_stream_wait(hs::StreamWait descriptor)
-{
-    return descriptor.operation();
-}
-
-extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_stream_wait(hs::StreamWait descriptor)
-{
-    return TT_OP_STREAMWAIT(
-        hal::to_underlying(descriptor.targets), descriptor.target_low, hal::to_underlying(descriptor.target), hal::to_underlying(descriptor.slot));
-}
-
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_flush_tdma(hm::FlushScope scope)
 {
     return hm::FlushTdma {scope}.operation();
@@ -196,9 +185,6 @@ extern "C" void reject_invalid_runtime_descriptors()
     (void)hs::StallWait {static_cast<hs::StallTarget>(512), hs::StallCondition::MathIdle}.operation();
     (void)hs::StallWait {hs::StallTarget::Math, static_cast<hs::StallCondition>(8192)}.operation();
     (void)hs::SemaphoreWait {hs::StallTarget::Math, hs::SemaphoreMask::S0, static_cast<hs::SemaphoreCondition>(0)}.operation();
-    (void)hs::StreamWait {hs::StallTarget::Unpack, static_cast<hs::StreamSlot>(4), hs::StreamTarget::Phase, 0}.operation();
-    (void)hs::StreamWait {hs::StallTarget::Unpack, hs::StreamSlot::S0, static_cast<hs::StreamTarget>(2), 0}.operation();
-    (void)hs::StreamWait {hs::StallTarget::Unpack, hs::StreamSlot::S0, hs::StreamTarget::Phase, 1024}.operation();
     (void)hm::FlushTdma {static_cast<hm::FlushScope>(16)}.operation();
     (void)hm::ResourceDeclaration {16, 0, 1}.operation();
     (void)hm::ResourceDeclaration {0, 512, 1}.operation();
@@ -206,7 +192,7 @@ extern "C" void reject_invalid_runtime_descriptors()
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_descriptors>:
-// ASSERT-COUNT-14: ebreak
+// ASSERT-COUNT-11: ebreak
 // ASSERT-NOT: ebreak
 // ASSERT-NOT: sw
 // ASSERT: ret
