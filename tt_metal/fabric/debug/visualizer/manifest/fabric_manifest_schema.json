@@ -1,0 +1,532 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fabric manifest",
+  "description": "The shape of a fabric manifest (README.md in this directory). Fields are described by kind, not by key: FIELDS.md names each key. Values the manifest defines (channel status, credit backing, stream register, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names.",
+  "type": "object",
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "kind": { "const": "fabric_manifest" },
+    "run": { "$ref": "#/$defs/run" },
+    "fabric_context": { "$ref": "#/$defs/fabric_context" },
+    "vocabulary": { "$ref": "#/$defs/vocabulary" },
+    "archs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/arch" }
+    },
+    "enums": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/enum" }
+    },
+    "meshes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^M[0-9]+$" },
+      "additionalProperties": { "$ref": "#/$defs/mesh" }
+    }
+  },
+  "required": ["manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "core": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
+    "vc_key": { "pattern": "^vc[0-9]+$" },
+    "category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
+    "kind": { "enum": ["l1", "stream", "number", "flag", "enum"] },
+    "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
+    "schema": {
+      "type": "string",
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+    },
+
+    "run": {
+      "type": "object",
+      "properties": {
+        "arch": { "$ref": "#/$defs/name" },
+        "fabric_config": { "$ref": "#/$defs/name" },
+        "reliability_mode": { "$ref": "#/$defs/name" },
+        "tensix_config": { "$ref": "#/$defs/name" },
+        "udm_mode": { "$ref": "#/$defs/name" },
+        "host_rank": { "$ref": "#/$defs/count" },
+        "mpi_rank": { "$ref": "#/$defs/count" },
+        "world_size": { "type": "integer", "minimum": 1 },
+        "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+      },
+      "required": [
+        "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "host_rank", "mpi_rank",
+        "world_size", "written_at"
+      ],
+      "additionalProperties": false
+    },
+
+    "fabric_context": {
+      "type": "object",
+      "properties": {
+        "topology": { "$ref": "#/$defs/name" },
+        "is_2d_routing": { "type": "boolean" },
+        "packet_header_size_bytes": { "$ref": "#/$defs/count" },
+        "max_payload_size_bytes": { "$ref": "#/$defs/count" },
+        "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
+        "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
+        "routing_1d_extension_words": { "$ref": "#/$defs/count" },
+        "multi_txq": { "type": "boolean" }
+      },
+      "required": [
+        "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes",
+        "channel_buffer_size_bytes", "multi_txq"
+      ],
+      "if": { "properties": { "is_2d_routing": { "const": true } } },
+      "then": { "required": ["routing_2d_route_buffer_size"], "not": { "required": ["routing_1d_extension_words"] } },
+      "else": { "required": ["routing_1d_extension_words"], "not": { "required": ["routing_2d_route_buffer_size"] } },
+      "additionalProperties": false
+    },
+
+    "vocabulary": {
+      "type": "object",
+      "properties": {
+        "categories": { "type": "array", "items": { "$ref": "#/$defs/category" }, "uniqueItems": true },
+        "kinds": { "type": "array", "items": { "$ref": "#/$defs/kind" }, "uniqueItems": true }
+      },
+      "required": ["categories", "kinds"],
+      "additionalProperties": false
+    },
+
+    "type_keys": {
+      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry.",
+      "type": "object",
+      "properties": {
+        "size": { "$ref": "#/$defs/count" },
+        "num_elements": { "$ref": "#/$defs/count" },
+        "size_per_element": { "$ref": "#/$defs/count" },
+        "bits_per_entry": { "$ref": "#/$defs/count" },
+        "schema": { "$ref": "#/$defs/schema" }
+      },
+      "required": ["size", "schema"],
+      "dependentRequired": {
+        "size_per_element": ["num_elements"],
+        "bits_per_entry": ["num_elements"]
+      }
+    },
+    "region_keys": {
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "address": { "$ref": "#/$defs/count" },
+        "cleared_by_host": { "type": "boolean" }
+      },
+      "required": ["address", "cleared_by_host"]
+    },
+    "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
+    "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
+    "stream_keys": {
+      "type": "object",
+      "properties": {
+        "stream_id": { "$ref": "#/$defs/count" },
+        "register": { "enum": ["buf_space_available", "remote_src"] },
+        "schema": { "$ref": "#/$defs/schema" }
+      },
+      "required": ["stream_id", "register", "schema"]
+    },
+    "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+
+    "arch": {
+      "type": "object",
+      "properties": {
+        "areas": {
+          "type": "object",
+          "properties": {
+            "heartbeat": {
+              "$ref": "#/$defs/region_keys",
+              "properties": {
+                "magic": { "$ref": "#/$defs/count" },
+                "magic_mask": { "$ref": "#/$defs/count" },
+                "period_iters": { "$ref": "#/$defs/count" }
+              },
+              "required": ["magic", "magic_mask", "period_iters"],
+              "unevaluatedProperties": false
+            },
+            "fabric_telemetry": { "$ref": "#/$defs/region" },
+            "routing_table": { "$ref": "#/$defs/region" },
+            "go_msg": { "$ref": "#/$defs/region" },
+            "launch": { "$ref": "#/$defs/region" },
+            "launch_msg_rd_ptr": { "$ref": "#/$defs/region" },
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" }
+          },
+          "required": [
+            "heartbeat", "fabric_telemetry", "routing_table", "go_msg", "launch", "launch_msg_rd_ptr",
+            "eth_fw_mailbox"
+          ],
+          "additionalProperties": false
+        },
+        "types": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "size": { "$ref": "#/$defs/count" },
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/type_keys",
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "offset": { "$ref": "#/$defs/count" }
+                  },
+                  "required": ["name", "offset"],
+                  "unevaluatedProperties": false
+                }
+              }
+            },
+            "required": ["size", "members"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["areas", "types"],
+      "additionalProperties": false
+    },
+
+    "enum": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/count" }
+        }
+      },
+      "required": ["values"],
+      "additionalProperties": false
+    },
+
+    "mesh": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
+        "torus": {
+          "type": "object",
+          "properties": { "y": { "type": "boolean" }, "x": { "type": "boolean" } },
+          "required": ["y", "x"],
+          "additionalProperties": false
+        },
+        "express_routing": { "type": "boolean" },
+        "credit_transport": {
+          "description": "Only for meshes on this host.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "backing": { "enum": ["stream_register", "l1_counter"] },
+              "reasons": { "type": "array", "items": { "$ref": "#/$defs/name" } }
+            },
+            "required": ["backing", "reasons"],
+            "additionalProperties": false
+          }
+        },
+        "chips": {
+          "type": "object",
+          "propertyNames": { "pattern": "^C[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/chip" }
+        }
+      },
+      "required": ["shape", "express_routing", "chips"],
+      "additionalProperties": false
+    },
+
+    "chip": {
+      "type": "object",
+      "properties": {
+        "mesh_coord": { "type": "array", "items": { "$ref": "#/$defs/count" }, "minItems": 1 },
+        "physical_chip_id": { "type": ["integer", "null"] },
+        "asic_id": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x[0-9a-f]{16}$" }] },
+        "is_local": { "type": "boolean" },
+        "z_port_role": { "$ref": "#/$defs/name" },
+        "local_sync": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/local_sync" }] },
+        "routers": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[EWNSZ][0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/router" }
+        }
+      },
+      "required": ["mesh_coord", "physical_chip_id", "asic_id", "is_local"],
+      "if": { "properties": { "is_local": { "const": true } } },
+      "then": {
+        "properties": { "physical_chip_id": { "type": "integer" }, "asic_id": { "type": "string" } },
+        "required": ["z_port_role", "local_sync", "routers"]
+      },
+      "else": {
+        "description": "A chip this rank cannot map to a device.",
+        "properties": { "physical_chip_id": { "type": "null" }, "asic_id": { "type": "null" } },
+        "maxProperties": 4
+      },
+      "additionalProperties": false
+    },
+
+    "local_sync": {
+      "type": "object",
+      "properties": {
+        "master": { "$ref": "#/$defs/router_path" },
+        "num_routers": { "$ref": "#/$defs/count" },
+        "router_channels_mask": { "$ref": "#/$defs/count" }
+      },
+      "required": ["master", "num_routers", "router_channels_mask"],
+      "additionalProperties": false
+    },
+
+    "router": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "eth_chan": { "$ref": "#/$defs/count" },
+            "logical_core": { "$ref": "#/$defs/core" },
+            "virtual_core": { "$ref": "#/$defs/core" }
+          },
+          "required": ["eth_chan", "logical_core", "virtual_core"],
+          "additionalProperties": false
+        },
+        "link": {
+          "type": "object",
+          "properties": {
+            "edge_capability": { "$ref": "#/$defs/name" },
+            "peer": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/router_path" }] },
+            "cross_host": { "type": "boolean" },
+            "wrap": { "type": "boolean" },
+            "dispatch_link": { "type": "boolean" }
+          },
+          "required": ["edge_capability", "peer", "cross_host", "wrap", "dispatch_link"],
+          "additionalProperties": false
+        },
+        "shape": {
+          "type": "object",
+          "properties": {
+            "num_vcs": { "$ref": "#/$defs/count" },
+            "senders_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "receivers_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "num_active_eriscs": { "type": "integer", "minimum": 1 },
+            "channel_trimming_overrides_applied": { "type": "boolean" },
+            "vc0_bubble_flow_control": { "type": "boolean" }
+          },
+          "required": [
+            "num_vcs", "senders_per_vc", "receivers_per_vc", "num_active_eriscs",
+            "channel_trimming_overrides_applied", "vc0_bubble_flow_control"
+          ],
+          "additionalProperties": false
+        },
+        "credit_counters": {
+          "type": "object",
+          "properties": {
+            "to_sender_ack": { "$ref": "#/$defs/counter_array" },
+            "to_sender_completion": { "$ref": "#/$defs/counter_array" },
+            "receiver_ack": { "$ref": "#/$defs/counter_array" },
+            "receiver_completion": { "$ref": "#/$defs/counter_array" }
+          },
+          "required": ["to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"],
+          "additionalProperties": false
+        },
+        "channels": {
+          "type": "object",
+          "properties": {
+            "senders": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/sender_channel" }
+              }
+            },
+            "receivers": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/receiver_channel" }
+              }
+            }
+          },
+          "required": ["senders", "receivers"],
+          "additionalProperties": false
+        },
+        "intra_chip_downstream_edges": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": { "pattern": "^edge[0-9]+$" },
+            "additionalProperties": { "$ref": "#/$defs/downstream_edge" }
+          }
+        },
+        "fields": { "$ref": "#/$defs/fields" },
+        "eriscs": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^erisc[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "processor": { "$ref": "#/$defs/name" },
+              "fields": { "$ref": "#/$defs/fields" }
+            },
+            "required": ["processor", "fields"],
+            "additionalProperties": false
+          }
+        },
+        "leftover_l1": { "$ref": "#/$defs/optional_region" }
+      },
+      "required": [
+        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "fields",
+        "eriscs", "leftover_l1"
+      ],
+      "additionalProperties": false
+    },
+
+    "counter_array": {
+      "$ref": "#/$defs/region_keys",
+      "properties": { "index_space": { "enum": ["own_sender_compact", "peer_sender_compact"] } },
+      "required": ["index_space"],
+      "unevaluatedProperties": false
+    },
+
+    "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
+
+    "credit_ref": {
+      "oneOf": [
+        { "$ref": "#/$defs/stream" },
+        {
+          "type": "object",
+          "properties": {
+            "array": {
+              "type": "string",
+              "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
+            },
+            "index": { "$ref": "#/$defs/count" }
+          },
+          "required": ["array", "index"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "sender_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "producer": {
+          "anyOf": [
+            { "type": "null" },
+            { "enum": ["worker", "tensix_mux"] },
+            { "$ref": "#/$defs/router_path" }
+          ]
+        },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "credits": {
+          "type": "object",
+          "properties": {
+            "acked": { "$ref": "#/$defs/credit_ref" },
+            "completed": { "$ref": "#/$defs/credit_ref" }
+          },
+          "required": ["completed"],
+          "additionalProperties": false
+        },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "producer", "ring_buffer", "credits", "fields"],
+      "additionalProperties": false
+    },
+
+    "receiver_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "forwards_on": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^vc[0-9]+$" }] },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "forwards_on", "ring_buffer", "fields"],
+      "additionalProperties": false
+    },
+
+    "downstream_edge": {
+      "type": "object",
+      "properties": {
+        "downstream_channel": {
+          "type": "string",
+          "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+/channels/senders/vc[0-9]+/ch[0-9]+$"
+        },
+        "through_tensix_mux": { "type": "boolean" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["downstream_channel", "through_tensix_mux", "fields"],
+      "additionalProperties": false
+    },
+
+    "fields": {
+      "description": "Keyed by the field's key (FIELDS.md lists them). Null for a buffer the builder did not allocate.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }
+    },
+
+    "field": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/region_keys",
+          "properties": { "category": { "$ref": "#/$defs/category" }, "kind": { "const": "l1" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "$ref": "#/$defs/stream_keys",
+          "properties": { "category": { "$ref": "#/$defs/category" }, "kind": { "const": "stream" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/category" },
+            "kind": { "const": "number" },
+            "value": { "$ref": "#/$defs/count" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/category" },
+            "kind": { "const": "flag" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/category" },
+            "kind": { "const": "enum" },
+            "value": { "$ref": "#/$defs/count" },
+            "schema": { "type": "string", "pattern": "^enum:[A-Za-z_][A-Za-z0-9_]*$" }
+          },
+          "required": ["category", "kind", "value", "schema"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
