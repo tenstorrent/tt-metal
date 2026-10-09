@@ -1,0 +1,58 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import time
+
+art=Path('/home/ttuser/qwen38-artifacts-20261007')
+root=art/'release-image-v1'
+root.mkdir()
+manifest='sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579'
+config='sha256:23f5f92af192e23cde494bcdac1f2efddc5c3b301345af3997ca3f79036c6af1'
+archive_sha='755626b044cea12f390fd343439dbfe4af920aba6e7d156a26490c478325d648'
+report=dict(state='preflight',started_at=time.time(),manifest_digest=manifest,config_digest=config,archive_sha256=archive_sha,hardware_opened=False)
+def save():
+ p=root/'status.json.tmp';p.write_text(json.dumps(report,indent=2)+'\n');p.replace(root/'status.json')
+def run(command,timeout):
+ print(json.dumps(command),flush=True)
+ return subprocess.run(command,check=True,timeout=timeout,text=True,capture_output=True)
+save()
+try:
+ required=6010501632+6010425345+18909817344+8*1024**3
+ free=shutil.disk_usage(root).free
+ assert free>required,(free,required)
+ report.update(state='downloading',free_before_bytes=free,conservative_required_bytes=required);save()
+ partial=root/'image.oci.tar.partial'
+ run(['curl','--fail','--silent','--show-error','--cacert',str(art/'qwen38-image-copy-ca-v1.pem'),'--connect-timeout','10','--max-time','900','--retry','2','--retry-max-time','900','--output',str(partial),'https://10.228.203.34:18443/sha256/'+archive_sha],1100)
+ digest=hashlib.sha256()
+ with partial.open('rb') as f:
+  for data in iter(lambda:f.read(16*1024**2),b''):digest.update(data)
+ assert digest.hexdigest()==archive_sha
+ with partial.open('rb') as f:os.fsync(f.fileno())
+ archive=root/'image.oci.tar';partial.rename(archive)
+ assert shutil.disk_usage(root).free>6010425345+18909817344+8*1024**3
+ report.update(state='loading',downloaded_at=time.time(),archive_bytes=archive.stat().st_size);save()
+ result=run(['docker','image','load','--input',str(archive)],1200)
+ (root/'load.log').write_text(result.stdout+result.stderr)
+ image=json.loads(run(['docker','image','inspect',config],30).stdout)[0]
+ assert image['Id']==config
+ (root/'image-inspect.json').write_text(json.dumps(image,indent=2)+'\n')
+ report.update(state='checking_runtime',loaded_at=time.time());save()
+ common=['docker','run','--rm','--label','qwen38.task=image-runtime-v1','--network=none','--read-only','--memory=4g','--memory-swap=4g','--cpus=4','--pids-limit=256','--tmpfs','/tmp:rw,size=512m','--env','PYTHONDONTWRITEBYTECODE=1','--entrypoint','/home/container_app_user/tt-metal/python_env/bin/python']
+ verify=run(common+['--name','qwen38-image-import-check-v1',config,'/home/container_app_user/qwen38-bundle/verify_image.py'],180)
+ (root/'runtime-imports.log').write_text(verify.stdout+verify.stderr)
+ assert 'QWEN_IMAGE_SOURCE_AND_IMPORTS_PASS' in verify.stdout
+ help_result=run(common+['--name','qwen38-image-entrypoint-check-v1',config,'/home/container_app_user/app/src/run_vllm_api_server.py','--help'],180)
+ (root/'entrypoint-help.log').write_text(help_result.stdout+help_result.stderr)
+ report.update(state='runtime_imports_passed_unqualified',finished_at=time.time(),free_after_bytes=shutil.disk_usage(root).free)
+except BaseException as error:
+ report.update(state='failed',error=type(error).__name__,detail=str(error)[:2000],finished_at=time.time())
+ if isinstance(error,subprocess.CalledProcessError):
+  (root/'failure.log').write_text((error.stdout or '')+(error.stderr or ''))
+ raise
+finally:
+ save()
+ owned=subprocess.check_output(['docker','ps','-aq','--filter','label=qwen38.task=image-runtime-v1'],text=True,timeout=30).split()
+ if owned:subprocess.run(['docker','rm','-f',*owned],timeout=60,check=True)

@@ -126,9 +126,19 @@ async def run_http_sweep(base_url, directory, *, deployment, priority_only=False
                 print(f"HTTP_SWEEP_BEGIN isl={length} concurrency={concurrency}", flush=True)
                 cell["warmup"] = await burst()
                 cell["samples"] = []
+                save_report(report, directory)
+                print(
+                    f"HTTP_SWEEP_WARMUP_COMPLETE isl={length} concurrency={concurrency} elapsed_s={cell['warmup']['elapsed_s']:.6f}",
+                    flush=True,
+                )
                 for repeat in range(report["measured_runs"]):
                     cell["samples"].append(await burst())
                     save_report(report, directory)
+                    print(
+                        f"HTTP_SWEEP_SAMPLE_COMPLETE isl={length} concurrency={concurrency} repeat={repeat + 1} "
+                        f"elapsed_s={cell['samples'][-1]['elapsed_s']:.6f}",
+                        flush=True,
+                    )
                 cell["summary"] = summarize_http(cell["samples"])
                 cell["status"] = "completed"
                 save_report(report, directory)

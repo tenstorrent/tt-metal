@@ -17,7 +17,8 @@ The first Tau3 pilot failed before inference because a sparse checkout omitted
 shared user-simulator guidelines. Five physical Galaxy HTTP cells completed,
 then a read error stopped the first queue. The corrected native-recurrence
 control finished at **170/198 (85.86%)**, including one incorrect output-budget
-cutoff. The valid Tau3 pilot is running; a BFP8/HiFi2 LM-head control is queued
+cutoff. The bounded Tau3 pilot completed 3/12 successes with five timeout-affected
+trials; a BFP8/HiFi2 LM-head control is queued
 after current hardware work, with a new G0 and full GPQA.
 See the [current qualification report](galaxy-evidence/qualification-overnight-v2/README.md).
 The experimental image is built and preserved on host disk. Registry publication,

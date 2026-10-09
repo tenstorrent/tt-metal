@@ -764,3 +764,51 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
 [Native results](../galaxy-evidence/qualification-overnight-v2/README.md),
 [head queue](../galaxy-evidence/accuracy-head-v1/README.md),
 [image artifact](../galaxy-evidence/image-build-v5/README.md).
+
+## Oct 9, 05:39-06:00 UTC: bounded Tau3 result and queued CPU/image checks
+
+- Corrected Tau3 completed 12/12 attempts in 32m36s, with 3 successes, 277
+  validly parsed tool calls, zero malformed arguments and zero output-budget
+  cutoffs. Four tasks hit the 20-minute task cap; task_026 hit its 300-second
+  model-request timeout (raw row 10, 300.119971 seconds, 8K output budget).
+  Three completed user-stop trials and one 60-step-limit trial scored zero.
+  This self-simulated/graded pilot is not a matched published reference score;
+  incomplete trials and manual conversation review remain explicit limitations.
+- Native physical HTTP cells completed at 32K/C32 and 32K/C64. The 128-user
+  warmup had an extended interval without visible tokens. Workers remained
+  live, advanced from nine to sixteen active requests, then generated tokens
+  across all eight engines at 05:56 UTC. No reset, restart or debugger attach
+  was performed. Cold setup is a lead, not a proven cause; retain warmup timing.
+- OCI inspection v1 assumed gzip and failed on zstd base layers. v2 dispatches
+  by declared media type; all 46 layer hashes/sizes and manifest/config digests
+  passed. Layer tar bytes total 18.91 GB uncompressed and 6.01 GB compressed.
+  The build host lacks the conservative import space plus an 8-GiB reserve,
+  so no existing image was removed and no import was attempted there.
+- A bounded TLS source serves only the immutable image archive to allocated
+  host .98. The certificate was copied through authenticated SSH; no private
+  key or registry credential was transferred. The destination copy/import,
+  no-device container checks and new CPU HF-head reference are queued behind
+  both hardware queues in qwen38-post-head-cpu-v1-20261009.service. Their host
+  load is not allowed to overlap the measurements. The image/head policy in
+  all existing jobs remains unchanged. No result is claimed for the CPU probe.
+- The CPU probe uses all original BF16 HF decoder weights, eight fixed public
+  reference steps, and identical hidden states for head-only BFP4/BFP8 weight
+  round trips. It rejects incomplete checkpoint loading and reports numerical
+  sensitivity without including device fidelity or pretending to predict GPQA.
+
+[Tau3](../galaxy-evidence/tau-pilot-v2/README.md),
+[OCI inspection](../galaxy-evidence/image-build-v5/inspection/README.md),
+[follow-up queue](../galaxy-evidence/post-head-cpu-v1/README.md).
+
+### 06:00 UTC timing correction: repeated prefill pauses, not a cold-only delay
+
+The saved 32K/C128 warmup took 95.101 s; measured bursts took 95.233, 94.975
+and 95.112 s. This contradicts a one-off cold-start explanation. Earlier-half
+requests (ranked by TTFT in each burst) had median stream rates 2.687-2.691
+tok/s/user; later-half requests had 10.354-10.467. Current full-prefill
+scheduling can pause already-started decode to admit later prompts. This is a
+lead supported by source and the stream timing pattern, not a measured device
+stall or a complete stage breakdown. Overall HTTP output rate is 172.26 tok/s,
+including all prompt work for 32K-input/128-output requests. It must not replace
+a decode-only long-context rate. Added warmup and per-burst timing logs for
+future sweeps; the active immutable source was not edited.

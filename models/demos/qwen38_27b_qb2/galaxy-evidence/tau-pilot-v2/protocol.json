@@ -1,0 +1,37 @@
+{
+  "revision": "17e07b1da2bbc0cadfddeea36412686e0604127b",
+  "dataset_sha256": "3c6e2123a7290c4a3d94a234f3adba1cf4a9883b1323291bfd29ae14f65199ac",
+  "task_ids": [
+    "task_032",
+    "task_050",
+    "task_019",
+    "task_016",
+    "task_057",
+    "task_047",
+    "task_060",
+    "task_026",
+    "task_051",
+    "task_102",
+    "task_066",
+    "task_097"
+  ],
+  "selection": "Frozen prior stratified diagnostic sample: 1 action, 4 small, 4 medium, 3 large document sets",
+  "concurrency": 8,
+  "trials": 1,
+  "retries": 0,
+  "per_task_seconds": 1200,
+  "run_seconds": 2700,
+  "max_steps": 60,
+  "agent_max_tokens": 8192,
+  "user_and_judge_max_tokens": 2048,
+  "model": "Qwen/Qwen3.8-27B",
+  "simulator_and_judge": "same local Qwen, greedy, no thinking",
+  "agent_sampling": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 20,
+    "thinking": true
+  },
+  "base_url": "http://127.0.0.1:8078",
+  "started_at": 1791522746.8960497
+}

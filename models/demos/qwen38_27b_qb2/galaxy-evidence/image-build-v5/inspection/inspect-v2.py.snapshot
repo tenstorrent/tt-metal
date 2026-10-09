@@ -1,0 +1,57 @@
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tarfile
+import time
+
+root=Path('/home/ttuser/qwen38-release-build-20261009-v5')
+archive=root/'artifact/qwen38-image.oci.tar'
+destination=root/'artifact/oci-inspection-v2.json'
+assert not destination.exists()
+started=time.time()
+metadata=json.loads((root/'build-metadata.json').read_text())
+manifest_digest=metadata['containerimage.digest'].split(':',1)[1]
+blob_name=lambda value:'blobs/sha256/'+value.split(':',1)[-1]
+report={'state':'inspecting','started_at':started,'archive':str(archive),'layers':[]}
+with tarfile.open(archive,'r:') as tar:
+ manifest_bytes=tar.extractfile(blob_name(manifest_digest)).read()
+ assert hashlib.sha256(manifest_bytes).hexdigest()==manifest_digest
+ manifest=json.loads(manifest_bytes)
+ config_bytes=tar.extractfile(blob_name(manifest['config']['digest'])).read()
+ assert hashlib.sha256(config_bytes).hexdigest()==manifest['config']['digest'].split(':')[1]
+ config=json.loads(config_bytes)
+ assert config['architecture']=='amd64' and config['os']=='linux'
+ report.update(manifest_digest='sha256:'+manifest_digest,entrypoint=config['config'].get('Entrypoint'),command=config['config'].get('Cmd'),user=config['config'].get('User'),working_dir=config['config'].get('WorkingDir'))
+ for layer in manifest['layers']:
+  size=0;digest=hashlib.sha256()
+  with tar.extractfile(blob_name(layer['digest'])) as stream:
+   for block in iter(lambda:stream.read(16*1024**2),b''):size+=len(block);digest.update(block)
+  assert size==layer['size'] and digest.hexdigest()==layer['digest'].split(':')[1]
+  media_type=layer['mediaType']
+  if media_type.endswith('+gzip'):
+   unpacked=0
+   with tar.extractfile(blob_name(layer['digest'])) as compressed:
+    with gzip.GzipFile(fileobj=compressed) as stream:
+     for block in iter(lambda:stream.read(16*1024**2),b''):
+      unpacked+=len(block)
+      if unpacked>64*1024**3:raise ValueError('Unexpected layer above 64 GiB')
+  elif media_type.endswith('+zstd'):
+   output=subprocess.check_output(['/bin/bash','-c','set -o pipefail; tar -xOf "$1" "$2" | zstd -dc | wc -c','_',str(archive),blob_name(layer['digest'])],text=True,timeout=600)
+   unpacked=int(output.strip())
+   assert unpacked<64*1024**3
+  elif media_type.endswith('.tar'):
+   unpacked=size
+  else:
+   raise ValueError(f'Unsupported layer compression: {media_type}')
+  report['layers'].append(dict(digest=layer['digest'],compressed_bytes=size,uncompressed_tar_bytes=unpacked))
+  print(json.dumps(report['layers'][-1]),flush=True)
+compressed=sum(row['compressed_bytes'] for row in report['layers'])
+uncompressed=sum(row['uncompressed_tar_bytes'] for row in report['layers'])
+free=shutil.disk_usage(root).free
+report.update(state='verified',finished_at=time.time(),compressed_layer_bytes=compressed,uncompressed_layer_tar_bytes=uncompressed,free_host_disk_bytes=free,conservative_load_bytes=compressed+uncompressed+8*1024**3,load_fits_with_8gib_reserve=free>compressed+uncompressed+8*1024**3)
+with destination.open('x') as f:json.dump(report,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+print(json.dumps(report),flush=True)

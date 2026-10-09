@@ -1,0 +1,7 @@
+{
+  "state": "serving",
+  "started_at": 1791524964.575527,
+  "allowed_client": "10.228.203.98",
+  "only_artifact": "/home/ttuser/qwen38-release-build-20261009-v5/artifact/qwen38-image.oci.tar",
+  "tls": true
+}

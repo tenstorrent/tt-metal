@@ -1,0 +1,251 @@
+{
+  "state": "verified",
+  "started_at": 1791524491.9969094,
+  "archive": "/home/ttuser/qwen38-release-build-20261009-v5/artifact/qwen38-image.oci.tar",
+  "layers": [
+    {
+      "digest": "sha256:58d08388939a85ef3525d682dc94907103446baf69c8b33737115a8911bcbf6b",
+      "compressed_bytes": 24314564,
+      "uncompressed_tar_bytes": 80642560
+    },
+    {
+      "digest": "sha256:72f085b5beaccd41df093534d7cf263e80a6a6675d0814ad7d689da608d2a671",
+      "compressed_bytes": 17837048,
+      "uncompressed_tar_bytes": 53206016
+    },
+    {
+      "digest": "sha256:4a89749a92841d6be1850c7cb35b353f480d5691e44ecd4b2cd4f916d3f60660",
+      "compressed_bytes": 51774836,
+      "uncompressed_tar_bytes": 176616960
+    },
+    {
+      "digest": "sha256:f5957a87b91da7795d5a4ddab9c5dbed7e882ec2f4c2d3a592fae29a9fda9234",
+      "compressed_bytes": 768467,
+      "uncompressed_tar_bytes": 3827200
+    },
+    {
+      "digest": "sha256:8820b742c9e80569b2d51a72dda0c431da0053f92e4c70b0b2a0fdc73c2306e6",
+      "compressed_bytes": 6182775,
+      "uncompressed_tar_bytes": 33464832
+    },
+    {
+      "digest": "sha256:2c1ce468d9f3d941396801f6e3afc8921466650dd05430fe644cd3537713d27f",
+      "compressed_bytes": 16,
+      "uncompressed_tar_bytes": 1024
+    },
+    {
+      "digest": "sha256:49cd12acc857f609839a5449dd98a41a6e139a59cc5f728aca8687344892952e",
+      "compressed_bytes": 26740245,
+      "uncompressed_tar_bytes": 81849344
+    },
+    {
+      "digest": "sha256:a9407457e70d411c0635fd8664adbbedd9ce408769ab8d46726b692ab4784e00",
+      "compressed_bytes": 5830,
+      "uncompressed_tar_bytes": 23552
+    },
+    {
+      "digest": "sha256:43a9195dd5b3f457acbb7a7d3745d610862673efbb2e572ca59d85fed22550b6",
+      "compressed_bytes": 2739,
+      "uncompressed_tar_bytes": 9728
+    },
+    {
+      "digest": "sha256:951e0602f62ee885524329aa117b9d61c12c0ca3917c3febefd6b1a27e95c9c6",
+      "compressed_bytes": 552,
+      "uncompressed_tar_bytes": 4608
+    },
+    {
+      "digest": "sha256:f8f6648df5c0a3b9f4cac987c0569ccdd11fd0d19a2e9fcb2cfb6a7c1aea13fa",
+      "compressed_bytes": 455405401,
+      "uncompressed_tar_bytes": 1939769344
+    },
+    {
+      "digest": "sha256:a7394e674fda6585b2d32ef43f65864bc48ca701f57247890af2f67bcfaf6262",
+      "compressed_bytes": 104289498,
+      "uncompressed_tar_bytes": 454325248
+    },
+    {
+      "digest": "sha256:2c1ce468d9f3d941396801f6e3afc8921466650dd05430fe644cd3537713d27f",
+      "compressed_bytes": 16,
+      "uncompressed_tar_bytes": 1024
+    },
+    {
+      "digest": "sha256:fff7807ec1d458e3613f877ec97dee188f046e13be80317bfbfbdf8387a3fd2c",
+      "compressed_bytes": 5045648,
+      "uncompressed_tar_bytes": 18437632
+    },
+    {
+      "digest": "sha256:e29a7b6ec98079123c2d06ca03f30211f15123e823a964e1e8a25935563aeebc",
+      "compressed_bytes": 50398322,
+      "uncompressed_tar_bytes": 187880448
+    },
+    {
+      "digest": "sha256:fc4ecf5ad6b1b204c8b2f492e42516e5f42b4e949a5641b513a3ad750ff04058",
+      "compressed_bytes": 294668,
+      "uncompressed_tar_bytes": 835072
+    },
+    {
+      "digest": "sha256:e96bc1d610c115d958dd740d78398fbd5936f57bd602e16a5d8138bd2e63b02c",
+      "compressed_bytes": 3914849,
+      "uncompressed_tar_bytes": 10300928
+    },
+    {
+      "digest": "sha256:e39f8e0bc6d0afb521c3d2ee3aa7605415d67865fbcd8044d938b5738d98ab96",
+      "compressed_bytes": 2668771,
+      "uncompressed_tar_bytes": 21226496
+    },
+    {
+      "digest": "sha256:245f6ac2a4adece01868b084f744a5434a86e7c0cb7231d6acfd29755c5ccf70",
+      "compressed_bytes": 3650817,
+      "uncompressed_tar_bytes": 12706816
+    },
+    {
+      "digest": "sha256:2c1ce468d9f3d941396801f6e3afc8921466650dd05430fe644cd3537713d27f",
+      "compressed_bytes": 16,
+      "uncompressed_tar_bytes": 1024
+    },
+    {
+      "digest": "sha256:641e8fc2fdf5594c214a8903b17855f9266a7e11b6e451cb7eb9d682cda55ce2",
+      "compressed_bytes": 149,
+      "uncompressed_tar_bytes": 2560
+    },
+    {
+      "digest": "sha256:38f1a60caca9f800a05751bb8718d9a7981c01e69a7190920a1cda742937360d",
+      "compressed_bytes": 54037553,
+      "uncompressed_tar_bytes": 373652992
+    },
+    {
+      "digest": "sha256:1d427d24cfbe8342635da1a170075c8ea0cbafff6a5f7e9be068d412c491f3dd",
+      "compressed_bytes": 2008,
+      "uncompressed_tar_bytes": 24576
+    },
+    {
+      "digest": "sha256:d63d546e0dd6275885d71c2c1f06d48d7eb1459820a6ec5cab02e6630646ded5",
+      "compressed_bytes": 30418680,
+      "uncompressed_tar_bytes": 30570496
+    },
+    {
+      "digest": "sha256:a1da36aeec84bfcd9f9f1a0f040be09f83d3d4e92735ae074efd7650f87959d3",
+      "compressed_bytes": 960164,
+      "uncompressed_tar_bytes": 9821696
+    },
+    {
+      "digest": "sha256:2c1ce468d9f3d941396801f6e3afc8921466650dd05430fe644cd3537713d27f",
+      "compressed_bytes": 16,
+      "uncompressed_tar_bytes": 1024
+    },
+    {
+      "digest": "sha256:79a1a108eea2117b906b43849984979b303b5fac82705006cf6caf9dc9781ed6",
+      "compressed_bytes": 269,
+      "uncompressed_tar_bytes": 7680
+    },
+    {
+      "digest": "sha256:90a569cd45d3f4c7f904ad10622f3e39e966dcf92a18046aed5d87f7ff9834cd",
+      "compressed_bytes": 364,
+      "uncompressed_tar_bytes": 4096
+    },
+    {
+      "digest": "sha256:a80ff10af1e972b1da715b6c0bb92ae3fee3b5a23643702d0a568c78c46c0f93",
+      "compressed_bytes": 340,
+      "uncompressed_tar_bytes": 4608
+    },
+    {
+      "digest": "sha256:9f5353b72c67aff86fe971708557fa4d763942aafa77049fe40b1544cc1d3726",
+      "compressed_bytes": 1826,
+      "uncompressed_tar_bytes": 7680
+    },
+    {
+      "digest": "sha256:ac0e64d6e28f44a616fdcd61fe8297fa08d69cb95e20597224fc82ae789e65f4",
+      "compressed_bytes": 718,
+      "uncompressed_tar_bytes": 5632
+    },
+    {
+      "digest": "sha256:fd55eb5ca883d1443f8802b7f1f30fc12ecabfe8fd5fa6b878931042be4282a6",
+      "compressed_bytes": 212,
+      "uncompressed_tar_bytes": 4096
+    },
+    {
+      "digest": "sha256:62c1348aa20af749acb61ac86f0a5b61acae04b6d101523dfe6b40673bef1ad9",
+      "compressed_bytes": 275,
+      "uncompressed_tar_bytes": 3584
+    },
+    {
+      "digest": "sha256:c63322decae50d0391caf9e20ca3838910ea0251bef0e602053ba6301e64722f",
+      "compressed_bytes": 272,
+      "uncompressed_tar_bytes": 3584
+    },
+    {
+      "digest": "sha256:1bb2e972c95283594a7a2d23a3ef10467e0c68596ce684057e94cd00c4439980",
+      "compressed_bytes": 62733758,
+      "uncompressed_tar_bytes": 202306048
+    },
+    {
+      "digest": "sha256:05f54b1063696f96117ce12885e589c71a94bbfd37b7cbdcfa44ae57c9bffbfb",
+      "compressed_bytes": 98932426,
+      "uncompressed_tar_bytes": 410825728
+    },
+    {
+      "digest": "sha256:20aee940fa56580dcc352af0dc5c7adde14fb702d0ac7a0cb6924f5e049e9a54",
+      "compressed_bytes": 6794,
+      "uncompressed_tar_bytes": 359424
+    },
+    {
+      "digest": "sha256:77bf3e3d1f560417fabf6dab44a5297bc1db2daa352152a104d3ff617342361a",
+      "compressed_bytes": 796395541,
+      "uncompressed_tar_bytes": 3212992512
+    },
+    {
+      "digest": "sha256:b3a621a391a1fb806723951e0c3fd1a7070cac6ff9850c2efbf68837a63f0380",
+      "compressed_bytes": 1264,
+      "uncompressed_tar_bytes": 4608
+    },
+    {
+      "digest": "sha256:73c978c375b174fc44f089e6a8245ee8847f215c50ecfc1d39bcfc226dc61997",
+      "compressed_bytes": 4606,
+      "uncompressed_tar_bytes": 353792
+    },
+    {
+      "digest": "sha256:3265a62f2c9dc599da62204c6cba235db3cd059f190c2552decf7bbdfc6e3610",
+      "compressed_bytes": 4208673883,
+      "uncompressed_tar_bytes": 11583861760
+    },
+    {
+      "digest": "sha256:c7cca47cc7661a24bdb9c17e8cf645bd7658b827978fd21f94cf7821cffa82e0",
+      "compressed_bytes": 26056,
+      "uncompressed_tar_bytes": 106496
+    },
+    {
+      "digest": "sha256:6dcaeafda4e36e2af6ad412eb4a4445a6e2e86f08684447ec1fcb13d609947e2",
+      "compressed_bytes": 4931048,
+      "uncompressed_tar_bytes": 9724928
+    },
+    {
+      "digest": "sha256:bfd770217137cb47041f78a02fe9f3296f82f7fa031630ba33330caa94cdb164",
+      "compressed_bytes": 208,
+      "uncompressed_tar_bytes": 3584
+    },
+    {
+      "digest": "sha256:787537c53b2239b72bf4df6e3e9d5b6e5a70ee6465945e27f6f8988fdbfab9eb",
+      "compressed_bytes": 1805,
+      "uncompressed_tar_bytes": 33280
+    },
+    {
+      "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+      "compressed_bytes": 32,
+      "uncompressed_tar_bytes": 1024
+    }
+  ],
+  "manifest_digest": "sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579",
+  "entrypoint": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "/home/container_app_user/app/src/run_vllm_api_server.py"
+  ],
+  "command": null,
+  "user": "container_app_user",
+  "working_dir": "/home/container_app_user/app/src",
+  "finished_at": 1791524545.6160793,
+  "compressed_layer_bytes": 6010425345,
+  "uncompressed_layer_tar_bytes": 18909817344,
+  "free_host_disk_bytes": 28069339136,
+  "conservative_load_bytes": 33510177281,
+  "load_fits_with_8gib_reserve": false
+}

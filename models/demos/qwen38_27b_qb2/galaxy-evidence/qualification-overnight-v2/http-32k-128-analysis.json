@@ -1,0 +1,66 @@
+{
+  "source_sha256": "13bd9fbffc66b09a46cb1c1fb4e439e527316f7eac15efb8e2d07f6f3ea743cf",
+  "input_tokens": 32768,
+  "concurrency": 128,
+  "warmup_s": 95.10117134219036,
+  "measured_samples": [
+    {
+      "repeat": 1,
+      "elapsed_s": 95.23292746581137,
+      "cohorts": {
+        "earlier_half": {
+          "rows": 64,
+          "median_ttft_s": 47.30923261051066,
+          "median_decode_tsu": 2.6885858704577905
+        },
+        "later_half": {
+          "rows": 64,
+          "median_ttft_s": 82.37348144315183,
+          "median_decode_tsu": 10.466837466783835
+        }
+      }
+    },
+    {
+      "repeat": 2,
+      "elapsed_s": 94.97511100396514,
+      "cohorts": {
+        "earlier_half": {
+          "rows": 64,
+          "median_ttft_s": 47.17842881940305,
+          "median_decode_tsu": 2.6914059659681966
+        },
+        "later_half": {
+          "rows": 64,
+          "median_ttft_s": 82.20837201597169,
+          "median_decode_tsu": 10.420413731826525
+        }
+      }
+    },
+    {
+      "repeat": 3,
+      "elapsed_s": 95.11161942407489,
+      "cohorts": {
+        "earlier_half": {
+          "rows": 64,
+          "median_ttft_s": 47.063612210564315,
+          "median_decode_tsu": 2.6871184367499907
+        },
+        "later_half": {
+          "rows": 64,
+          "median_ttft_s": 82.1045256643556,
+          "median_decode_tsu": 10.354066403634825
+        }
+      }
+    }
+  ],
+  "full_cell_summary": {
+    "tokens_per_second_per_user": 2.705101703484182,
+    "aggregate_e2e_tokens_per_second": 172.26076161050878,
+    "ttft_p50_s": 47.47413482074626,
+    "ttft_p90_s": 82.49480151454918,
+    "tpot_ms": 369.6718680528706,
+    "elapsed_s": 95.11161942407489,
+    "samples": 3
+  },
+  "interpretation": "Warm and measured bursts are alike. The lower earlier-half stream rate is consistent with pauses for later full prefills. No device-stall or cold-JIT cause is established. These are whole HTTP bursts with 128-token outputs, not isolated decode throughput."
+}

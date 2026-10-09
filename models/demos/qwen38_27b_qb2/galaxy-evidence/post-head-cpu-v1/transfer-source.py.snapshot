@@ -1,0 +1,31 @@
+import http.server
+import json
+from pathlib import Path
+import shutil
+import ssl
+import subprocess
+import time
+
+root=Path('/home/ttuser/qwen38-release-build-20261009-v5')
+work=root/'transfer-v1'
+assert work.is_dir() and (work/"cert.pem").is_file() and (work/"key.pem").is_file()
+archive=root/'artifact/qwen38-image.oci.tar'
+digest='755626b044cea12f390fd343439dbfe4af920aba6e7d156a26490c478325d648'
+(work/'key.pem').chmod(0o600)
+class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  if self.client_address[0]!='10.228.203.98' or self.path!='/sha256/'+digest:
+   self.send_error(404);return
+  self.send_response(200)
+  self.send_header('Content-Type','application/octet-stream')
+  self.send_header('Content-Length',str(archive.stat().st_size))
+  self.end_headers()
+  with archive.open('rb') as f:shutil.copyfileobj(f,self.wfile,4*1024**2)
+server=http.server.HTTPServer(('10.228.203.34',18443),Handler)
+server.socket.settimeout(60)
+ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.minimum_version=ssl.TLSVersion.TLSv1_2
+ctx.load_cert_chain(work/'cert.pem',work/'key.pem')
+server.socket=ctx.wrap_socket(server.socket,server_side=True)
+(work/'status.json').write_text(json.dumps(dict(state='serving',started_at=time.time(),allowed_client='10.228.203.98',only_artifact=str(archive),tls=True),indent=2))
+server.serve_forever()

@@ -1,5 +1,14 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 06:00 UTC update: bounded Tau3 finished 3/12 successes in 32m36s,
+with four task timeouts and one 300-second request timeout. Tool-call parsing
+recorded no malformed arguments across 277 calls; this is not equivalent to
+agentic quality or a matched reference score. Native HTTP measurements are
+still active. CPU HF-head sensitivity and no-device image-runtime checks are
+persistently queued after hardware jobs, avoiding host-load interference.
+[Results](../galaxy-evidence/tau-pilot-v2/README.md) and
+[queued checks](../galaxy-evidence/post-head-cpu-v1/README.md).
+
 Oct 9 05:22 UTC update: matched native 64K-output GPQA completed **170/198
 (85.86%)** in 48m39s, including one incorrect output-budget cutoff. The other
 27 failures stopped naturally; truncation alone cannot close the unchanged

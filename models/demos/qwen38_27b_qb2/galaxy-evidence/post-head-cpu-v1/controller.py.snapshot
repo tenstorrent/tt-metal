@@ -1,0 +1,61 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+
+art=Path('/home/ttuser/qwen38-artifacts-20261007')
+task=Path('/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006')
+root=art/'post-head-cpu-v1'
+root.mkdir()
+dependencies=[('qwen38-overnight-v2-20261009.service','557dbf2612934e889a5652b82e5cfe21',art/'overnight-v2/queue.json'),('qwen38-accuracy-head-v1-20261009.service','ff89c12d6a9b4feaa268d7eff48b4132',art/'accuracy-head-v1/queue.json')]
+sources=[art/'qwen38-load-image-v1.py',art/'probe-hf-head-v1.py']
+hashes={str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
+state=dict(state='waiting',started_at=time.time(),source_sha256=hashes,survives_disconnect=True,resumes_after_reboot=False,hardware_opened=False,stages=[])
+def save():
+ p=root/'status.json.tmp';p.write_text(json.dumps(state,indent=2)+'\n');p.replace(root/'status.json')
+save()
+try:
+ deadline=time.monotonic()+18*3600
+ while True:
+  if time.monotonic()>deadline:raise TimeoutError('Hardware queues did not finish within 18 hours')
+  ready=True;observations=[]
+  for unit,invocation,receipt in dependencies:
+   try:
+    output=subprocess.check_output(['systemctl','--user','show',unit,'-p','InvocationID','-p','MainPID','-p','ActiveState','-p','LoadState','-p','Result'],text=True,timeout=15)
+   except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:
+    observations.append(dict(unit=unit,observation_error=type(error).__name__));ready=False;continue
+   props=dict(line.split('=',1) for line in output.splitlines() if '=' in line)
+   observations.append(dict(unit=unit,properties=props))
+   if props.get('InvocationID') and props['InvocationID']!=invocation:raise ValueError('Dependency service was replaced')
+   if props.get('LoadState') not in ('loaded','not-found') or props.get('MainPID')!='0' or props.get('ActiveState') not in ('inactive','failed'):
+    ready=False;continue
+   if props.get('LoadState')=='loaded' and props.get('Result')!='success':raise ValueError('Dependency service failed')
+   completed=json.loads(receipt.read_text())
+   if completed.get('state')!='completed' or completed.get('native-control',{}).get('owned_processes_stopped') is not True:
+    raise ValueError('Dependency lacks completed queue and clean serving shutdown')
+  state.update(observed_at=time.time(),dependencies=observations);save()
+  if ready:break
+  time.sleep(30)
+ for path,digest in hashes.items():
+  if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=digest:raise ValueError('Frozen CPU follow-up source changed')
+ state.update(state='running');save()
+ env=dict(os.environ,TT_METAL_HOME=str(task/'metal'),LD_LIBRARY_PATH=f'{task}/metal-install/lib:{task}/metal-build/lib',PYTHONPATH=f'{task}/metal:{task}/metal/tools',ARCH_NAME='blackhole',OMP_NUM_THREADS='8',MKL_NUM_THREADS='8',CUDA_VISIBLE_DEVICES='',PYTHONUNBUFFERED='1',TT_METAL_INSPECTOR_RPC='0')
+ for name,command,timeout in [
+  ('image-runtime-check',['/usr/bin/python3',str(sources[0])],2600),
+  ('hf-head-reference',[str(task/'python_env/bin/python'),str(sources[1]),'--weights',str(art/'checkpoint-pinned-1d4bf0f2'),'--qualification',str(art/'overnight-v2/native-g0/receipts/full-model.json'),'--output',str(art/'hf-head-reference-v1'),'--threads','8','--steps','8'],1800),
+ ]:
+  row=dict(name=name,state='running',started_at=time.time(),command=command,timeout_seconds=timeout)
+  state['stages'].append(row);save()
+  with (root/(name+'.log')).open('w') as log:
+   try:
+    result=subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=timeout,check=False)
+    row.update(state='completed' if result.returncode==0 else 'failed',exit_code=result.returncode)
+   except subprocess.TimeoutExpired:
+    row.update(state='failed',error='TimeoutExpired')
+  row['finished_at']=time.time();save()
+ state.update(state='completed',passed=all(row['state']=='completed' for row in state['stages']),finished_at=time.time())
+except BaseException as error:
+ state.update(state='failed',error=type(error).__name__,detail=str(error)[:2000],finished_at=time.time());raise
+finally:save()

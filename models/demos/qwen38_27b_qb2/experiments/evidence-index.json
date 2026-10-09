@@ -1,11 +1,16 @@
 {
-  "generated_at": "2026-10-09T05:37:03.234096+00:00",
+  "generated_at": "2026-10-09T06:05:00.293771+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "config/precision_accurate_decode_bfp8_head.json",
       "bytes": 984,
       "sha256": "e4f24f9d92b4bf109f51c2c796c858edd5d4866514a4aa2386048f512aefc2e1"
+    },
+    {
+      "path": "demo/probe_hf_head.py",
+      "bytes": 6887,
+      "sha256": "21e1a6a24e05e44558c3933aa1170a06838b8baddaeff7f54d0459a915c43343"
     },
     {
       "path": "demo/run_accuracy_followup.py",
@@ -24,8 +29,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 61647,
-      "sha256": "ce18f7f793c3367cae77d4e9d22c61d06f33bd6de577e6f0571bd1f58af48467"
+      "bytes": 64915,
+      "sha256": "0eb4deb39c1f9c77e96554d22cb0318f60690ba62eed00b442760b0840d5c9e4"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -34,8 +39,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 22222,
-      "sha256": "aae3bc4d91fe511c917904c9816ecd4705778c33b320c1a2f406a231f088c81f"
+      "bytes": 22796,
+      "sha256": "5a130b5dc969c9921afda324243aa3563e05659ae799a5467b23dfeea2710609"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2099,6 +2104,26 @@
       "sha256": "4a8ee4affb8c020cd21b6fcb1eba97be2f5e77a237276df665d9d8e91fd7c260"
     },
     {
+      "path": "galaxy-evidence/image-build-v5/inspection/README.md",
+      "bytes": 857,
+      "sha256": "f294e95c5f8b7b5f601b0cbfe9ed7966ecef657abc131969267fd346a26341ea"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v5/inspection/inspect-v1.py.snapshot",
+      "bytes": 2668,
+      "sha256": "63ae84fca2dd437cf1ea64c2180f36526da053d479408c2fab7ee08ae23eaf19"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v5/inspection/inspect-v2.py.snapshot",
+      "bytes": 3167,
+      "sha256": "af15221437cdd778ffc64e4e31eca14524b7324a38b1197b12d870af81918769"
+    },
+    {
+      "path": "galaxy-evidence/image-build-v5/inspection/oci-inspection.json",
+      "bytes": 8890,
+      "sha256": "e23987afcc9a2bb7caaf6f605e6cede1f91ddb6b28bc7e54f752db0c2328b0cd"
+    },
+    {
       "path": "galaxy-evidence/image-build-v5/preservation.json",
       "bytes": 1059,
       "sha256": "01198e622fb20fc221990667b539a271f6517d20685aa8e651afce4e9db3f0a2"
@@ -2930,6 +2955,36 @@
       "sha256": "9c5b675ad61dfeadd84166d8c92627a803ab0f3a9418dcf83ab18e35629d4430"
     },
     {
+      "path": "galaxy-evidence/post-head-cpu-v1/README.md",
+      "bytes": 3023,
+      "sha256": "4a0163ea1126a9cd080c3c424961caade8c8eafe7de9ad2bea9ad11cd2226932"
+    },
+    {
+      "path": "galaxy-evidence/post-head-cpu-v1/controller.py.snapshot",
+      "bytes": 4117,
+      "sha256": "4ecc25337c70acd840ba5757581b17f0867ae2f842348e1d306e0c2000aa83ab"
+    },
+    {
+      "path": "galaxy-evidence/post-head-cpu-v1/image-runtime.py.snapshot",
+      "bytes": 3640,
+      "sha256": "eed8909e9c5dbfa761bc8ef33bfc886c489ac2ec7bd27be4b83149d9326b663a"
+    },
+    {
+      "path": "galaxy-evidence/post-head-cpu-v1/status-at-launch.json",
+      "bytes": 1088,
+      "sha256": "824e5295a1d720d312c014fd2161dddb9b1b2f8281b8539c1bdffbaae7bf9d72"
+    },
+    {
+      "path": "galaxy-evidence/post-head-cpu-v1/transfer-source-at-launch.json",
+      "bytes": 210,
+      "sha256": "4aae31e7851a08b2f9459af111faae24d11e961fe6434f8766559a07f81ddc0b"
+    },
+    {
+      "path": "galaxy-evidence/post-head-cpu-v1/transfer-source.py.snapshot",
+      "bytes": 1337,
+      "sha256": "9e89912ade8a277145d0406026767bd469525f265dbfb4ecd045d5f8b23ad365"
+    },
+    {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",
       "bytes": 3818,
       "sha256": "dd31e9135bd7f9eb5fa4b1372e80f90a1520ddb2e2b3645d7bd4924e691643ed",
@@ -3221,8 +3276,8 @@
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/README.md",
-      "bytes": 11061,
-      "sha256": "49f57ba663b0e6464eec930139f36aac00eb5cf6ac4373bc7ad8417e105ace75"
+      "bytes": 11238,
+      "sha256": "8f58c305be0ceebc90d5baf2d17dcd8acbc80376c0ab7b061c5b97ffaeaacd98"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/gpqa-audit-64k.json",
@@ -3253,6 +3308,16 @@
       "path": "galaxy-evidence/qualification-overnight-v2/gpqa-summary-64k.json",
       "bytes": 2071,
       "sha256": "b445d13f87f85bb3b543d1c7ab689f37c8b014fab66b1d804e86e274020d1665"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/http-32k-128-analysis.json",
+      "bytes": 1992,
+      "sha256": "8707b8eee9353d0256b415e0eaa030be7d6b101ada0a0d5ffcde34b5350fd07e"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/http-snapshot-0600.json.gz",
+      "bytes": 45486,
+      "sha256": "219be7cff397abdb3bd60b3bef77350148b6a240753ff9694200ec16796be2a3"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/launch.json",
@@ -4376,6 +4441,21 @@
       }
     },
     {
+      "path": "galaxy-evidence/tau-pilot-v2/README.md",
+      "bytes": 1708,
+      "sha256": "9099f478402d554505b8893626dbf5b20228784e6c63692e4f062840adce1688"
+    },
+    {
+      "path": "galaxy-evidence/tau-pilot-v2/protocol.json",
+      "bytes": 936,
+      "sha256": "2c612b7820b6dfa66bc61e20cd614ed95efe7ce64432fdaf7858e9dc3943481f"
+    },
+    {
+      "path": "galaxy-evidence/tau-pilot-v2/summary.json",
+      "bytes": 4986,
+      "sha256": "8182512fecb958421a78fe09061020509b7ea14eb505426998564a218c5ec272"
+    },
+    {
       "path": "galaxy-evidence/unit.xml",
       "bytes": 22699,
       "sha256": "37caa2373700d20ea0748fd3bd103ba3851f1904834ce6796a91498775e6feb7",
@@ -4385,6 +4465,11 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "tests/galaxy_http_sweep.py",
+      "bytes": 7913,
+      "sha256": "fe05c2da5a0f9fedb6a87bc09fddeb603bbaf45e2d4087f5a5eb96bb688031b8"
     },
     {
       "path": "tests/unit/test_accuracy_followup.py",

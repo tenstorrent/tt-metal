@@ -99,8 +99,10 @@ replicas produced matching tokens; concurrent/isolated TPOT ratios range from
 long-context serving-throughput qualification. The JUnit copy adds only its
 missing final newline. Full GPQA began through the standard eight-worker vLLM
 endpoint at approximately 04:22 UTC and finished at 05:12:24 UTC with 170/198.
-The unchanged GPQA gate failed; the valid Tau3 pilot then started. Later
-agentic/performance stages have not yet been qualified.
+The unchanged GPQA gate failed. The [Tau3 pilot](../tau-pilot-v2/README.md)
+subsequently finished at 3/12 successes in 32m36s, with four task timeouts and
+one request timeout. It is not a matched published reference score. The
+physical HTTP sweep is still running; no complete performance pass is claimed.
 
 The queue owns `/tmp/tt-device.lock` through safe runners, has a twelve-hour
 hard limit, a 256-GiB host-memory limit and scoped process-group shutdown.

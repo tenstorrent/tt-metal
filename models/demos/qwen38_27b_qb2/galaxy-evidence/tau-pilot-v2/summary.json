@@ -1,0 +1,215 @@
+{
+  "state": "completed",
+  "selected": 12,
+  "attempted": 12,
+  "passed": 3,
+  "accuracy": 0.25,
+  "all_selected_denominator": 12,
+  "all_tasks_attempted": true,
+  "not_a_matched_published_reference": true,
+  "manual_review_pending": true,
+  "trials": [
+    {
+      "task_id": "task_032",
+      "attempted": true,
+      "passed": true,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 370.85237981704995
+      },
+      "calls": 18,
+      "truncated_calls": 0,
+      "tool_calls": 7,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 1.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_050",
+      "attempted": true,
+      "passed": true,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 402.60775388404727
+      },
+      "calls": 20,
+      "truncated_calls": 0,
+      "tool_calls": 21,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 1.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_019",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 938.2109041591175
+      },
+      "calls": 37,
+      "truncated_calls": 0,
+      "tool_calls": 24,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 0.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_016",
+      "attempted": true,
+      "passed": true,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 423.80713403364643
+      },
+      "calls": 19,
+      "truncated_calls": 0,
+      "tool_calls": 10,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 1.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_057",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1513238348998
+      },
+      "calls": 33,
+      "truncated_calls": 0,
+      "tool_calls": 21,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_047",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 993.5662800329737
+      },
+      "calls": 39,
+      "truncated_calls": 0,
+      "tool_calls": 36,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 0.0,
+      "termination": "max_steps"
+    },
+    {
+      "task_id": "task_060",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1508802236058
+      },
+      "calls": 25,
+      "truncated_calls": 0,
+      "tool_calls": 20,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_026",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 755.3893045959994
+      },
+      "calls": 11,
+      "truncated_calls": 0,
+      "tool_calls": 10,
+      "malformed_tool_calls": 0,
+      "call_errors": 1,
+      "reward": null,
+      "termination": "infrastructure_error"
+    },
+    {
+      "task_id": "task_051",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 785.6917039621621
+      },
+      "calls": 35,
+      "truncated_calls": 0,
+      "tool_calls": 29,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 0.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_102",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 0,
+        "timed_out": false,
+        "elapsed_seconds": 995.9713290068321
+      },
+      "calls": 19,
+      "truncated_calls": 0,
+      "tool_calls": 23,
+      "malformed_tool_calls": 0,
+      "call_errors": 0,
+      "reward": 0.0,
+      "termination": "user_stop"
+    },
+    {
+      "task_id": "task_066",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1936748670414
+      },
+      "calls": 21,
+      "truncated_calls": 0,
+      "tool_calls": 32,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_097",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": -15,
+        "timed_out": true,
+        "elapsed_seconds": 1200.1634010709822
+      },
+      "calls": 21,
+      "truncated_calls": 0,
+      "tool_calls": 44,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    }
+  ],
+  "calls": 298,
+  "truncated_calls": 0,
+  "tool_calls": 277,
+  "malformed_tool_calls": 0,
+  "call_errors": 1,
+  "elapsed_seconds": 1955.8588285446167
+}
