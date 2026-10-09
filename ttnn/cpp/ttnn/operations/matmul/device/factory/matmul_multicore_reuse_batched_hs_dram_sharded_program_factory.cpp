@@ -217,6 +217,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
+    const DFBSpecName INTERMED0_RELOAD_ALIAS_DFB{"intermed0_reload_alias"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -258,17 +259,49 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
-    if (share_out_interm_buffer) {
-        out_dfb_spec.advanced_options.alias_with = {INTERMED0_DFB};
-        intermed0_dfb_spec.advanced_options.alias_with = {OUT_DFB};
+    // Fp32 partials reload hazard: bias add reads intermed0 as an FPU operand (SrcA) so UnpackToDest
+    // can't live on intermed0; route reload through intermed0_reload_alias (same SRAM, UnpackToDest).
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    DataflowBufferSpec intermed0_reload_alias_dfb_spec{
+        .unique_id = INTERMED0_RELOAD_ALIAS_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = share_out_interm_buffer ? out_num_entries : interm0_num_entries,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+    };
+    // `out` and `intermed0` do not borrow OUTPUT here (shard reached via LocalTensorAccessor); alias must match.
+    {
+        Group<DFBSpecName> out_aliases;
+        Group<DFBSpecName> intermed0_aliases;
+        Group<DFBSpecName> alias_aliases;
+        if (share_out_interm_buffer) {
+            out_aliases.push_back(INTERMED0_DFB);
+            intermed0_aliases.push_back(OUT_DFB);
+            if (bias_reload_alias) {
+                out_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                alias_aliases.push_back(OUT_DFB);
+                alias_aliases.push_back(INTERMED0_DFB);
+            }
+        } else if (bias_reload_alias) {
+            intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+            alias_aliases.push_back(INTERMED0_DFB);
+        }
+        out_dfb_spec.advanced_options.alias_with = std::move(out_aliases);
+        intermed0_dfb_spec.advanced_options.alias_with = std::move(intermed0_aliases);
+        intermed0_reload_alias_dfb_spec.advanced_options.alias_with = std::move(alias_aliases);
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(bias_tensor.has_value() ? 5 : 4);
+    dataflow_buffers.reserve(bias_tensor.has_value() ? (bias_reload_alias ? 6 : 5) : 4);
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(std::move(intermed0_reload_alias_dfb_spec));
+    }
     if (bias_tensor.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
@@ -302,6 +335,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
     if (skip_compute) {
         mm_kernel_defines["SKIP_COMPUTE"] = "1";
@@ -515,13 +551,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
+    // UnpackToDest on the buffer the reload reads: intermed0 (no bias) or alias (bias). See comment above.
+    const bool fp32_partials_cross_block =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
     compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
-        {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+        {INTERMED0_DFB,
+         (fp32_partials_cross_block && !bias_reload_alias) ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc},
     };
     if (bias_tensor.has_value()) {
         compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+    }
+    if (bias_reload_alias) {
+        compute_hw.unpack_modes.insert({INTERMED0_RELOAD_ALIAS_DFB, UnpackMode::UnpackToDest});
     }
 
     KernelSpec compute{
@@ -601,6 +644,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         compute.compile_time_args.insert({"bias_ntiles", per_core_N});
         // row_broadcast_bias: DRAM sharded always uses row broadcast
         compute.compile_time_args.insert({"row_broadcast_bias", 1u});
+    }
+    if (bias_reload_alias) {
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+            .accessor_name = "intermed0_reload_alias",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+            .accessor_name = "intermed0_reload_alias",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
     }
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
         using ttnn::operations::matmul::utilities::get_activation_params;
