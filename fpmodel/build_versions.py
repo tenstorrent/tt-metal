@@ -195,6 +195,7 @@ commit = {
     "v14": "9b13f5f",
     "v15": "ecf2d7b",
     "v16": "6a60fb2",
+    "v17": "db953bd",
 }
 rules = rules_cv()
 CVPRED = {
@@ -211,6 +212,7 @@ CVPRED = {
     "v14": np.load("pred_cv_v14.npy"),
     "v15": np.load("pred_cv_v15.npy"),
     "v16": np.load("pred_cv_v16.npy"),
+    "v17": np.load("pred_cv_v17.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -275,7 +277,7 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
-FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13", "v14", "v15")}
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v17")}
 FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
 
 
@@ -568,6 +570,51 @@ RUNS = [
         None,
         None,
     ),
+    (
+        "v17",
+        "fresh/fresh8_timed.csv",
+        "fresh102001",
+        "Fresh random set, draw 8 (seeds 102001-7)",
+        "Out-of-sample: generated and picked after v17 was frozen.",
+        None,
+        "fresh/chain_v17.done",
+    ),
+    (
+        "v15",
+        "fresh/fresh8_v15_timed.csv",
+        "fresh102001-v15",
+        "Draw 8 with v15's picks (head to head with v17)",
+        "Same problems as v17's draw 8: v15's differing picks re-timed with legacy and rules in one session.",
+        None,
+        "fresh/v15on8.done",
+    ),
+    (
+        "v17",
+        "fresh/freshbh6_timed.csv",
+        "freshbh103001",
+        "BH fresh random set 6 (seeds 103001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v17 BH constants.",
+        None,
+        "fresh/freshbh6.done",
+    ),
+    (
+        "v15",
+        "fresh/freshbh6_v15_timed.csv",
+        "freshbh103001-v15",
+        "BH draw 6 with v15's picks (head to head with v17)",
+        "Same problems as v17's BH draw 6.",
+        None,
+        "fresh/freshbh6.done",
+    ),
+    (
+        "v17",
+        "miss/bh_unseen_v17_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
 ]
 for vid, path, sid, label, note, usage, done in RUNS:
     add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
@@ -610,6 +657,7 @@ for vid, meta in V.items():
         "v14": "abl/v14.json",
         "v15": "abl/v15.json",
         "v16": "abl/v16.json",
+        "v17": "abl/v17.json",
     }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
@@ -630,7 +678,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v15"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v17"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [

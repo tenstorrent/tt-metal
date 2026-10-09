@@ -152,5 +152,16 @@
    "DRAM writes get their own fitted chip efficiency (WH 0.26, BH 0.53): output-heavy small-K problems stop being predicted 30-40% too fast",
    "better time prediction (draw 6 median error 9%), slightly worse selection on BH unseen: kept as a candidate"
   ]
+ },
+ "v17": {
+  "title": "v17: writes + Reuse sync (model of record)",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at db953bd (frozen as frozen_v17_*.json)",
+  "pick": "as v15",
+  "mechanisms": [
+   "v16 (DRAM write efficiency fitted: WH 0.26, BH 0.53)",
+   "Reuse cores only partly synchronise: 0.75 of the lockstep link load (Reuse bias on draw 7: +25% -> +5%)",
+   "draw 8 head to head with v15 on the same problems: equal selection (0.544 vs 0.543), better prediction (median error 9.5% vs 12.0%, 83% vs 72% within 25%)"
+  ]
  }
 }
