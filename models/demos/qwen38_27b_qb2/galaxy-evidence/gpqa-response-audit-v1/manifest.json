@@ -1,0 +1,36 @@
+{
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tests/gpqa_response_audit.py": "3129024158f67b6e15559fc80b9f0525e1320d9017c6530a2b8c11704e0e96b6",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_response_audit.py": "44a634905000d979e0ac065282a755ac66a66bf6c76dcd19799f820688171d91"
+  },
+  "fixture_sha256": "53668f80d1963f2329e91a3b322cffeb781eebba3268812963a93aaee83242ce",
+  "commands": [
+    [
+      "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+      "-m",
+      "pytest",
+      "/home/ttuser/qwen38-artifacts-20261007/gpqa-response-audit-v2/source/models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_response_audit.py",
+      "-c",
+      "/home/ttuser/qwen38-artifacts-20261007/gpqa-response-audit-v2/pytest.ini",
+      "--confcutdir=/home/ttuser/qwen38-artifacts-20261007/gpqa-response-audit-v2/source",
+      "-q",
+      "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gpqa-response-audit-v2/unit.xml"
+    ],
+    [
+      "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+      "-m",
+      "models.demos.qwen38_27b_qb2.tests.gpqa_response_audit",
+      "--receipts",
+      "/home/ttuser/qwen38-artifacts-20261007/overnight-v1/candidate/evaluation/gpqa/gpqa-responses.jsonl",
+      "--private-responses",
+      "/home/ttuser/qwen38-artifacts-20261007/overnight-v1/candidate/evaluation/gpqa/private-responses",
+      "--max-output-tokens",
+      "65536",
+      "--max-model-len",
+      "262144",
+      "--output",
+      "/home/ttuser/qwen38-artifacts-20261007/gpqa-response-audit-v2/audit.json"
+    ]
+  ],
+  "runtime_source": "private responses matched against scored receipt hashes; no model execution"
+}

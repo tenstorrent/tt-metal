@@ -633,3 +633,34 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
 [Current queue and methodology](../galaxy-evidence/qualification-overnight-v2/README.md),
 [delivery results](../galaxy-evidence/delivery-pass-v2/README.md),
 [failed full profile](../galaxy-evidence/full-trace-attempt-v2/README.md).
+
+## Oct 9, from 03:42 UTC: saved-response diagnosis and release preparation
+
+- Revalidated PID 917206 as active before inspecting saved outputs. The native
+  control continued loading; no live source, request budget or policy was edited.
+- Matched all 198 private response hashes and token counts to the published
+  scored receipts. All fifteen truncations hit exactly 65,536 output tokens,
+  with 163-542 prompt tokens and no final answer. These are output-limit events,
+  not exhaustion of 262,144 context. They remain incorrect in 163/198 (82.32%).
+- Natural-stop subset is 163/183, not an alternate qualification score. The
+  overall result would need fourteen more correct answers to meet 177/198.
+- Exact duplicate 20-word tail sequences are below 0.246% for each truncated
+  response. Private inspection of five tails shows continuing calculations and
+  reconsideration; no claim they would finish correctly. A separate wrong
+  natural-stop output is highly repetitive and has no final-answer content.
+- Added a text-free response audit and six passing CPU regression tests. Local
+  convenience environments lacked pytest (one older temporary env was gone),
+  so tests ran in the existing remote task environment with isolated source and
+  no device access. Raw GPQA examples remain private on the host.
+- Installed HF Qwen3.5 reference and custom GDN both add 1e-6 to the squared
+  norm before rsqrt; that suspected formula mismatch was not found.
+- Created `/private/tmp/tt-inference-server-qwen38-release` from refreshed main
+  `27699d0ac` on `anatarajan/qwen38-galaxy-release-20261009`. Main already has a
+  P300X2 Qwen profile, but it uses a four-chip ring. It does not package the
+  tested eight-process TP4 Linear Galaxy launch. Added digest rendering and an
+  optional requirement that both the inference image and BusyBox-compatible
+  init image are pinned. Six chart-render tests pass; the initial test helper
+  computed its root one level too high, fixed before the successful run.
+  The image build and Galaxy profile remain packaging work. No cluster changes.
+
+[Audit evidence and reproduction](../galaxy-evidence/gpqa-response-audit-v1/README.md).

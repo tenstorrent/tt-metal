@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-10-09T03:33:41.540665+00:00",
+  "generated_at": "2026-10-09T04:00:22.178646+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 52435,
-      "sha256": "be991f9257c1667a7ad70457906d53674de221b5fa447e326ab6d93fec3ccb87"
+      "bytes": 54604,
+      "sha256": "25995e18fc4832b3cbb98443fec87e1f42a598a6855ff29c85d93b9bf1f50e8d"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -14,8 +14,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 20751,
-      "sha256": "d591021dadb92bc85f585bd7eed721051bc9cae3eec2b7e8538151ca0b006660"
+      "bytes": 20991,
+      "sha256": "423dce4051737f34989cc530ae26ee7f373d32a9710620d1d6b204e1bc6b9ad2"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1859,6 +1859,31 @@
       "scope": "198/198 Diamond questions; 32768-token output budget"
     },
     {
+      "path": "galaxy-evidence/gpqa-response-audit-v1/README.md",
+      "bytes": 3919,
+      "sha256": "8bef904c172b7498648f4137733e462e75746815b1c7ab1c68e28c20a9fb0218"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-response-audit-v1/audit.json",
+      "bytes": 103201,
+      "sha256": "626510c3d6d834c2854a44f82b3c37c1cf7fdb63494f5af1a7336ce1023a4da5"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-response-audit-v1/manifest.json",
+      "bytes": 1700,
+      "sha256": "da2b93f3c069ea41fdd30034f313e320210b3fd5ee168eb7a2d0217cd932157b"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-response-audit-v1/unit.log",
+      "bytes": 98,
+      "sha256": "a4ce3c4d2d126cf54794b588fe0568dcf174b80e68913316f73e0da7b9f1c64b"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-response-audit-v1/unit.xml",
+      "bytes": 1306,
+      "sha256": "b93a2824411a29e3d78430c1d8315518b7be2843437dc49f4830b9b4d6480731"
+    },
+    {
       "path": "galaxy-evidence/hardware-followup-launch-v1/README.md",
       "bytes": 4600,
       "sha256": "d3165eb4754885eef0065243652d5f2b9d6095d4e07b22efe9f64993d4ed7889"
@@ -3101,8 +3126,8 @@
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/README.md",
-      "bytes": 5962,
-      "sha256": "11e89df9337f7df204d1614f289ab16dd64620d2b459afc3376b2a3309fe019e"
+      "bytes": 6267,
+      "sha256": "d7465c572edd3cf6a6ef520e785e48442535e900c59b4268f9d7ba181686acc9"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/launch.json",

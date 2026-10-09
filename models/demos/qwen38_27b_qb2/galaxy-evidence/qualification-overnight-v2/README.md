@@ -24,6 +24,11 @@ must not be substituted for steady-state, fixed-context kernel throughput.
 Private full responses remain on the allocated host; public receipts contain
 hashes, token usage and correctness, not GPQA examples.
 
+The [saved-response audit](../gpqa-response-audit-v1/README.md) confirms that the
+fifteen cutoffs all hit exactly 65,536 generated tokens with no final answer,
+well below the 256K context capacity. All count as incorrect in 163/198.
+The natural-stop subset (163/183) is a diagnostic, not the full score.
+
 ## What stopped the first queue
 
 `qwen38-overnight-v1-20261008.service` ran independently of the client session,

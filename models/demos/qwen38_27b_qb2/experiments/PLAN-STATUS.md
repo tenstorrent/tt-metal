@@ -109,9 +109,12 @@ recurrence choice; new model-eval qualification is still pending. See
 [integration evidence](../galaxy-evidence/gdn-model-integration-v1/README.md) and
 [matched model sweeps](../galaxy-evidence/gdn-matched-comparison-v4/README.md).
 
-The last full GPQA result remains 171/198 (86.36%), below the plan's 89.2% gate.
-Numerical component passes and repeatable generated tokens do not replace this
-quality gate. New attention/GDN policy reference-eval qualification is pending.
+The historical native full GPQA result was 171/198 (86.36%). The latest optimized
+64K-output run is 163/198 (82.32%), including fifteen output-budget cutoffs;
+neither meets the plan's 89.2% gate. Numerical component passes and repeatable
+generated tokens do not replace this quality gate. The matched native control
+is pending. [Saved-response audit](../galaxy-evidence/gpqa-response-audit-v1/README.md)
+distinguishes output-budget cutoffs from the model's 256K context capacity.
 
 ## Current long-context work
 
