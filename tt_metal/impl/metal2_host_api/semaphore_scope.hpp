@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include "impl/context/metal_env_impl.hpp"
