@@ -153,6 +153,8 @@ inline void misc_op_body(std::uint32_t tile)
     if constexpr (SFPU_MISC_INIT_PER_TILE) { misc_op_init(); }
     if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<false>, tile, VectorMode::RC, RAND_FROM, RAND_SCALE); }
     else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_dropout<false, 8>, tile, VectorMode::RC, DROPOUT_PROBABILITY, DROPOUT_SCALE); }
+    else if constexpr (SFPU_MISC_OPERATION == 2) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_mask<true, 8>, 0, 1, 0, VectorMode::RC); }
+    else if constexpr (SFPU_MISC_OPERATION == 8) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_int_mask<true, 8>, 0, 1, 0, VectorMode::RC); }
     else if constexpr (SFPU_MISC_OPERATION == 3) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<MISC_MATH_FORMAT, false, 8>, 0, 1, 0, VectorMode::RC); }
     else if constexpr (SFPU_MISC_OPERATION == 4) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_reshuffle_rows<false>, tile, VectorMode::RC_custom, RESHUFFLE_INDEX_L1); }
     else if constexpr (SFPU_MISC_OPERATION == 5) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_softcap<false, is_fp32_dest_acc_en, 8>, tile, VectorMode::RC, SOFTCAP_BETA, SOFTCAP_BETA_RECIP); }
