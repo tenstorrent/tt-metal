@@ -24,12 +24,12 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, tiles per row, row length compiled in: 0 for the runtime count)
+# (fidelity, tiles per row, row length compiled in: 0 for the runtime count); the last four are the DeepSeek RMSNorm's rows
 VARIANTS = [
     (fidelity, num_tiles, 0)
     for num_tiles in (1, 2, 4, 8)
     for fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4)
-] + [(MathFidelity.LoFi, num_tiles, num_tiles) for num_tiles in (1, 2, 3, 7)]  # the DeepSeek RMSNorm's rows
+] + [(MathFidelity.LoFi, num_tiles, num_tiles) for num_tiles in (1, 2, 3, 7)]
 
 
 @pytest.mark.perf
