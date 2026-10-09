@@ -70,3 +70,10 @@ and h exchange, x and y not moving), ~80 us is NoC traffic interaction: twice th
 (NOC1) bytes contending with the row-major y writes; the flows are coupled (removing x alone is slower).
 Next lever (not tried): the y writes' route / timing against the bf16 x and h streams (e.g. y on the x multicast's
 quiet windows, or the h exchange on NOC0), and h held row by row on the down cores (3 x 512 KB at 128-row sub-blocks).
+Full isolation, M 2048, us per expert (normal / no y writes / x never moves and no y writes; bfp8 core 273):
+bf16 x + bfp8 h (128-row): 366.4 / 366.2 / 321.1 -> bf16 x gate/up compute +48 (unpack-bound on 2 KB x tiles), x
+delivery +45, y writes 0. bfp8 x + bf16 h (64-row): 383.1 / 350.2 / 295.1 -> bf16 h compute +22, x path +55 (the
+64-row sub-blocks: x delivered in half-size blocks; it is not the x bytes), y writes +33 (contending with the doubled
+h traffic). bf16 x + h: 375.5 / 335.1 / 294.4 -> +21 compute, +41 x path, +40 y writes. Two of the three parts come
+from the 64-row sub-blocks that the bf16 h buffers force; the levers are 128-row sub-blocks with bf16 h (h held row by
+row on the down cores) and the y writes kept off the h traffic.
