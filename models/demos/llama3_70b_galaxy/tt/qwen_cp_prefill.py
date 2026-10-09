@@ -446,3 +446,88 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     out = _row_rs(tt_ccl, mc, o, S, "WO")
     ttnn.deallocate(o)
     return out
+
+
+def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
+    """Design B MLP (steps 14-18). x_local: ff-norm output [1, 1, S/32, 5120] bf8 (deallocated).
+    Returns FF2 reduce-scattered over the rows, [1, 1, S/32, 5120] in the model's prefill output dtype (bf16)."""
+    S = ctx.lay.S
+    args, mc = mlp.args, mlp.model_config
+    xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
+    ttnn.deallocate(x_local)
+    fp32 = ff13_fp32_acc()
+    ff13_kw = dict(
+        config=FF13_FP32_CFG if fp32 else FF13_CFG,
+        compute_kernel_config=args.compute_kernel_config_hifi2 if fp32 else args.compute_kernel_config_lofi,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    w1o = ttnn.experimental.minimal_matmul(input_tensor=xa, weight_tensor=w["w1"], **ff13_kw)  # [1, 1, S/4, 3200]
+    w3o = ttnn.experimental.minimal_matmul(input_tensor=xa, weight_tensor=w["w3"], **ff13_kw)
+    ttnn.deallocate(xa)
+    w2_in = ttnn.mul(
+        w1o,
+        w3o,
+        input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(w1o)
+    ttnn.deallocate(w3o)
+    w2o = ttnn.experimental.minimal_matmul(
+        input_tensor=w2_in,
+        weight_tensor=w["w2"],
+        config=FF2_CFG,
+        dtype=mlp.prefill_output_dtype,
+        compute_kernel_config=args.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )  # [1, 1, S/4, 5120]
+    ttnn.deallocate(w2_in)
+    out = _row_rs(tt_ccl, mc, w2o, S, "FF2")
+    ttnn.deallocate(w2o)
+    return out
+
+
+def _norm_gammas(dist_norm):
+    """The layer norm's replicated gamma [1, 1, 160, 32] (ROW_MAJOR bf16) split into two width halves of 2560,
+    cached on the module (a 10 KB copy per norm; the stored gamma is not touched)."""
+    g = getattr(dist_norm, "_qwen_cp_gammas", None)
+    if g is None:
+        full = dist_norm.norm.weight
+        n = int(full.shape[2])
+        g = tuple(ttnn.slice(full, [0, 0, i * n // 2, 0], [1, 1, (i + 1) * n // 2, 32]) for i in range(2))
+        dist_norm._qwen_cp_gammas = g
+    return g
+
+
+def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
+    """RMSNorm of the residual [1, 1, S/32, 5120] over the full local width, no CCL. The stock ops overflow L1 at
+    width 5120, so stats and apply run on two width halves of 2560 with the stats concatenated (job142: 0.737 ms,
+    pcc 0.99996 vs fp32)."""
+    g = _norm_gammas(dist_norm)
+    W = int(x.shape[-1])
+    rows = int(x.shape[-2])
+    xs = [ttnn.slice(x, [0, 0, 0, i * W // 2], [1, 1, rows, (i + 1) * W // 2]) for i in range(2)]
+    sts = [
+        ttnn.rms_norm_pre_all_gather(t, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16) for t in xs
+    ]
+    st = ttnn.concat(sts, dim=3)
+    for t in sts:
+        ttnn.deallocate(t)
+    outs = [
+        ttnn.rms_norm_post_all_gather(
+            xs[i],
+            st,
+            epsilon=dist_norm.norm.eps,
+            weight=g[i],
+            compute_kernel_config=compute_kernel_config,
+            dtype=out_dtype,
+        )
+        for i in range(2)
+    ]
+    for t in xs + [st]:
+        ttnn.deallocate(t)
+    out = ttnn.concat(outs, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for t in outs:
+        ttnn.deallocate(t)
+    return out

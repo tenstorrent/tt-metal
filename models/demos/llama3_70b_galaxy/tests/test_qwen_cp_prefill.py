@@ -534,3 +534,83 @@ def test_cp_attention_layer(mesh_device, seq_len, reset_seeds):
     assert res["ref_pcc_b"] >= res["ref_pcc_today"] and res["ref_rel_l2_b"] <= res["ref_rel_l2_today"], res
     assert res["k_pcc_b"] >= res["k_pcc_today"] and res["v_pcc_b"] >= res["v_pcc_today"], res
     assert out_pcc >= 0.995, res
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+@pytest.mark.parametrize("seq_len", [40960])
+def test_cp_mlp_norm_layer(mesh_device, seq_len, reset_seeds):
+    """Slice 4: (a) cp.local_norm (2 width halves) vs an fp32 host RMSNorm with the layer's gamma: pcc >= 0.99995.
+    (b) cp.mlp_prefill vs today's forward_prefill (seq_parallel) on the same bf8 input: output PCC >= 0.9999; both
+    also against an fp32 host MLP of the same quantized input and weights on 1024 positions (logged)."""
+    model, pt, blocks = _one_layer_model(mesh_device, seq_len)
+    layer, ccl = model.layers[0], model.tt_ccl
+    mlp = layer.feed_forward
+    lay = cp.CPLayout(seq_len)
+    res = {}
+
+    # (a) local norm on a residual-sized chunk
+    torch.manual_seed(7)
+    xr = (torch.randn(1, 1, lay.s32, cp.HIDDEN) * 3).to(torch.bfloat16)
+    xd = ttnn.from_torch(
+        xr,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    for name, dn in (("attn_norm", layer.attention_norm), ("ff_norm", layer.ff_norm)):
+        yd = cp.local_norm(dn, xd, layer.args.compute_kernel_config_hifi2)
+        ttnn.synchronize_device(mesh_device)
+        y = ttnn.to_torch(ttnn.get_device_tensors(yd)[5]).float().reshape(lay.s32, -1)
+        g = ttnn.to_torch(ttnn.get_device_tensors(dn.norm.weight)[0]).float().reshape(-1)
+        x32 = xr.float().reshape(lay.s32, -1)
+        ref = x32 * torch.rsqrt(x32.pow(2).mean(-1, keepdim=True) + dn.norm.eps) * g
+        res[f"{name}_pcc"] = _pcc(y, ref)
+        res[f"{name}_rel_l2"] = float((y - ref).norm() / ref.norm())
+        ttnn.deallocate(yd)
+    ttnn.deallocate(xd)
+
+    # (b) MLP
+    torch.manual_seed(8)
+    xh = _q_host(torch.randn(1, 1, seq_len, cp.HIDDEN), ttnn.bfloat8_b).to(torch.bfloat16)
+    out_t = mlp.forward_prefill(_x_natural(mesh_device, xh, ttnn.bfloat8_b), seq_parallel=True)
+    nat_t = ccl.ring_all_gather_seq(out_t, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+    ttnn.synchronize_device(mesh_device)
+    y_t = _natural_quarters(mesh_device, nat_t, seq_len)
+    for t in (out_t, nat_t):
+        ttnn.deallocate(t)
+    ctx = cp.get_context(ccl, mesh_device, seq_len)
+    w = cp.gather_layer_weights(ccl, layer.attention, mlp, keys=("w1", "w3", "w2"))
+    x_nat = _x_natural(mesh_device, xh, ttnn.bfloat8_b)
+    xl = cp.entry(ctx, ccl, x_nat)
+    ttnn.deallocate(x_nat)
+    out_b = cp.mlp_prefill(ctx, ccl, mlp, xl, w)
+    nat_b = cp.exit_natural(ctx, ccl, out_b)
+    ttnn.synchronize_device(mesh_device)
+    y_b = _natural_quarters(mesh_device, nat_b, seq_len)
+    wh = {
+        k: torch.cat(
+            [ttnn.to_torch(ttnn.get_device_tensors(w[k])[r * COLS]).float().squeeze() for r in range(ROWS)],
+            dim=1 if k != "w2" else 0,
+        )
+        for k in ("w1", "w3", "w2")
+    }
+    cp.free_weights(w)
+    idx = torch.cat([torch.arange(512), torch.arange(seq_len - 512, seq_len)])
+    x32 = xh.float().reshape(seq_len, -1)[idx]
+    ref = (torch.nn.functional.silu(x32 @ wh["w1"]) * (x32 @ wh["w3"])) @ wh["w2"]
+    res.update(
+        mlp_out_pcc_b_vs_today=_pcc(y_b, y_t),
+        mlp_rel_l2_b_vs_today=float((y_b - y_t).norm() / y_t.norm()),
+        mlp_ref_pcc_today=_pcc(y_t[idx], ref),
+        mlp_ref_pcc_b=_pcc(y_b[idx], ref),
+        mlp_ref_rel_l2_today=float((y_t[idx] - ref).norm() / ref.norm()),
+        mlp_ref_rel_l2_b=float((y_b[idx] - ref).norm() / ref.norm()),
+    )
+    logger.info("CP_S4 " + " ".join(f"{k}={v:.7f}" for k, v in res.items()))
+    ccl.close()
+    assert res["attn_norm_pcc"] >= 0.99995 and res["ff_norm_pcc"] >= 0.99995, res
+    assert res["mlp_out_pcc_b_vs_today"] >= 0.9999, res
