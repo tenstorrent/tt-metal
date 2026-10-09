@@ -2581,6 +2581,7 @@ __attribute__((optimize("Os"))) void teardown(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    noc_clear_packet_tags(NOC_INDEX);
 
 #ifdef ARCH_BLACKHOLE
     // Tagged write completion does not reset command-buffer transaction IDs.
