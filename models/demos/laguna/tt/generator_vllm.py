@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -1829,7 +1830,19 @@ class LagunaForCausalLM:
         ttnn.copy_host_to_device_tensor(self.gen._host(torch.tensor([t], dtype=torch.float32), ttnn.bfloat16), st["t"])
         ttnn.copy_host_to_device_tensor(self.gen._host(torch.tensor([s], dtype=torch.int32), ttnn.uint32), st["seeds"])
 
-    def prefill_forward(
+    _PREFILL_TIMING = os.environ.get("TT_LAGUNA_PREFILL_TIMING") == "1"
+
+    def prefill_forward(self, *args, **kwargs):
+        """Timing wrapper (TT_LAGUNA_PREFILL_TIMING=1 logs the wall time of each prefill step) around
+        _prefill_forward_impl."""
+        if not self._PREFILL_TIMING:
+            return self._prefill_forward_impl(*args, **kwargs)
+        t0 = time.perf_counter()
+        out = self._prefill_forward_impl(*args, **kwargs)
+        print(f"[laguna] prefill step {(time.perf_counter() - t0) * 1e3:.1f} ms at {time.time():.3f}", flush=True)
+        return out
+
+    def _prefill_forward_impl(
         self,
         tokens,
         page_table=None,
