@@ -147,6 +147,19 @@ std::optional<tt::tt_metal::TensorTopology> reduce_scatter_output_topology(
 std::optional<tt::tt_metal::TensorTopology> reduce_scatter_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t scatter_dim);
 
+// The respelling the Tensor overload above applies, for a caller whose reduce_scatter input is a label rather than a
+// tensor (a fused op reduce-scatters its own matmul result, which no tensor carries when its hook runs) or whose op
+// ranks a whole-mesh ring the same way (all_to_all_async_generic): a whole-mesh `label` (cluster_axis nullopt) is
+// spelled over `ring_tensor`'s device-storage coordinates -- the tensor the op's program factory passes to
+// get_linearized_index_from_physical_coord -- when that tensor is stored on every device of the mesh. With a
+// cluster_axis, a tensor that is not stored on every device, or no label, `label` is returned as is. A label whose
+// coordinate count differs from the storage's is a scatter-family refusal naming `op`.
+std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
+    std::optional<tt::tt_metal::TensorTopology> label,
+    const Tensor& ring_tensor,
+    std::optional<uint32_t> cluster_axis,
+    const char* op = "reduce_scatter");
+
 // mesh_partition and all_to_all scatter `out_dim` along `cluster_axis` like reduce_scatter, but nothing is summed, so
 // a Shard of another dim is not consumed: a whole-mesh scatter of a tensor still sharded on another dim along a
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
