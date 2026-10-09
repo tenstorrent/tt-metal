@@ -1902,7 +1902,8 @@ void call_binary_sfpu_operation(
                               ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT ||
                               BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE ||
                               BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER ||
-                              BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2;
+                              BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 ||
+                              BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT;
     constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
     if constexpr (one_call)
     {
