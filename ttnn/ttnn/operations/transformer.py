@@ -12,6 +12,7 @@ from ttnn.operations.transformer_golden import (
     exp_ring_joint_scaled_dot_product_attention_golden,
     flash_mla_prefill_golden,
     flash_multi_latent_attention_decode_golden,
+    fused_recurrent_gated_delta_rule_golden,
     gated_delta_attn_seq_golden,
     joint_scaled_dot_product_attention_golden,
     paged_flash_multi_latent_attention_decode_golden,
@@ -158,6 +159,10 @@ ttnn.attach_golden_function(ttnn.experimental.rotary_embedding, golden_function=
 ttnn.attach_golden_function(
     ttnn.transformer.chunk_gated_delta_rule,
     golden_function=chunk_gated_delta_rule_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.fused_recurrent_gated_delta_rule,
+    golden_function=fused_recurrent_gated_delta_rule_golden,
 )
 ttnn.attach_golden_function(
     ttnn.transformer.chunked_flash_mla_prefill,
