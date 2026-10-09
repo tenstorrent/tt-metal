@@ -86,11 +86,12 @@ def gather_rows(t: ttnn.Tensor) -> ttnn.Tensor:
 def scatter_rows(t: ttnn.Tensor) -> ttnn.Tensor:
     """Per-chip partial sums over all S rows -> the split quarter of the 4-chip sum (reduce_scatter on axis 0, then
     axis 1): half the bytes of an all_reduce, and no slice afterwards.
-    GLM_SCATTER_OP=fabric_bf16 (experiment): the partials typecast to bf16, then ttnn.bringup.fabric_reduce_scatter
-    (MiMo's, bf16 only) on axis 0 and 1 (GLM_MOE_LINKS links); returns bf16."""
+    GLM_SCATTER_OP=fabric_bf16 (default): the partials typecast to bf16, then ttnn.bringup.fabric_reduce_scatter
+    (MiMo's, bf16 only) on axis 0 and 1 (GLM_MOE_LINKS links); returns bf16. "ttnn": fp32 ttnn.reduce_scatter.
+    56k prefill 9.34 -> 8.95 s; KV PCC unchanged (s4096 kv_latent 0.96653 / 0.98409), 56k top1 0.8767 -> 0.8804."""
     import os
 
-    if os.environ.get("GLM_SCATTER_OP", "ttnn") == "fabric_bf16":
+    if os.environ.get("GLM_SCATTER_OP", "fabric_bf16") == "fabric_bf16":
         links = int(os.environ.get("GLM_MOE_LINKS", "2"))
         tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=MC)
         a = ttnn.bringup.fabric_reduce_scatter(tb, cluster_axis=0, num_links=links)
