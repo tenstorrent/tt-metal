@@ -355,7 +355,9 @@ class TtKdaAttention(LightweightModule):
             assert start < end <= start + s and end % END_ALIGN == 0, f"actual_end {end} for chunk [{start}, +{s})"
         kda = self._kda(s)
         if split:  # rows of mesh row r = its two chips' quarters
-            xs = ttnn.all_gather(x, dim=-2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            from models.demos.glm53_flash_d_p.tt.common import gather_axis
+
+            xs = gather_axis(x, TP_AXIS)
         else:
             xs = ttnn.mesh_partition(x, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = ttnn.reshape(xs, (1, s // self.sp, self.hidden))
