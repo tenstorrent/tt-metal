@@ -34,6 +34,8 @@ def multicore_candidates(e):
             continue
         if (r.get("bias", 0) == 1) or act not in ("", "nan", "None"):
             continue
+        if r.get("transpose_b", 0) == 1:  # draw 4: both MultiCore picks with a transposed B ran 1.15-1.8x slower
+            continue
         grid = (g.grid_x * g.grid_y).max()
         tiles = r.batch * -(-r.M // 32) * -(-r.N // 32)
         x = r.copy()
