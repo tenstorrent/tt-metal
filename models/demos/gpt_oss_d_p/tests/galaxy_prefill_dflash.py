@@ -19,6 +19,7 @@ Optional:
   PREFILL_DFLASH_COMPAT_RESULT  reload consumer result .pt
   GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.90)
   GPT_OSS_DFLASH_POS_PCC_MIN optional per-position PCC floor
+  EXPERT_DTYPE               bf8 or bf4 (default) expert weights; must match the tilized cache
   PREFILL_TPS_ITERS          disabled/enabled timing repetitions (default 1)
   PREFILL_TSU_MIN            synchronized enabled-path tokens/s floor
 """
@@ -65,17 +66,19 @@ def _load_inputs(seed_path: Path | None, trace_dir: Path):
         raise ValueError(f"{trace_dir} needs at least {REAL_TOKENS} token ids")
     selected = [int(x) for x in kv_tokens[:REAL_TOKENS]]
     if seed_path is None:
-        return None, selected
+        return None, selected, 0
     seed = torch.load(seed_path, map_location="cpu", weights_only=False)
-    seed_tokens = seed.get("seed_token_ids") or seed.get("prompt_token_ids")
-    if not seed_tokens:
+    seed_tokens = seed.get("seed_token_ids")
+    if seed_tokens is None:
+        seed_tokens = seed.get("prompt_token_ids")
+    if seed_tokens is None or len(seed_tokens) == 0:
         raise ValueError(f"{seed_path} needs at least one seed token id")
     reference_positions = min(len(seed_tokens), REAL_TOKENS)
     if "reduced_hidden_prenorm_ref" not in seed or seed["reduced_hidden_prenorm_ref"].shape[0] < reference_positions:
         raise ValueError(f"{seed_path} needs reduced_hidden_prenorm_ref[{reference_positions}, H]")
     if [int(x) for x in seed_tokens[:reference_positions]] != selected[:reference_positions]:
         raise ValueError("PREFILL_TRACE_DIR and BLAZE_DFLASH_SEED_REF contain different token prefixes")
-    return seed, selected
+    return seed, selected, reference_positions
 
 
 def _to_host_reduced(mesh, result) -> torch.Tensor:
@@ -202,7 +205,7 @@ def main() -> int:
     seed_raw = os.environ.get("BLAZE_DFLASH_SEED_REF")
     seed_path = _require_path("BLAZE_DFLASH_SEED_REF") if seed_raw else None
     draft_path = _require_path("TT_HF_DRAFT_MODEL")
-    seed, token_ids = _load_inputs(seed_path, trace_dir)
+    seed, token_ids, reference_positions = _load_inputs(seed_path, trace_dir)
 
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -229,6 +232,7 @@ def main() -> int:
                 default_chunk_size=PADDED_TOKENS,
                 weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
                 topology=ttnn.Topology.Linear if linear else ttnn.Topology.Ring,
+                expert_weight_dtype=ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b,
                 dflash_checkpoint_path=draft_path,
             ),
         )
@@ -288,7 +292,6 @@ def main() -> int:
         aggregate = per_position = None
         golden_token = None
         if seed is not None:
-            reference_positions = min(len(seed["seed_token_ids"]), REAL_TOKENS)
             reference = seed["reduced_hidden_prenorm_ref"][:reference_positions].float()
             reduced_reference = reduced[:reference_positions]
             aggregate = _pcc(reference, reduced_reference)
@@ -300,8 +303,9 @@ def main() -> int:
             if pos_min is not None and float(per_position.min()) < float(pos_min):
                 gate_failures.append(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
 
-            if len(seed["next_token_ref"]) >= REAL_TOKENS:
-                golden_token = int(seed["next_token_ref"][REAL_TOKENS - 1])
+            next_token_ref = seed.get("next_token_ref")
+            if next_token_ref is not None and len(next_token_ref) >= REAL_TOKENS:
+                golden_token = int(next_token_ref[REAL_TOKENS - 1])
                 topk_ids = seed.get("golden_topk_token_ids")
                 if result.y0 != golden_token and (
                     topk_ids is None or result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1]]

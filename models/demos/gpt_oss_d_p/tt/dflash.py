@@ -199,7 +199,13 @@ def reference_linear_reduced_hidden(
 
 @dataclass(frozen=True)
 class DFlashFeatureLayout:
-    """Physical layout of ``reduced_hidden`` at the prefill/P-D boundary."""
+    """Physical layout of ``reduced_hidden`` at the prefill/P-D boundary.
+
+    ``sp_block_cyclic``: within one chunk, SP row ``r`` owns the contiguous rows
+    ``[r * chunk_size / sp, (r + 1) * chunk_size / sp)``. Across a chunked
+    request that ownership repeats every ``chunk_size`` positions, so the whole
+    sequence is block-cyclic over SP with period ``chunk_size``.
+    """
 
     mesh_shape: tuple[int, int]
     sp_axis: int
