@@ -8,6 +8,7 @@ These tests are intentionally non-gating: they log correctness and latency for
 agents/engineers optimizing the op, but they do not assert thresholds.
 """
 
+import os
 import time
 
 import pytest
@@ -19,7 +20,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 _TP_AXIS = 1
-_NUM_LINKS = 1
+_NUM_LINKS = int(os.environ.get("RMSNORM_PROBE_LINKS", "1"))
 _TOPOLOGY = ttnn.Topology.Linear
 _WARMUP_ITERS = 3
 _MEASURE_ITERS = 10
