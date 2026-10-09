@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::prim {
 void BroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -52,29 +53,38 @@ Tensor BroadcastDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, tensor_args.input_tensor.device());
 }
 
-std::vector<tt::tt_metal::TensorTopology> BroadcastDeviceOperation::compute_output_topologies(
+BroadcastDeviceOperation::topology_return_value_t BroadcastDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Every device along the broadcast line ends up holding the sender's bytes. The op only ever runs on a tensor
     // that spans the sender's line: every non-sender's link-0 worker waits on the semaphore the sender's line
     // multicast raises (BroadcastProgramFactory::create_at, `wait_output_semaphore = (link == 0) && !is_sender`), so
-    // a device off that line would never be signalled. The honest label is therefore the input's label with Replicate
-    // on the broadcast axis (`cluster_axis`) and every other axis kept verbatim -- those axes are trivial for any
-    // input the op accepts -- or Replicate on every axis when the whole (1-D) distribution is the line. Stated
-    // directly rather than through the helper's per-axis edit, so no refusal is possible (the helper would reject a
-    // 1-D sub-range label such as `{4}, [Shard{3}]` on a 2x4 mesh as not covering the mesh, which is a perfectly good
-    // broadcast input).
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto placements = input_topology.placements();
-    const auto& cluster_axis = operation_attributes.cluster_axis;
-    if (cluster_axis.has_value() && *cluster_axis < placements.size()) {
-        placements[*cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    } else {
+    // a device off that line would never be signalled. Along that line the honest label is Replicate on the broadcast
+    // axis (`cluster_axis`) with the other axes kept, or Replicate on every axis when the whole distribution is the
+    // line.
+    //
+    // A 1-D label is stated directly: its single placement describes the line -- the whole 1xN mesh, or a sub-range
+    // such as `MeshMapperConfig([Shard(3)], MeshShape(4))` on a 2x4 mesh, which the helper's uncollapse_placements
+    // refuses as not covering the mesh although it is a perfectly good broadcast input -- so it becomes Replicate
+    // whatever `cluster_axis` says. An N-D label goes through the helper (the all_broadcast label: `cluster_axis`
+    // becomes Replicate, no contiguity requirement), which edits by axis index only when axis i of the label is axis
+    // i of the mesh and refuses otherwise: `MeshMapperConfig([Shard(3), Replicate], MeshShape(4, 1))` on a 2x4 mesh
+    // does not fit, distributes row-major over row 0, and its `Shard(3)` axis is no mesh axis, so no per-axis edit
+    // describes it (editing index 1 kept `Shard(3)` and claimed four distinct pieces where every device holds the
+    // sender's). A refusal (nullopt, already reported by the helper) keeps the input's label -- the same under-claim,
+    // now logged, and an error under strict mode -- stated explicitly as the sibling hooks do.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    if (input_topology.placements().size() <= 1) {
+        auto placements = input_topology.placements();
         for (auto& placement : placements) {
             placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
         }
+        return {tt::tt_metal::TensorTopology(
+            input_topology.distribution_shape(), std::move(placements), input_topology.mesh_coords())};
     }
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(placements), input_topology.mesh_coords())};
+    return {
+        ttnn::operations::ccl::common::all_broadcast_output_topology(input_tensor, operation_attributes.cluster_axis)
+            .value_or(input_topology)};
 }
 
 Tensor broadcast(
