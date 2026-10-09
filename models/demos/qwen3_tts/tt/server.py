@@ -54,7 +54,7 @@ from models.demos.qwen3_tts.tt.mesh_utils import to_torch_chip0 as _mesh_to_torc
 # (newer tt-metal only); a no-op on builds without it.
 _mark_corruptible = getattr(ttnn, "mark_corruptible", lambda *_args, **_kwargs: None)
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS
-from models.demos.qwen3_tts.tt.utils import last_real_hidden_row
+from models.demos.qwen3_tts.tt.utils import last_real_hidden_row, talker_suppress_ids
 
 
 def _user_path_no_dotdot(path: str) -> Path:
@@ -144,6 +144,12 @@ class TTSConfig:
     top_k: int = 50
     greedy: bool = False
     repetition_penalty: float = 1.0  # >1.0 discourages repetition (e.g., 1.1-1.3)
+    # As the reference qwen-tts generate(): code 0 never samples the 1024 codec control
+    # ids at the top of the Talker vocab except EOS, and EOS not before min_new_tokens
+    # frames. Without the mask a sampled control id (pad/bos/think/language) derails the
+    # utterance: it runs to max_new_tokens or turns to noise.
+    suppress_special_codec: bool = True
+    min_new_tokens: int = 2
 
     # Post-processing: trim reference echo from start of generated audio.
     # ICL TTS models briefly reproduce the reference speaker's last word
@@ -502,6 +508,7 @@ def sample_token(
     greedy: bool = False,
     repetition_penalty: float = 1.0,
     generated_tokens: List[int] = None,
+    suppress_ids: Optional[torch.Tensor] = None,
 ) -> int:
     """Sample next token from logits with optional repetition penalty.
 
@@ -512,13 +519,17 @@ def sample_token(
         greedy: Use argmax instead of sampling
         repetition_penalty: Penalty for previously generated tokens (>1.0 discourages repetition)
         generated_tokens: List of previously generated token IDs for repetition penalty
+        suppress_ids: Token IDs that must not be sampled (see :func:`talker_suppress_ids`)
     """
-    if greedy:
-        return logits.argmax().item()
-
     # float32: faster topk/softmax/multinomial on CPU than bfloat16 for this vocab size
     if logits.dtype != torch.float32:
         logits = logits.float()
+    if suppress_ids is not None:
+        logits = logits.clone()
+        logits[suppress_ids] = float("-inf")
+
+    if greedy:
+        return logits.argmax().item()
 
     # Apply repetition penalty to previously generated tokens (vectorized; hot loop)
     if repetition_penalty != 1.0 and generated_tokens:
@@ -1897,6 +1908,7 @@ def generate_codes_ttnn(
             config.greedy,
             config.repetition_penalty,
             generated_code0_tokens,
+            suppress_ids=talker_suppress_ids(config, codec_logits_torch.numel(), len(generated_code0_tokens)),
         )
         generated_code0_tokens.append(token_0)
         ttnn.synchronize_device(device)
@@ -1926,6 +1938,7 @@ def generate_codes_ttnn(
             config.greedy,
             config.repetition_penalty,
             generated_code0_tokens,
+            suppress_ids=talker_suppress_ids(config, codec_logits_torch.numel(), len(generated_code0_tokens)),
         )
         generated_code0_tokens.append(token_0)
         ttnn.synchronize_device(device)
@@ -3459,6 +3472,7 @@ def run_inference(
             config.greedy,
             config.repetition_penalty,
             generated_code0_tokens,
+            suppress_ids=talker_suppress_ids(config, codec_logits_torch.numel(), len(generated_code0_tokens)),
         )
         generated_code0_tokens.append(token_0)
 

@@ -137,6 +137,34 @@ def _read_device_token(token_tt: Any, index: int = 0) -> int:
     return int(_mesh_to_torch(token_tt).flatten()[index].item())
 
 
+_AUDIO_CODEBOOK_SIZE = 2048
+_TALKER_SUPPRESS_CACHE: dict = {}
+
+
+def talker_suppress_ids(config: Any, vocab_size: int, num_generated: int) -> Optional[torch.Tensor]:
+    """Code-0 ids the Talker must not sample next, as the reference qwen-tts generate().
+
+    Ids from 2048 (the audio codebook size) to the end of the 3072-wide Talker vocab
+    are codec control ids (pad, bos, think, language, ...); only EOS among them may be
+    sampled, and EOS not before ``config.min_new_tokens`` frames exist. A 2048-wide
+    (code predictor) vocab has none. Returns None when nothing is masked.
+    """
+    suppress_special = getattr(config, "suppress_special_codec", False) and vocab_size > _AUDIO_CODEBOOK_SIZE
+    block_eos = num_generated < getattr(config, "min_new_tokens", 0)
+    if not suppress_special and not block_eos:
+        return None
+    key = (vocab_size, suppress_special, block_eos, config.codec_eos_id)
+    ids = _TALKER_SUPPRESS_CACHE.get(key)
+    if ids is None:
+        mask = set(range(_AUDIO_CODEBOOK_SIZE, vocab_size)) if suppress_special else set()
+        mask.discard(config.codec_eos_id)
+        if block_eos:
+            mask.add(config.codec_eos_id)
+        ids = torch.tensor(sorted(mask), dtype=torch.long)
+        _TALKER_SUPPRESS_CACHE[key] = ids
+    return ids
+
+
 def ar_decode_loop(
     state: DecodeLoopState,
     config: Any,
@@ -774,6 +802,9 @@ def ar_decode_loop(
                 config.greedy,
                 config.repetition_penalty,
                 generated_code0_tokens,
+                suppress_ids=talker_suppress_ids(
+                    config, _codec0_logits_torch.numel(), len(generated_code0_tokens)
+                ),
             )
             _t_after_codec0_cpu = time.perf_counter()
         if not _codec0_in_talker_trace:
