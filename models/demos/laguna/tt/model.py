@@ -399,6 +399,8 @@ class LagunaModel:
             and D > 1
             and seq % (D * 32) == 0
             and hasattr(l0, "_prefill_forward_sp")
+            and int(start_pos) == 0
+            and (runtime_offsets is None or tuple(runtime_offsets.chunk_lengths) == (int(seq),))
             and ((single_shot and rope_ctx is not None) or (not single_shot and one_chunk))
         )
         if sp:

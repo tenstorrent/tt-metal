@@ -1473,18 +1473,6 @@ class MultichipDecoder(OptimizedDecoder):
         # single-shot q32/k64 program diverging from the pipeline's q32/k32 numerics after a cache hit.
         # Cold single-shot and all D1/D4 calls have runtime_offsets=None and remain byte-for-byte on
         # the established local-SDPA branch below.
-        if runtime_offsets is not None or seq > self.PIPE_CHUNK:
-            return self._prefill_pipelined(
-                x_BSH,
-                kv_cache,
-                page_table,
-                fill_page_table,
-                user_id,
-                start_pos,
-                fill_page_table_base_pos=fill_page_table_base_pos,
-                rope_mats=rope_mats,
-                runtime_offsets=runtime_offsets,
-            )
         if seq_parallel:
             # Sequence-parallel residual (LagunaModel.prefill_layers): this chip holds 1/D of the rows of the
             # residual stream. Each all-reduce becomes its reduce-scatter half (_reduce), the residual adds and
@@ -1509,6 +1497,18 @@ class MultichipDecoder(OptimizedDecoder):
                                                  user_id, start_pos, rope_mats)
             finally:
                 self._sp_active = False
+        if runtime_offsets is not None or seq > self.PIPE_CHUNK:
+            return self._prefill_pipelined(
+                x_BSH,
+                kv_cache,
+                page_table,
+                fill_page_table,
+                user_id,
+                start_pos,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+                rope_mats=rope_mats,
+                runtime_offsets=runtime_offsets,
+            )
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])
