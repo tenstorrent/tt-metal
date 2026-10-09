@@ -81,13 +81,26 @@ file.
 
 - `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32;
   any other value, or any value for an empty tensor, is taken as is. The Python `Tensor.assign()` calls it, so the
-  safetensors loaders and the in-place initializers in `ttml.init` keep each tensor's dtype, and so does
-  `ttml.checkpointing`, which loads parameters and optimizer state into the live tensors.
+  in-place initializers in `ttml.init` keep each tensor's dtype.
+- `ttml.autograd.assign_numpy()` loads a numpy array into a tensor in its stored dtype, converted on the host: an
+  fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
+  loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
+  checkpoint loader and `LinearLayer.__setstate__` use it.
+- Transfers through `SocketManager` carry the bf16 view, from C++ and from Python. `RemoteOptimizer` and the Python
+  `SocketManager.recv()` write a bf16 tensor in place through `get_value_for_update()`; any other tensor receives
+  into a bf16 buffer that `assign()` installs, so it keeps the dtype it is stored in.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
 - Gradients load as bf16, whatever dtype they were saved in: backward produces bf16 gradients, and the fused AdamW
   and SGD kernels accept only bf16.
+
+## Reading values from Python
+
+- `Tensor.to_numpy()` reads the tensor as stored. A bf16 tensor gives a float32 array by default, converted on the
+  host, so the read leaves no fp32 copy on the device. `precision=` reads one view instead, and `new_type=` picks
+  the array's dtype.
+- `Tensor.dtype()` and `Tensor.to_string()` describe the tensor as stored.
 
 ## Why this design
 
