@@ -436,11 +436,23 @@ class TtLlamaMLP(LightweightModule):
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+        # Qwen long prefill on Wormhole: the fused FF2 all-gather + matmul below gathers in its output dtype, so
+        # w2_in was typecast bf8 -> bf16 after the mul. Write the mul output in that dtype directly instead
+        # (S=40960: mul bf8 + typecast 1.64 ms -> mul bf16 1.04 ms; skips the bf8 rounding of w2_in).
+        w2_in_dtype = ttnn.bfloat8_b
+        if (
+            self.args.is_qwen
+            and not self.args.is_blackhole
+            and batch_size == 1
+            and seq_len > 4096
+            and self.prefill_output_dtype == ttnn.bfloat16
+        ):
+            w2_in_dtype = ttnn.bfloat16
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
+            dtype=w2_in_dtype,
             memory_config=w1_out.memory_config(),
         )
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul.
