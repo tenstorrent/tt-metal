@@ -1508,3 +1508,21 @@ No session connection is needed for that queue to continue.
   branches/image do not yet qualify a coordinated release. No release mutation.
 - Evidence: galaxy-evidence/gpqa-first-v2/. Frozen published source ASTs match
   the live copy; formatting changes were not applied to running snapshots.
+
+## Oct 9, 17:09 UTC: GPQA accepted; release work scoped
+
+- User explicitly accepted GPQA as close enough and asked for remaining release
+  work. Live progress: 174 correct among 194/198 completed, zero truncations.
+  Preserve the remaining generations and final score; do not rewrite the original
+  threshold or claim its strict gate passed. GPQA is no longer a user acceptance
+  blocker. The persistent queue continues unchanged.
+- Inspected the image probe stderr: exit 2 is argparse rejecting a missing
+  `--tt-device` argument in the probe's wrapper invocation, before hardware or
+  serving. Runtime imports and entrypoint help had passed. Fixing the probe and
+  proving real container inference remain separate steps.
+- Inspected retained Tau3 evidence: 3/12 overall, four task timeouts, one
+  infrastructure error, zero malformed tool calls among 277 tool calls. This
+  older pilot does not qualify current BFP8 agentic performance.
+- Remaining release path: container/API/tool validation; publish SHA/digest-pinned
+  artifacts and verify Helm deployment; Galaxy dev catalogue and Shield jobs;
+  On-dispatch/nightly/release CI, stable alignment and release-team promotion.

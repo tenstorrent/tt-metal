@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T16:44:36.968178+00:00",
+  "generated_at": "2026-10-09T17:11:07.932906+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -99,8 +99,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 112232,
-      "sha256": "b128f1c5d002e8c673e3a504aa9e8687553499eb7705f4863aca3ce7b7cb288a"
+      "bytes": 113412,
+      "sha256": "5313e84945d61484ff119e03bb3550b2a34658ab3999875b6630846d990bf86e"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -114,8 +114,8 @@
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
-      "bytes": 2955,
-      "sha256": "9f8e7ec9b3c3b6766d181c07d51402f3281fd98839e69f5639f7e501af645454"
+      "bytes": 3539,
+      "sha256": "7c22d2f99510669e9d46c76d599cd5323c4fd9532d66a1fe5710d0770de9b0be"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",

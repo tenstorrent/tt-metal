@@ -43,10 +43,18 @@ Galaxy candidate's release qualification. Source branches and a built image
 alone do not satisfy the process. Pin release artifacts by commit/digest as
 requested; do not deploy moving branch names or `latest` tags.
 
-Remaining gates: corrected full GPQA, tool-calling/agentic acceptance, successful
+GPQA is accepted by the user as of Oct 9, 17:09 UTC. At the acceptance
+check, 194/198 responses were complete with 174 correct and zero truncations.
+The run continues to preserve the final 198-question result. This is explicit
+user acceptance, not a retroactive claim that the original 177/198 gate passed;
+immutable benchmark receipts and the running protocol remain unchanged.
+
+Remaining gates: tool-calling/agentic acceptance, successful
 container startup and inference, Galaxy catalogue/job integration, passing
 target-device On-dispatch and nightly/release CI, stable-branch alignment and
 release-team staging. The built BFP8 image passed runtime import and entrypoint
-help checks, but its separate startup probe exited 2; container inference is
-not qualified. This review did not contact release engineering, change prod
+help checks, but its separate startup probe exited 2 because the probe omitted
+the required `--tt-device` wrapper argument. This is a probe invocation failure,
+not evidence of a broken image. Fix the probe, verify the packaged handoff, then
+run container hardware/API checks; container inference remains unqualified. This review did not contact release engineering, change prod
 catalogue entries, trigger shared CI, create release tags or publish a release.
