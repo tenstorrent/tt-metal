@@ -1237,6 +1237,9 @@ SubDeviceManagerId MeshDeviceImpl::acquire_command_list_builder() {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
     validate_sub_device_manager_tracker();
+    TT_FATAL(
+        sub_device_manager_tracker_->num_traces() == 0,
+        "Cannot create a CommandListBuilder while a trace exists on the MeshDevice");
     command_list_builder_active_ = true;
     return sub_device_manager_tracker_->get_active_sub_device_manager_id();
 }
@@ -1245,6 +1248,17 @@ void MeshDeviceImpl::release_command_list_builder() {
     auto lock = lock_api();
     TT_ASSERT(command_list_builder_active_);
     command_list_builder_active_ = false;
+}
+
+void MeshDeviceImpl::register_command_list() {
+    auto lock = lock_api();
+    ++num_command_lists_;
+}
+
+void MeshDeviceImpl::unregister_command_list() {
+    auto lock = lock_api();
+    TT_ASSERT(num_command_lists_ > 0);
+    --num_command_lists_;
 }
 
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
@@ -1555,6 +1569,8 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
+    // Serializes the trace-pool erase with the trace check in acquire_command_list_builder.
+    auto lock = lock_api();
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
@@ -1582,6 +1598,11 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    // Held across the check and trace creation so a CommandListBuilder cannot be created in between.
+    auto lock = lock_api();
+    TT_FATAL(
+        !command_list_builder_active_ && num_command_lists_ == 0,
+        "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
