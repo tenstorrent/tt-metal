@@ -13,7 +13,8 @@
 //   address via address-update replay in end_ops. No per-tile RISC-V overhead.
 //
 // L1 step (a 16-bit input through a 16-bit DEST): end_ops advance L1_Dest_addr by one output tile (SCRATCH_SEC2) with a
-//   bare CFGSHIFTMASK; two-tile chunks of a 16-bit output keep the replay, whose WRCFG becomes that CFGSHIFTMASK.
+//   bare CFGSHIFTMASK; two-tile chunks of a 16-bit output keep the replay, whose WRCFG becomes that CFGSHIFTMASK. A row
+//   of two tiles with a 16-bit output has no bare chunk to share the row with and keeps the WRCFG replay and its init.
 
 #pragma once
 
@@ -26,6 +27,9 @@ constexpr std::uint32_t REPLAY_TILE_LEN    = 16;
 
 constexpr std::uint32_t REPLAY_ADDR_UPDATE_OFFSET = ckernel::packer::replay_buf_offset;
 constexpr std::uint32_t REPLAY_ADDR_UPDATE_LEN    = 4;
+
+// An init for a row of two tiles with a 16-bit output, whose replay steps OUTPUT_ADDR; written and read only under LLK asserts.
+inline bool pack_fast_tilize_two_tile_row = false;
 
 __attribute__((noinline)) void _llk_pack_fast_tilize_configure_addrmod_()
 {
@@ -258,8 +262,9 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
     _llk_pack_fast_tilize_l1_step_mop_config_<output_16b>(unit_dim);
 }
 
-// For callers that know the input's L1 format: a 16-bit input through a 16-bit DEST takes the L1 step, a 32-bit input or
-// DEST the init above. With compile-time formats only one of them is compiled in.
+// For callers that know the input's L1 format and the row width (full_dim tiles): a 16-bit input through a 16-bit DEST
+// takes the L1 step; a 32-bit input or DEST, and a row of two tiles with a 16-bit output, the init above. With
+// compile-time formats and width only one of them is compiled in.
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     const std::uint32_t use_32bit_dest,
@@ -267,17 +272,20 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     const std::uint32_t unit_dim,
     const std::uint32_t num_faces,
     const std::uint32_t pack_src_format,
-    const bool input_32b)
+    const bool input_32b,
+    const std::uint32_t full_dim)
 {
+    const bool output_16b = datum_size_in_bytes(pack_dst_format) == 2;
+    LLK_ASSERT_BLOCK(pack_fast_tilize_two_tile_row = !is_fp32_dest_acc_en && !input_32b && output_16b && full_dim == 2);
     if constexpr (is_fp32_dest_acc_en)
     {
         _llk_pack_fast_tilize_init_<Dst, true>(use_32bit_dest, pack_dst_format, unit_dim, num_faces, pack_src_format);
     }
-    else if (input_32b)
+    else if (input_32b || (output_16b && full_dim == 2))
     {
         _llk_pack_fast_tilize_init_<Dst, false>(use_32bit_dest, pack_dst_format, unit_dim, num_faces, pack_src_format);
     }
-    else if (datum_size_in_bytes(pack_dst_format) == 2)
+    else if (output_16b)
     {
         _llk_pack_fast_tilize_l1_step_init_<Dst, true>(pack_dst_format, unit_dim, pack_src_format);
     }
@@ -340,10 +348,11 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
     _llk_pack_fast_tilize_mop_config_(new_unit_dim);
 }
 
-// Pairs with the init that takes input_32b.
+// Pairs with the init that takes input_32b and full_dim.
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b)
 {
+    LLK_ASSERT(!pack_fast_tilize_two_tile_row || new_unit_dim == 2, "fast_tilize: a row of two tiles takes two-tile chunks only");
     if (is_fp32_dest_acc_en || input_32b)
     {
         _llk_pack_fast_tilize_mop_config_(new_unit_dim);

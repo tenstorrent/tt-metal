@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // fast_tilize_init
     const bool input_32b = static_cast<std::uint32_t>(formats.unpack_A_src) == static_cast<std::uint32_t>(DataFormat::Float32);
-    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src, input_32b);
+    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src, input_32b, BLOCK_CT_DIM);
 
     // Row-scoped pack: destination programmed once per row, chunks streamed through.
     std::uint32_t prev_udim = unit_dims[0];
