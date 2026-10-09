@@ -201,16 +201,13 @@ def test_matmul(
 
 
 # The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
+# The row MOP, Auto TTSync and transpose sweeps run nightly; the LLK smoke splits its tests in two groups by count.
 ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
     input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
     ),
     DEST_ACC_MODES,
 )
-
-
-# The smoke run takes every 7th block (all formats, DEST modes and k steps); the full sweeps below are nightly.
-ROW_MOP_SMOKE_COMBINATIONS = ROW_MOP_COMBINATIONS[::7]
 
 
 @skip_for_wormhole
@@ -228,15 +225,6 @@ def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
 
 
-@skip_for_wormhole
-@parametrize(
-    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
-    format_dest_acc_and_dims=ROW_MOP_SMOKE_COMBINATIONS,
-)
-def test_matmul_row_mop_smoke(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
-
-
 # The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape.
 @skip_for_wormhole
 @pytest.mark.nightly
@@ -245,15 +233,6 @@ def test_matmul_row_mop_smoke(math_fidelity, format_dest_acc_and_dims):
     format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
 )
 def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, unpack_ttsync=True)
-
-
-@skip_for_wormhole
-@parametrize(
-    math_fidelity=[MathFidelity.LoFi],
-    format_dest_acc_and_dims=ROW_MOP_SMOKE_COMBINATIONS,
-)
-def test_matmul_unpack_ttsync_smoke(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, unpack_ttsync=True)
 
 
@@ -285,6 +264,7 @@ TRANSPOSE_COMBINATIONS = [
 
 
 @skip_for_wormhole
+@pytest.mark.nightly
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
