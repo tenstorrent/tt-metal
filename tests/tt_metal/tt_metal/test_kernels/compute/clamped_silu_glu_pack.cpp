@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clamped_silu_glu.cpp with the activation on the pack thread (clamped_silu_glu_tile_pack): the math thread only
-// copies the gate and up tiles into DST. gate arrives in c_0, up in c_1; the result is packed to c_16.
+// clamped_silu_glu.cpp with the activation on the pack thread; the math thread only copies the gate and up tiles.
 //   compile_time_args = [num_tiles, dst_gate_index, dst_up_index, dst_out_index]
 
 #include <cstdint>

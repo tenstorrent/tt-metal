@@ -35,8 +35,6 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * The loop runs over the eight 4-row groups; the row within a group is a template constant of reshuffle_row.
- *
  * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
@@ -50,7 +48,6 @@ constexpr std::uint32_t row_group_addr(const std::uint32_t row) { return (row & 
 
 constexpr std::uint32_t word(const int encoding) { return static_cast<std::uint32_t>(encoding); }
 
-// One input row; ROW_IN_GROUP (0-3) selects the input register at compile time.
 template <std::uint32_t ROW_IN_GROUP>
 inline __attribute__((always_inline)) void reshuffle_row(const std::uint32_t input_row_addr, const std::uint32_t idx_word) {
     const std::uint32_t dst_row = (idx_word >> (8 * ROW_IN_GROUP)) & 0xFFu;
@@ -105,11 +102,11 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row + 34);
     // }
 
-    // Skip tile header, hence + 16. The 32 index bytes are read as eight words, one per 4-row group.
+    // Skip tile header, hence + 16:
     const volatile tt_l1_ptr std::uint32_t* idx_words =
         reinterpret_cast<const volatile tt_l1_ptr std::uint32_t*>(idx_addr + 16);
 
-    // TODO: Add dynamic assert for idx_ptr being within L1 memory bounds
+    // TODO: Add dynamic assert for idx_words being within L1 memory bounds
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE
 
 #pragma GCC unroll 0

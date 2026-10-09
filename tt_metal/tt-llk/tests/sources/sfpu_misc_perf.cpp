@@ -4,7 +4,6 @@
 
 // Perf kernel for the SFPU ops outside the unary and binary registry sweeps (SFPU_MISC_OPERATION, numbered as
 // SFPU_MISC_OPERATIONS in python_tests/helpers/test_variant_parameters.py): the datacopy carrier and one body per tile.
-// SFPU_MISC_PARAM: the rand scale form or the reshuffle_rows index pattern; SFPU_MISC_INIT_PER_TILE: the init before every tile.
 
 #include <algorithm>
 #include <cstdint>

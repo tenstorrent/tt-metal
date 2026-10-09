@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-reshuffle_rows SFPU test: the scatter-add output[idx[i]] += input[i] over the 32 rows of a tile,
-with the destination row indices in the first 32 bytes of buffer_B[0] (255 skips the row). Small
-integers keep every partial sum exact in bf16; the patterns cover permutations, skipped and shared rows.
-"""
+"""reshuffle_rows scatter-add output[idx[i]] += input[i] over a tile, the indices in the first 32 bytes
+of buffer_B[0] (255 skips a row); small integers keep every sum exact in bf16."""
 
 import torch
 from helpers.format_config import DataFormat

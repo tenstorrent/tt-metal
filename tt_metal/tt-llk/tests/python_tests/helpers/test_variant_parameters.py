@@ -2186,9 +2186,8 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 
 @dataclass
 class SFPU_DROPOUT_PROBE(TemplateParameter):
-    """Dropout parameters for sources/sfpu_dropout_test.cpp: the 31-bit PRNG threshold (0 keeps
-    all, 0x7FFFFFFF drops all), the scale as fp32 bits, and whether an eltwise binary init
-    precedes the body."""
+    """Dropout parameters for sources/sfpu_dropout_test.cpp: the 31-bit PRNG threshold, the scale
+    as fp32 bits, and whether an eltwise binary init precedes the body."""
 
     dropout_binary_init_before: bool = False
     dropout_probability: int = 0

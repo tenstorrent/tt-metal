@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Perf rows for the SFPU kernels outside the unary and binary registry sweeps: rand, dropout, mask
-(float and Int32), copy_dest_values, reshuffle_rows, softcap, situ_glu and clamped_silu_glu, one
-body per tile after the datacopy carrier (sources/sfpu_misc_perf.cpp). misc_param selects the
-rand scale form or the reshuffle_rows index pattern; misc_init_per_tile re-runs the op's init.
-"""
+"""Perf rows for the SFPU kernels outside the unary and binary registry sweeps, one body per tile
+after the datacopy carrier (sources/sfpu_misc_perf.cpp)."""
 
 import pytest
 from conftest import skip_for_wormhole

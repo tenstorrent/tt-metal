@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-Dropout SFPU test with a deterministic outcome: probability 0 keeps every element (times the
-scale), probability INT_MAX drops every element. The binary_init_before variant runs the eltwise
-binary init between the datacopy and the body, as a kernel fusing dropout after add_tiles does.
-"""
+"""Dropout with a deterministic outcome: probability 0 keeps every element, INT_MAX drops every one,
+with and without the eltwise binary init that add_tiles before dropout leaves."""
 
 import torch
 from helpers.format_config import DataFormat

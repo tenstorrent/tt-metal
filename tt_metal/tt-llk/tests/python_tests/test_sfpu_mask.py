@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""
-Mask SFPU test with the data and the mask tile at arbitrary DEST indices, adjacent and not,
-before and after the data, over the half of DEST the sync mode acquires. Float16_b drives
-calculate_mask and calculate_mask_posinf, Int32 calculate_int_mask; the comparison is exact.
-"""
+"""Mask with the data and the mask tile at any two DEST indices of the acquired half; Float16_b
+drives calculate_mask and calculate_mask_posinf, Int32 calculate_int_mask."""
 
 import torch
 from helpers.format_config import DataFormat
@@ -18,7 +15,7 @@ from helpers.test_variant_parameters import SFPU_MASK_PLACEMENT, TILE_COUNT
 FLOAT_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 INT_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
-# (data tile, mask tile) placements; the first pair is what every in-tree caller passes today.
+# (data tile, mask tile) placements; the first pair is the one the in-tree callers pass.
 PLACEMENTS_16BIT_DEST = [(0, 1), (1, 0), (0, 2), (0, 7), (7, 0), (3, 5), (6, 2)]
 PLACEMENTS_32BIT_DEST = [(0, 1), (1, 0), (0, 3), (3, 0), (2, 1)]
 

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// situ_glu.cpp with the activation on the pack thread (situ_glu_tile_pack): the math thread only copies the gate
-// and up tiles into DST. gate arrives in c_0, up in c_1; the result is packed to c_16.
+// situ_glu.cpp with the activation on the pack thread; the math thread only copies the gate and up tiles.
 //   compile_time_args = [num_tiles, dst_out_index]
 
 #include <cstdint>
