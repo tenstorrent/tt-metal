@@ -4,7 +4,8 @@
 
 Full backing tiles make writes outside the selected tiny-tile rows observable.
 Each dispatch uses two adjacent pairs, a pair between guard tiles, and a partial
-batch across three DEST acquisitions. The compute-API test also uses real tiny CBs.
+batch across three DEST acquisitions. Later batches reinitialize sigmoid after
+an approximate-exp initializer overwrites its reciprocal constant.
 """
 
 import struct

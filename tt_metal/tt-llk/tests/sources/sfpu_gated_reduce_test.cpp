@@ -36,6 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_MATH
+#include "ckernel_sfpu_exp.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_gated_reduce.h"
@@ -61,6 +62,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 tile, formats.math, formats.math);
+        }
+        if (base != 0)
+        {
+            // Approximate exp overwrites LREG12 (vConstFloatPrgm0). Reinitializing
+            // sigmoid must restore the 2.0 constant used by its reciprocal.
+            sfpu::exp_init<true, 0x3f800000 /* scale = 1.0f */, true, is_fp32_dest_acc_en>();
         }
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::silu>();
         sfpu::sigmoid_init<false>();
