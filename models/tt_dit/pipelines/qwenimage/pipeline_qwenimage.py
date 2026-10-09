@@ -63,7 +63,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "tp": (2, 1),
         "encoder_tp": (2, 1),
         "encoder_fsdp": None,
-        "num_links": 1,
+        "num_links": 2,
     },
     (2, 4): {
         "cfg": (2, 0),
