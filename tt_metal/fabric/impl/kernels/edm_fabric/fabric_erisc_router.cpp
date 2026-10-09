@@ -1291,15 +1291,19 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
-        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-
-        // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
-        // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
-        // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
-        if constexpr (!enable_first_level_ack) {
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
+        // A bridged frame was retired when it went to the host; this credit is for its H2E copy, so drop it.
+        if constexpr (!sender_channel_uses_e2h(sender_channel_index)) {
+            outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+            // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
+            // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
+            // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
+            if constexpr (!enable_first_level_ack) {
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface,
+                    completions_since_last_check,
+                    channel_connection_established);
+            }
         }
     }
 
@@ -1310,8 +1314,10 @@ FORCE_INLINE
         auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+            if constexpr (!sender_channel_uses_e2h(sender_channel_index)) {  // bridged: already credited
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+            }
         }
     }
 
