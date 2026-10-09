@@ -683,7 +683,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
 
   | Pipeline | Toggles (default `true` unless noted) |
   |---|---|
-  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
   | `t3000-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` which defaults to **`false`** — the e2e suite costs about 195 of the 279 machine-minutes of a full run, so pass `run-e2e-tests: true` only when the change touches CCL, fabric or dispatch |
