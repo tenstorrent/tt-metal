@@ -19,7 +19,7 @@
 #ifdef SE_Y_RM
 #include "api/compute/pack_untilize.h"
 #endif
-#ifdef SE_ZONES
+#if defined(SE_ZONES) || defined(SE_DZ)
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
 
@@ -115,7 +115,7 @@ void kernel_main() {
     UNPACK((_llk_unpack_configure_stoch_rnd_<StochRndType::Pack>()));
 #endif
     matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
-#ifdef SE_Y_RM
+#if defined(SE_Y_RM) && !defined(SE_YRM_PACKTILE)
     pack_untilize_dest_init<cpw, pcd>(out_cb);
 #endif
 #ifdef SE_DYN
@@ -157,12 +157,22 @@ void kernel_main() {
         DeviceZoneScopedN("SE_DOWN");
 #endif
 #ifndef SE_Y_RM
-        cb_reserve_back(out_cb, mt * pcd);
+        {
+#ifdef SE_ZONES
+            DeviceZoneScopedN("SE_OUT_WAIT");
+#endif
+            cb_reserve_back(out_cb, mt * pcd);
+        }
 #endif
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
 #ifdef SE_Y_RM
-            cb_reserve_back(out_cb, pcd);
+            {
+#ifdef SE_ZONES
+                DeviceZoneScopedN("SE_OUT_WAIT");
+#endif
+                cb_reserve_back(out_cb, pcd);
+            }
 #endif
             for (uint32_t c0 = 0; c0 < pcd; c0 += cpw) {
                 const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
@@ -170,29 +180,77 @@ void kernel_main() {
                 if constexpr (pcd > cpw) {
                     matmul_block_init(h_all_cb, in1_cb, false, cw, 1, hk);
                 }
+#ifdef SE_DZ  // (detail zones on sub-blocks v % 16 == 5: DEST acquire, the K loop, pack)
+                const bool dz = v % 16 == 5;
+                if (dz) {
+                    DeviceZoneScopedN("DN_ACQ");
+                    tile_regs_acquire();
+                } else {
+                    tile_regs_acquire();
+                }
+#else
                 tile_regs_acquire();
+#endif
                 uint32_t w = 0;
-                for (uint32_t kk = 0; kk < kt_d; ++kk) {
-                    if (kk % kblk_d == 0) {
+#ifdef SE_DZ
+                auto kloop = [&]() {
+#endif
+                    for (uint32_t kk = 0; kk < kt_d; ++kk) {
+                        if (kk % kblk_d == 0) {
 #ifdef SE_DN_REG
-                        w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
+                            w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
 #else
                         w = wblock(e * nblk + kk / kblk_d);
 #endif
-                    }
-                    matmul_block(h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
+                        }
+                        matmul_block(
+                            h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
 #ifdef SE_EARLY_POP
-                    // The expert's last row (final column pass): each weight block goes as soon as it is used, so
-                    // the next expert's blocks stream into the ring while this row still runs.
-                    if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
-                        cb_pop_front(in1_cb, slot);
-                        ++popped;
+                        // The expert's last row (final column pass): each weight block goes as soon as it is used, so
+                        // the next expert's blocks stream into the ring while this row still runs.
+                        if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
+                            cb_pop_front(in1_cb, slot);
+                            ++popped;
+                        }
+#endif
+                    }
+#ifdef SE_DZ
+                };
+                if (dz) {
+                    DeviceZoneScopedN("DN_K");
+                    kloop();
+                } else {
+                    kloop();
+                }
+#endif
+                tile_regs_commit();
+#ifdef SE_DZ
+                if (dz) {
+                    DeviceZoneScopedN("DN_WAIT");
+                    tile_regs_wait();
+                } else {
+                    tile_regs_wait();
+                }
+                if (dz) {
+                    DeviceZoneScopedN("DN_PACK");
+#if defined(SE_Y_RM)
+                    pack_untilize_dest<cpw, pcd>(out_cb, 1, c0 / cpw);
+#else
+                    for (uint32_t i = 0; i < cw; ++i) {
+                        pack_tile<true>(i, out_cb, r * pcd + c0 + i);
                     }
 #endif
+                    tile_regs_release();
+                    continue;
                 }
-                tile_regs_commit();
+#else
                 tile_regs_wait();
-#ifdef SE_Y_RM
+#endif
+#if defined(SE_Y_RM) && defined(SE_YRM_PACKTILE)  // (perf probe: tiles, not rows)
+                for (uint32_t i = 0; i < cw; ++i) {
+                    pack_tile<true>(i, out_cb, c0 + i);
+                }
+#elif defined(SE_Y_RM)
                 pack_untilize_dest<cpw, pcd>(out_cb, 1, c0 / cpw);
 #else
                 for (uint32_t i = 0; i < cw; ++i) {
@@ -211,7 +269,17 @@ void kernel_main() {
             cb_reserve_back(xo_cb, mt * pcx);
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
+#ifdef SE_DZ  // (detail zones on sub-blocks v % 16 == 5: DEST acquire, the K loop, pack)
+                const bool dz = v % 16 == 5;
+                if (dz) {
+                    DeviceZoneScopedN("DN_ACQ");
+                    tile_regs_acquire();
+                } else {
+                    tile_regs_acquire();
+                }
+#else
                 tile_regs_acquire();
+#endif
                 uint32_t w = 0;
                 for (uint32_t kk = 0; kk < kt_d; ++kk) {
                     if (kk % kblk_x == 0) {

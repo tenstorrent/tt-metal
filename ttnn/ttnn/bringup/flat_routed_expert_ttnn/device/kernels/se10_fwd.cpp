@@ -22,6 +22,14 @@
 #include "api/debug/dprint.h"
 #endif
 
+// The weight forward's unicast VC: its own, not the default write VC (1) the h exchange, the y writes and the read
+// requests would share with it (head-of-line blocking behind them: ~-12% expert time at M 512 on its own VC)
+#ifdef SE_FWD_VC
+constexpr uint8_t fwd_vc = SE_FWD_VC;
+#else
+constexpr uint8_t fwd_vc = 3;
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);
     constexpr uint32_t R = get_compile_time_arg_val(1);
@@ -96,7 +104,13 @@ void kernel_main() {
                     for (uint32_t o = 0; o < blk_bytes; o += NOC_MAX_BURST_SIZE) {
                         const uint32_t n = blk_bytes - o < NOC_MAX_BURST_SIZE ? blk_bytes - o : NOC_MAX_BURST_SIZE;
                         noc_async_write_one_packet_with_trid(
-                            src + (j / groups) * blk_bytes + o, recv[j] | (dst + o), n, trid);
+                            src + (j / groups) * blk_bytes + o,
+                            recv[j] | (dst + o),
+                            n,
+                            trid,
+                            write_cmd_buf,
+                            noc_index,
+                            fwd_vc);
                     }
                 }
                 ++issued;
