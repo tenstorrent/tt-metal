@@ -13,6 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
+from models.tt_transformers.tt.model_config import qk_fused_core_ranges
 from models.tt_transformers.tt.prefetcher import Prefetcher
 from ttnn import replicate_tensor_to_mesh_mapper
 
@@ -821,21 +822,23 @@ class RotarySetup(LightweightModule):
         )
 
         def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):
-            if ttnn.get_arch_name() == "blackhole":
-                if prefetcher is not None:
-                    return ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                        start_core,
-                        batch_size_per_device_group,
-                        prefetcher.all_worker_cores_range_set,
-                        row_wise=True,
-                    )
-                else:
-                    # Use batch_size (which is doubled_batch_size for fused QK) to determine the number of cores
-                    if batch_size % 32 == 0:
-                        return ttnn.CoreGrid(y=8, x=8)
-                    return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
-            else:
-                return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
+            if ttnn.get_arch_name() == "blackhole" and prefetcher is not None:
+                return ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    start_core,
+                    batch_size_per_device_group,
+                    prefetcher.all_worker_cores_range_set,
+                    row_wise=True,
+                )
+            if use_qk_fused:
+                # cos, sin and trans_mat are consumed on the cores that hold Q and K, so this grid
+                # must be Q's cores followed by K's cores. num_cores_to_corerangeset fills the device
+                # grid's rows instead, which on a grid wider than 8 columns hands K another user's
+                # cos/sin. batch_size is already the doubled batch here.
+                q_range, k_range = qk_fused_core_ranges(batch_size // 2)
+                return ttnn.CoreRangeSet({q_range, k_range})
+            if ttnn.get_arch_name() == "blackhole" and batch_size % 32 == 0:
+                return ttnn.CoreGrid(y=8, x=8)
+            return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
 
         self.batch_grid = get_batch_grid(
             self.batch_size_per_device_group,

@@ -5199,6 +5199,22 @@ def num_to_corerange(
     )
 
 
+def qk_fused_core_ranges(
+    batch: int,
+    row_size: int = 8,
+) -> Tuple[ttnn.CoreRange, ttnn.CoreRange]:
+    """
+    Core ranges for the fused QK ops: ``batch`` cores for Q, then ``batch`` cores for K.
+
+    ``rotary_embedding_llama_fused_qk`` reads the cos, sin and trans_mat shard that lands on
+    the core holding Q (or K) for that user, so every tensor it takes has to be sharded over
+    Q's cores followed by K's cores, in that order. This is the single definition of that
+    layout; callers that build a core grid for one of those tensors must use it.
+    """
+    k_start_core = ttnn.CoreCoord(batch % row_size, batch // row_size)
+    return num_to_corerange(batch, grid_x=row_size), num_to_corerange(batch, start_core=k_start_core, grid_x=row_size)
+
+
 def num_to_coregrid(x):
     if x % 8 == 0:
         return ttnn.CoreGrid(y=x // 8, x=8)
