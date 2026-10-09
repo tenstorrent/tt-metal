@@ -358,6 +358,19 @@ class SpecRunner:
         dec.forward()
         ttnn.synchronize_device(self.md)
         dec.restore_states(self.snaps)
+        root = self.drafter_root
+        if (
+            self.phys is None
+            and getattr(getattr(self.m, "sink", None), "taps", None) is not None
+            and not getattr(root, "_taps_compiled", False)
+        ):  # compile pass of the seeding from the prefill taps (nothing selected: no ring row written), before any trace exists
+            root._taps_compiled = True
+            self._taps_seed(
+                torch.zeros(self.B, dtype=torch.bool),
+                torch.ones(self.B, dtype=torch.long),
+                torch.zeros(self.B, dtype=torch.long),
+                dry=True,
+            )
         if (
             self.sampled
         ):  # compile pass of the two halves of the sampled round (creates their lazily built tensors before any trace exists)
@@ -469,11 +482,201 @@ class SpecRunner:
         return self._readback(self.pack_b)
 
     # ---- hand-off: drafter seeding ----------------------------------------------------------------------------------------------
-    def seed(self, tokens, lens, first):
-        """tokens [B, L] prompts, lens [B], first [B] (the prefill's first generated token). Replays [p0_u, S_u) per user (p0 even, >= S-128-1) with forced accepts.
-        Returns (X [B,n] the first block (first token + drafts), base [B])."""
-        B, n = self.B, self.n
+    def _capture_all(self, block_of, b0):
+        """First use after a release: compile pass + trace capture of this runner and of every sibling (adaptive set) on the block ``block_of(n)`` ([B, n] tokens) at positions ``b0``."""
+        B = self.B
+        rs = [self] + list(
+            self.siblings
+        )  # adaptive: every runner of the set captures its trace on the same first block
+        blocks = {id(r_): block_of(r_.n) for r_ in rs}
+        for r_ in rs:  # phase 1: all compile passes, before ANY trace exists
+            r_.prepare(blocks[id(r_)], b0)
+        for r_ in rs:  # phase 2: the traces
+            r_.capture_trace()
+        reps = int(os.environ.get("DSV41_SPEC_CALIB", "0"))
+        if os.environ.get("DSV41_SPEC_SWITCHTEST") == "1":  # diagnostic: alternate the traces of the runners
+            for it in range(3):
+                for r_ in rs:
+                    self.log(f"switchtest it {it} -> k={r_.k}")
+                    r_._round(blocks[id(r_)], b0, torch.full((B,), r_.n - 1))
+            self.log("switchtest done")
+        if reps > 0:
+            for r_ in rs:
+                r_.calibrate(blocks[id(r_)], b0, reps)
+
+    def taps_ready(self, lens, users=None):
+        """True when the prefill's drafter taps (tt/prefill_taps.py) hold the last 128 positions of every user of ``users`` (default: every user with a prompt longer than the dummy
+        length 1 of an idle row) at the prompt length ``lens``."""
+        sink = getattr(self.m, "sink", None)
+        if (
+            getattr(sink, "taps", None) is None
+            or self.phys is not None
+            or os.environ.get("DSV41_SEED_FROM_PREFILL") == "0"
+        ):
+            return False
         lens = torch.as_tensor(lens).long()
+        users = [b for b in range(self.B) if int(lens[b]) > 1] if users is None else list(users)
+        return bool(users) and all(self.m.tap_n.get(b) == int(lens[b]) for b in users)
+
+    def seed_from_prefill(self, lens, first, users=None):
+        """Seed the drafter of ``users`` (default: every user with taps) from the PREFILL's taps: no replay of the prompt tail through the verify trace. ``lens`` [B] prompt lengths (the position
+        of the first generated token), ``first`` [B] the first generated token. Writes the drafter's ring rows of the last 128 positions of every selected user (eager, tt/mtp.py
+        ``DSparkDrafter.seed_from_taps``), then drafts the first 5 tokens exactly as the last replay round does (token ``first`` at the frontier ``lens - 1``). Rows of the other users are
+        untouched; ``dev_first`` / ``d_final`` / ``conf_final`` are updated for the selected users only. Returns (X [B,n] the first block, base [B]).
+        """
+        B, n, rows, cols = self.B, self.n, self.rows, self.cols
+        lens = torch.as_tensor(lens).long()
+        first = torch.as_tensor(first).long()
+        taps, Ud = self.m.sink.taps, self.m.U
+        sel = torch.zeros(B, dtype=torch.bool)
+        for b in range(B) if users is None else users:
+            if self.m.tap_n.get(int(b)) == int(lens[b]) and int(lens[b]) > 0:
+                sel[int(b)] = True
+        if (
+            self.tid is None
+        ):  # (after a release) compile pass + trace capture on a block that writes only positions >= the prompt length
+            X = torch.zeros(B, self.n, dtype=torch.long)
+            X[:, 0] = first
+            b0 = torch.clamp(lens, max=self.m.max_ctx - self.n - 1)
+            self._capture_all(lambda nn: torch.cat([X[:, :1], torch.zeros(B, nn - 1, dtype=torch.long)], dim=1), b0)
+        if getattr(self, "d_final", None) is None:
+            self.d_final = torch.zeros(B, BLOCK, dtype=torch.long)
+            self.conf_final = torch.zeros(B, BLOCK)
+            self.dev_first = torch.zeros(B, dtype=torch.long)
+        self._taps_seed(sel, lens, first)
+        X0 = torch.zeros(B, n, dtype=torch.long)
+        X0[:, 0] = first
+        X0[:, 1:] = self.d_final[:, : self.k]
+        return X0, lens.clone()
+
+    def _taps_seed(self, sel, lens, first, dry=False):
+        """Body of ``seed_from_prefill``: per drafter chunk with a selected user, ring rows from the stash + the first drafts. ``dry``: run every chunk with nothing selected (compile pass:
+        writes no ring row, keeps no draft)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_ROWS
+
+        B, rows, cols = self.B, self.rows, self.cols
+        taps, Ud = self.m.sink.taps, self.m.U
+        root = self.drafter_root
+        subs = getattr(root, "subs", [root])
+        Uc = taps.Uc
+        shard = taps.shard
+        up = lambda t, dt, lay=ttnn.ROW_MAJOR_LAYOUT: ttnn.from_torch(
+            t.contiguous(),
+            device=self.md,
+            dtype=dt,
+            layout=lay,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        j = torch.arange(TAP_ROWS)
+        for c, sub in enumerate(subs):
+            assert sub.U == Uc, f"drafter chunk of {sub.U} users != tap chunk {Uc}"
+            gb = torch.tensor(
+                [[r * Ud + c * Uc + u for u in range(Uc)] for r in range(rows)]
+            )  # [rows, Uc] global users of this chunk
+            ok = sel[gb]
+            if not bool(ok.any()) and not dry:
+                continue
+            S = lens[gb]  # [rows, Uc]
+            # position held by stash slot j of user (r, u): the latest position < S with position % 128 == j (valid: >= 0 and the user is selected)
+            p = (S.unsqueeze(1) - 1) - ((S.unsqueeze(1) - 1 - j.reshape(1, -1, 1)) % TAP_ROWS)  # [rows, 128, Uc]
+            valid = ok.unsqueeze(1) & (p >= 0)
+            pos = torch.where(valid, p, torch.zeros_like(p)).reshape(rows * TAP_ROWS * Uc)
+            slot = torch.where(valid, p % 160, torch.full_like(p, -1)).reshape(rows * TAP_ROWS, Uc)
+            hidden = taps.chunk_hidden(c)
+            sub.seed_from_taps(hidden, up(pos.to(torch.int32), ttnn.int32), up(slot.to(torch.int32), ttnn.int32))
+            ttnn.deallocate(hidden)
+            # first drafts: token ``first`` at the frontier lens - 1 (what the last replay round drafts from)
+            t_dev = up(first[gb].reshape(rows * Uc, 1).to(torch.int32), ttnn.uint32)
+            f_dev = up((lens[gb] - 1).clamp(min=0).reshape(rows * Uc, 1).to(torch.int32), ttnn.int32)
+            d, drafts = sub.draft_full(t_dev, f_dev)
+            cq = sub.conf_q
+            toks = torch.stack(
+                [
+                    torch.stack(
+                        [
+                            ttnn.to_torch(ttnn.get_device_tensors(t)[r * cols]).reshape(-1)[:Uc].long()
+                            for r in range(rows)
+                        ]
+                    )
+                    for t in d["tokens"]
+                ],
+                dim=-1,
+            )  # [rows, Uc, 5]
+            conf = torch.stack(
+                [ttnn.to_torch(ttnn.get_device_tensors(cq)[r * cols]).reshape(BLOCK, Uc).float() for r in range(rows)]
+            ).permute(
+                0, 2, 1
+            )  # [rows, Uc, 5]
+            for r in range(rows):
+                for u in range(Uc):
+                    b = int(gb[r, u])
+                    if sel[b]:
+                        self.d_final[b] = toks[r, u]
+                        self.conf_final[b] = conf[r, u] / 65535.0
+                        self.dev_first[b] = int(first[b])
+        ttnn.synchronize_device(self.md)
+
+    def seed(self, tokens, lens, first):
+        """tokens [B, L] prompts, lens [B], first [B] (the prefill's first generated token). Seeds the drafter from the prefill's taps when it has them for every user (``seed_from_prefill``), else
+        replays [p0_u, S_u) per user (p0 even, >= S-128-1) with forced accepts.
+        Returns (X [B,n] the first block (first token + drafts), base [B])."""
+        lens = torch.as_tensor(lens).long()
+        if self.taps_ready(lens):
+            X0, base = self.seed_from_prefill(lens, first)
+            if (
+                os.environ.get("DSV41_SEED_COMPARE") == "1"
+            ):  # oracle: the same state after the replay of the prompt tail, compared in this process; the run continues from the taps' state
+                self._compare_with_replay(tokens, lens, first)
+                X0, base = self.seed_from_prefill(lens, first)
+            return X0, base
+        return self._seed_replay(tokens, lens, first)
+
+    def _ring_rows(self, lens):
+        """host {user: [3 stages][positions p in [max(0, S - 128), S)] -> ring row [512] fp32} of the drafter's attention rings (diagnostics)."""
+        rows, cols, Ud = self.rows, self.cols, self.m.U
+        subs = getattr(self.drafter_root, "subs", [self.drafter_root])
+        out = {}
+        for c, sub in enumerate(subs):
+            for s_, a in enumerate(sub.attn):
+                devs = ttnn.get_device_tensors(a.cache)
+                for r in range(rows):
+                    cache = ttnn.to_torch(devs[r * cols]).float().reshape(sub.U, -1, 512)
+                    for u in range(sub.U):
+                        b = r * Ud + c * sub.U + u
+                        S = int(lens[b])
+                        ps = list(range(max(0, S - 128), S))
+                        out.setdefault(b, [None, None, None])[s_] = cache[u, [p % 160 for p in ps]].clone()
+        return out
+
+    def _compare_with_replay(self, tokens, lens, first):
+        """DSV41_SEED_COMPARE=1: after the seeding from the taps, run the replay seeding of the same prompts and compare the drafter ring rows of the last 128 positions, the first drafts and
+        the confidences (logged)."""
+        B = self.B
+        r_t = self._ring_rows(lens)
+        d_t, c_t = self.d_final.clone(), self.conf_final.clone()
+        self._seed_replay(tokens, lens, first)
+        r_r = self._ring_rows(lens)
+        cos = lambda a, b: float((a * b).sum() / (a.norm() * b.norm()).clamp(min=1e-12))
+        worst = []
+        for st in range(3):
+            cs, rel = [], []
+            for b in range(B):
+                if int(lens[b]) <= 1:
+                    continue
+                a, b_ = r_t[b][st], r_r[b][st]
+                cs.append(min(cos(a[i], b_[i]) for i in range(a.shape[0])))
+                rel.append(float((a - b_).abs().max() / b_.abs().max().clamp(min=1e-6)))
+            worst.append((min(cs), max(rel)))
+        same = (d_t[:, : self.k] == self.d_final[:, : self.k]).float().mean(0).tolist()
+        self.log(
+            "SEED_COMPARE ring rows (replay vs taps), per stage (min over users and rows of the cosine, max relative abs diff): "
+            + "; ".join(f"stage {i}: cos {c:.5f} rel {r:.4f}" for i, (c, r) in enumerate(worst))
+            + f"; first drafts equal per draft index {[round(x, 3) for x in same]}; max |conf diff| {float((c_t - self.conf_final).abs().max()):.4f}; mean conf taps {float(c_t[:, : self.k].mean()):.3f} replay {float(self.conf_final[:, : self.k].mean()):.3f}"
+        )
+
+    def _seed_replay(self, tokens, lens, first):
+        B, n = self.B, self.n
         # replay length: the last SEED_TAIL tokens (default 128 = the full attention window of the drafter). A shorter tail cuts the seeding time (one verify round per 4 replayed tokens, ~115 ms each at B=32,
         # whatever the number of rows to seed) at the price of drafter state for the older positions; acceptance recovers as the request decodes (the drafts are proposals, the verify keeps the output exact).
         tail = int(os.environ.get("DSV41_SPEC_SEED_TAIL", "128"))
@@ -496,25 +699,7 @@ class SpecRunner:
             if (
                 self.tid is None
             ):  # first use: compile pass + trace capture on the first replay block (writes the same state the replay writes)
-                b0 = p0.clone()
-                rs = [self] + list(
-                    self.siblings
-                )  # adaptive: every runner of the set captures its trace on the same first replay block
-                blocks = {id(r_): torch.stack([seqs[b][int(b0[b]) : int(b0[b]) + r_.n] for b in range(B)]) for r_ in rs}
-                for r_ in rs:  # phase 1: all compile passes, before ANY trace exists
-                    r_.prepare(blocks[id(r_)], b0)
-                for r_ in rs:  # phase 2: the traces
-                    r_.capture_trace()
-                reps = int(os.environ.get("DSV41_SPEC_CALIB", "0"))
-                if os.environ.get("DSV41_SPEC_SWITCHTEST") == "1":  # diagnostic: alternate the traces of the runners
-                    for it in range(3):
-                        for r_ in rs:
-                            self.log(f"switchtest it {it} -> k={r_.k}")
-                            r_._round(blocks[id(r_)], b0, torch.full((B,), r_.n - 1))
-                    self.log("switchtest done")
-                if reps > 0:
-                    for r_ in rs:
-                        r_.calibrate(blocks[id(r_)], b0, reps)
+                self._capture_all(lambda nn: torch.stack([seqs[b][int(p0[b]) : int(p0[b]) + nn] for b in range(B)]), p0)
             rr = torch.minimum(torch.full((B,), r), nbl - 1)  # finished users repeat their last block (idempotent)
             base = p0 + rr * n
             X = torch.stack([seqs[b][int(base[b]) : int(base[b]) + n] for b in range(B)])

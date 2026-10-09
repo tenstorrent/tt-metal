@@ -40,7 +40,8 @@ class PagedStateSink:
         self.rows, self.cols = tuple(md.shape)
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
         self.lens = None  # [B] real prompt lengths (global user order: row-major over mesh rows)
-        self.bufs = {}  # C -> {"ring": t, "lat": {src: t}, "idx": t, "mask": t}
+        self.bufs = {}  # C -> {"ring": t, "lat": {src: t}, "idx": t, "mask": t, "tap": t}
+        self.taps = None  # PrefillTaps (tt/prefill_taps.py): drafter taps of the last 128 positions, written inside the chunk trace (speculative builds)
 
     def set_lengths(self, lens):
         self.lens = torch.as_tensor(lens).long()
@@ -152,7 +153,12 @@ class PagedStateSink:
             self.bufs[C]["hmask_cs"] = ttnn.to_device(
                 self._host_cs(hm, C), self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+        if self.taps is not None:
+            self.bufs[C]["tap"] = self.taps.upload(self._host_taps(0, C))
         return self.bufs[C]
+
+    def _host_taps(self, s0, C):
+        return self.taps.host_ids(s0, C, self.U, self._user_of, self.lens)
 
     def update(self, s0, C):
         """Refresh the persistent index tensors for the chunk of positions [s0, s0 + C) (host work + 6 small uploads; call before each chunk / replay)."""
@@ -170,6 +176,8 @@ class PagedStateSink:
         h2d(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
         if colsplit_active(self.U, C):
             h2d(self._host_cs(hm, C), bufs["hmask_cs"])
+        if self.taps is not None:
+            h2d(self.taps.upload(self._host_taps(s0, C), host=True), bufs["tap"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):

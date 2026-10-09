@@ -39,6 +39,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.paged_ops import PAGE_TOKENS, 
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import DSV41PrefillAttention, clear_chunk_caches
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_handoff import GenPrefillModel, PagedStateSink
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillLayer, DSV41PrefillMoE
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import PrefillTaps, taps_possible
 
 # prefill routed experts via ttnn.experimental.deepseek_prefill reading the decode ring weights in place: default ON with automatic fallback
 # (tt/uni_policy.py); DSV41_PREFILL_MOE=off forces the moe_compute prefill path
@@ -125,6 +126,11 @@ class Model:
             dtype=kv_dtype,
         )
         self.sink = PagedStateSink(mesh_device, self.pool, self.Up, decode_users=self.U)
+        # speculative builds (pool ring rows for the spec runners): the prefill chunk trace also writes the drafter's taps (layers 37-39 stream means of the last 128 positions of every
+        # user, tt/prefill_taps.py), which seed the drafter after the prefill instead of replaying the prompt tail through the verify trace. ``tap_n[user]`` = prompt length the stash holds.
+        self.tap_n = {}
+        if self.pool.ring_rows >= 128 + 127 and taps_possible(self.layer_ids):
+            self.sink.taps = PrefillTaps(mesh_device, self.U)
         self.sources, self.attns, self.built, self.step_groups, pls = {}, {}, [], {}, []
         sh = _Shards()
         pool = ThreadPoolExecutor(max_workers=2)
@@ -879,6 +885,9 @@ class Model:
                 pm.forward_device(bufs, S, s0, C, dyn=True)
                 ttnn.synchronize_device(self.md)
                 self._post_chunk(s0, C)
+        for b in range(B):  # the drafter taps of the last 128 positions of every active user are in the stash
+            if active is None or bool(active[b]):
+                self.tap_n[b] = int(lens[b])
         _t0 = time.perf_counter()
         ttnn.synchronize_device(self.md)
         _t1 = time.perf_counter()
@@ -1289,6 +1298,7 @@ class Model:
                             resume.pop(b)
         for b, _, _, _ in items:
             res[b] = self._res[b]
+            self.tap_n[b] = ends[b]
         self.timing = dict(
             pm.timing,
             total=time.perf_counter() - t_start,
