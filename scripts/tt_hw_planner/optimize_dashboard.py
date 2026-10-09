@@ -663,6 +663,41 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
     if not (roofline["points"] or roofline["bw_gbps"] or roofline["peak_tflops"]):
         roofline = None
 
+    # Achievable band for the dashboard, on the SAME basis as the RUN_REPORT roofline header:
+    # the model's theoretical ceiling from the baseline profile, times the achievable fractions --
+    # the operator override (optimize --achievable-low/--achievable-high, via TT_PERF_ACHIEVABLE_BAND)
+    # or the default 60-80%%. So the flag the user set is visible here, not only in RUN_REPORT.
+    achievable = None
+    try:
+        from models.experimental.perf_automation.cc_optimize.summary import _throughput_from_profile
+
+        _tp2 = _throughput_from_profile(profile)
+        _theo = (_tp2 or {}).get("theoretical_rate")
+        if _theo:
+            _lo, _hi = 0.60, 0.80
+            try:
+                from models.experimental.perf_automation.agent.perf_target import _achievable_override as _ov_fn
+
+                _o = _ov_fn()
+                if _o:
+                    _lo, _hi = _o
+            except Exception:
+                pass
+            _meas = (throughput or {}).get("current")
+            _unit = (throughput or {}).get("unit") or "tok/s"
+            achievable = {
+                "theoretical_rate": round(float(_theo), 2),
+                "lo_pct": round(_lo * 100, 1),
+                "hi_pct": round(_hi * 100, 1),
+                "band_lo": round(_lo * float(_theo), 2),
+                "band_hi": round(_hi * float(_theo), 2),
+                "measured": round(float(_meas), 2) if _meas else None,
+                "overridden": bool(_o) if '_o' in dir() else False,
+                "unit": _unit,
+            }
+    except Exception:
+        achievable = None
+
     # HITL: PEEK ONLY. The orchestrator's read consumes the proposal; the dashboard must not.
     proposal = _read_json(run_dir / _HITL_PROPOSAL)
 
@@ -710,6 +745,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requ
         "events": list(reversed(events)),
         "ledger": ledger,
         "roofline": roofline,
+        "achievable": achievable,
         "env": env or None,
         "thermal": thermal,
         "topology": topology,

@@ -796,6 +796,10 @@ function renderTab(S) {
     const h = S.headroom;
     let head = `<div class="legend" style="margin-bottom:10px">current ${fmtMs(m.current)} · baseline ${fmtMs(m.baseline)} · target ${fmtMs(m.target)}` +
       (h ? ` · modeled floor ${fmtMs2(h.floor_ms)} (−${h.pct.toFixed(0)}% headroom)` : "") + `</div>`;
+    if (S.achievable) {
+      const a = S.achievable;
+      head += `<div class="legend" style="margin-bottom:10px">roofline band \u2014 THEORETICAL ${a.theoretical_rate} ${a.unit} \u00b7 <b>ACHIEVABLE ${a.lo_pct}\u2013${a.hi_pct}%</b> (${a.band_lo}\u2013${a.band_hi} ${a.unit})${a.overridden ? " (override)" : ""}${a.measured != null ? ` \u00b7 MEASURED ${a.measured} ${a.unit}` : ""}</div>`;
+    }
     let chart = "";
     if (S.roofline) {
       chart = rooflineChart(S.roofline) ||

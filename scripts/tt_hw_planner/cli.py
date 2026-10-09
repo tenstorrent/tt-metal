@@ -11629,11 +11629,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="port for the --dashboard server (default 8798; falls back to a free port if taken).",
     )
     popt.add_argument(
-        "--achievable-band",
-        dest="achievable_band",
+        "--achievable-low",
+        dest="achievable_low",
         default=None,
-        help="Override the roofline ACHIEVABLE band shown in RUN_REPORT (e.g. '70-90' or '0.7-0.9'); "
-        "default is the model's physics-derived band (dense 60-80%%, MoE 37.5-50%%).",
+        help="Low end of the roofline ACHIEVABLE band shown in RUN_REPORT (percent or fraction, "
+        "e.g. 70 or 0.7). Use together with --achievable-high.",
+    )
+    popt.add_argument(
+        "--achievable-high",
+        dest="achievable_high",
+        default=None,
+        help="High end of the roofline ACHIEVABLE band (percent or fraction, e.g. 90 or 0.9). Use "
+        "together with --achievable-low. Default: the model's physics-derived band "
+        "(dense 60-80%%, MoE 37.5-50%%).",
     )
     _add_commit_push_args(popt)
     popt.set_defaults(func=_autocommit_wrap(cmd_optimize, "optimize"))
