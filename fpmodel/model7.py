@@ -30,10 +30,12 @@ TERMS = {
     "epilogue": "bias add and SFPU activation per output tile",
     "issue": "each page read costs the reader core a fixed issue time (per-core floor on a K block's read)",
     "pad": "K not a multiple of 32: the in0 reader zero-fills each row tile of the last K block (barrier + RISC-V loop)",
+    "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
 }
 EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
     "linkbank": "link loads from only the DRAM banks each K step touches (bank camping concentrates link traffic)",
+    "msync0": "in0 mcast only: receivers ack after computing on the block, so the ack collection adds to each compute step",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
@@ -252,6 +254,9 @@ def predict(g, p, parts=False):
             0.0,
         )
 
+    if on("mcast") and (on("msync0") or on("msync")):  # the sender gathers each receiver's ack after it computed
+        sync = g["rx0"] * p["ack_rx"] + (g["rx1"] * p["ack_rx"] if on("msync") else 0.0)
+        comp = comp + sync
     piped = read + (nK - 1) * np.maximum(read, comp) + comp  # double-buffered K loop
     serial = nK * (read + comp)
     block = np.where(g["dbuf"], piped, serial) + epi + write
