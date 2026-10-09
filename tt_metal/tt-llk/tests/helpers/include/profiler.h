@@ -154,7 +154,24 @@ __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record
     write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
-template <std::uint16_t id16, bool LOOP_PAD = false>
+#if defined(LLK_DBG_BARRIER)
+// PACK_ISOLATE: the idle peers hold at their TILE_LOOP end until pack is done, so their epilogue's L1 traffic cannot lock
+// the packers into their slow pattern; quiet_seen sits after every other variable (sections.ld), so nothing else moves.
+__attribute__((section(".llk_quiet_data"))) inline std::uint32_t quiet_seen = 0;
+
+__attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
+{
+    while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
+    {
+        for (std::uint32_t i = 0; i < 32; ++i)
+        {
+            asm volatile("nop");
+        }
+    }
+}
+#endif
+
+template <std::uint16_t id16, bool LOOP_PAD = false, bool QUIET_WAIT = false>
 class zone_scoped
 {
 private:
@@ -184,6 +201,12 @@ public:
     ~zone_scoped()
     {
         ckernel::fence_compiler();
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (QUIET_WAIT)
+        {
+            quiet_wait();
+        }
+#endif
         if (LOOP_PAD ? is_opened : __builtin_expect(is_opened, 1))
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
@@ -227,6 +250,11 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP")>();
+
+// A peer's TILE_LOOP zone in PACK_ISOLATE: it holds its epilogue until the pack thread is done (quiet_wait).
+#define ZONE_SCOPED_Q(marker, quiet_wait) \
+    PROFILER_META(MARKER_FULL(marker))    \
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP"), quiet_wait>();
 
 #define TIMESTAMP(marker)              \
     PROFILER_META(MARKER_FULL(marker)) \
