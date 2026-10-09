@@ -143,8 +143,6 @@ _K3 = _MoEPerfCase(
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        # Passed explicitly: run_model defaults the routed side to SiLU, which would gate the cheaper
-        # SiLU variant of the routed kernel instead of K3's SiTU-GLU.
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
     ),
