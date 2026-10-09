@@ -13,7 +13,7 @@ import pytest
 import torch
 import ttnn
 
-from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
+from _ttt_sampler_utils import as_update_input, generate_one, open_sampler, to_torch_2d
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 32
@@ -21,11 +21,11 @@ OVERWRITE_VALUE = 0.0
 
 
 @pytest.fixture(scope="module")
-def completer():
+def sampler():
     # Use ClusterType to differentiate P100 from P150 which ttnn.get_arch_name() cannot distinguish
     if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
         pytest.skip("Currently not supported on P100; see https://github.com/tenstorrent/tt-metal/issues/54621")
-    with open_completer(dummy_weights=False) as c:
+    with open_sampler(dummy_weights=False) as c:
         yield c
 
 
@@ -74,18 +74,18 @@ def _overwrite_attn(a, value):
     )
 
 
-def test_attention_update_round_trip(completer):
+def test_attention_update_round_trip(sampler):
     """Snapshot -> overwrite -> restore must reproduce the original tokens."""
-    model = completer.models[0]
-    prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
+    model = sampler.models[0]
+    prompt_ids = sampler.tokenizer.encode(PROMPT, add_special_tokens=True)
 
-    tokens_A = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_A = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
 
     snapshots = [_snapshot_attn_hf(layer.attention) for layer in model.layers]
 
     for layer in model.layers:
         _overwrite_attn(layer.attention, OVERWRITE_VALUE)
-    tokens_broken = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_broken = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_broken != tokens_A, (
         f"overwriting q/k/v/o with {OVERWRITE_VALUE} did not change generation; "
         "the overwrite step was a no-op, so the rest of the test is meaningless"
@@ -93,7 +93,7 @@ def test_attention_update_round_trip(completer):
 
     for layer, snap in zip(model.layers, snapshots):
         _restore_attn(layer.attention, snap)
-    tokens_B = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_B = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_B == tokens_A, (
         "Attention.update did not reproduce __init__-equivalent state: " f"tokens_A={tokens_A}, tokens_B={tokens_B}"
     )

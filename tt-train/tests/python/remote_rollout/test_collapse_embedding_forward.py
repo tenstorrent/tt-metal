@@ -15,7 +15,7 @@ import pytest
 import torch
 import ttnn
 
-from _completer_utils import as_update_input, open_completer, to_torch_2d
+from _ttt_sampler_utils import as_update_input, open_sampler, to_torch_2d
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TARGET_TOKEN_ID = 16000
@@ -23,15 +23,15 @@ PROMPT = "Explain a tensor in a paragraph."
 
 
 @pytest.fixture(scope="module")
-def completer():
-    with open_completer(dummy_weights=False, model_source=MODEL_ID) as c:
+def sampler():
+    with open_sampler(dummy_weights=False, model_source=MODEL_ID) as c:
         yield c
 
 
-def _build_collapsed_embedding(completer):
+def _build_collapsed_embedding(sampler):
     """Return the HF-format ``embed_tokens`` update input with every row
     replaced by row TARGET_TOKEN_ID."""
-    model = completer.models[0]
+    model = sampler.models[0]
     emb_hf_2d = to_torch_2d(model.embd.weights)  # (V, H)
     target_row = emb_hf_2d[TARGET_TOKEN_ID, :].clone()
     collapsed_hf = target_row.unsqueeze(0).expand(emb_hf_2d.shape[0], -1).contiguous()  # (V, H)
@@ -39,10 +39,10 @@ def _build_collapsed_embedding(completer):
     return as_update_input(collapsed_hf, model.mesh_device)
 
 
-def _ids_to_ttnn(completer, ids: List[int]):
+def _ids_to_ttnn(sampler, ids: List[int]):
     """Convert token ids to the ``(1, 1, 1, S)`` ttnn tensor ``Embedding.forward``
     expects."""
-    model = completer.models[0]
+    model = sampler.models[0]
     tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, 1, 1, -1)
     return ttnn.from_torch(
         tokens,
@@ -53,28 +53,28 @@ def _ids_to_ttnn(completer, ids: List[int]):
     )
 
 
-def _embed(completer, ids: List[int]):
+def _embed(sampler, ids: List[int]):
     """Run only ``Embedding.forward()`` and return the result as a torch tensor."""
-    model = completer.models[0]
-    ids_ttnn = _ids_to_ttnn(completer, ids)
+    model = sampler.models[0]
+    ids_ttnn = _ids_to_ttnn(sampler, ids)
     out = model.embd(ids_ttnn)
     return ttnn.to_torch(out)
 
 
-def test_embedding_update_matches_direct_lookup(completer):
+def test_embedding_update_matches_direct_lookup(sampler):
     """Invariant: after collapsing the table so every row = row TARGET_TOKEN_ID,
     embedding a real prompt must equal embedding all-TARGET_TOKEN_ID ids on the
     original table (both yield ``E[TARGET_TOKEN_ID]`` at every position)."""
-    model = completer.models[0]
-    prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
+    model = sampler.models[0]
+    prompt_ids = sampler.tokenizer.encode(PROMPT, add_special_tokens=True)
     all_target_ids = [TARGET_TOKEN_ID] * len(prompt_ids)
 
-    a_orig = _embed(completer, all_target_ids)
+    a_orig = _embed(sampler, all_target_ids)
 
-    new_weights = _build_collapsed_embedding(completer)
+    new_weights = _build_collapsed_embedding(sampler)
     model.embd.update(embed_tokens=new_weights)
 
-    c_collapsed = _embed(completer, prompt_ids)
+    c_collapsed = _embed(sampler, prompt_ids)
 
     assert torch.equal(a_orig, c_collapsed), (
         "Embedding.update didn't reproduce a direct table lookup: "

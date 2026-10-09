@@ -45,7 +45,7 @@ def open_device(device_config) -> Any:
     return the ``ttnn.MeshDevice``. Pair with :func:`close_device`.
 
     Only enables fabric when it isn't already configured. Under tt-run the
-    grpo_remote_rollout ``conftest.py`` ``_set_fabric_2d`` fixture, which must
+    remote_rollout ``conftest.py`` ``_set_fabric_2d`` fixture, which must
     be requested via ``pytest.mark.usefixtures``, sets FABRIC_2D
     on every rank before the test body runs; calling ``enable_fabric`` again from just
     this rank (asymmetrically with the peer rank, which reaches the same
@@ -69,7 +69,7 @@ def close_device() -> None:
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
-class _TttCompleter:
+class _TttSampler:
     """Adapter over :class:`TTTRolloutSampler` that forwards its attributes
     and adds a lazily-loaded ``.tokenizer`` so dummy-weight tests stay
     HF-auth-free (only tests that touch ``.tokenizer`` pay for the download)."""
@@ -94,7 +94,7 @@ class _TttCompleter:
         return getattr(self._worker, name)
 
 
-def build_completer(
+def build_sampler(
     mesh_device: Any,
     *,
     dummy_weights: bool,
@@ -103,7 +103,7 @@ def build_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Build a :class:`TTTRolloutSampler` wrapped in :class:`_TttCompleter`.
+    """Build a :class:`TTTRolloutSampler` wrapped in :class:`_TttSampler`.
 
     Heavy when ``dummy_weights=False`` (loads real HF weights); call from a
     module-scoped fixture so the cost is paid once per file.
@@ -132,11 +132,11 @@ def build_completer(
         seed=0,
         dummy_weights=dummy_weights,
     )
-    return _TttCompleter(worker, model_source)
+    return _TttSampler(worker, model_source)
 
 
 @contextlib.contextmanager
-def open_completer(
+def open_sampler(
     *,
     dummy_weights: bool,
     max_batch_size: int = 1,
@@ -144,9 +144,9 @@ def open_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Open the device, build a TTT completer, and tear both down on exit.
+    """Open the device, build a TTT sampler, and tear both down on exit.
 
-    Cleanup order matters: drop the completer (freeing its on-device tensors),
+    Cleanup order matters: drop the sampler (freeing its on-device tensors),
     GC, then close the mesh.
     """
     device_config, _ = load_device_config()
@@ -159,9 +159,9 @@ def open_completer(
         mesh_shape=ttnn.MeshShape(*device_config.mesh_shape),
         trace_region_size=_TRACE_REGION_SIZE,
     )
-    completer = None
+    sampler = None
     try:
-        completer = build_completer(
+        sampler = build_sampler(
             mesh_device,
             dummy_weights=dummy_weights,
             max_batch_size=max_batch_size,
@@ -169,9 +169,9 @@ def open_completer(
             model_source=model_source,
             instruct=instruct,
         )
-        yield completer
+        yield sampler
     finally:
-        completer = None
+        sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)
 
@@ -204,10 +204,10 @@ def to_torch_2d(t):
     return out
 
 
-def generate_one(completer, prompt_ids, *, max_new_tokens: int):
+def generate_one(sampler, prompt_ids, *, max_new_tokens: int):
     """Single-prompt completion helper: return the generated token list.
 
     Sampling params (temperature/top_k/top_p/seed) are baked into the worker at
     construction; per-call overrides are not supported.
     """
-    return completer.generate_tokens([prompt_ids], max_new_tokens=max_new_tokens)[0]
+    return sampler.generate_tokens([prompt_ids], max_new_tokens=max_new_tokens)[0]
