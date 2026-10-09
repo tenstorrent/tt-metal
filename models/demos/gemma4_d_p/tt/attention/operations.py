@@ -95,6 +95,8 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        # Pinned so a bfp8 input (the short-M attention gather) still yields bf16 heads; RoPE requires bf16.
+        dtype=ttnn.bfloat16,
     )
     if x is not hidden_states:
         x.deallocate(True)
