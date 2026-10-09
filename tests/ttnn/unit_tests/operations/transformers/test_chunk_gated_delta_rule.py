@@ -633,3 +633,73 @@ def test_state_decay_vs_fp64_reference(device):
     assert ok_o, f"o vs fp64 recurrence: {pcc_o}"
     assert ok_s, f"final_state vs fp64 recurrence: {pcc_s}"
     assert rms <= 5.0e-4, f"final-state rms error {rms:.3e} > 5.0e-4 (shipped kernel: 4.5e-4)"
+
+
+# --------------------------------------------------------------------------------------------
+# Long-sequence carried-state accuracy.
+#
+# The scan carries S across T/32 chunks with S <- dl*S + k_dec_t@v_new. If that update reads S (or
+# dl) through the FPU, the unpacker truncates the fp32 values to the 19-bit source registers on every
+# chunk; the rounding is toward zero, so it is a bias, not noise, and it compounds: on Blackhole the
+# final state of a slow-decay head shrank ~10% in norm at 8K tokens (state PCC 0.992 on real Qwen3.x
+# GDN layer inputs), which is invisible at 2K. The heads that matter for long context are exactly the
+# slow ones, so this test spans per-head decay rates from |g| ~ 1e-4 (barely forgets) to ~0.5 and
+# checks the final state against an fp64 token recurrence at 8K tokens, per head and in norm.
+# --------------------------------------------------------------------------------------------
+STATE_8K_PCC = 0.9999
+STATE_8K_NORM_TOL = 2.0e-3
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@_hw_only
+def test_state_carry_8k_vs_fp64_reference(device):
+    torch.manual_seed(20261009)
+    B, T, Hk, Hv, Dk, Dv = 1, 8192, 4, 12, 128, 128  # the 27B TP-4 slice: BH=12, G=3, NC=256
+    G = Hv // Hk
+    grid = device.compute_with_storage_grid_size()
+    if B * Hv > grid.x * grid.y:
+        pytest.skip(f"BH={B * Hv} exceeds the {grid.x}x{grid.y} grid")
+
+    q = l2_norm(torch.randn(B, T, Hk, Dk), dim=-1).to(torch.bfloat16)
+    k = l2_norm(torch.randn(B, T, Hk, Dk), dim=-1).to(torch.bfloat16)
+    v = (0.5 * torch.randn(B, T, Hv, Dv)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(B, T, Hv))
+    rate = torch.logspace(-4, -0.3, Hv)  # per-head decay scale: slowest head first
+    g = -(rate * 2 * torch.rand(B, T, Hv))
+    s0 = torch.zeros(B, Hv, Dk, Dv)
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    eye, tril, ones, masks = _const_tiles(device)
+    _, fs_tt = ttnn.transformer.chunk_gated_delta_rule(
+        dev(q, ttnn.bfloat16),
+        dev(k, ttnn.bfloat16),
+        dev(v, ttnn.bfloat16),
+        dev(g, ttnn.float32),
+        dev(beta, ttnn.float32),
+        initial_state=dev(s0, ttnn.float32),
+        output_final_state=True,
+        chunk_size=CHUNK,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+    )
+    fs_dev = ttnn.to_torch(fs_tt).double().reshape(B, Hv, Dk, Dv)
+
+    q_ref = q.float().repeat_interleave(G, dim=2)
+    k_ref = k.float().repeat_interleave(G, dim=2)
+    _, fs_ref = _fp64_token_recurrence(q_ref, k_ref, v.float(), beta, g, s0, scale=Dk**-0.5)
+
+    per_head = [check_with_pcc(fs_ref[:, h].float(), fs_dev[:, h].float(), STATE_8K_PCC) for h in range(Hv)]
+    norm_ratio = [(fs_dev[:, h].norm() / fs_ref[:, h].norm()).item() for h in range(Hv)]
+    print(f"\nper-head final-state PCC (slow -> fast): {[p for _, p in per_head]}")
+    print(f"per-head final-state norm ratio device/fp64: {[round(r, 6) for r in norm_ratio]}")
+    for h, (ok, p) in enumerate(per_head):
+        assert ok, f"head {h} (|g| ~ {rate[h]:.1e}): final state PCC {p} < {STATE_8K_PCC} vs fp64 at T={T}"
+    for h, r in enumerate(norm_ratio):
+        assert abs(r - 1.0) <= STATE_8K_NORM_TOL, (
+            f"head {h} (|g| ~ {rate[h]:.1e}): final state norm ratio {r:.6f} drifts by more than "
+            f"{STATE_8K_NORM_TOL} at T={T} (a biased per-chunk state update compounds with length)"
+        )
