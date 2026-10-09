@@ -63,6 +63,12 @@ def _stable_config_name(config_id: int, num_configs: int) -> str:
     return f"{config_id:0{width}d}"
 
 
+def dflash_config_name(kind: str, head: int) -> str:
+    if kind not in ("k", "v"):
+        raise ValueError(f"DFlash config kind must be 'k' or 'v', got {kind!r}")
+    return f"dflash_{kind}_h{head:02d}"
+
+
 def build_kv_chunk_address_table(
     *,
     mesh_device,
@@ -75,6 +81,8 @@ def build_kv_chunk_address_table(
     chunk_size,
     num_kv_heads,
     head_dim,
+    dflash_kv_cache=None,
+    dflash_num_layers=0,
 ):
     """Build the GPT-OSS multi-config block-cyclic KV chunk address table (does not serialize).
 
@@ -101,40 +109,74 @@ def build_kv_chunk_address_table(
         assert (
             t.shape[0] == num_users * num_layers
         ), f"{name} cache batch dim {t.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
+    if dflash_kv_cache is not None:
+        assert dflash_num_layers > 0, "dflash_num_layers is required with dflash_kv_cache"
+        assert (
+            dflash_kv_cache.k.buffer_address() != dflash_kv_cache.v.buffer_address()
+        ), "DFlash K and V must be distinct allocations; shared addresses would make every V config alias K"
+        assert (
+            dflash_kv_cache.k.shape == dflash_kv_cache.v.shape
+        ), f"DFlash V shape {dflash_kv_cache.v.shape} != K shape {dflash_kv_cache.k.shape}"
+        for name, tensor in (("dflash k", dflash_kv_cache.k), ("dflash v", dflash_kv_cache.v)):
+            assert tensor.shape[0] == num_users * dflash_num_layers, (
+                f"{name} cache batch dim {tensor.shape[0]} != "
+                f"num_users({num_users}) * dflash_num_layers({dflash_num_layers})"
+            )
+    elif dflash_num_layers:
+        raise ValueError("dflash_num_layers was set without dflash_kv_cache")
 
     num_chunks_per_seq_len = seq_len // chunk_size
 
     # Config layout: k_h0..k_hN-1, v_h0..v_hN-1.
+    # (config name, label, tensor, TP columns, dtype, physical layers, global layer offset)
     specs = []
     for h in range(num_kv_heads):
-        specs.append((f"k_h{h}", kv_cache.k, [h], kv_cache.k.dtype))
+        specs.append((None, f"k_h{h}", kv_cache.k, [h], kv_cache.k.dtype, num_layers, 0))
     for h in range(num_kv_heads):
-        specs.append((f"v_h{h}", kv_cache.v, [h], kv_cache.v.dtype))
+        specs.append((None, f"v_h{h}", kv_cache.v, [h], kv_cache.v.dtype, num_layers, 0))
 
-    # Dict ctor + zero-padded names: protobuf import uses std::map; unpadded "0".."15" would
-    # reorder config_ids (see module docstring). Map iteration order == padded numeric order.
-    num_configs = len(specs)
+    # Keep target names/IDs byte-for-byte stable, then append named DFlash K/V configs.
+    target_config_count = len(specs)
+    for config_id in range(target_config_count):
+        specs[config_id] = (_stable_config_name(config_id, target_config_count), *specs[config_id][1:])
+    if dflash_kv_cache is not None:
+        for kind, tensor in (("k", dflash_kv_cache.k), ("v", dflash_kv_cache.v)):
+            for head in range(num_kv_heads):
+                specs.append(
+                    (
+                        dflash_config_name(kind, head),
+                        f"dflash_{kind}_h{head}",
+                        tensor,
+                        [head],
+                        tensor.dtype,
+                        dflash_num_layers,
+                        num_layers,
+                    )
+                )
+
+    merged_num_layers = num_layers + dflash_num_layers
     configs_by_name = {
-        _stable_config_name(i, num_configs): _make_config(
-            num_layers=num_layers,
+        name: _make_config(
+            num_layers=merged_num_layers,
             max_seq_len=seq_len,
             num_users=num_users,
             chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
         )
-        for i, (_, _, _, dtype) in enumerate(specs)
+        for name, _, _, _, dtype, _, _ in specs
     }
     table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs_by_name)
-    assert table.num_configs() == num_configs
-    for i in range(num_configs):
-        assert table.config_name(i) == _stable_config_name(i, num_configs), (
-            f"config_id {i} name {table.config_name(i)!r} != {_stable_config_name(i, num_configs)!r} "
-            "(protobuf-safe naming broken)"
+    assert table.num_configs() == len(specs)
+    expected_names = [spec[0] for spec in specs]
+    for config_id, expected_name in enumerate(expected_names):
+        assert table.config_name(config_id) == expected_name, (
+            f"config_id {config_id} name {table.config_name(config_id)!r} != {expected_name!r}; "
+            "protobuf-safe naming/order broken"
         )
 
     host_name = socket.gethostname()
     hosts_set = set()
 
-    for config_id, (label, tensor, group_cols, dtype) in enumerate(specs):
+    for config_id, (_, label, tensor, group_cols, dtype, physical_layers, layer_offset) in enumerate(specs):
         base_addr = tensor.buffer_address()
         chunk_bytes = _chunk_size_bytes(dtype, head_dim)
         for global_row in range(sp):
@@ -153,7 +195,7 @@ def build_kv_chunk_address_table(
             curr_bank_id = 0
             curr_bank_offset = 0
             for slot in range(num_users):
-                for layer in range(num_layers):
+                for physical_layer in range(physical_layers):
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = seq_chunk * chunk_size + global_row * tokens_per_chunk_local
                         chunk_token_end = chunk_token_start + tokens_per_chunk_local
@@ -162,7 +204,7 @@ def build_kv_chunk_address_table(
                             location.noc_addr = (curr_bank_id << 32) | (base_addr + curr_bank_offset)
                             location.size_bytes = chunk_bytes
                             location.device_group_index = group_idx
-                            table.set(layer, position, slot, location, config_id)
+                            table.set(layer_offset + physical_layer, position, slot, location, config_id)
 
                             curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                             if curr_bank_id == 0:
@@ -170,8 +212,8 @@ def build_kv_chunk_address_table(
 
     logger.info(
         f"[gpt-oss-d-p-kv-table] multi-config table built "
-        f"(configs={len(specs)} [{', '.join(s[0] for s in specs)}], entries={table.total_entries()}, "
-        f"banks={num_dram_banks}, chunk_bytes={configs_by_name[_stable_config_name(0, num_configs)].chunk_size_bytes})"
+        f"(configs={len(specs)} [{', '.join(s[1] for s in specs)}], entries={table.total_entries()}, "
+        f"banks={num_dram_banks}, chunk_bytes={configs_by_name[_stable_config_name(0, target_config_count)].chunk_size_bytes})"
     )
     return table
 
@@ -189,6 +231,8 @@ def build_and_serialize_kv_chunk_table(
     num_kv_heads,
     head_dim,
     path,
+    dflash_kv_cache=None,
+    dflash_num_layers=0,
 ) -> str:
     """Build the GPT-OSS multi-config table and serialize it to ``path`` for SET_TABLE. Returns ``path``."""
     table = build_kv_chunk_address_table(
@@ -202,6 +246,8 @@ def build_and_serialize_kv_chunk_table(
         chunk_size=chunk_size,
         num_kv_heads=num_kv_heads,
         head_dim=head_dim,
+        dflash_kv_cache=dflash_kv_cache,
+        dflash_num_layers=dflash_num_layers,
     )
     ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
     logger.info(
