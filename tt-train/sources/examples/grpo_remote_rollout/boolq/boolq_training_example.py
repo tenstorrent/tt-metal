@@ -35,7 +35,7 @@ from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
     llama_stop_and_pad,
 )
 from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient, MPIRolloutServer
-from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
+from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
@@ -214,7 +214,7 @@ def _ttt_main() -> None:
 
         # One worker owns the whole parent mesh: it splits it into [1,1] submeshes
         # and runs generation data-parallel across them.
-        worker = TttGenerationWorker(
+        worker = TTTRolloutSampler(
             mesh_device=parent_mesh,
             model_source=model_id,
             max_batch_size=rr["max_batch_size"],
@@ -223,10 +223,13 @@ def _ttt_main() -> None:
             optimizations=bf16_attn_bfp8_mlp_optimizations,
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
+            completions_per_prompt=int(raw["training_config"]["grpo_config"]["num_generations"]),
+            max_completion_length=int(raw["training_config"]["grpo_config"]["max_completion_length"]),
             temperature=grpo_temperature,
             top_k=0,
             top_p=1.0,
             seed=None,
+            dummy_weights=True,
         )
 
         # The bridge replicates each transferred policy onto every submesh; the
@@ -236,8 +239,8 @@ def _ttt_main() -> None:
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
             bridge=bridge,
-            generate_fn=worker.generate,
-            on_weights_received=worker.update_weights,
+            generate_fn=worker.generate_tokens,
+            on_weights_received=lambda weights: worker.update_weights(weights, version=worker.weight_version + 1),
         )
         server.serve_forever()
     finally:
