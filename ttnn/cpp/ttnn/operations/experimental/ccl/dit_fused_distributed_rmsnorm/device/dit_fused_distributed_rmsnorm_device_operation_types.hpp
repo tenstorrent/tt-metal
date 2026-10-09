@@ -8,6 +8,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
+#include <cstdint>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -27,7 +28,7 @@ using ttnn::experimental::DitFusedNormType;
 // optional output-dtype cast — all in a single program with L1-resident input.
 struct DitFusedDistributedRmsnormParams {
     float epsilon;
-    uint32_t num_heads_per_device;
+    std::uint32_t num_heads_per_device;
     // Per-head normalization (FLUX.2 path): reduce over head_dim per
     // (token, head) instead of the full row. When true, AG is skipped
     // entirely — each head is assumed local to chip.
@@ -43,9 +44,9 @@ struct DitFusedDistributedRmsnormParams {
 
     // CCL config. cluster_axis is a 0 placeholder for a local norm (ring_size == 1);
     // every fabric-axis lookup is guarded on ring_size > 1.
-    uint32_t cluster_axis;
-    uint32_t num_links;
-    uint32_t ring_size;
+    std::uint32_t cluster_axis;
+    std::uint32_t num_links;
+    std::uint32_t ring_size;
     ttnn::ccl::Topology topology;
     std::vector<GlobalSemaphore> multi_device_global_semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
@@ -54,13 +55,13 @@ struct DitFusedDistributedRmsnormParams {
 
     DitFusedDistributedRmsnormParams(
         float epsilon,
-        uint32_t num_heads_per_device,
+        std::uint32_t num_heads_per_device,
         bool per_head_norm,
         std::optional<DataType> dtype,
         MemoryConfig output_mem_config,
-        uint32_t cluster_axis,
-        uint32_t num_links,
-        uint32_t ring_size,
+        std::uint32_t cluster_axis,
+        std::uint32_t num_links,
+        std::uint32_t ring_size,
         ttnn::ccl::Topology topology,
         std::vector<GlobalSemaphore> multi_device_global_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
@@ -87,7 +88,7 @@ struct DitFusedDistributedRmsnormParams {
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);
-        attrs.emplace_back("norm_type", static_cast<uint8_t>(norm_type));
+        attrs.emplace_back("norm_type", static_cast<std::uint8_t>(norm_type));
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("cluster_axis", cluster_axis);
@@ -133,26 +134,32 @@ struct DitFusedDistributedRmsnormInputs {
 // constraint — workers cooperate by writing different chunk indices into
 // the same set of pages. Total pages per chip = num_devices * num_chunks_per_device.
 struct DitFusedDistributedRmsnormSizing {
-    uint32_t num_tile_rows = 0;
-    uint32_t num_workers = 0;
-    bool is_tp_1 = false;                // ring_size==1 or per_head_norm: reduce locally, no all-gather
-    bool use_mux = false;                // !is_tp_1: uses the fabric-forwarder all-gather + DRAM scratch
-    uint32_t window_size = 0;            // tile-rows per packed page
-    uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
-    uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 on the is_tp_1 path)
-    uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
+    std::uint32_t num_tile_rows = 0;
+    std::uint32_t num_workers = 0;
+    bool is_tp_1 = false;                     // ring_size==1 or per_head_norm: reduce locally, no all-gather
+    bool use_mux = false;                     // !is_tp_1: uses the fabric-forwarder all-gather + DRAM scratch
+    std::uint32_t window_size = 0;            // tile-rows per packed page
+    std::uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
+    std::uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 on the is_tp_1 path)
+    std::uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
     // Stats transported per token-tile: 1 for RMSNorm (sum-of-squares), 2 for
     // Welford LayerNorm (mean, M2). Each stat is a 128 B packed stick, so the
     // physical stick is stats_per_token * 128 B.
-    uint32_t stats_per_token = 1;
-    uint32_t stick_bytes = 128;  // stats_per_token * 128
+    std::uint32_t stats_per_token = 1;
+    std::uint32_t stick_bytes = 128;  // stats_per_token * 128
+    // Two-wave column split (RMS, one forwarder, one row per worker): two workers per tile-row (column
+    // halves), rows split into two AG waves. Each wave's sticks occupy their own wave_span_bytes region
+    // of the page, slot j at dit_rmsnorm_wave_slot_offset(j) (fp32 tile row 0 layout). Shape-only, so the
+    // stats buffer spec agrees; create_at may still run the plain path (the page is just larger).
+    bool col_split_capable = false;
+    std::uint32_t wave_slots = 0;  // sticks per wave (2 * rows of the larger wave)
+    std::uint32_t wave_span_bytes = 0;
 };
 
-DitFusedDistributedRmsnormSizing compute_sizing(
-    const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+DitFusedDistributedRmsnormSizing compute_sizing(const DitFusedDistributedRmsnormParams& args, const Tensor& input);
 
 // Single source of truth for the persistent gathered-stats DRAM scratch spec:
-// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, DRAM INTERLEAVED.
+// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, L1 INTERLEAVED.
 // Used by the pre-alloc helper, compute_output_specs, and validate so the pre-allocated
 // buffer, the op's expected spec, and the validation check cannot drift. Only meaningful
 // on the all-gather path (sizing.use_mux; total_pages > 0).
