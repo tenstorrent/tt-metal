@@ -8,6 +8,7 @@ The contract is that a zero divisor yields zero, including for a zero dividend,
 where the plain divide yields NaN. Everything else is the quotient.
 """
 
+import numpy as np
 import pytest
 import torch
 import ttnn
@@ -82,3 +83,21 @@ def test_div_no_nan_by_infinity(device, dtype):
     got = ttnn.to_torch(ttnn.div_no_nan(ia, ib)).flatten()[0]
 
     assert got == 0.0, f"div_no_nan(2, inf) returned {got}"
+
+
+def test_div_no_nan_int32_keeps_composite(device):
+    """Integer inputs are not fused: they keep the composite, where divide promotes them to a
+    float32 true division, so the result is main's bit for bit."""
+    ta = torch.tensor([[7, -7, 9, 0, 100, -5, 1, 2**20]], dtype=torch.int32)
+    tb = torch.tensor([[2, 2, 0, 0, -3, 0, 1, 3]], dtype=torch.int32)
+    # 3.5, -3.5, 0, 0, -33.333332, 0, 1.0, 349525.34
+    bits = [0x40600000, 0xC0600000, 0, 0, 0xC2055555, 0, 0x3F800000, 0x48AAAAAB]
+    expected = torch.from_numpy(np.array([bits], dtype=np.uint32).view(np.int32))
+
+    ia = ttnn.from_torch(ta, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ib = ttnn.from_torch(tb, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.div_no_nan(ia, ib)
+
+    assert out.dtype == ttnn.float32
+    got = ttnn.to_torch(out)
+    assert torch.equal(got.view(torch.int32), expected), f"div_no_nan returned {got.flatten()}"
