@@ -27,6 +27,12 @@ BFP4_TILE = 576  # bytes: 512 mantissa + 64 shared exponents
 W_BYTES = E * 3 * (H // 32) * (I // 32) * BFP4_TILE
 YRM = os.environ.get("GLM_SWEEP_YRM", "1") == "1"  # 0: y as bfp8 tiles
 DFP32 = os.environ.get("GLM_SWEEP_DFP32", "1") == "1"  # 0: bf16 DEST for the down projection
+# GLM_SWEEP_OP=unified: ttnn.bringup.unified_routed_expert_moe on the same bfp4 experts at LoFi (fp32 DEST, packer L1
+# acc), row-major bf16 dispatched buffer in; GLM_SWEEP_UNI_HP=1 high_precision (bf16 x / h / y), 0 the default path
+UNIFIED = os.environ.get("GLM_SWEEP_OP", "flat") == "unified"
+XBF16 = os.environ.get("GLM_SWEEP_XBF16", "0") == "1"  # flat: x / h as bf16 tiles (else bfp8)
+HBF16 = os.environ.get("GLM_SWEEP_HBF16", "0") == "1"
+UNI_HP = os.environ.get("GLM_SWEEP_UNI_HP", "1") == "1"
 DRAM_GBS, FLOP_CYC, N_COMPUTE, N_GRID = 512.0, 4096, 64 + 26, 110
 
 
@@ -37,13 +43,34 @@ def test_flat_balanced_sweep(device):
 
     torch.manual_seed(0)
     W = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
-    op = FlatRoutedExpert(
-        device, W, m=CAP, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act="clamped_silu", pin=1
-    )
-    del W
     rm = lambda t, d: ttnn.from_torch(  # noqa: E731
         t, dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    if UNIFIED:  # the same bfp4 experts, the unified op's per-expert weight tensors
+        to_dev = lambda w: ttnn.from_torch(  # noqa: E731
+            w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        uw = [[to_dev(W[0][e][i]) for e in range(E)] for i in range(3)]
+        gidx = rm(torch.arange(E, dtype=torch.int32), ttnn.uint32)
+        ucfg = ttnn.types.BlackholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+    else:
+        op = FlatRoutedExpert(
+            device,
+            W,
+            m=CAP,
+            H=H,
+            I=I,
+            gids=[list(range(E))],
+            n_global=NG,
+            wdtype="bf4",
+            act="clamped_silu",
+            pin=1,
+            x_bf16=XBF16,
+            h_bf16=HBF16,
+        )
+    del W
     x = rm(torch.randn(T, H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
 
     rt = ttnn.device.IsProgramRealtimeProfilerActive()
@@ -64,7 +91,23 @@ def test_flat_balanced_sweep(device):
             regions[0, :E] = torch.arange(E, dtype=torch.int32) * M
             tidx = torch.randint(0, T, (1, E * M), dtype=torch.int32)
             cd, rd, td = rm(counts, ttnn.uint32), rm(regions, ttnn.uint32), rm(tidx, ttnn.uint32)
-            call = lambda: op(x, cd, rd, token_index=td, y_row_major=YRM, down_fp32=DFP32)  # noqa: E731
+            if UNIFIED:  # the dispatched buffer: the experts' rows back to back (>= one expert's capacity of rows)
+                xb = rm(torch.randn(max(E * M, CAP), H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
+                call = lambda: ttnn.bringup.unified_routed_expert_moe(  # noqa: E731
+                    xb,
+                    rd,
+                    cd,
+                    gidx,
+                    uw[0],
+                    uw[1],
+                    uw[2],
+                    max_dispatched_tokens_per_expert=CAP,
+                    compute_kernel_config=ucfg,
+                    activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
+                    high_precision=UNI_HP,
+                )
+            else:
+                call = lambda: op(x, cd, rd, token_index=td, y_row_major=YRM, down_fp32=DFP32)  # noqa: E731
             y0 = call()
             if os.environ.get("GLM_SWEEP_DUMP") and M == 128:  # y of M 128, to compare variants for equality
                 torch.save(ttnn.to_torch(y0), os.environ["GLM_SWEEP_DUMP"])
@@ -87,7 +130,8 @@ def test_flat_balanced_sweep(device):
                     dev, ghz = statistics.median(per) / 1e3, recs[hit[0]][1]
             ms = dev if dev is not None else wall
             rows = E * M
-            dram = (W_BYTES + rows * H * (2 + (2 if YRM else 1088 / 1024))) / (ms * 1e-3) / 1e9 / DRAM_GBS
+            y_b = (2 if UNI_HP else 1088 / 1024) if UNIFIED else (2 if YRM else 1088 / 1024)  # y bytes per element
+            dram = (W_BYTES + rows * H * (2 + y_b)) / (ms * 1e-3) / 1e9 / DRAM_GBS
             flops = rows * 6 * H * I
             peak_core = FLOP_CYC * ghz * 1e9
             mc = flops / (ms * 1e-3) / (peak_core * N_COMPUTE)

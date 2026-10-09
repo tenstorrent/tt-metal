@@ -35,7 +35,9 @@ ttnn::Tensor flat_routed_expert(
     uint32_t x_pages_per_row = 1,
     bool y_row_major = false,
     bool down_fp32 = false,
-    bool pack_stochastic_rounding = false);
+    bool pack_stochastic_rounding = false,
+    bool x_bf16 = false,
+    bool h_bf16 = false);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(

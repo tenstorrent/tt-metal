@@ -376,7 +376,16 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
                 cur_ct = gw;
                 cur_rt = rr;
             }
+#ifdef SE_WAITZ
+            if (wz) {
+                DeviceZoneScopedN("GU_ACQ");
+                tile_regs_acquire();
+            } else {
+                tile_regs_acquire();
+            }
+#else
             tile_regs_acquire();
+#endif
             for (uint32_t b = 0; b < nk_gu; ++b) {
                 uint32_t xo = 0;
 #ifdef SE_WAITZ

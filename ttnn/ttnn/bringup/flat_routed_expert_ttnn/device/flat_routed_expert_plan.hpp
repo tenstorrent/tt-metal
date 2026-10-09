@@ -41,6 +41,10 @@ struct FlatRoutedExpertConfig {
     // stochastic rounding in the packer of every compute kernel (x tilize, h, y): the default rounds bf16 -> bfp8 ties
     // away from zero (+0.28% per pack on bf16-valued data, +1.25% on the expert output); no effect on the plan
     bool pack_stochastic_rounding = false;
+    // x / h as bf16 tiles (else bfp8): the relays tilize x to bf16, gate/up packs h as bf16 and the down cores read it
+    // (twice the x / h bytes and L1; at LoFi about half the expert's error vs fp32 math on the same weights)
+    bool x_bf16 = false;
+    bool h_bf16 = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -53,7 +57,9 @@ struct FlatRoutedExpertConfig {
         "pin",
         "y_row_major",
         "down_fp32",
-        "pack_stochastic_rounding");
+        "pack_stochastic_rounding",
+        "x_bf16",
+        "h_bf16");
     auto attribute_values() const {
         return std::forward_as_tuple(
             hidden,
@@ -66,7 +72,9 @@ struct FlatRoutedExpertConfig {
             pin,
             y_row_major,
             down_fp32,
-            pack_stochastic_rounding);
+            pack_stochastic_rounding,
+            x_bf16,
+            h_bf16);
     }
 };
 
@@ -87,9 +95,13 @@ struct FlatRoutedExpertPlan {
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
     // relays
     uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
-    // x / h tile bytes and formats (bfp8 1088; precision probes MIMO_FL_X_BF16 / MIMO_FL_H_BF16: bf16 2048), and the
+    // x / h tile bytes and formats (bfp8 1088; config x_bf16 / h_bf16: bf16 2048), and the
     // relay's tilized super-block slots (fewer with bf16 x, so the relay arena fits)
     uint32_t x_tile = kBf8Tile, h_tile = kBf8Tile, sb_slots = kSbSlots;
+    // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
+    // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
+    bool gu_full_sync = false;
+    bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
     bool group_rect = false;
     // down
     bool rdown = false;
@@ -98,7 +110,8 @@ struct FlatRoutedExpertPlan {
     float dring = 2.0f;
     std::vector<uint32_t> pcds, col0s;
     // arena (per core, 2 KB aligned offsets)
-    uint32_t x_off = 0, p_off = 0, rd_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0, arena_tiles = 0;
+    uint32_t x_off = 0, p_off = 0, hl_off = 0, rd_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0,
+             arena_tiles = 0;
     uint32_t rd_slots = 2;
     // weight regions (bytes per core region)
     uint32_t region_bytes = 0, wd_region = 0, wr_region = 0;

@@ -36,7 +36,9 @@ nb::dict plan_dict(
     uint32_t num_global_experts,
     uint32_t max_tokens_per_expert,
     bool weights_bf8,
-    uint32_t pin) {
+    uint32_t pin,
+    bool x_bf16,
+    bool h_bf16) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -47,7 +49,9 @@ nb::dict plan_dict(
             .max_tokens = (max_tokens_per_expert + 31) / 32 * 32,
             .weights_bf8 = weights_bf8,
             .activation = 0,
-            .pin = pin});
+            .pin = pin,
+            .x_bf16 = x_bf16,
+            .h_bf16 = h_bf16});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -118,6 +122,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
             pack_stochastic_rounding (bool): stochastic rounding in the compute kernels' packers (x tilize, h, y).
                 The default packer rounds bf16 -> bfp8 ties away from zero, a +0.28% magnitude bias per pack on
                 bf16-valued data that adds up to ~+1.25% on y; unbiased with this, at slightly more noise.
+            x_bf16 (bool): x as bf16 tiles (the relays tilize to bf16; else bfp8). Must match the plan the weights were
+                laid out with (flat_routed_expert_plan(..., x_bf16)).
+            h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -141,7 +148,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_pages_per_row") = 1,
         nb::arg("y_row_major") = false,
         nb::arg("down_fp32") = false,
-        nb::arg("pack_stochastic_rounding") = false);
+        nb::arg("pack_stochastic_rounding") = false,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false);
 
     mod.def(
         "flat_routed_expert_plan",
@@ -154,6 +163,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("max_tokens_per_expert"),
         nb::arg("weights_bf8") = false,
         nb::arg("pin") = 1,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false,
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
 }
 

@@ -1,16 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Stress + determinism: flat_routed_expert on the whole LoudBox mesh (2x4, all 8 chips) for GLM_STRESS_ITERS mesh
-calls (default 2,000,000), the model's call (C++ op, capacity 8192, indexed into T = 5120 gathered tokens,
-clamped_silu, bfp4, row-major bf16 y, fp32 down). Each chip runs its own 36 of 288 experts.
+"""Determinism + stress: flat_routed_expert on the whole LoudBox mesh (2x4, all 8 chips), GLM_STRESS_ITERS mesh calls
+(default 2,000,000), the model's call (C++ op, capacity 8192, indexed into T = 5120 tokens, clamped_silu, bfp4, row-major
+bf16 y, fp32 down). Each chip runs its own 36 of 288 experts.
 
-Routing cycles over patterns, different on every chip: balanced 128 / 160 / 512, model-like skewed (Dirichlet 0.8 over
-~5120 rows), spiky (empty experts, 1-31 row experts, a few at 1-2k), all tiny (1-3 rows, half empty), one expert at the
-full capacity. Every output is compared on device, bit-exact over its active rows, against the first output of the
-same pattern (a sticky marker, read every GLM_STRESS_CHECK calls): any difference is a non-determinism. Every 7th call
-a matmul runs in between; every 5000 calls the L1 allocation shifts (the op's per-launch arena moves). Hangs: the
-dispatch timeout of scripts/run_safe_pytest.sh.
+Accuracy regimes (x / h tile formats): bfp8/bfp8, bfp8 x + bf16 h, bf16 x + bfp8 h, bf16/bf16; one op per regime, built
+up front; the regime switches every GLM_STRESS_BLOCK calls (default 10,000), cycling. Within a regime the calls cycle
+over routing patterns, different on every chip: balanced 128 / 160 / 512, model-like skewed, spiky (empty, 1-31 row and
+1-2k row experts), all tiny, one expert at the full capacity.
+
+Everything stays on device (as tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py): the first output of each
+(regime, pattern) is that pair's reference; every later output of the pair is compared bit-exactly with it over the
+routed rows (ne * routed-row mask -> max) into a per-chip sticky marker (each chip reduces only its own data, nothing
+crosses devices). The 8 markers are read back once per block (before each regime switch): any nonzero is a
+non-determinism, reported with its regime. Every 7th call a matmul runs in between; every 5000 calls the L1
+allocation shifts (the op's per-launch arena moves). Hangs: the dispatch timeout of scripts/run_safe_pytest.sh.
 
   BRINGUP_SPEC=models/demos/glm53_flash_d_p_lb/bringup/spec.yaml TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 \\
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/glm53_flash_d_p_lb/tests/test_flat_stress.py -s"""
@@ -26,7 +31,13 @@ from models.demos.common.bringup.testing.harness import mesh_parametrize
 
 E, H, I, T, CAP = 36, 4096, 2048, 5120, 8192
 ITERS = int(os.environ.get("GLM_STRESS_ITERS", "2000000"))
-CHECK = int(os.environ.get("GLM_STRESS_CHECK", "5000"))
+BLOCK = int(os.environ.get("GLM_STRESS_BLOCK", "10000"))
+REGIMES = ((False, False), (False, True), (True, False), (True, True))  # (x_bf16, h_bf16)
+PATTERNS = ("bal128", "bal160", "skew", "spiky", "tiny", "cap", "bal512")
+
+
+def _rname(r):
+    return f"x {'bf16' if r[0] else 'bfp8'} / h {'bf16' if r[1] else 'bfp8'}"
 
 
 def _pattern(kind, g):
@@ -53,9 +64,6 @@ def _pattern(kind, g):
     raise ValueError(kind)
 
 
-PATTERNS = ("bal128", "bal160", "skew", "spiky", "tiny", "cap", "bal512")
-
-
 @pytest.mark.timeout(24 * 3600)
 @mesh_parametrize
 def test_flat_stress(mesh_device):
@@ -68,9 +76,23 @@ def test_flat_stress(mesh_device):
     gids = [[d * E + e for e in range(E)] for d in range(n_dev)]
     torch.manual_seed(0)
     w = [(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]
-    op = FlatRoutedExpert(
-        mesh_device, [w] * n_dev, m=CAP, H=H, I=I, gids=gids, n_global=ng, wdtype="bf4", act="clamped_silu", pin=1
-    )
+    ops = {}
+    for r in REGIMES:
+        ops[r] = FlatRoutedExpert(
+            mesh_device,
+            [w] * n_dev,
+            m=CAP,
+            H=H,
+            I=I,
+            gids=gids,
+            n_global=ng,
+            wdtype="bf4",
+            act="clamped_silu",
+            pin=1,
+            x_bf16=r[0],
+            h_bf16=r[1],
+        )
+        logger.info(f"[stress] built {_rname(r)}")
     del w
     shard = lambda ts, dt, layout=ttnn.ROW_MAJOR_LAYOUT: ttnn.from_torch(  # noqa: E731
         torch.stack(ts),
@@ -102,52 +124,51 @@ def test_flat_stress(mesh_device):
             reg.append(r_)
             tix.append(torch.randint(0, T, (1, rows), dtype=torch.int32, generator=g))
             msk.append(m_)
-        case = dict(
-            kind=kind,
-            rows=rows,
-            counts=ttnn.reshape(shard(cnt, ttnn.uint32), (1, ng)),
-            regions=ttnn.reshape(shard(reg, ttnn.uint32), (1, ng)),
-            tidx=ttnn.reshape(shard(tix, ttnn.uint32), (1, rows)),
-            mask=ttnn.reshape(shard(msk, ttnn.bfloat16, ttnn.TILE_LAYOUT), (rows, H)),
+        cases.append(
+            dict(
+                kind=kind,
+                counts=ttnn.reshape(shard(cnt, ttnn.uint32), (1, ng)),
+                regions=ttnn.reshape(shard(reg, ttnn.uint32), (1, ng)),
+                tidx=ttnn.reshape(shard(tix, ttnn.uint32), (1, rows)),
+                mask=ttnn.reshape(shard(msk, ttnn.bfloat16, ttnn.TILE_LAYOUT), (rows, H)),
+            )
         )
-        y = op(x, case["counts"], case["regions"], token_index=case["tidx"], y_row_major=True, down_fp32=True)
-        case["gold"] = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(y)
-        cases.append(case)
-        logger.info(f"[stress] {kind}: rows {rows}, per-chip routed {[int(c.sum()) for c in per]}")
-    ttnn.synchronize_device(mesh_device)
-    # the checker must see a difference: the first pattern's gold against itself doubled (active rows are nonzero)
-    c0 = cases[0]
-    probe = ttnn.max(
-        ttnn.multiply(ttnn.ne(c0["gold"], ttnn.multiply(c0["gold"], 2.0), dtype=ttnn.bfloat16), c0["mask"])
-    )
-    assert min(float(ttnn.to_torch(t).item()) for t in ttnn.get_device_tensors(probe)) == 1.0, "checker is blind"
+        logger.info(f"[stress] pattern {kind}: rows {rows}, per-chip routed {[int(c.sum()) for c in per]}")
 
+    def call(r, c):
+        return ops[r](x, c["counts"], c["regions"], token_index=c["tidx"], y_row_major=True, down_fp32=True)
+
+    # the checker must see a difference: an output against itself doubled (its routed rows are nonzero)
+    c0 = cases[0]
+    y0 = ttnn.to_layout(call(REGIMES[0], c0), ttnn.TILE_LAYOUT)
+    probe = ttnn.max(ttnn.multiply(ttnn.ne(y0, ttnn.multiply(y0, 2.0), dtype=ttnn.bfloat16), c0["mask"]))
+    assert min(float(ttnn.to_torch(t).item()) for t in ttnn.get_device_tensors(probe)) == 1.0, "checker is blind"
+    ttnn.deallocate(y0)
+
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
     a = ttnn.from_torch(
-        torch.randn(1, 1, 1024, 4096),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        torch.randn(1, 1, 1024, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=rep
     )
     b = ttnn.from_torch(
-        torch.randn(1, 1, 4096, 2048),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        torch.randn(1, 1, 4096, 2048), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=rep
     )
-    pinned = []
-    marker = None
+    gold = {}  # (regime, pattern) -> the pair's first output (TILE), kept on device
+    pinned, marker, n_checked = [], None, 0
     t0 = time.time()
     for it in range(ITERS):
-        c = cases[it % len(cases)]
-        y = op(x, c["counts"], c["regions"], token_index=c["tidx"], y_row_major=True, down_fp32=True)
-        ne = ttnn.ne(c["gold"], ttnn.to_layout(y, ttnn.TILE_LAYOUT), dtype=ttnn.bfloat16)
-        mk = ttnn.max(ttnn.multiply(ne, c["mask"]))
-        marker = mk if marker is None else ttnn.maximum(marker, mk)
-        ttnn.deallocate(y)
-        ttnn.deallocate(ne)
+        r = REGIMES[(it // BLOCK) % len(REGIMES)]
+        ci = it % len(cases)
+        c = cases[ci]
+        y = ttnn.to_layout(call(r, c), ttnn.TILE_LAYOUT)
+        if (r, ci) not in gold:
+            gold[(r, ci)] = y
+        else:
+            ne = ttnn.ne(gold[(r, ci)], y, dtype=ttnn.bfloat16)
+            mk = ttnn.max(ttnn.multiply(ne, c["mask"]))
+            marker = mk if marker is None else ttnn.maximum(marker, mk)
+            ttnn.deallocate(ne)
+            ttnn.deallocate(y)
+            n_checked += 1
         if it % 7 == 6:
             ttnn.deallocate(ttnn.matmul(a, b))
         if it % 5000 == 4999:  # shift the L1 allocation: the next launches' arena sits elsewhere
@@ -162,17 +183,23 @@ def test_flat_stress(mesh_device):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=mesh_device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    mesh_mapper=rep,
                 )
             )
-        if (it + 1) % CHECK == 0 or it + 1 == ITERS:
-            vals = [float(ttnn.to_torch(t).item()) for t in ttnn.get_device_tensors(marker)]
+        if (it + 1) % BLOCK == 0 or it + 1 == ITERS:
+            vals = (
+                [float(ttnn.to_torch(t).item()) for t in ttnn.get_device_tensors(marker)] if marker is not None else []
+            )
             dt = time.time() - t0
             logger.info(
-                f"[stress] {it + 1:,} / {ITERS:,} calls, {(it + 1) / dt:.0f} calls/s, {dt / 60:.1f} min, "
-                f"mismatch marker per chip {vals}"
+                f"[stress] {it + 1:,} / {ITERS:,} calls (block {_rname(r)}), {n_checked:,} compared, "
+                f"{(it + 1) / dt:.0f} calls/s, {dt / 60:.1f} min, mismatch marker per chip {vals}"
             )
-            assert max(vals) == 0.0, f"non-deterministic output by call {it + 1}: per-chip marker {vals}"
-            ttnn.deallocate(marker)
+            assert not vals or max(vals) == 0.0, f"non-deterministic output in regime {_rname(r)}: per chip {vals}"
+            if marker is not None:
+                ttnn.deallocate(marker)
             marker = None
-    logger.info(f"[stress] PASS: {ITERS:,} mesh calls ({ITERS * n_dev:,} chip calls), bit-exact, no hang")
+    logger.info(
+        f"[stress] PASS: {ITERS:,} mesh calls ({ITERS * n_dev:,} chip calls), {n_checked:,} compared bit-exact over "
+        f"{len(REGIMES)} regimes x {len(PATTERNS)} patterns, no hang"
+    )
