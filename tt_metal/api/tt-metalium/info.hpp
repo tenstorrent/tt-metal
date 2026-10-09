@@ -12,7 +12,7 @@
 
 /**
  * @file
- * @brief Tags for the device query API (`get_info<P>()`).
+ * @brief Tags for the device query API (`get_info<InfoType>()`).
  *
  * A tag is an empty struct whose `return_type` is the type of the property it names. Tags are shared by every object
  * that can answer a query (currently MeshDevice), so a property has one name and one meaning everywhere.
@@ -25,9 +25,9 @@
  */
 
 /**
- * @brief Tags naming the properties that can be queried with `get_info<P>()`.
+ * @brief Tags naming the properties that can be queried with `get_info<InfoType>()`.
  *
- * `P::return_type` is the type of the property's value.
+ * `InfoType::return_type` is the type of the property's value.
  */
 namespace tt::tt_metal::info {
 

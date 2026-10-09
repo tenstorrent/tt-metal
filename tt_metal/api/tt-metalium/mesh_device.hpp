@@ -338,41 +338,42 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Device queries. In the three calls below, `P` is a property tag from <tt-metalium/info.hpp>
-    // (e.g. info::l1_alignment) and `P::return_type` is the type of its value. Only the properties listed after the
-    // class are supported; asking for any other tag fails to link.
+    // Device queries. In the three calls below, `InfoType` is a property tag from <tt-metalium/info.hpp>
+    // (e.g. info::l1_alignment) and `InfoType::return_type` is the type of its value. Only the properties listed after
+    // the class are supported; asking for any other tag fails to link.
 
     /**
      * @brief Queries a property of the device at a single mesh coordinate.
      *
-     * This is the form every property implements; get_info<P>() and get_info_per_device<P>() are built on it.
+     * This is the form every property implements; get_info<InfoType>() and get_info_per_device<InfoType>() are built on
+     * it.
      *
-     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
      * @param coord Coordinate of the device in this mesh.
-     * @return The value of the property for that device, of type `P::return_type`.
+     * @return The value of the property for that device, of type `InfoType::return_type`.
      * @throws std::runtime_error If `coord` is out of bounds of this mesh, or the device is remote (owned by another
      * host).
      */
-    template <class P>
-    typename P::return_type get_info(const MeshCoordinate& coord) const;
+    template <class InfoType>
+    typename InfoType::return_type get_info(const MeshCoordinate& coord) const;
 
     /**
      * @brief Queries a property of this mesh as a whole.
      *
-     * The property must have the same value on every local device. Use get_info_per_device<P>() or
-     * get_info<P>(coord) for properties that can differ between devices.
+     * The property must have the same value on every local device. Use get_info_per_device<InfoType>() or
+     * get_info<InfoType>(coord) for properties that can differ between devices.
      *
-     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
-     * @return The value shared by all local devices, of type `P::return_type`.
+     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @return The value shared by all local devices, of type `InfoType::return_type`.
      * @throws std::runtime_error If the mesh has no local devices, or if the local devices report different values.
      */
-    template <class P>
-    typename P::return_type get_info() const {
+    template <class InfoType>
+    typename InfoType::return_type get_info() const {
         const std::vector<MeshCoordinate> coords = local_coordinates();
         TT_FATAL(!coords.empty(), "Cannot query a mesh device that has no local devices");
-        typename P::return_type value = get_info<P>(coords.front());
+        typename InfoType::return_type value = get_info<InfoType>(coords.front());
         for (const MeshCoordinate& coord : coords) {
-            if (!(get_info<P>(coord) == value)) {
+            if (!(get_info<InfoType>(coord) == value)) {
                 throw_non_uniform_info(coord);
             }
         }
@@ -382,15 +383,15 @@ public:
     /**
      * @brief Queries a property of every device in this mesh.
      *
-     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
      * @return A container shaped like the mesh. Entries for local devices hold the property value, of type
-     * `P::return_type`; entries for remote devices (owned by another host) are marked remote.
+     * `InfoType::return_type`; entries for remote devices (owned by another host) are marked remote.
      */
-    template <class P>
-    DistributedMeshContainer<typename P::return_type> get_info_per_device() const {
-        DistributedMeshContainer<typename P::return_type> result(shape());
+    template <class InfoType>
+    DistributedMeshContainer<typename InfoType::return_type> get_info_per_device() const {
+        DistributedMeshContainer<typename InfoType::return_type> result(shape());
         for (const MeshCoordinate& coord : local_coordinates()) {
-            result.at(coord) = MaybeRemote<typename P::return_type>::local(get_info<P>(coord));
+            result.at(coord) = MaybeRemote<typename InfoType::return_type>::local(get_info<InfoType>(coord));
         }
         return result;
     }
