@@ -136,15 +136,26 @@ Image-only build work uses idle host `10.228.203.34`, a dedicated new directory,
 and bounded container RAM. Attempt v1 stopped before compilation because the
 host disables unprivileged user namespaces. Attempt v2 proved the isolated
 mount-capable builder worked, but the client selected the rootless socket; it
-was explicitly stopped and preserved. Attempt v3 sets the correct socket and
-is running as `qwen38-release-build-v3-20261009.service` with a four-hour limit,
+was explicitly stopped and preserved. Attempt v3 fixed the client socket, then failed before any Dockerfile command
+because nested cgroups were read-only. v4 verified a private cgroup remount
+preserved the outer memory limit, but nested runc then failed its BPF device
+query. Neither failure affected the model endpoint. v5 uses BuildKit rootless
+spec conversion and an explicit rootless-cgroup runc wrapper inside the same
+bounded, mount-capable container. Its tiny image probe (root write, chown and
+UID-1000 access) passed before the full build reached native CMake configuration.
+It runs as `qwen38-release-build-v5-20261009.service` with a four-hour limit,
 24 CPUs and 192 GiB of container memory. No accelerators, host namespaces,
 Docker socket or checkpoint are mounted into the builder. Only the new source
 context and image-output directory are bound. Host kernel settings and existing
 images are unchanged. Build caches use a container-local tmpfs; OCI output is
-under `/dev/shm/qwen38-release-image-20261009-v3`, so it survives SSH disconnect
+under `/dev/shm/qwen38-release-image-20261009-v5`, so it survives SSH disconnect
 but must be exported to durable storage before reboot.
 
 The build is not yet an available image or release. Follow its actual service,
-`/home/ttuser/qwen38-release-build-20261009-v3/state.json` and `run.log`.
+`/home/ttuser/qwen38-release-build-20261009-v5/state.json` and `run.log`.
 [Build and Helm instructions](https://github.com/tenstorrent/tt-inference-server/blob/e0e05bad5361d7c170068b3ad7b4df27de192250/scripts/release/QWEN38_GALAXY.md).
+
+The native control reached 170/195 completed at 04:53 UTC without cutoffs, so
+it cannot meet 177/198 even if the remaining three are correct. This remains a
+running partial result. A [higher-precision LM-head ablation](../../experiments/ACCURACY-ABLATIONS.md)
+is prepared but unrun; the current hardware queue and image policy are unchanged.

@@ -1,11 +1,21 @@
 {
-  "generated_at": "2026-10-09T04:36:26.611907+00:00",
+  "generated_at": "2026-10-09T04:58:04.369433+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
+      "path": "config/precision_accurate_decode_bfp8_head.json",
+      "bytes": 984,
+      "sha256": "e4f24f9d92b4bf109f51c2c796c858edd5d4866514a4aa2386048f512aefc2e1"
+    },
+    {
+      "path": "experiments/ACCURACY-ABLATIONS.md",
+      "bytes": 2526,
+      "sha256": "a880a1790d08c1f38fd71f6c26c55e8e0093db64771207e8af6c6f58f30fee6a"
+    },
+    {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 57662,
-      "sha256": "d20fb0e0fc16c5944fcd664f948ed048020659a8b02e7cd59c404b9976640780"
+      "bytes": 59395,
+      "sha256": "e95955cdafebabf959383295ba0d07f399017e15c06cbc01ce9fb27f1e577236"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -3126,8 +3136,8 @@
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/README.md",
-      "bytes": 9143,
-      "sha256": "a5acf2da954cf69e2134975f201c26de589bb1207ab2160e4654b1a35c436445"
+      "bytes": 9990,
+      "sha256": "d97868af720f04ca456dd83b9776b1544624429b860b8457a0adac3d0731eff6"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/launch.json",

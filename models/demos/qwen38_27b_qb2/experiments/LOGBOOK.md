@@ -707,3 +707,28 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
   Client disconnect does not cancel it. All failed-attempt logs remain intact.
 
 [Native control and packaging receipts](../galaxy-evidence/qualification-overnight-v2/README.md).
+
+## Oct 9, 04:35-04:55 UTC: image executor repair and next accuracy control
+
+- Image build v3 reached Dockerfile execution, then failed on read-only nested
+  cgroup creation. v4 proved a private-container remount left the 128-MiB test
+  limit unchanged, but runc then failed its nested BPF device-filter query.
+  Failed services and containers are terminal; logs are preserved. No host
+  cgroup remount, user-namespace sysctl, firmware or accelerator operation.
+- v5 uses BuildKit's rootless spec conversion plus explicit runc rootless
+  cgroups inside the bounded container, keeping its process sandbox. A tiny
+  pinned-BusyBox build passed root writes, UID-1000 chown and non-root access
+  before the real image build. Source fetch succeeded and native CMake is
+  configuring. qwen38-release-build-v5-20261009.service owns the persistent
+  build; all earlier service names are historical. The final image still needs
+  source/import checks, hardware qualification and durable registry export.
+- Native GPQA reached 170/195 at 04:53:10 UTC with no cutoffs. At most 173/198
+  is now possible, so this run cannot meet 177/198. Leave it running and retain
+  the complete score. The early higher partial rate did not justify promotion.
+- Prepared an unrun BFP8/HiFi2 LM-head control; existing selected weights use
+  BFP4/LoFi at the head. Policy validation and comparison confirm that all 64
+  decoder policies and all other numeric settings stay identical. This tests
+  the combined head restoration, without claiming a root cause or gain. It
+  needs its own G0 and full GPQA. It is not yet queued, and neither running
+  evaluation nor image source was changed. Throughput/storage tradeoff must be
+  measured before release selection.
