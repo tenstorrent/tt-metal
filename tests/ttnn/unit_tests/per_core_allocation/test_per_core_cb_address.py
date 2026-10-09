@@ -189,6 +189,11 @@ def test_pages_written_by_raw_address_are_read_through_the_cb(per_core_mesh_devi
     source = _sharded_tensor(mesh, [WRITER], len(receivers) * PAGE, per_core=False, data=pages.reshape(1, -1))
     out = _sharded_tensor(mesh, list(receivers), PAGE, per_core=False)
 
+    cbs = [_cb(tensor, core, LAST_PAGE) for core in receivers]
+    # get_cb_address is what callers hand other cores, so it must be this core's raw per-core address too.
+    for core, cb in zip(receivers, cbs):
+        assert ttnn.get_cb_address(cb) == _addr(tensor, core) + LAST_PAGE, f"core {core}"
+
     to_receivers = [source.buffer_address(), len(receivers), PAGE]
     for core in receivers:
         noc = mesh.worker_core_from_logical_core(core)
@@ -218,7 +223,7 @@ def test_pages_written_by_raw_address_are_read_through_the_cb(per_core_mesh_devi
     program = ttnn.ProgramDescriptor(
         kernels=[writer, receiver],
         semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=_cores([*receivers, WRITER]), initial_value=0)],
-        cbs=[_cb(tensor, core, LAST_PAGE) for core in receivers],
+        cbs=cbs,
     )
 
     _run(mesh, [tensor, source, out], program)
