@@ -9,6 +9,9 @@ from .grpo_trainer import (
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,
+    RolloutBatch,
+    RolloutSampler,
+    build_rollout_sampler,
     get_grpo_config,
 )
 from ttml.modules.lora import LoraConfig

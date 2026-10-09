@@ -18,7 +18,6 @@ kernel recompiles).
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
@@ -32,13 +31,13 @@ from ttml.common.utils import no_grad, round_up_to_tile, build_causal_mask
 from ttml.models import RunnerType
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 
-from huggingface_hub import snapshot_download
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from .completer_common import deallocate_tensors, async_read_to_host
+from ttml.trainers.grpo_trainer.grpo_ttml_model import load_hf_state_dict
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import async_read_to_host, deallocate_tensors
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache
@@ -174,14 +173,14 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
             # Weights are uploaded already-sharded to match each materialized
             # parameter's placements (full tensor stays in host RAM).
-            hf_state_dict = self._load_hf_state_dict(model_source)
+            hf_state_dict = load_hf_state_dict(model_source)
             load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie, sharded=True)
             del hf_state_dict
         else:
             tt_model = Qwen3(qwen_config)
 
             # Load HF weights into the (still replicated) model, then shard.
-            hf_state_dict = self._load_hf_state_dict(model_source)
+            hf_state_dict = load_hf_state_dict(model_source)
             load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie)
             del hf_state_dict
 
@@ -202,23 +201,6 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         self._model = tt_model
         self._config = qwen_config
         self._max_seq_len = max_seq_len
-
-    @staticmethod
-    def _load_hf_state_dict(model_source: str) -> dict:
-        """Return a HuggingFace float state-dict for ``model_source``."""
-        import torch
-
-        if os.path.isdir(model_source):
-            path = model_source
-        else:
-            path = snapshot_download(
-                repo_id=model_source,
-                allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-            )
-        hf_model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32, trust_remote_code=True)
-        state_dict = hf_model.state_dict()
-        del hf_model
-        return state_dict
 
     @property
     def tokenizer(self) -> Any:

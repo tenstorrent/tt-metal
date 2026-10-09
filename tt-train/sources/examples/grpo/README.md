@@ -38,28 +38,27 @@ python3 boolq_training_example.py \
     --config tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml
 ```
 
-To train **Qwen3 32B sharded across all 32 Galaxy cards with FSDP**:
+To train **Qwen3 32B sharded across all 32 Galaxy cards with FSDP**, pick the
+Qwen3 config:
 
 ```bash
-python3 boolq_training_example.py --model qwen3 \
+python3 boolq_training_example.py \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
 Notes:
 
-- `--model` chooses the completer: `llama-1b` (default,
-  `LlamaGRPOCompleter`) or `qwen3` (`Qwen3GRPOCompleter` with FSDP —
-  see [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc).
-- `--model_source` overrides the HuggingFace ID / local path from the
-  per-model default (Qwen3 default: `Qwen/Qwen3-32B`).
-- `--max_seq_len` sets the generation horizon for the Qwen3 path
-  (default 2048).
-- `max_sequence_length` is passed in as a Python argument, and the
-  `transformer_config` is constructed using that argument.
-- **WandB logging**: enable with `--wandb`; select project / run /
-  entity / mode via `--wandb_project`, `--wandb_run_name`,
-  `--wandb_entity`, `--wandb_mode` (`online` / `offline` /
-  `disabled`). The `GRPOMonitor` callback fires on `on_step_end`.
+- The model family comes from `model_type` in the config's model yaml
+  (`"llama"` or `"qwen3"`), and the runner (gradient checkpointing or not)
+  from its `runner_type`. `GRPOTrainer` builds that model, and since the configs
+  set `rollout_source: "ttml"` in `grpo_config`, it generates rollouts with it
+  through a `TTMLRolloutSampler`;
+  for Qwen3 FSDP see [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc.
+- `model_source` in the training config selects the HuggingFace ID or local
+  path (default: `meta-llama/Llama-3.2-1B-Instruct`).
+- **WandB logging**: set `report_to: wandb` (and optionally `run_name`) in
+  `grpo_config`; project / entity / mode come from the `WANDB_PROJECT` /
+  `WANDB_ENTITY` / `WANDB_MODE` env vars.
 
 ### Accuracy Evaluation
 
@@ -85,8 +84,8 @@ per-step CSV from `GRPOMonitor` into a training curve.
 
 ## Device Config
 
-`LlamaGRPOCompleter` and `Qwen3GRPOCompleter` open the trainer's
-device mesh from the `device_config:` block of the training YAML,
+`GRPOTrainer` opens its device mesh from the `device_config:` block of
+the training YAML,
 wrapped in a `DeviceConfig` object (defined in
 [`ttml/common/config.py`](../../ttml/ttml/common/config.py)):
 
@@ -99,13 +98,13 @@ device_config:
 | Field         | Type              | Default   | Description                                                                                                                                                              |
 | ------------- | ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `enable_ddp`  | `bool`            | `false`   | Enable distributed data-parallel training across the trainer's mesh.                                                                                                     |
-| `enable_fsdp` | `bool`            | `false`   | Enable fully-sharded data parallel. Supported by `Qwen3GRPOCompleter`; shards params / grads / optimizer state across the `"fsdp"` mesh axis.                            |
+| `enable_fsdp` | `bool`            | `false`   | Enable fully-sharded data parallel. Supported for Qwen3; shards params / grads / optimizer state across the `"fsdp"` mesh axis.                                     |
 | `mesh_shape`  | `list[int]`       | `[1, 1]`  | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`.                                                                                                  |
 | `device_ids`  | `list[int]`       | `null`    | Specific device IDs to use (default: auto-select).                                                                                                                       |
 
 Device setup (`enable_fabric`, `open_device`,
-`initialize_parallelism_context`) is performed inside the completer
-constructor, not the trainer. FSDP-specific behavior — including the
+`initialize_parallelism_context`) is performed by `setup_ttml_model`,
+which the `GRPOTrainer` constructor calls. FSDP-specific behavior — including the
 requirement that `checkpointing: false` — is documented in the
 [FSDP subsection](../../../docs/GRPO_TRAINER.md#fsdp) of the trainer
 doc.

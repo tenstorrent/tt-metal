@@ -7,12 +7,7 @@ import argparse
 import logging
 import os
 import random
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
-
-# The `grpo` package lives two levels up, in the examples directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import torch
@@ -21,10 +16,6 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, get_grpo_config
-from grpo.utils.llama_completer import LlamaCompletionCtx
-from grpo.utils.llama_completer import LlamaGRPOCompleter
-from grpo.utils.qwen3_completer import Qwen3CompletionCtx
-from grpo.utils.qwen3_completer import Qwen3GRPOCompleter
 
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -71,7 +62,8 @@ def parse_args():
         default="tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml",
         help=(
             "Training config path, relative to TT_METAL_RUNTIME_ROOT or absolute. "
-            "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP."
+            "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP, and "
+            "the model_type / runner_type of its model_config select the model family and runner."
         ),
     )
     parser.add_argument(
@@ -79,24 +71,6 @@ def parse_args():
         type=int,
         default=42,
         help="RNG seed for reproducible runs. If omitted, seed defaults to 42.",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="llama-1b",
-        choices=["llama-1b", "qwen3"],
-        help="Which model family to train: 'llama-1b' (single device, default) "
-        "or 'qwen3' (ttml Qwen3 sharded with FSDP).",
-    )
-    parser.add_argument(
-        "--memory_efficient",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Qwen3 runner mode. When set (the default), use gradient checkpointing "
-        "(RunnerType.MemoryEfficient): per-block activations are recomputed in the "
-        "backward pass to keep within DRAM at large micro-batch / sequence lengths. "
-        "Pass --no-memory_efficient for the retain-activations runner (RunnerType.Default): "
-        "faster backward, much higher peak memory.",
     )
     args, _ = parser.parse_known_args()
     return args
@@ -115,8 +89,6 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    is_qwen3 = args.model == "qwen3"
-
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
@@ -132,15 +104,16 @@ if __name__ == "__main__":
 
     model_id = raw["training_config"].get("model_source") or DEFAULT_MODEL_ID
 
+    assert training_config.model_config, "training_config.model_config must be set"
+    transformer_config = get_model_config(training_config.model_config)
+    is_qwen3 = transformer_config.model_type == "qwen3"
+    optimizer_dict = raw["training_config"]["optimizer"]
+
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     dataset = (
         load_dataset("google/boolq", split="train").shuffle(seed=args.seed).map(make_format_boolq(tokenizer, is_qwen3))
     )
-
-    assert training_config.model_config, "training_config.model_config must be set"
-    transformer_config = get_model_config(training_config.model_config)
-    optimizer_dict = raw["training_config"]["optimizer"]
 
     output_dir = os.path.join(
         tt_metal_root,
@@ -149,37 +122,14 @@ if __name__ == "__main__":
     )
     grpo_config = get_grpo_config(raw, output_dir=output_dir)
 
-    if is_qwen3:
-        completer = Qwen3GRPOCompleter(
-            ctx=Qwen3CompletionCtx(
-                max_tokens_to_complete=grpo_config.max_completion_length,
-                temperature=grpo_config.temperature,
-                completions_per_prompt=grpo_config.num_generations,
-            ),
-            transformer_config=transformer_config,
-            device_config=device_config,
-            model_source=model_id,
-            memory_efficient=args.memory_efficient,
-        )
-    else:
-        completer = LlamaGRPOCompleter(
-            ctx=LlamaCompletionCtx(
-                max_tokens_to_complete=grpo_config.max_completion_length,
-                temperature=grpo_config.temperature,
-                completions_per_prompt=grpo_config.num_generations,
-            ),
-            transformer_config=transformer_config,
-            device_config=device_config,
-            model_source=model_id,
-        )
-
     grpo_trainer = GRPOTrainer(
-        completer=completer,
+        transformer_config=transformer_config,
+        device_config=device_config,
+        model_source=model_id,
         dataset=dataset,
         config=grpo_config,
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
-        model_source=model_id,
     )
     grpo_trainer.train()
     logging.info("BOOLQ GRPO TRAINING COMPLETE")

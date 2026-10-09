@@ -1,7 +1,7 @@
 # Qwen3-32B GRPO + FSDP on a 32-card Blackhole galaxy.
 #
 # Run:
-#   python3 boolq/boolq_training_example.py --model qwen3 \
+#   python3 boolq/boolq_training_example.py \
 #     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 #
 # Lazy parameter init (default on Qwen3 FSDP) shards each param on load; eager full-replication would OOM.
@@ -26,6 +26,7 @@ training_config:
     kahan_summation: false
 
   grpo_config:
+    rollout_source: "ttml"
     epsilon: 0.2
     per_device_train_batch_size: 8
     num_iterations: 1

@@ -23,9 +23,11 @@ import torch
 import ttml
 import ttnn
 from safetensors.numpy import save_file
-from ttml.common.utils import create_optimizer, no_grad
+from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_tile
+from ttml.modules import RunMode
 
-from .callback import TrainerCallback
+from ..callback import TrainerCallback
+from .grpo_ttml_model import setup_ttml_model
 
 try:
     import wandb as _wandb  # type: ignore
@@ -94,6 +96,62 @@ class GRPOCompleter(ABC):
 
 
 @dataclass
+class RolloutBatch:
+    """Describes multiple rollout samples (not a specific count).
+
+    Fields:
+        weight_version: Which theta version produced this batch. The trainer
+            can use it to detect / down-weight stale samples.
+        prompts: B ragged prompt token IDs.
+        completions: B ragged completion token IDs (one per prompt in
+            single-generation mode; per prompt-completion pair otherwise).
+        logprobs: [B, max_completion_length] float32. Per-generated-token
+            log pi_old(a_t | s_t). Padding positions are don't-care; the
+            trainer masks them out.
+    """
+
+    weight_version: int
+    prompts: List[List[int]]
+    completions: List[List[int]]
+    logprobs: np.ndarray
+
+
+class RolloutSampler(ABC):
+    """Abstract base for producers of :class:`RolloutBatch`."""
+
+    @abstractmethod
+    def generate(self, prompts: List[List[int]]) -> RolloutBatch:
+        """Generate completions for a batch of tokenised prompts and return them
+        packaged (with per-token log pi_old and producer metadata) as a
+        :class:`RolloutBatch`.
+        """
+
+
+ROLLOUT_SOURCES = ("ttml",)
+
+
+def build_rollout_sampler(
+    source: str,
+    *,
+    model: Any,
+    tokenizer: Any,
+    max_completion_length: int,
+    temperature: float,
+    completions_per_prompt: int,
+) -> RolloutSampler:
+    """Build the :class:`RolloutSampler` named by ``source``.
+
+    ``"ttml"`` builds a :class:`TTMLRolloutSampler` that generates with
+    ``model`` and ``tokenizer`` (the trainer's own) on the already-open device.
+    """
+    if source == "ttml":
+        from .ttml_rollout_sampler import TTMLRolloutSampler
+
+        return TTMLRolloutSampler(model, tokenizer, max_completion_length, temperature, completions_per_prompt)
+    raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
+
+
+@dataclass
 class GRPOConfig:
     epsilon: float
     # Number of completions resident on a single device within one micro-batch.
@@ -121,6 +179,9 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+    # Which RolloutSampler the trainer builds (see ROLLOUT_SOURCES above).
+    # "ttml": in-process TTMLRolloutSampler that generates with the trainer's policy model.
+    rollout_source: str
     # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
     # so users familiar with those configs can map yamls directly:
     #   "constant" -> flat at base_lr; ``min_lr_rate`` is ignored.
@@ -201,6 +262,17 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'clip_grad_norm_max_norm' must be > 0 when 'use_clip_grad_norm' is True "
                 f"(got {self.clip_grad_norm_max_norm})."
+            )
+
+        if not isinstance(self.rollout_source, str):
+            raise TypeError(
+                f"grpo_config: 'rollout_source' must be a str, got {type(self.rollout_source).__name__}. "
+                f"Supported values: {list(ROLLOUT_SOURCES)}."
+            )
+        if self.rollout_source not in ROLLOUT_SOURCES:
+            raise ValueError(
+                f"grpo_config: 'rollout_source' must be one of {list(ROLLOUT_SOURCES)} "
+                f"(got {self.rollout_source!r})."
             )
 
         # ``report_to`` is intentionally a plain string in this framework
@@ -689,10 +761,10 @@ def compute_advantages_host(rewards_np: np.ndarray, group_size: int) -> np.ndarr
     co-located by group on a device, so groups are free to straddle devices.
     The advantages are deliberately returned in host order (NOT regrouped per
     device) so that each micro-batch slice can later be sharded along axis 0 in
-    the exact same group-agnostic, host-order way that
-    :meth:`GRPOCompleter.compute_nlog_probs` shards its token tensors. That
-    alignment is what keeps every completion paired with its own advantage on
-    every device; see :func:`upload_micro_advantages`.
+    the exact same group-agnostic, host-order way as the :func:`layout_microbatch`
+    token tensors that feed the trainer's policy forward. That alignment is what
+    keeps every completion paired with its own advantage on every device; see
+    :func:`upload_micro_advantages`.
     """
     B = rewards_np.shape[0]
     assert B % group_size == 0, "rewards length must be divisible by group_size"
@@ -702,14 +774,14 @@ def compute_advantages_host(rewards_np: np.ndarray, group_size: int) -> np.ndarr
 
 
 def upload_micro_advantages(adv_np: np.ndarray, mapper: Any, num_devices: int) -> Any:
-    """Upload one micro-batch's advantages, sharded to match ``compute_nlog_probs``.
+    """Upload one micro-batch's advantages, sharded to match the policy log-probs.
 
     ``adv_np`` is the host-order advantage slice for a single micro-batch (shape
     ``[mb]``, where ``mb`` is the micro-batch size). It is sharded along axis 0
     across the mesh, so device ``d`` receives host rows
     ``[d * mb_local : (d + 1) * mb_local]`` — the SAME contiguous,
-    group-agnostic split that :meth:`GRPOCompleter.compute_nlog_probs` applies
-    to its ``[mb, T]`` token tensors for the very same micro-batch. Because both
+    group-agnostic split the trainer applies to the :func:`layout_microbatch`
+    ``[mb, Tp]`` tensors for the very same micro-batch. Because both
     tensors are sharded the same way over the same host-order list, device-local
     row ``r`` of the advantages corresponds to device-local row ``r`` of the
     log-probs, i.e. the same completion.
@@ -735,6 +807,63 @@ def iter_micro_batch(
         end = min(start + micro_batch_size, len(completions))
 
         yield prompts[start:end], completions[start:end]
+
+
+def layout_microbatch(
+    prompts: List[List[int]],
+    completions: List[List[int]],
+    pad_token: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Right-padded next-token layout for one micro-batch.
+
+    Row ``i`` holds ``seq = prompts[i] + completions[i]`` shifted for next-token
+    prediction: ``inputs[i, :L] = seq[:-1]`` and ``targets[i, :L] = seq[1:]``
+    with ``L = len(seq) - 1``; pad tokens fill ``[L, Tp)``. Completion token
+    ``j`` is therefore predicted at column ``len(prompts[i]) - 1 + j``, which is
+    where ``mask`` is 1.0. ``Tp`` is the tile-rounded max ``L`` over the
+    micro-batch. Padding only on the right means a plain causal mask keeps real
+    tokens from attending to pads.
+
+    Returns ``(inputs [B, Tp] uint32, targets [B, Tp] uint32, mask [B, Tp] float32, Tp)``.
+    """
+    assert len(prompts) == len(completions)
+    B = len(prompts)
+    Tp = round_up_to_tile(max(len(p) + len(c) - 1 for p, c in zip(prompts, completions)))
+    inputs = np.full((B, Tp), pad_token, dtype=np.uint32)
+    targets = np.full((B, Tp), pad_token, dtype=np.uint32)
+    mask = np.zeros((B, Tp), dtype=np.float32)
+    for i, (p, c) in enumerate(zip(prompts, completions)):
+        if len(p) < 2:
+            raise ValueError("Prompt is too short")
+        seq = list(p) + list(c)
+        if len(seq) < 2:
+            raise ValueError("Sequence is too short")
+        L = len(seq) - 1
+        inputs[i, :L] = np.asarray(seq[:-1], dtype=np.uint32)
+        targets[i, :L] = np.asarray(seq[1:], dtype=np.uint32)
+        mask[i, len(p) - 1 : len(p) - 1 + len(c)] = 1.0
+    return inputs, targets, mask, Tp
+
+
+def place_old_nlog_probs(
+    prompts: List[List[int]],
+    completions: List[List[int]],
+    logprobs_rows: np.ndarray,
+    Tp: int,
+) -> np.ndarray:
+    """Place the sampler's ``log pi_old`` rows into the :func:`layout_microbatch` layout.
+
+    ``logprobs_rows`` is the ``[B, max_completion_length]`` slice of
+    ``RolloutBatch.logprobs`` for this micro-batch, holding ``+log pi_old`` of
+    completion token ``j`` at column ``j``. Returns ``[B, Tp]`` float32
+    NEGATIVE log-probs (the sign the GRPO loss uses) with completion token ``j``
+    of row ``r`` at column ``len(prompts[r]) - 1 + j``; every other column is 0.
+    """
+    old = np.zeros((len(prompts), Tp), dtype=np.float32)
+    for r, (p, c) in enumerate(zip(prompts, completions)):
+        s = len(p) - 1
+        old[r, s : s + len(c)] = -logprobs_rows[r, : len(c)]
+    return old
 
 
 def save_checkpoint(
@@ -851,30 +980,56 @@ def _build_lr_factor_fn(
 class GRPOTrainer:
     def __init__(
         self,
-        completer: GRPOCompleter,
+        transformer_config: Any,
+        device_config: Any,
+        model_source: str,
         dataset: Any,
         config: GRPOConfig,
         reward_func: Optional[Callable[..., List[float]]] = None,
         optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
-        model_source: Optional[str] = None,
         reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
     ) -> None:
+        """
+        Args:
+            transformer_config: Model config; ``model_type`` selects the model
+                family.
+            device_config: Device mesh config the trainer opens.
+            model_source: HuggingFace model ID or local checkpoint directory
+                the trainer loads the model from, and whose HF config is saved
+                with checkpoints.
+
+        The trainer opens the device and builds the policy model and tokenizer
+        (``self.model`` / ``self.tokenizer``) with
+        :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`,
+        then builds its :class:`RolloutSampler` from ``config.rollout_source``
+        with that model and tokenizer, exposed as ``self.rollout_sampler``. The
+        trainer runs its own forward pass with gradients on the model and never
+        changes its run mode.
+        """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
 
         self._init_rewards(reward_func, reward_funcs)
 
         # Constructor inputs (immutable during ``train``).
-        self.completer = completer
         self.dataset = dataset
         self.config = config
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
 
-        # Model handle — bound in ``_setup`` from ``completer.model``.
-        self.model: Any = None
+        self.model: Any
+        self.tokenizer: Any
+        self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
+        self.rollout_sampler: RolloutSampler = build_rollout_sampler(
+            config.rollout_source,
+            model=self.model,
+            tokenizer=self.tokenizer,
+            max_completion_length=config.max_completion_length,
+            temperature=config.temperature,
+            completions_per_prompt=config.num_generations,
+        )
 
         # Per-step accumulator rebuilt every optimizer step by
         # ``_reset_step_metrics``. Callbacks can inject additional keys here
@@ -889,7 +1044,7 @@ class GRPOTrainer:
         # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
         # full trainer lifecycle is visible in one place; populated by
         # ``_setup()`` on the first ``train()`` call.
-        self._tokenizer: Any = None
+        self._pad_token: int = 0
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
         self._autograd_ctx: Any = None
@@ -1005,13 +1160,14 @@ class GRPOTrainer:
 
         Populates the ``self._foo`` attributes pre-declared in ``__init__`` (all
         the parallelism-topology and batching state that every phase helper
-        below reads) plus the public ``self.model`` handle.
+        below reads).
         """
         grpo_cfg = self.config
-        completer = self.completer
-        tt_model = completer.model
-        tokenizer = completer.tokenizer
-        self.model = tt_model
+        tt_model = self.model
+        tokenizer = self.tokenizer
+        pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+        if pad_token is None:
+            raise ValueError("GRPOTrainer: tokenizer has neither pad_token_id nor eos_token_id")
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         base_lr = optimizer.get_lr()
@@ -1030,18 +1186,18 @@ class GRPOTrainer:
         #     ``initialize_parallelism_context`` and synced with
         #     ``synchronize_gradients``. This is the general-purpose DDP/TP
         #     mechanism used across ttml (the shared trainer, the non-GRPO qwen3
-        #     examples, etc.); the Llama GRPO completer initializes it.
-        #   * Named-mesh DDP — the completer opened a named mesh (via
+        #     examples, etc.); ``setup_ttml_model`` initializes it for Llama.
+        #   * Named-mesh DDP — ``setup_ttml_model`` opened a named mesh (via
         #     ``ttml.open_device_mesh``) with a "dp" axis of size > 1 and synced
         #     with ``sync_gradients`` over that axis. This is the FSDP-oriented
-        #     backend; the Qwen3 GRPO completer takes ONLY this route and never
+        #     backend; the Qwen3 path takes ONLY this route and never
         #     initializes a parallelism context.
         # Checking the context alone (as the code originally did) leaves
         # ``ddp_enabled`` False on the Qwen3 path — which then trips
-        # ``num_devices = 1`` below while the completer still shards the batch
+        # ``num_devices = 1`` below while the sampler still shards the batch
         # across the whole mesh, blowing up with "batch N must be divisible by
         # num_devices". Detecting the "dp" axis mirrors the exact DDP signal the
-        # completer uses (``mesh.has_axis("dp")``).
+        # sampler uses (``mesh.has_axis("dp")``).
         ddp_context_enabled: bool = (
             autograd_ctx.is_parallelism_context_initialized()
             and autograd_ctx.get_parallelism_context().is_ddp_enabled()
@@ -1050,7 +1206,7 @@ class GRPOTrainer:
             mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
         )
         # FSDP is configured through a named mesh (axis "fsdp"), opened via
-        # ``ttml.open_device_mesh`` by the completer — not the parallelism
+        # ``ttml.open_device_mesh`` by ``setup_ttml_model`` — not the parallelism
         # context that context-based DDP uses. When an "fsdp" axis is present the
         # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
         # gradients are synchronised with ``ttml.sync_gradients`` over the
@@ -1113,8 +1269,9 @@ class GRPOTrainer:
         # Derive the across-mesh micro-batch size (in completions), the per
         # micro-batch prompt count, and the generation (effective) batch size up
         # front, and validate the divisibility relationships so misconfigurations
-        # fail with a clear message instead of a cryptic shard assert deep in
-        # ``compute_nlog_probs`` (or a silently ragged final micro-batch).
+        # fail with a clear message instead of a cryptic shard assert when the
+        # :func:`layout_microbatch` tensors are uploaded for the trainer's
+        # policy forward (or a silently ragged final micro-batch).
         #
         # ``per_device_train_batch_size`` is the number of completions resident
         # on a single device within one micro-batch, so the whole mesh handles
@@ -1163,7 +1320,7 @@ class GRPOTrainer:
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
         # Publish outputs onto self for the per-batch helpers.
-        self._tokenizer = tokenizer
+        self._pad_token = int(pad_token)
         self._optimizer = optimizer
         self._autograd_ctx = autograd_ctx
         self._mesh = mesh
@@ -1209,7 +1366,7 @@ class GRPOTrainer:
     def _iter_prompt_batches(self) -> Iterator[Tuple[List[List[int]], dict]]:
         """Yield ``(prompts, extra_dataset_columns)`` per generation batch.
 
-        Prompts are UNEXPANDED (one entry per prompt); the completer's
+        Prompts are UNEXPANDED (one entry per prompt); the rollout sampler's
         ``generate`` fans them out to ``num_generations`` completions each.
         """
         gbp = self._generation_batch_prompts
@@ -1222,29 +1379,34 @@ class GRPOTrainer:
                 {k: list(col[start:end]) for k, col in extra_cols.items()},
             )
 
-    def _rollout(self, prompts: List[List[int]]) -> List[List[int]]:
-        """Sync rollout: block on ``completer.generate(prompts)`` and return
-        ``N * num_generations`` completions. Writes ``generation_time_s`` to
-        ``self.metrics``.
+    def _rollout(self, prompts: List[List[int]]) -> RolloutBatch:
+        """Sync rollout: block on ``rollout_sampler.generate(prompts)`` and
+        return a :class:`RolloutBatch` with ``N * num_generations`` completions
+        and their ``log pi_old``. Writes ``generation_time_s`` to ``self.metrics``.
         """
         gen_t0 = time.perf_counter()
-        completions = self.completer.generate(prompts)
+        batch = self.rollout_sampler.generate(prompts)
         self.metrics["generation_time_s"] = time.perf_counter() - gen_t0
-        return completions
+        return batch
 
     def _expand_prompts_and_columns(
         self,
         prompts: List[List[int]],
         extra_dataset_columns: dict,
-    ) -> Tuple[List[List[int]], dict]:
-        """Replicate each prompt and each dataset-column entry
-        ``num_generations`` times so that index ``i`` of the returned lists
-        aligns 1:1 with completion ``i``. Called AFTER ``_rollout``.
+        batch: RolloutBatch,
+    ) -> dict:
+        """Replicate each dataset-column entry ``num_generations`` times so that
+        index ``i`` aligns 1:1 with completion ``i`` of ``batch``. Called AFTER
+        ``_rollout``; ``batch.prompts`` is already expanded by the sampler and
+        must match the same replication of ``prompts``.
         """
         g = self.config.num_generations
-        prompts_x = [p for p in prompts for _ in range(g)]
-        cols_x = {k: [v for v in col for _ in range(g)] for k, col in extra_dataset_columns.items()}
-        return prompts_x, cols_x
+        prompts_x = [list(p) for p in prompts for _ in range(g)]
+        assert [list(p) for p in batch.prompts] == prompts_x, (
+            "RolloutBatch.prompts must hold each prompt repeated num_generations times, in order "
+            f"(got {len(batch.prompts)} prompts for {len(prompts)} x {g})"
+        )
+        return {k: [v for v in col for _ in range(g)] for k, col in extra_dataset_columns.items()}
 
     def _compute_rewards(
         self,
@@ -1260,8 +1422,8 @@ class GRPOTrainer:
         ``log_completions`` is enabled — ``prompts`` / ``completions`` /
         ``rewards`` display slices.
         """
-        prompt_strs = [self._tokenizer.decode(p) for p in prompts_x]
-        completion_strs = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions]
+        prompt_strs = [self.tokenizer.decode(p) for p in prompts_x]
+        completion_strs = [self.tokenizer.decode(c, skip_special_tokens=True) for c in completions]
 
         per_func = [
             np.array(dispatch_reward(fn, completion_strs, prompt_strs, extra_cols_x), dtype=np.float32)
@@ -1293,95 +1455,80 @@ class GRPOTrainer:
         """Group-relative advantages on host (per-prompt mean subtracted)."""
         return compute_advantages_host(rewards_np, self.config.num_generations)
 
-    def _optimize(
-        self,
-        prompts_x: List[List[int]],
-        completions: List[List[int]],
-        advantages_np: np.ndarray,
-    ) -> None:
-        """Reference log-probs (once) + per-micro-batch forward-with-grad + GRPO
-        loss + backward. Accumulates gradients across the whole generation
-        batch; does NOT call ``optimizer.step()`` — that is ``_apply_gradients``.
-        """
-        ref_logprobs = self._compute_ref_logprobs(prompts_x, completions)
-        try:
-            self.model.train()
-            self._optimizer.zero_grad()
-            global_len = len(prompts_x)
-            mb = self._completions_per_microbatch
-            for i, (p, c, ref_nlog, ref_mask) in enumerate(
-                self._iter_micro_batches(prompts_x, completions, ref_logprobs),
-            ):
-                adv_slice = advantages_np[i * mb : i * mb + len(c)]
-                self._compute_loss_and_backward(p, c, adv_slice, ref_nlog, ref_mask, global_len)
-        finally:
-            for nlog, mask in ref_logprobs:
-                _deallocate_tensors([nlog, mask])
+    def _optimize(self, batch: RolloutBatch, advantages_np: np.ndarray) -> None:
+        """Per-micro-batch forward-with-grad + GRPO loss + backward.
 
-    def _compute_ref_logprobs(
-        self,
-        prompts_x: List[List[int]],
-        completions: List[List[int]],
-    ) -> List[Tuple[Any, Any]]:
-        """Eval-mode + ``no_grad`` forward pass: ratio-denominator log-probs
-        for every micro-batch of the current generation batch. Reused across
-        every mini-epoch of ``_optimize``; freed on ``_optimize`` exit.
+        ``pi_old`` comes from ``batch.logprobs`` (the sampler's per-token
+        ``log pi_old``) and stays on the host until its micro-batch runs, so it
+        is fixed across ``num_iterations`` passes. Accumulates gradients across
+        the whole generation batch; does NOT call ``optimizer.step()`` — that is
+        ``_apply_gradients``.
         """
-        out: List[Tuple[Any, Any]] = []
-        self.model.eval()
-        with no_grad():
-            for p, c in iter_micro_batch(prompts_x, completions, self._completions_per_microbatch):
-                nlog, mask = self.completer.compute_nlog_probs(p, c)
-                nlog.set_requires_grad(False)
-                mask.set_requires_grad(False)
-                out.append((nlog, mask))
-        return out
+        assert (
+            self.model.get_run_mode() == RunMode.TRAIN
+        ), "GRPOTrainer: model left in eval mode (a sampler or callback didn't restore it)"
+        self._optimizer.zero_grad()
+        mb = self._completions_per_microbatch
+        global_len = len(batch.completions)
+        for i, (p, c) in enumerate(iter_micro_batch(batch.prompts, batch.completions, mb)):
+            rows = slice(i * mb, i * mb + len(c))
+            inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token)
+            old_np = place_old_nlog_probs(p, c, batch.logprobs[rows], Tp)
+            self._compute_loss_and_backward(inputs, targets, mask_np, old_np, advantages_np[rows], global_len)
 
-    def _iter_micro_batches(
-        self,
-        prompts_x: List[List[int]],
-        completions: List[List[int]],
-        ref_logprobs: List[Tuple[Any, Any]],
-    ) -> Iterator[Tuple[List[List[int]], List[List[int]], Any, Any]]:
-        """Yield ``(prompts_slice, completions_slice, ref_nlog, ref_mask)`` per
-        micro-batch, pairing each token slice with its cached reference
-        log-probs (by index into ``ref_logprobs``).
+    def _compute_policy_nlog_probs(self, inputs: np.ndarray, targets: np.ndarray) -> ttml.autograd.Tensor:
+        """Teacher-forced forward with grad over the :func:`layout_microbatch`
+        tensors. Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
         """
-        for i, (p, c) in enumerate(
-            iter_micro_batch(prompts_x, completions, self._completions_per_microbatch),
-        ):
-            nlog, mask = ref_logprobs[i]
-            yield p, c, nlog, mask
+        B, Tp = inputs.shape
+        x = ttml.autograd.Tensor.from_numpy(
+            inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
+        )
+        # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
+        B_local = int(x.shape()[0])
+        logits = self.model(x, build_causal_mask(Tp, device=True))
+        tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper)
+        nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
+        return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
 
     def _compute_loss_and_backward(
         self,
-        prompts_slice: List[List[int]],
-        completions_slice: List[List[int]],
+        inputs: np.ndarray,
+        targets: np.ndarray,
+        mask_np: np.ndarray,
+        old_np: np.ndarray,
         adv_slice: np.ndarray,
-        ref_nlog: Any,
-        ref_mask: Any,
         global_len: int,
     ) -> None:
-        """One autograd transaction: upload advantages, run the current-policy
-        forward pass with grad, build the clipped GRPO surrogate, backward,
-        and free the intermediates.
+        """One autograd transaction: upload advantages, ``pi_old`` and the
+        completion mask, run the current-policy forward pass with grad, build
+        the clipped GRPO surrogate, backward, and free the intermediates.
 
         ``global_len`` is the completion count across the whole generation
         batch (all ``grad_accum`` micro-batches); the loss normalization uses
         it to yield a mean-over-effective-batch gradient after all micro-batch
         contributions accumulate.
         """
-        # Advantages and completion token tensors are both sharded along axis
-        # 0 over the identical host-order slice, so each device pairs a
-        # completion's log-probs with that same completion's advantage.
+        # Advantages, pi_old, the mask and the policy log-probs are all sharded
+        # along axis 0 over the identical host-order rows, so device-local row r
+        # of every tensor refers to the same completion.
         adv_slice_val = upload_micro_advantages(adv_slice, self._dp_mapper, self._num_devices)
         adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
+        mask = ttml.autograd.Tensor.from_numpy(mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper)
+        mask.set_requires_grad(False)
 
-        nlog_new, mask_new = self.completer.compute_nlog_probs(prompts_slice, completions_slice)
+        nlog_new = self._compute_policy_nlog_probs(inputs, targets)
+        new_val = nlog_new.get_value()
+        nlog_old = ttml.autograd.Tensor.from_numpy(old_np, new_val.layout, new_val.dtype, self._dp_mapper)
+        nlog_old.set_requires_grad(False)
+        assert list(nlog_old.shape()) == list(
+            nlog_new.shape()
+        ), f"pi_old shape {nlog_old.shape()} != pi shape {nlog_new.shape()}"
+
         loss = self._compute_grpo_loss(
-            ref_nlog,
+            nlog_old,
             nlog_new,
-            ref_mask,
+            mask,
             adv_ttml,
             global_len,
             self.config.epsilon,
@@ -1389,7 +1536,7 @@ class GRPOTrainer:
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
-        _deallocate_tensors([nlog_new, mask_new, adv_ttml, loss])
+        _deallocate_tensors([nlog_old, nlog_new, mask, adv_ttml, loss])
 
     def _apply_gradients(self) -> None:
         """LR scheduler step + grad sync + optional grad clip +
@@ -1410,14 +1557,14 @@ class GRPOTrainer:
         if self._fsdp_enabled:
             ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
         elif self._ddp_context_enabled:
-            # Parallelism-context DDP (Llama completer): a parallelism context
+            # Parallelism-context DDP (Llama): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
             # be a silent no-op here — it reduces over named mesh axes, and this
             # path opens no named mesh (``maybe_mesh()`` is None), so it would
             # leave gradients un-averaged.
             ttml.core.distributed.synchronize_gradients(self.model.parameters())
         elif self._ddp_enabled:
-            # Named-mesh DDP (Qwen3 completer): no parallelism context exists,
+            # Named-mesh DDP (Qwen3): no parallelism context exists,
             # so all-reduce + average grads over the "dp" mesh axis — the same
             # primitive FSDP uses. The loss normalization divides by
             # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
@@ -1463,8 +1610,8 @@ class GRPOTrainer:
             self._time_callback(cb, "on_step_end", self, step, **_step_kwargs())
 
         # Seal step_time_s after all non-monitor work is done, so it covers
-        # the full per-step wall time (rollout, host post-gen, reference
-        # log-probs, training loop, non-monitor callbacks). GRPOMonitor's own
+        # the full per-step wall time (rollout, host post-gen, training loop,
+        # non-monitor callbacks). GRPOMonitor's own
         # cost is deliberately outside this window.
         self.metrics["step_time_s"] = time.perf_counter() - self._step_start_time
 
@@ -1484,7 +1631,7 @@ class GRPOTrainer:
             step,
             cfg.output_dir,
             dp_composer=self._dp_composer,
-            tokenizer=self._tokenizer,
+            tokenizer=self.tokenizer,
             grpo_config=cfg,
             optimizer=self._optimizer,
             model_source=self.model_source,
@@ -1510,12 +1657,6 @@ class GRPOTrainer:
     # -- training loop -------------------------------------------------------
 
     def train(self) -> None:
-        """Synchronous GRPO training loop.
-
-        Walks the phase helpers above once per generation batch, then per
-        mini-epoch runs ``_optimize`` (ref logprobs + fwd-grad + loss +
-        backward), ``_apply_gradients``, and the metrics/checkpoint bookkeeping.
-        """
         self._setup()
         for cb in self.callbacks:
             cb.on_train_begin(self)
@@ -1523,15 +1664,17 @@ class GRPOTrainer:
         self._reset_step_metrics()
 
         for prompts, extra_cols in self._iter_prompt_batches():
-            completions = self._rollout(prompts)
-            prompts_x, cols_x = self._expand_prompts_and_columns(prompts, extra_cols)
-            rewards_np = self._compute_rewards(prompts_x, completions, cols_x)
+            batch = self._rollout(prompts)
+            cols_x = self._expand_prompts_and_columns(prompts, extra_cols, batch)
+            rewards_np = self._compute_rewards(batch.prompts, batch.completions, cols_x)
             advantages_np = self._compute_advantages(rewards_np)
 
             for _ in range(self.config.num_iterations):
-                self._optimize(prompts_x, completions, advantages_np)
+                self._optimize(batch, advantages_np)
                 self._apply_gradients()
                 self.metrics["step"] += 1
+                if hasattr(self.rollout_sampler, "set_weight_version"):
+                    self.rollout_sampler.set_weight_version(self.metrics["step"])
                 self._publish_step_metrics()
                 self._maybe_checkpoint()
                 self._reset_step_metrics()

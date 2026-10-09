@@ -4,16 +4,16 @@
 
 """End-to-end smoke test for ``GRPOTrainer`` on a Tenstorrent device.
 
-The goal is to exercise the full GRPO loop (generation -> reward ->
-advantages -> old-prob forward -> train-mode forward+backward -> optimizer
-step -> callbacks) in the smallest configuration that still produces a
-non-degenerate gradient update.
+The goal is to exercise the full GRPO loop (rollout with per-token
+``log pi_old`` -> reward -> advantages -> train-mode forward+backward ->
+optimizer step -> callbacks) in the smallest configuration that still
+produces a non-degenerate gradient update.
 
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
   * Skip the HuggingFace weight download by monkey-patching
-    ``snapshot_download`` and ``load_from_safetensors`` in
-    ``utils.llama_completer`` to no-ops; the model keeps its random init.
+    ``_download_hf_repo`` and ``load_from_safetensors`` in
+    ``ttml.trainers.grpo_trainer.grpo_ttml_model`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -32,6 +32,7 @@ which is a gated HuggingFace repo. To run this in CI without an
 
 from __future__ import annotations
 
+import csv
 import os
 import sys
 
@@ -41,14 +42,18 @@ import pytest
 import ttml
 import ttnn
 from datasets import Dataset
+from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
+from ttml.modules import RunMode
+from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
+from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
-# The ``LlamaGRPOCompleter`` reference implementation lives under the
-# examples tree, not under ``ttml`` proper. Surface its package on the
-# import path so this test can use it without copy-pasting the completer.
+# The ``LlamaGRPOCompleter`` reference implementation lives under the examples
+# tree, not under ``ttml`` proper. Surface its package on the import path so
+# this test can use it.
 _EXAMPLES_DIR = os.path.join(
     os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
     "tt-train",
@@ -75,7 +80,7 @@ TINY_TRANSFORMER_CONFIG = TransformerConfig(
             "dropout_prob": 0.0,
             "num_blocks": 1,
             "weight_tying": "enabled",
-            # Overwritten by ``len(tokenizer)`` inside the completer ctor.
+            # Overwritten by ``len(tokenizer)`` inside the sampler ctor.
             "vocab_size": 32000,
             "max_sequence_length": 128,
             "runner_type": "memory_efficient",
@@ -133,21 +138,20 @@ CAPITALS_SYSTEM_PROMPT = (
 
 @pytest.fixture(autouse=True)
 def _reuse_open_device(monkeypatch):
-    """Override ``LlamaGRPOCompleter.setup_device`` to reuse the already-open
-    AutoContext device instead of calling ``open_device`` again.
+    """Override ``grpo_ttml_model.open_device`` (and the reference
+    ``LlamaGRPOCompleter.setup_device``) to reuse the already-open AutoContext
+    device instead of calling ``open_device`` again.
 
     Other tests in ``tests/python/`` lazily open the AutoContext device on
     first tensor use and never close it. When pytest collects this file
     alongside them, the device is already open by the time we get here, so
-    the default ``setup_device`` would trip ``open_device was called after
+    the default ``open_device`` would trip ``open_device was called after
     the device was created``. Reusing the live device sidesteps the issue
     without leaking device-management code into the test body.
     """
-    monkeypatch.setattr(
-        LlamaGRPOCompleter,
-        "setup_device",
-        lambda self, device_config: ttml.autograd.AutoContext.get_instance().get_device(),
-    )
+    current_device = lambda *args: ttml.autograd.AutoContext.get_instance().get_device()  # noqa: E731
+    monkeypatch.setattr(grpo_ttml_model, "open_device", current_device)
+    monkeypatch.setattr(LlamaGRPOCompleter, "setup_device", current_device)
 
 
 class _RecordingCallback(TrainerCallback):
@@ -159,7 +163,6 @@ class _RecordingCallback(TrainerCallback):
         self.step_end = 0
         self.train_end = 0
         self.last_step_metrics: dict | None = None
-        self.final_step_time_s: float | None = None
 
     def on_train_begin(self, trainer):
         self.train_begin += 1
@@ -173,18 +176,20 @@ class _RecordingCallback(TrainerCallback):
 
     def on_train_end(self, trainer):
         self.train_end += 1
-        # `step_time_s` is the full per-step wall time that is computed
-        # after all non-monitor `on_step_end` callbacks. Record this here.
-        self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch):
-    """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from grpo.utils import llama_completer
+    """Skip the HF download / safetensors load so the tiny model keeps random init.
 
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
-    monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+    Both names are patched on ``grpo_ttml_model`` only. ``_download_hf_repo`` wraps
+    ``huggingface_hub.snapshot_download``, which is left alone because transformers
+    also uses it to fetch the tokenizer this test loads. ``load_from_safetensors`` is
+    bound there with ``from ... import``, so patching ``ttml.models.llama`` would not
+    reach it.
+    """
+    monkeypatch.setattr(grpo_ttml_model, "_download_hf_repo", lambda model_source: "/tmp/unused")
+    monkeypatch.setattr(grpo_ttml_model, "load_from_safetensors", lambda *args, **kwargs: None)
 
 
 @pytest.mark.requires_device
@@ -195,23 +200,6 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     and actually mutates model weights via ``optimizer.step``.
     """
     np.random.seed(0)
-
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=4,
-            temperature=1.0,
-            completions_per_prompt=2,
-        ),
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
-    )
-
-    # Snapshot a single parameter so we can prove training mutated it.
-    params = completer.model.parameters()
-    assert params, "tiny model should expose at least one parameter"
-    snapshot_name, snapshot_param = next(iter(params.items()))
-    before = snapshot_param.to_numpy(ttnn.DataType.FLOAT32).copy()
 
     grpo_cfg = GRPOConfig(
         epsilon=0.2,
@@ -227,9 +215,10 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         max_completion_length=4,
         num_generations=2,
         warmup_steps=0,
+        rollout_source="ttml",
     )
 
-    tokenizer = completer.tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
     user_prompts = ["What is 1+1?", "Name a color."]
     dataset = Dataset.from_dict(
         {
@@ -266,14 +255,29 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     }
 
     recorder = _RecordingCallback()
-    GRPOTrainer(
-        completer=completer,
+    trainer = GRPOTrainer(
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
         dataset=dataset,
         config=grpo_cfg,
         reward_func=reward_func,
         optimizer_dict=optimizer_dict,
         callbacks=[recorder],
-    ).train()
+    )
+    sampler = trainer.rollout_sampler
+    assert isinstance(sampler, TTMLRolloutSampler)
+
+    # Snapshot a single parameter so we can prove training mutated it.
+    params = trainer.model.parameters()
+    assert params, "tiny model should expose at least one parameter"
+    snapshot_name, snapshot_param = next(iter(params.items()))
+    before = snapshot_param.to_numpy(ttnn.DataType.FLOAT32).copy()
+
+    trainer.train()
+
+    assert trainer.model.get_run_mode() == RunMode.TRAIN, "the sampler must leave the shared model in train mode"
+    assert sampler.weight_version == 1, "trainer should publish the new weight version after the optimizer step"
 
     assert recorder.train_begin == 1, "on_train_begin should fire exactly once"
     assert recorder.before_step == 1, "on_before_optimizer_step should fire once for the single step"
@@ -297,11 +301,16 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
 
-    step_time_s = recorder.final_step_time_s
-    assert step_time_s is not None, "missing metric step_time_s"
+    # ``step_time_s`` is sealed after the non-monitor ``on_step_end`` callbacks
+    # and cleared by the end-of-step metrics reset, so read it from the row the
+    # default GRPOMonitor wrote.
+    with open(tmp_path / "grpo_metrics.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1, f"expected one metrics row, got {len(rows)}"
+    step_time_s = float(rows[0]["step_time_s"])
     assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
-    after = completer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
+    after = trainer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
     assert before.shape == after.shape
     assert not np.array_equal(before, after), (
         f"parameter {snapshot_name!r} was unchanged after one optimizer step; "
@@ -309,6 +318,75 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     )
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_layout_microbatch_aligns_old_logprobs_mask_and_targets():
+    """pi_old columns, mask columns and target tokens refer to the same
+    completion tokens on ragged prompts/completions, with pi_old sign-flipped.
+    """
+    pad = 0
+    prompts = [[11, 12, 13], [21, 22], [31, 32, 33, 34, 35]]
+    completions = [[101, 102], [201, 202, 203, 204], [301]]
+    max_completion_length = 6
+    logprobs = np.zeros((len(prompts), max_completion_length), dtype=np.float32)
+    for r, c in enumerate(completions):
+        logprobs[r, : len(c)] = -np.arange(1, len(c) + 1, dtype=np.float32) - 10.0 * r
+
+    inputs, targets, mask, Tp = layout_microbatch(prompts, completions, pad)
+    old = place_old_nlog_probs(prompts, completions, logprobs, Tp)
+
+    assert Tp == 32
+    assert inputs.shape == targets.shape == mask.shape == old.shape == (len(prompts), Tp)
+    for r, (p, c) in enumerate(zip(prompts, completions)):
+        seq = p + c
+        L = len(seq) - 1
+        np.testing.assert_array_equal(inputs[r, :L], seq[:-1])
+        np.testing.assert_array_equal(targets[r, :L], seq[1:])
+        assert np.all(inputs[r, L:] == pad) and np.all(targets[r, L:] == pad)
+
+        cols = np.flatnonzero(mask[r])
+        np.testing.assert_array_equal(cols, np.arange(len(p) - 1, len(p) - 1 + len(c)))
+        np.testing.assert_array_equal(targets[r, cols], c)
+        np.testing.assert_array_equal(old[r, cols], -logprobs[r, : len(c)])
+        assert np.all(old[r, cols] > 0.0)
+        assert np.all(np.delete(old[r], cols) == 0.0)
+
+
+_GRPO_CONFIG_FIELDS = dict(
+    epsilon=0.2,
+    per_device_train_batch_size=4,
+    num_iterations=1,
+    gradient_accumulation_steps=1,
+    logging_steps=1,
+    output_dir="",
+    checkpointing=False,
+    checkpoint_interval=1,
+    prompts_to_train=2,
+    temperature=1.0,
+    max_completion_length=4,
+    num_generations=2,
+    warmup_steps=0,
+)
+
+
+def test_grpo_config_requires_rollout_source(expect_error):
+    with expect_error(TypeError, "rollout_source"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS)
+
+
+def test_grpo_config_rejects_unknown_rollout_source(expect_error):
+    with expect_error(ValueError, "'rollout_source' must be one of"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_source="vllm")
+
+
+def test_get_grpo_config_reads_rollout_source():
+    cfg = get_grpo_config({"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_source": "ttml"}}})
+    assert cfg.rollout_source == "ttml"
+
+
+def test_layout_microbatch_rejects_short_prompt(expect_error):
+    with expect_error(ValueError, "Prompt is too short"):
+        layout_microbatch([[1]], [[2, 3]], pad_token=0)
 
 
 def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
