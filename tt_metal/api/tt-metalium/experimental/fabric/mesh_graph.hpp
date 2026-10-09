@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include <filesystem>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_stl/indestructible.hpp>
+#include <tuple>
 #include <umd/device/types/arch.hpp>  // tt::ARCH
 #include <tt-metalium/device_types.hpp>
 #include <cstddef>
@@ -16,11 +17,11 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
-#include <memory>
 #include <optional>
 #include <vector>
 
