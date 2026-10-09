@@ -20,15 +20,18 @@ void kernel_main() {
     const uint32_t start_id_base = get_arg(args::start_id_base);
     const uint32_t start_id = start_id_base + start_id_offset;
 
+    // On Quasar a DataflowBuffer drains (waits for posted == acked) when destroyed, so the entry
+    // size must come from the long-lived consumer: a temporary would block on tiles the reader
+    // already posted, which only this kernel acks.
+    DataflowBuffer cb_out(dfb::out);
     // single-tile ublocks
-    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
+    const uint32_t tile_bytes = cb_out.get_entry_size();
 
     // The destination-buffer base address is bound via the tensor parameter (tensor::dst),
     // replacing the legacy buffer-address RTA slot 0.
     const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer cb_out(dfb::out);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 
