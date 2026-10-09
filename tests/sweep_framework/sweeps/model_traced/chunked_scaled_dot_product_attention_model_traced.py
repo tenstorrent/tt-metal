@@ -241,6 +241,8 @@ def run(
     # and no longer fits, so drop it and let the op use the clamped grid.
     _pc = op_kwargs.get("program_config")
     if _pc is not None and hasattr(_pc, "compute_with_storage_grid_size"):
+        # Traces recorded the old max_cores_per_head_batch default (16), a decode setting prefill SDPA rejects.
+        _pc.max_cores_per_head_batch = None
         try:
             _dg = device.compute_with_storage_grid_size()
             _g = _pc.compute_with_storage_grid_size
@@ -252,8 +254,6 @@ def run(
                 )
                 if _pc.exp_approx_mode is not None:
                     _pc_kwargs["exp_approx_mode"] = _pc.exp_approx_mode
-                if getattr(_pc, "max_cores_per_head_batch", None) is not None:
-                    _pc_kwargs["max_cores_per_head_batch"] = _pc.max_cores_per_head_batch
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_pc_kwargs)
         except Exception:
             # best-effort reconstruction; fall back to the default program_config
