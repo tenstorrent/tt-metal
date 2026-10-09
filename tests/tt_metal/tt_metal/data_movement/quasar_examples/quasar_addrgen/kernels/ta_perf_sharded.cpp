@@ -84,12 +84,12 @@ void kernel_main() {
         using E = std::decay_t<decltype(endpoint)>;
         using tensor_accessor::TransferDir;
         if constexpr (std::is_same_v<E, TA>) {
-            return tensor_accessor::transfer_noc_addr<TransferDir::Read>(ta, args.page_id, 0, noc_index);
+            return tensor_accessor::generated_noc_addr<TransferDir::Read>(ta, args.page_id, 0, noc_index);
         } else if constexpr (std::is_same_v<E, ShardView<TA>>) {
-            return tensor_accessor::transfer_shard_noc_addr<TransferDir::Read>(
+            return tensor_accessor::generated_shard_noc_addr<TransferDir::Read>(
                 ta, args.shard_id, args.offset_bytes, noc_index);
         } else {
-            return tensor_accessor::transfer_noc_addr<TransferDir::Read>(endpoint, 0, noc_index);
+            return tensor_accessor::generated_noc_addr<TransferDir::Read>(endpoint, 0, noc_index);
         }
     };
 

@@ -2,27 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Quasar: TensorAccessor transfer addresses from the overlay address generator.
+// tensor_accessor::generated_noc_addr() asks this header for the NoC address of a tensor used to issue a NoC
+// transaction. Instead of computing it in software (TensorAccessor::get_noc_addr()), a sequence serves it. A sequence
+// is an address-generator side programmed with the tensor's layout, which produces the next page's address on each pop.
+// A request the hardware can't serve returns false, and the caller uses the software address.
 //
-// tensor_accessor::transfer_noc_addr() (api/tensor/transfer_noc_addr.h) asks this header for the NoC address of a
-// tensor page that is about to be transferred. Instead of computing it in software (TensorAccessor::get_noc_addr()),
-// a *sequence* serves it: an address-generator side programmed with the tensor's layout, which produces the next page's
-// address on each pop. A request the hardware can't serve returns false, and the caller uses the software address.
-//
-// On a hit, a sequence on a push side writes the address straight into the command buffer the NoC API issues on (push)
+// On a hit, a sequence on a push side writes the address straight into the command buffer the NoC API issues on,
 // instead of returning it; the NoC API then issues without writing that address (api/tensor/noc_traits.h, PushIssue).
-// Only the remote address is ever generated; the local (L1) address is always written by the NoC API.
-//
-// Sections, in order:
-//   1. ATT mapping      bank selectors and window bits of the active ATT map
-//   2. Sides            2 address generators x 2 sides; which serve reads, which serve writes, which can push
-//   3. Sequence state   one SideState per side and one parked sequence, all thread-local
-//   4. Side operations  program, pop, push, move the position, save, restore
-//   5. Recipes          plan_*: the programming that makes page i the next pop, and how many indices it covers
-//   6. Policy           serve_on_side(): hit / skip / restart / re-seek / software;
-//                       serve_request(): find or take a side (LRU spill)
-//   7. Entry points     try_transfer_noc_addr (page ids: TensorAccessor, PageView, wrapper, pages()),
-//                       try_transfer_shard_page_noc_addr (shard_pages()), try_transfer_shard_noc_addr (ShardView)
+// Only the remote address is ever generated; the local address is written by the NoC API.
 //
 // Run-time work a compiler could do statically instead:
 //   - Side assignment and spill/reload (serve_request(), serve_request_slow(), take_side()): each request finds its
@@ -32,9 +19,6 @@
 //   - Seeks (reseek(), plan_*): a loop whose page id is affine in its counter (page = a * i + b) could program the
 //     sequence once before the loop, with a pop amount of a.
 //   - The hit check (serve_on_side()): with both of the above, a transfer is a single push or pop.
-//
-// Only builds under NOC_ATT_ENABLED: the recipes are ATT endpoint-selector encoding (selector << endpoint_shift),
-// which has no meaning under the default V2/XY backend.
 
 #pragma once
 
@@ -66,7 +50,7 @@ namespace tt_addrgen {
 inline constexpr uint64_t kInnerEndSentinel = uint64_t{1} << 48;
 
 // Outer-loop end bound. The outer loop starts at the ATT window's compare bits, so its end must exceed every window's
-// compare (grendel_qsr1 has one at bit 48, the inner sentinel).
+// compare.
 inline constexpr uint64_t kOuterEndSentinel = uint64_t{1} << 62;
 
 template <bool IsDram>
@@ -83,15 +67,13 @@ static_assert(
     "an ATT window's compare bits must stay below the outer loop's end, or the sequence wraps and loses them");
 }  // namespace att_check
 
-// ATT selector of interleaved bank `bank`, resolved exactly as the software path resolves it (DRAM bank ->
-// dram_selectors[], L1 bank -> l1_bank_to_noc_xy -> worker selector).
 template <bool IsDram>
 inline __attribute__((always_inline)) uint32_t interleaved_bank_selector(uint32_t bank) {
     return interleaved_window<IsDram>().selector(noc_address_backend::bank_address<IsDram>(bank, 0, noc_index));
 }
 
-// Metal 2.0 TensorAccessors (built from a binding token) have a hardware recipe: their binding id is a compile-time
-// constant in their type, which is the sequence's identity. Accessors without one use software.
+// Only Metal 2.0 TensorAccessors (built from a binding token) have a hardware recipe. Their binding id is a
+// compile-time constant in their type, which is the sequence's identity. Accessors without one use software.
 template <typename T, typename = void>
 struct bound_tensor_accessor : std::false_type {};
 template <typename DSpecT>
@@ -101,8 +83,6 @@ struct bound_tensor_accessor<TensorAccessor<DSpecT>, void>
 template <typename Accessor>
 inline constexpr bool has_hw_recipe = bound_tensor_accessor<Accessor>::value;
 
-// A sequence's bank shift: its memory's ATT window (an accessor's tensor is in DRAM or in L1, a compile-time property,
-// and every recipe below resolves its addresses in that window).
 template <typename Accessor>
 inline constexpr uint32_t sequence_shift = interleaved_window<Accessor::DSpec::is_dram>().endpoint_shift;
 
@@ -181,18 +161,13 @@ inline constexpr uint32_t kMaxSkip = 64;
 // Short-run fallback: a seek costs hundreds of cycles of software (and more where the recipe takes several address
 // computations to decide), so a sequence whose seeks keep covering fewer than kMinRun indices is slower than software.
 // After kShortSeeksToSoftware such seeks in a row the sequence uses software for good. Row-recipe sequences restart
-// cheaply and never count. TT_TA_ADDRGEN_MIN_RUN overrides (0 turns it off).
+// cheaply and never count.
 // This is a run-time guess at what the compiler could decide statically (which loops use the hardware path at all);
 // once the compiler does that, the fallback is likely unnecessary and can be removed.
-#if defined(TT_TA_ADDRGEN_MIN_RUN)
-inline constexpr uint32_t kMinRun = TT_TA_ADDRGEN_MIN_RUN;
-#else
 inline constexpr uint32_t kMinRun = 4;
-#endif
 inline constexpr uint8_t kShortSeeksToSoftware = 2;
 
-// One sequence: on a side (sides[]) or parked (parked[]). All zero = free: thread_local zero-initialized storage
-// (.tbss) starts fresh for every kernel launch.
+// One sequence: on a side (sides[]) or parked (parked[]). All zero = free
 struct SideState {
     union {
         uint64_t base_addr;  // ShardBases: the base popped for base_shard (ShardView transfers reuse it with offsets)
@@ -241,6 +216,7 @@ struct ParkedSequence {
     SideState sequence;
     overlay::AddrgenPosition pos;
 };
+// Kept here as a toggle because spilling and reloading is expensive and needs to be measured by microbenchmarks.
 #if defined(TT_TA_ADDRGEN_NO_SPILL)
 inline constexpr uint32_t kNumParked = 0;
 #else
@@ -254,8 +230,6 @@ inline thread_local ParkedSequence parked[kNumParked > 0 ? kNumParked : 1];
 inline thread_local uint8_t last_side[2];        // per direction: the side used last (the other one is the LRU)
 inline thread_local uint8_t generator_ready[2];  // this kernel already reset generator g
 
-// A DM core's 8 KB of thread-local storage + stack already holds ~6.6 KB of DFB/CB interface state. At 640 bytes of
-// sequencer state the sharded path overflowed the remaining stack and hung; ~380 bytes ran the whole suite.
 inline constexpr uint32_t kSequencerTlsBytes =
     sizeof(sides) + sizeof(parked) + sizeof(last_side) + sizeof(generator_ready);
 static_assert(
@@ -280,7 +254,7 @@ inline bool shift_fits(uint32_t s, uint32_t shift) {
 // 4. Side operations
 // ============================================================================
 
-// One programming of a side. Loop semantics (checked by AddrgenLoopProbe): the inner loop counts from inner_start in
+// One programming of a side. Loop semantics: the inner loop counts from inner_start in
 // steps of inner_stride and wraps to 0 at inner_end; each wrap carries into the next loop out (the bank loop under
 // BANK_MIDDLE, the outer loop under BANK_INNER once the banks wrap). The outer loop keeps outer_start as its base and
 // adds outer_stride per carry. Address = inner + outer + (bank << endpoint_shift); outer_start includes the ATT
@@ -308,8 +282,7 @@ struct Seek {
 };
 
 // A generator is reset once, the first time this kernel uses either of its sides, to clear whatever an earlier kernel
-// left (face size and the like, which no sequence programs). Never again: a reset clears both sides, and the other side
-// may hold a live sequence. Every register a sequence depends on is written when it is programmed.
+// left.
 template <overlay::AddrGen G>
 inline __attribute__((always_inline)) void ensure_generator_reset() {
     if (!generator_ready[G]) {
@@ -318,8 +291,7 @@ inline __attribute__((always_inline)) void ensure_generator_reset() {
     }
 }
 
-// Program side S and record the programming in its state (for a later reload). Every register is written each time, so
-// nothing from a previous programming leaks in.
+// Program side S and record the programming in its state (for a later reload). Every register is written each time.
 template <uint32_t S>
 inline void program_side(const SideProgram& prog) {
     constexpr overlay::AddrGen G = side_generator<S>;
@@ -361,6 +333,19 @@ inline __attribute__((always_inline)) void push_side(uint32_t amount) {
     } else {
         __builtin_riscv_ttrocc_addrgen_push_dest_pop_x(overlay::ADDRGEN_0, amount - 1);
     }
+}
+
+// Produce side S's current address and advance it by `amount`: pushed into the command buffer (returns kAddrPushed)
+// when the caller allows it and S is its direction's push side, else popped back to the RISC-V.
+template <uint32_t S>
+inline __attribute__((always_inline)) uint64_t advance_side(uint32_t amount, bool push) {
+    if constexpr (is_push_side<S>) {
+        if (push) {
+            push_side<S>(amount);
+            return kAddrPushed;
+        }
+    }
+    return pop_side<S>(amount);
 }
 
 // Row restart: put side S at a new position of its current programming.
@@ -414,7 +399,7 @@ inline void restore_side(const overlay::AddrgenPosition& pos) {
 //   Interleaved (plan_interleaved): one programming walks the whole tensor. BANK_INNER cycles the bank every page and
 //     the inner loop advances one page per bank wrap, as InterleavedAddrGen computes in software. Assumes the device's
 //     interleaved banks are an ascending stride-1 ATT selector run with no per-bank offset (bank i's selector = bank
-//     0's + i), which the allocator and ATT map guarantee; nothing checks it here.
+//     0's + i), which the allocator and ATT map guarantee.
 //   Sharded, cross-bank (plan_cross_bank): when the shards along the innermost split dimension sit on banks with
 //     ascending stride-1 selectors at the same bank-local address, one BANK_MIDDLE programming walks a segment in one
 //     shard, the same segment in the next shard's bank, ..., then steps the outer loop to the next row (or, for a
@@ -425,11 +410,6 @@ inline void restore_side(const overlay::AddrgenPosition& pos) {
 //     page's address and the length of the run of following page ids that are contiguous in that same bank
 //     (contiguous_run); the address generator walks the run with a single-bank programming.
 //   shard_pages() and ShardView: their own sequence kinds, with their entry points at the end of this file.
-//
-// The recipes are the slow path, and they are deliberately not inlined. Every tensor binding is its own
-// type (its binding id), so each accessor gets its own copy of these; inlined, the copies' locals (plans, programs)
-// would all sit in the calling kernel's single stack frame at once -- a three-tensor sharded kernel used ~750 bytes of
-// frame that way, on a DM core whose stack has ~1 KB. As calls, only one seek's locals exist at a time.
 #define TT_TA_SEEK_NOINLINE __attribute__((noinline))
 
 // Interleaved: the next pop is page `page_id`; the programming covers every later page.
@@ -741,16 +721,17 @@ TT_TA_SEEK_NOINLINE inline Seek plan_sharded(const Accessor& acc, uint32_t page_
 //
 // Side assignment (serve_request(), serve_request_slow(), take_side()): a request first compares its sequence's key
 // against the two sides of its direction. A sequence on neither takes a free side, else the least recently used one:
-// that side's sequence is spilled -- its position read back (3 register reads) and parked with its programming -- and a
+// that side's sequence is spilled - its position read back (3 register reads) and parked with its programming. A
 // parked sequence that comes back is reloaded the same way (programming + position written back, no seek). With two
 // sides per direction, least recently used is "not the side used last", so one byte per direction tracks it.
 // Round-robin over more tensors than sides reloads on every transfer. TT_TA_ADDRGEN_NO_SPILL: first use is sticky
-// instead -- a side's first sequence keeps it and the extra sequences use software.
+// instead - a side's first sequence keeps it and the extra sequences use software.
 
-// Re-seek side S's sequence so that index i is the next pop, advancing `stride` per pop, and pop it.
+// Re-seek side S's sequence so that index i is the next address, advancing `stride` per request, and produce it
+// (pushed or popped, see advance_side).
 template <uint32_t S, typename Recipe>
 TT_TA_SEEK_NOINLINE inline uint64_t reseek(
-    SideState& s, uint32_t i, uint32_t stride, const void* acc_ptr, uint32_t arg, uint8_t noc) {
+    SideState& s, uint32_t i, uint32_t stride, const void* acc_ptr, uint32_t arg, uint8_t noc, bool push) {
     const Seek seek = Recipe::plan(acc_ptr, arg, noc, i);
     program_side<S>(seek.prog);
     s.run_end = seek.run_end;
@@ -763,7 +744,7 @@ TT_TA_SEEK_NOINLINE inline uint64_t reseek(
         s.short_seeks = 0;
     } else {
         s.row_pages = 0;
-        if constexpr (Recipe::kShortRunFallback && kMinRun != 0) {
+        if constexpr (Recipe::kShortRunFallback) {
             // Two seeks in a row that each cover fewer than kMinRun indices: this sequence is cheaper in software.
             const bool short_run = seek.run_end - i < kMinRun;
             s.short_seeks = short_run ? static_cast<uint8_t>(s.short_seeks + 1) : 0;
@@ -775,7 +756,7 @@ TT_TA_SEEK_NOINLINE inline uint64_t reseek(
     s.last = i;
     s.next = i + stride;
     s.last_hit = 0;  // a fresh programming: a hit again once a request continues it
-    return pop_side<S>(stride);
+    return advance_side<S>(stride, push);
 }
 
 // Request index i from side S, whose sequence this is: every case (see the policy at the top). True with the address
@@ -786,7 +767,7 @@ TT_TA_SEEK_NOINLINE inline uint64_t reseek(
 // previous request is next - stride.
 template <uint32_t S, typename Recipe>
 TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
-    uint32_t i, const void* acc_ptr, uint32_t arg, uint8_t noc, uint64_t& out) {
+    uint32_t i, const void* acc_ptr, uint32_t arg, uint8_t noc, bool push, uint64_t& out) {
     SideState& s = sides[S];
     if (s.short_seeks >= kShortSeeksToSoftware) {
         return false;  // short-run fallback: this sequence uses software from now on
@@ -795,7 +776,7 @@ TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
     if (i == s.next && i < s.run_end) {
         s.next = i + s.stride;
         s.last_hit = 1;
-        out = pop_side<S>(s.stride);
+        out = advance_side<S>(s.stride, push);
         return true;
     }
     if constexpr (Recipe::kShardRestart) {
@@ -816,13 +797,13 @@ TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
             s.last = i;
             s.next = i + 1;
             s.last_hit = 0;
-            out = pop_side<S>(1);
+            out = advance_side<S>(1, push);
             return true;
         }
     }
     if (i > s.next && i < s.run_end && i - s.next <= kMaxSkip) {
         // Ahead: skip forward in hardware. The step after this one is the request gap if the previous request had the
-        // same gap (a steady stride, e.g. every Nth page), else 1 -- so a jump (a block edge, a new row) doesn't put
+        // same gap (a steady stride, e.g. every Nth page), else 1 - so a jump (a block edge, a new row) doesn't put
         // the hardware past the next sequential request. A skip doesn't count as a hit: random access skips by
         // luck.
         const uint32_t gap = i - last;
@@ -836,7 +817,7 @@ TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
         s.last = i;
         s.next = i + step;
         s.last_hit = 0;
-        out = pop_side<S>(step);
+        out = advance_side<S>(step, push);
         return true;
     }
     if (i == s.next && i == s.run_end && s.row_pages != 0 && s.rows_left != 0 && s.stride == 1) {
@@ -849,22 +830,22 @@ TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
         s.next = i + 1;
         s.last = i;
         s.last_hit = 0;
-        out = pop_side<S>(1);
+        out = advance_side<S>(1, push);
         return true;
     }
     if (i == s.next) {
         out = reseek<S, Recipe>(
-            s, i, s.stride, acc_ptr, arg, noc);  // past the end of the run: the next run of the same sequence
+            s, i, s.stride, acc_ptr, arg, noc, push);  // past the end of the run: the next run of the same sequence
         return true;
     }
     // Behind, or a large jump. A sequence whose last request was a hit re-seeks right away, keeping its stride: the
     // jump back to the next block, column or pass of a regular pattern. A sequence whose previous request also missed
-    // uses software for this one -- random access -- and re-takes the hardware once the access continues at the
+    // uses software for this one - random access - and re-takes the hardware once the access continues at the
     // sequence's stride, or repeats the gap of the previous software request.
     const uint32_t gap = i > last ? i - last : 0;
     const bool continues = gap != 0 && (gap == s.stride || gap == s.miss_gap);
     if (s.last_hit || continues) {
-        out = reseek<S, Recipe>(s, i, continues ? gap : s.stride, acc_ptr, arg, noc);
+        out = reseek<S, Recipe>(s, i, continues ? gap : s.stride, acc_ptr, arg, noc, push);
         return true;
     }
     s.miss_gap = gap;
@@ -876,7 +857,7 @@ TT_TA_SEEK_NOINLINE inline bool serve_on_side_slow(
 // programming. One paired load (stride, run end), one store (next), the pop; `last_hit` is written only when it
 // changes. Endless: the programming covers every later index (interleaved), so there is no run end to check. Anything
 // else goes to serve_on_side_slow(). push: the caller can take the address in the command buffer, so a push side pushes
-// it instead of popping it (out = kAddrPushed); only hits push, the slow path always returns the address.
+// it instead of popping it (out = kAddrPushed), on the hit path and the slow path alike.
 template <uint32_t S, bool Endless, typename Recipe>
 inline __attribute__((always_inline)) bool serve_on_side(
     uint32_t i, uint32_t next, const void* acc_ptr, uint32_t arg, uint8_t noc, bool push, uint64_t& out) {
@@ -889,21 +870,14 @@ inline __attribute__((always_inline)) bool serve_on_side(
             if (__builtin_expect(!s.last_hit, 0)) {
                 s.last_hit = 1;
             }
-            if constexpr (is_push_side<S>) {
-                if (push) {
-                    push_side<S>(stride);
-                    out = kAddrPushed;
-                    return true;
-                }
-            }
-            out = pop_side<S>(stride);
+            out = advance_side<S>(stride, push);
             return true;
         }
     }
-    return serve_on_side_slow<S, Recipe>(i, acc_ptr, arg, noc, out);
+    return serve_on_side_slow<S, Recipe>(i, acc_ptr, arg, noc, push, out);
 }
 
-// Exchange two sequence states in place, 8 bytes at a time (no temporary sequence on the stack).
+// Exchange two sequence states in place. Used in a three tensor round-robin case
 inline void swap_sequences(SideState& a, SideState& b) {
     using word = uint64_t __attribute__((may_alias));
     word* wa = reinterpret_cast<word*>(&a);
@@ -917,12 +891,12 @@ inline void swap_sequences(SideState& a, SideState& b) {
 
 template <uint32_t S, typename Recipe>
 TT_TA_SEEK_NOINLINE inline bool take_side(
-    uint32_t key, uint32_t i, const void* acc_ptr, uint32_t arg, uint8_t noc, uint64_t& out) {
+    uint32_t key, uint32_t i, const void* acc_ptr, uint32_t arg, uint8_t noc, bool push, uint64_t& out) {
     SideState& s = sides[S];
     const bool spill = kNumParked > 0 && s.owner != 0 && s.restorable;
     for (uint32_t p = 0; p < kNumParked; ++p) {
         if (parked[p].sequence.owner == key) {
-            // Reload: the side's sequence and the parked one trade places -- the side's position is read back, the
+            // Reload: the side's sequence and the parked one trade places - the side's position is read back, the
             // parked sequence's programming and position written in, and the side's sequence parked where the other one
             // was.
             overlay::AddrgenPosition spilled;
@@ -934,9 +908,9 @@ TT_TA_SEEK_NOINLINE inline bool take_side(
             if (spill) {
                 parked[p].pos = spilled;
             } else {
-                parked[p].sequence.owner = 0;  // the side's sequence can't be restored (or there was none): forget it
+                parked[p].sequence.owner = 0;  // the side's sequence can't be restored (or there was none):
             }
-            const bool served = serve_on_side_slow<S, Recipe>(i, acc_ptr, arg, noc, out);
+            const bool served = serve_on_side_slow<S, Recipe>(i, acc_ptr, arg, noc, push, out);
             return served;
         }
     }
@@ -952,12 +926,12 @@ TT_TA_SEEK_NOINLINE inline bool take_side(
     }
     s = SideState{};
     s.owner = key;
-    out = reseek<S, Recipe>(s, i, 1, acc_ptr, arg, noc);
+    out = reseek<S, Recipe>(s, i, 1, acc_ptr, arg, noc, push);
     return true;
 }
 
-// The sequence isn't on a side of its direction: take a free side, else the least recently used one (spilling its
-// sequence; TT_TA_ADDRGEN_NO_SPILL: software instead), only where the other side of the generator fits its bank shift.
+// The sequence isn't on a side of its direction: take a free side, else the least recently used one,
+// only where the other side of the generator fits its bank shift.
 template <TransferDir Dir, typename Recipe>
 TT_TA_SEEK_NOINLINE inline bool serve_request_slow(
     uint32_t key,
@@ -966,6 +940,7 @@ TT_TA_SEEK_NOINLINE inline bool serve_request_slow(
     const void* acc_ptr,
     uint32_t arg,
     uint8_t noc,
+    bool push,
     uint64_t& out,
     uint32_t& served_side) {
     constexpr uint32_t PushSide = push_side_of(Dir);
@@ -992,8 +967,8 @@ TT_TA_SEEK_NOINLINE inline bool serve_request_slow(
     }
     served_side = target;
     last_side[d] = target;
-    return target == PushSide ? take_side<PushSide, Recipe>(key, i, acc_ptr, arg, noc, out)
-                              : take_side<PopSide, Recipe>(key, i, acc_ptr, arg, noc, out);
+    return target == PushSide ? take_side<PushSide, Recipe>(key, i, acc_ptr, arg, noc, push, out)
+                              : take_side<PopSide, Recipe>(key, i, acc_ptr, arg, noc, push, out);
 }
 
 // Record side S as the direction's most recently used (the LRU choice for spills); written only when it changes, and
@@ -1046,18 +1021,19 @@ inline __attribute__((always_inline)) bool serve_request(
         return serve_on_side<PopSide, Endless, Recipe>(
             i, static_cast<uint32_t>(pop_owner_next >> 32), acc_ptr, arg, noc, false, out);
     }
-    return serve_request_slow<Dir, Recipe>(key, shift, i, acc_ptr, arg, noc, out, served_side);
+    return serve_request_slow<Dir, Recipe>(key, shift, i, acc_ptr, arg, noc, push, out, served_side);
 }
 
 // ============================================================================
 // 7. Entry points
 // ============================================================================
 //
+//
 // Recipe types, one per kind of index (passed to serve_request() as the Recipe template argument):
 //   PagesRecipe       page ids (TensorAccessor, PageView, wrapper, pages()): plan_interleaved or plan_sharded
 //   ShardPagesRecipe  shard * shard_volume + page_in_shard (shard_pages()): plan_single_bank for the rest of the shard
 //   ShardBasesRecipe  shard ids (ShardView): plan_shard_bases
-// Each is stateless: plan() rebuilds the Seek from plain arguments -- the accessor (acc_ptr), one extra word (arg: the
+// Each is stateless: plan() rebuilds the Seek from plain arguments - the accessor (acc_ptr), one extra word (arg: the
 // shard volume for shard_pages()) and the NoC id (noc). The hit path only forwards these registers; plan() runs only
 // in the cold functions (reseek).
 //   kShortRunFallback: count the sequence's short seeks (see kMinRun).
@@ -1098,12 +1074,13 @@ struct ShardPagesRecipe {
     }
 };
 
-// Hardware transfer address of `page_id` (+ offset). Returns false (and leaves `out` untouched) when the request uses
-// software: this device's tables don't fit the recipe, or the sequence policy sends it there.
+// Hardware generated address of `page_id` (+ offset). Returns false (and leaves `out` untouched) when the request uses
+// software. SW fallback when this ATT doesn't fit the recipe, or the sequence policy sends it there.
 // MayPush: the caller issues on the direction's command buffer and accepts kAddrPushed (only for offset 0: a pushed
 // address can't have the offset added).
 template <TransferDir Dir, bool MayPush = false, typename Accessor>
-inline bool try_transfer_noc_addr(const Accessor& acc, uint32_t page_id, uint32_t offset, uint8_t noc, uint64_t& out) {
+inline __attribute__((always_inline)) bool try_generate_noc_addr(
+    const Accessor& acc, uint32_t page_id, uint32_t offset, uint8_t noc, uint64_t& out) {
     static_assert(has_hw_recipe<Accessor>);
     constexpr bool is_interleaved = Accessor::DSpec::is_interleaved;
     uint32_t served_side;
@@ -1114,9 +1091,6 @@ inline bool try_transfer_noc_addr(const Accessor& acc, uint32_t page_id, uint32_
             &acc,
             0,
             noc,
-            // Push only with no byte offset: a pushed address goes straight into the command buffer, so nothing can
-            // add `offset` to it (a popped one gets it added below). MayPush is the caller's compile-time permission;
-            // this makes it a run-time decision per request.
             /*push=*/MayPush && offset == 0,
             out,
             served_side)) {
@@ -1133,7 +1107,7 @@ inline bool try_transfer_noc_addr(const Accessor& acc, uint32_t page_id, uint32_
 // shards are consecutive runs, and reaching a shard's first page moves the sequence to that shard with three register
 // writes (the shard restart in serve_slow) instead of a seek. Padding pages the iterator skips are skipped in hardware.
 template <TransferDir Dir, bool MayPush = false, typename Accessor>
-inline __attribute__((always_inline)) bool try_transfer_shard_page_noc_addr(
+inline __attribute__((always_inline)) bool try_generate_shard_page_noc_addr(
     const Accessor& acc, uint32_t shard_id, uint32_t page_in_shard, uint32_t offset, uint8_t noc, uint64_t& out) {
     static_assert(has_hw_recipe<Accessor> && !Accessor::DSpec::is_interleaved);
     constexpr uint32_t key = sequence_key<Accessor, SequenceKind::ShardPages>;
@@ -1146,9 +1120,6 @@ inline __attribute__((always_inline)) bool try_transfer_shard_page_noc_addr(
             &acc,
             shard_volume,
             noc,
-            // Push only with no byte offset: a pushed address goes straight into the command buffer, so nothing can
-            // add `offset` to it (a popped one gets it added below). MayPush is the caller's compile-time permission;
-            // this makes it a run-time decision per request.
             /*push=*/MayPush && offset == 0,
             out,
             served_side)) {
@@ -1230,7 +1201,7 @@ struct ShardBasesRecipe {
 };
 
 template <TransferDir Dir, typename Accessor>
-inline bool try_transfer_shard_noc_addr(
+inline __attribute__((always_inline)) bool try_generate_shard_noc_addr(
     const Accessor& acc, uint32_t shard_id, uint32_t offset, uint8_t noc, uint64_t& out) {
     static_assert(has_hw_recipe<Accessor> && !Accessor::DSpec::is_interleaved);
     constexpr uint32_t key = sequence_key<Accessor, SequenceKind::ShardBases>;

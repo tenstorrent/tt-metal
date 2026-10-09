@@ -30,9 +30,9 @@ private:
  * @brief A Page that also remembers the accessor it came from.
  *
  * noc_addr() is the software-computed address. The extra accessor pointer lets a NoC transfer of this page ask the
- * accessor for a *transfer* address instead (see transfer_noc_addr.h), which on Quasar can come from the hardware
- * address generator. Where it does (detail::lazy_page_addr_v), the iterators don't compute the software address up
- * front: the page holds kLazyNocAddr and noc_addr() computes it on demand.
+ * accessor for a generated address instead, which can come from the hardware address generator.
+ * When it does (detail::lazy_page_addr_v), the iterators don't compute the software address upfront:
+ * the page holds kLazyNocAddr and noc_addr() computes it on demand.
  */
 template <typename Accessor>
 class AccessorPage : public Page {
@@ -45,13 +45,13 @@ public:
     const Accessor& accessor() const { return *accessor_; }
 
     // Hides Page::noc_addr: the raw address escapes the binding, so note the tensor as read and written (see
-    // TensorAccessor::get_noc_addr). The NoC traits take the transfer address and note the exact access instead.
+    // TensorAccessor::get_noc_addr). The NoC traits take the generated address and note the exact access instead.
     uint64_t noc_addr() const {
         tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
         return sw_noc_addr();
     }
 
-    // The software address without the note: for the transfer path's software fallback.
+    // The software address without the note for the generated address path's software fallback.
     uint64_t sw_noc_addr() const {
         const uint64_t addr = Page::noc_addr();
         return addr != kLazyNocAddr ? addr : detail::transfer_noc_addr(*accessor_, page_id(), 0, noc_);
@@ -69,7 +69,7 @@ private:
  * @brief A page yielded by shard_pages(): also remembers which shard it is in and its index within that shard.
  *
  * Pages of a shard are consecutive in its bank, so a transfer of the next page_in_shard can continue a hardware
- * walk even though the global page ids jump between shard rows (see transfer_noc_addr.h).
+ * walk even though the global page ids jump between shard rows.
  */
 template <typename Accessor>
 class ShardPage : public AccessorPage<Accessor> {

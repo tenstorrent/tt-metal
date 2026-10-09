@@ -51,7 +51,7 @@ inline uint64_t transfer_shard_noc_addr(
 // Whether the page iterators may leave a page's software address uncomputed (AccessorPage::kLazyNocAddr): when the
 // Quasar address generator serves the accessor's transfers (a bound accessor, in a Quasar DM build with the ATT
 // backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
-// Same condition as TT_TA_ADDRGEN_ACTIVE (api/tensor/transfer_noc_addr.h); TT_TA_ADDRGEN_DISABLE only forces the
+// Same condition as TT_TA_ADDRGEN_ACTIVE (internal/tensor/generated_noc_addr.h); TT_TA_ADDRGEN_DISABLE only forces the
 // software path for the microbenchmarks' baseline.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
 template <typename Accessor, typename = void>

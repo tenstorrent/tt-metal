@@ -4,7 +4,7 @@
 
 // TensorAccessor API coverage (TensorAccessorAddrgenApi): copies tensor src to tensor dst through a scratchpad that
 // holds one slot per page, using one NoC/TensorAccessor API per mode, so each API's transfer address goes through
-// tensor_accessor::transfer_noc_addr (on Quasar, the address-generator sequencer). With several threads, each thread
+// tensor_accessor::generated_noc_addr (on Quasar, the address-generator sequencer). With several threads, each thread
 // copies the pages it owns.
 //   mode 0  pages() with no range (sharded: the whole tensor) / pages(0, num_pages) (interleaved)
 //   mode 1  shard_pages(shard, start, end) in two halves per shard (sharded only)
@@ -17,7 +17,7 @@
 //
 // Compile-time args: mode, num_pages.
 // Runtime args: report_addr -- per thread (at + thread * 64 bytes), 4 words: {hw, pushes, address requests, done
-// marker} (hw and pushes in TT_TA_ADDRGEN_STATS builds; see api/tensor/transfer_noc_addr.h).
+// marker} (hw and pushes in TT_TA_ADDRGEN_STATS builds; see internal/tensor/generated_noc_addr.h).
 
 #include <type_traits>
 
@@ -41,7 +41,7 @@ void kernel_main() {
     const auto dst_ta = TensorAccessor(tensor::dst);
     const uint32_t page_size = src_ta.get_aligned_page_size();
 
-    uint32_t requests = 0;  // address requests that went through transfer_noc_addr
+    uint32_t requests = 0;  // address requests that went through generated_noc_addr
     // An iterator page: its own args types (empty offset), its page id picks the scratchpad slot.
     auto read = [&](const auto& page) {
         using Traits = noc_traits_t<std::decay_t<decltype(page)>>;

@@ -16,7 +16,7 @@
 // Tensor-side kernels use DFB implicit sync (async_read/async_write<NocOptions::TXN_ID>) by default;
 // a few *_Explicit rows keep the reserve/push/wait/pop path covered.
 //
-// Every NoC transfer address comes from tensor_accessor::transfer_noc_addr (via noc_traits_t), which uses the HW
+// Every NoC transfer address comes from tensor_accessor::generated_noc_addr (via noc_traits_t), which uses the HW
 // AddrGen for layouts with a recipe on ATT builds and software otherwise. Tensor-side kernels report how each
 // address was produced (TT_TA_ADDRGEN_STATS) and run_case checks that against the layout, so a row can't silently
 // pass on the software path. Without TT_METAL_NOC_ATT every row is software and the rows are the golden.
@@ -69,11 +69,12 @@ constexpr auto kWriterKernel =
 constexpr auto kFillKernel =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_fill_dfb.cpp";
 
-// Per-kernel opt-out from the HW AddrGen path (api/tensor/transfer_noc_addr.h): the kernel's NoC transfers use the
-// software TensorAccessor addresses.
+// Per-kernel opt-out from the HW AddrGen path (internal/tensor/generated_noc_addr.h): the kernel's NoC transfers use
+// the software TensorAccessor addresses.
 constexpr auto kDisableAddrgenDefine = "TT_TA_ADDRGEN_DISABLE";
 // Test instrumentation: each tensor-side kernel counts the transfer addresses the hardware produced and writes
-// {hw, pushes, transfers issued, unused stack bytes} to its report_addr RTA (TransferStats in transfer_noc_addr.h).
+// {hw, pushes, transfers issued, unused stack bytes} to its report_addr RTA (TransferStats in
+// internal/tensor/generated_noc_addr.h).
 constexpr auto kAddrgenStatsDefine = "TT_TA_ADDRGEN_STATS";
 constexpr uint32_t kNumStatsWords = 4;  // word 3: stack bytes the kernel never used (readers and multi/mixed only)
 constexpr uint32_t kStatsStride = 64;   // bytes reserved per kernel's report
@@ -1596,7 +1597,7 @@ INSTANTIATE_TEST_SUITE_P(
 // - async_write_zeros: DRAM pages are addressed in software (zero-fill isn't a streaming path), and local L1 is zeroed
 //   by the iDMA zero device with no remote address.
 // The strided modes run several threads, each copying the pages (or shards) it owns. Checks the data, that every
-// address request went through transfer_noc_addr (and, with ATT, through the address generator), and which modes push.
+// address request went through generated_noc_addr (and, with ATT, through the address generator), and which modes push.
 namespace api_cov {
 
 constexpr auto kKernel = "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_api_copy.cpp";
@@ -2259,7 +2260,7 @@ TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
     if (p.path == perf::Path::HwStats) {
         const uint32_t hw = r[10], pushes = r[11];
         log_info(tt::LogTest, "addrgen_perf_stats,{},hw={},pushes={}", perf::param_name(p), hw, pushes);
-        // Three sections go through transfer_noc_addr (addr, read, batched); only the two read sections issue through
+        // Three sections go through generated_noc_addr (addr, read, batched); only the two read sections issue through
         // Noc::async_read, which can take a pushed address.
         EXPECT_LE(hw, 3 * transfers);
         EXPECT_LE(pushes, 2 * transfers);
@@ -2645,8 +2646,8 @@ TEST_P(AddrgenRawPerf, Breakdown) {
     EXPECT_EQ(checks[1], 0u) << "pages read through push with a skip of 0 (PUSH_SRC_POP_X(cmdbuf, 0)) are wrong";
     EXPECT_EQ(checks[2], 0u) << "pages read through the count-less push builtin are wrong";
     EXPECT_EQ(checks[5], 0u) << "pages read through Noc::async_read (the push path) are wrong";
-    // A sequential walk that starts over re-seeks once (popped); every other request is a hit and pushes.
-    EXPECT_EQ(checks[6], raw_perf::kNumPages - 1) << "the sequencer should push every hit";
+    // A sequential walk on the push side pushes every request, its seek included.
+    EXPECT_EQ(checks[6], raw_perf::kNumPages) << "the sequencer should push every request";
 }
 
 INSTANTIATE_TEST_SUITE_P(

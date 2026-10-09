@@ -16,7 +16,7 @@
 // Named RTAs:
 //   start_page, num_pages,
 //   report_addr: L1 address for 4 words {hw, pushes, transfers issued, unused stack bytes} (TT_TA_ADDRGEN_STATS
-//                builds only; see api/tensor/transfer_noc_addr.h)
+//                builds only; see internal/tensor/generated_noc_addr.h)
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"

@@ -68,8 +68,8 @@ constexpr CmdBuf paired_cmdbuf(AddrGen addrgen) { return static_cast<CmdBuf>(sta
 enum bank_order_e { BANK_INNER = 0, BANK_MIDDLE, BANK_OUTER };
 
 /* A RoCC instruction with no result. Hardware workaround (AIHWE-6506): two value-returning RoCC instructions in flight
- * at once (e.g. back-to-back rd_reg into different registers) can hang the core; a rocc_nop between them avoids it.
- * The compiler is to insert it automatically; until then the library calls it between such instructions. */
+ * at once (e.g. back-to-back rd_reg into different registers) can hang; a rocc_nop between them avoids it.
+ * The compiler will eventually insert it automatically. */
 inline __attribute__((always_inline)) void rocc_nop() { CMDBUF_GET_VC_SPACE_NO_RESULT(0); }  // cmdbuf 0
 
 /*
@@ -418,9 +418,6 @@ inline __attribute__((always_inline)) uint64_t peek_src_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen() {
-    // Not __builtin_riscv_ttrocc_addrgen_pop_src(): that builtin sets xs1 with rs1 = x0, i.e. a pop amount of 0,
-    // and the address generator does not advance by one on 0 (seen on emu-quasar-2x3: the next address jumped by an
-    // arbitrary number of steps). The ROCC macro this replaced passed 1 explicitly; do the same.
     return __builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
@@ -446,9 +443,6 @@ inline __attribute__((always_inline)) uint64_t peek_dest_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen() {
-    // Not __builtin_riscv_ttrocc_addrgen_pop_dest(): that builtin sets xs1 with rs1 = x0, i.e. a pop amount of 0,
-    // and the address generator does not advance by one on 0 (seen on emu-quasar-2x3: the next address jumped by an
-    // arbitrary number of steps). The ROCC macro this replaced passed 1 explicitly; do the same.
     return __builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
