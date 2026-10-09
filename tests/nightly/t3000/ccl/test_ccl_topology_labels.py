@@ -797,6 +797,36 @@ def test_reduce_scatter_prim_whole_mesh(mesh_device, strict_ccl_topology):
     assert torch.equal(_compose_by_label(tt_output), full * num_devices)
 
 
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_reduce_scatter_prim_preallocated_output_is_relabelled(mesh_device, strict_ccl_topology):
+    """A caller-preallocated output (`output_tensor=`, the prim's optional_output_tensor): create_output_tensors
+    returns that tensor itself, so the hook's label lands on the caller's object through the shared tensor
+    attributes -- after the op it *is* the reduce_scatter result. {N}, [Replicate] in, a {N}, [Replicate] output
+    buffer, dim 3 along the inner axis: the returned tensor and the caller's handle both read [Replicate, Shard(3)]
+    ({N}, [Shard(3)] on a line) and compose to `cols` * T. Negative control: a hook returning {} would hand the
+    framework the union over the input and the preallocated output (two Replicates), so the result would keep
+    [Replicate] and composing it fails the identical-bytes check."""
+    torch.manual_seed(30)
+    rows, cols, _ = _mesh(mesh_device)
+    full = _integers([1, 1, 32, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ReplicateTensorToMesh(mesh_device))
+    tt_preallocated = _from_torch(
+        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16), mesh_device, ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+
+    tt_output = ttnn.reduce_scatter(
+        tt_input, dim=3, cluster_axis=1, topology=ttnn.Topology.Linear, output_tensor=tt_preallocated
+    )
+
+    expected_placements = [REPLICATE, SHARD(3)] if rows > 1 else [SHARD(3)]
+    expected_shape = (rows, cols) if rows > 1 else (cols,)
+    for tensor in (tt_output, tt_preallocated):
+        assert _placements(tensor) == expected_placements
+        assert _dist_shape(tensor) == expected_shape
+        assert torch.equal(_compose_by_label(tensor), full * cols)
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # broadcast (ccl/broadcast: one sender, every device on its line receives)
 # ---------------------------------------------------------------------------------------------------------------------
