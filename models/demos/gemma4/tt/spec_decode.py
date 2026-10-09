@@ -1336,12 +1336,12 @@ class SpeculativeDecoder:
 
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0]) if self._tp > 1 else ttnn.to_torch(id_tt)
+        t = self._read_replica(id_tt)
         return int(t.reshape(-1)[0])
 
     def _ids_to_host(self, ids_tt, n):
         """[1,1,n] uint32 device ids -> list[int] (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(ids_tt)[0]) if self._tp > 1 else ttnn.to_torch(ids_tt)
+        t = self._read_replica(ids_tt)
         flat = t.reshape(-1)
         return [int(flat[j]) for j in range(n)]
 
@@ -1775,7 +1775,7 @@ class SpeculativeDecoder:
         scratch on a re-replay)."""
         tr = self._fused_trace
         vh = tr["vhidden"]
-        vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
+        vh_t = self._read_replica(vh)
         sel = vh_t[:, :, row : row + 1, :].contiguous()  # [1,1,1,backbone]
         host_h = ttnn.from_torch(sel, layout=ttnn.TILE_LAYOUT, dtype=tr["h"].dtype, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(host_h, tr["h"])
@@ -1859,11 +1859,7 @@ class SpeculativeDecoder:
             _lg.debug(f"[spec-trace] fused replay pos={cur_pos} execute")
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            )
+            vx = self._read_replica(tr["verify_x"])
             vx = vx.reshape(-1)
             drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
             target_ids = self._ids_to_host(tr["vidx"], K + 1)
@@ -2225,10 +2221,7 @@ class SpeculativeDecoder:
         self._srv_first = False
 
         ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
-        vx = (
-            ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0]) if self._tp > 1 else ttnn.to_torch(tr["verify_x"])
-        )
-        vx = vx.reshape(-1)
+        vx = self._read_replica(tr["verify_x"]).reshape(-1)
         drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
         target_ids = self._ids_to_host(tr["vidx"], K + 1)
         m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
@@ -2554,7 +2547,7 @@ class SpeculativeDecoder:
         tr = self._fused_trace_batched
         B, P = tr["B"], tr["P"]
         vh = tr["vhidden"]
-        vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
+        vh_t = self._read_replica(vh)
         sel = torch.cat([vh_t[:, :, b * P + rows_b[b] : b * P + rows_b[b] + 1, :] for b in range(B)], dim=2)
         host_h = ttnn.from_torch(
             sel.contiguous(), layout=ttnn.TILE_LAYOUT, dtype=tr["h"].dtype, mesh_mapper=self._mapper
@@ -2637,11 +2630,7 @@ class SpeculativeDecoder:
 
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            ).reshape(-1)
+            vx = self._read_replica(tr["verify_x"]).reshape(-1)
             gids = self._ids_to_host(tr["vidx"], B * P)
 
             rows_b = []
@@ -2784,7 +2773,8 @@ class SpeculativeDecoder:
             anchor_pos: its absolute position p.
             max_new_tokens: max tokens to generate.
             anchor_hidden: optional pre-seeded target hidden at p; computed via
-                ``seed`` when None.
+                ``seed`` when None. Only the host loop accepts it; the fused body
+                seeds itself, so passing it on a fused route raises.
 
         Returns:
             (generated_token_ids, num_accept_per_iter) — the latter for accept-rate stats.
@@ -2803,6 +2793,8 @@ class SpeculativeDecoder:
             self._metrics_finish()
             return [], []
         if fused:
+            if anchor_hidden is not None:
+                raise ValueError("anchor_hidden is only accepted by the host loop; the fused body seeds itself")
             return self.generate_fused(anchor_token, anchor_pos, max_new_tokens, _nested=True)
         if self.target_has_pli and self._pli_dev_host:
             self.target.init_pli_device_weights()

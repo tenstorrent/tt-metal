@@ -52,6 +52,13 @@ def test_generate_dispatch(pli, device_pli, trace, temperature, fused, expect_er
         assert calls == []
 
 
+def test_fused_route_rejects_caller_anchor_hidden(expect_error):
+    decoder = _decoder(pli=False)
+    decoder.generate_fused = lambda *args, **kwargs: pytest.fail("fused body reached")
+    with expect_error(ValueError, "anchor_hidden"):
+        decoder.generate(1, 0, 1, anchor_hidden=object())
+
+
 @pytest.mark.parametrize("trace", [True, False])
 def test_batched_dispatch_follows_trace(trace, expect_error):
     decoder = _decoder(pli=False, trace=trace)
