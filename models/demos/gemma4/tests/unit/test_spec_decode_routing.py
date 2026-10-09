@@ -27,7 +27,7 @@ def _decoder(monkeypatch, *, pli, mechanism="device", route="auto", trace=True):
 @pytest.mark.parametrize(
     "pli,mechanism,expected",
     [
-        (True, "device", "fused-packed"),
+        (True, "device", "fused-batch-dim"),
         (True, "host", "host-loop"),
         (False, "device", "fused-batch-dim"),
     ],
@@ -45,10 +45,32 @@ def test_explicit_fusion_without_trace_fails_before_seed(monkeypatch, route, exp
         decoder.generate(1, 0, 1)
 
 
-def test_pli_batch_dim_rejected_before_seed(monkeypatch, expect_error):
-    decoder = _decoder(monkeypatch, pli=True, route="fused-batch-dim")
-    decoder.seed = lambda *args, **kwargs: pytest.fail("device work started")
-    with expect_error(ValueError, "cannot use fused-batch-dim"):
+@pytest.mark.parametrize(
+    "pli,route,expected_packed",
+    [
+        (True, "auto", None),
+        (False, "auto", None),
+        (True, "fused-packed", True),
+        (True, "fused-batch-dim", False),
+        (False, "fused-packed", True),
+        (False, "fused-batch-dim", False),
+    ],
+)
+def test_single_user_fused_routes_use_single_user_body(monkeypatch, pli, route, expected_packed):
+    monkeypatch.delenv("GEMMA4_SPEC_FUSED_PACKED", raising=False)
+    decoder = _decoder(monkeypatch, pli=pli, route=route)
+    decoder.generate_batched = lambda *args, **kwargs: pytest.fail("single user reached the batched body")
+    calls = []
+    decoder.generate_fused = lambda *args, **kwargs: calls.append((args, kwargs)) or ([7], [0])
+    assert decoder.generate(1, 0, 1) == ([7], [0])
+    assert calls == [((1, 0, 1), {"packed": expected_packed, "_nested": True})]
+
+
+def test_explicit_route_contradicting_fused_packed_env_raises(monkeypatch, expect_error):
+    monkeypatch.setenv("GEMMA4_SPEC_FUSED_PACKED", "0")
+    decoder = _decoder(monkeypatch, pli=True, route="fused-packed")
+    decoder.generate_fused = lambda *args, **kwargs: pytest.fail("generation started")
+    with expect_error(ValueError, "contradicts"):
         decoder.generate(1, 0, 1)
 
 
@@ -58,7 +80,7 @@ def test_mixed_pli_needs_diagnostic_override(monkeypatch, expect_error):
     with expect_error(ValueError, "different PLI"):
         decoder._effective_route()
     monkeypatch.setenv("GEMMA4_PLI_ALLOW_MIXED", "1")
-    assert decoder._effective_route() == "fused-packed"
+    assert decoder._effective_route() == "fused-batch-dim"
 
 
 def test_batched_seed_uses_selected_device_pli(monkeypatch):

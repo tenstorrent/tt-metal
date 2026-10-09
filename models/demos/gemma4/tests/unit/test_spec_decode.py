@@ -3274,11 +3274,13 @@ def test_fused_pli_current_seed_row(accepted, expected):
     assert decoder._fused_shift_seed_row(accepted, 3) == expected
 
 
-def test_fused_pli_route_uses_packed_batched_body():
+def test_fused_pli_route_uses_single_user_fused_body(monkeypatch):
     from types import SimpleNamespace
 
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
+    monkeypatch.delenv("GEMMA4_DECODE_PLI_DEV", raising=False)
+    monkeypatch.setenv("GEMMA4_PLI", "device")
     decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
     decoder._use_trace = True
     decoder.target_has_pli = True
@@ -3286,11 +3288,73 @@ def test_fused_pli_route_uses_packed_batched_body():
     decoder._pli_dev_host = True
     decoder._route = "auto"
     decoder.target = SimpleNamespace(max_seq_len=1024)
+    decoder.generate_batched = lambda *args, **kwargs: pytest.fail("single user reached the batched body")
     calls = []
-    decoder.generate_batched = lambda *args, **kwargs: calls.append((args, kwargs)) or ([[17, 23]], [[2]])
+    decoder.generate_fused = lambda *args, **kwargs: calls.append((args, kwargs)) or ([17, 23], [2])
 
     assert decoder.generate(5, 12, 2) == ([17, 23], [2])
-    assert calls == [(([5], [12], 2, 1024), {"_nested": True})]
+    assert calls == [((5, 12, 2), {"packed": None, "_nested": True})]
+
+
+@pytest.mark.parametrize("reseed,packed", [(False, True), (False, False), (True, False)])
+def test_fused_body_passes_device_pli_to_every_verify(monkeypatch, reseed, packed):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt import spec_decode
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    class Tensor:
+        def deallocate(self, force=False):
+            pass
+
+    for name in ("reshape", "concat", "repeat"):
+        monkeypatch.setattr(spec_decode.ttnn, name, lambda *args, **kwargs: Tensor())
+    monkeypatch.setattr(spec_decode.ttnn, "Shape", lambda dims: dims)
+    calls = []
+    target = SimpleNamespace(
+        ttnn_verify_forward=lambda **kwargs: (calls.append(kwargs) or Tensor(), Tensor()),
+        ttnn_packed_verify_forward=lambda **kwargs: (calls.append(kwargs) or Tensor(), Tensor()),
+    )
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder.draft_len = 3
+    decoder.target = target
+    decoder.target_has_pli = True
+    decoder._fused_reseed = reseed
+    decoder.tt_kv_cache = []
+    decoder._shared_kv = {}
+    decoder._shared_kv_page_tables = lambda page_table: {}
+    decoder._packed_H = lambda: 1
+    decoder._argmax_last = lambda logits, rows: Tensor()
+    decoder.assistant = SimpleNamespace(step=lambda *args: (Tensor(), Tensor()))
+    tr = {key: Tensor() for key in ("anchor_tok", "h", "d_pu", "d_pi", "d_pt", "v_pu", "v_pi", "v_pt")}
+    tr.update(d_ptl=None, v_ptl=None)
+    if packed:
+        tr.update(
+            pv=True,
+            pv_mask_full=Tensor(),
+            pv_mask_slide=Tensor(),
+            pv_pos=Tensor(),
+            pv_embed={},
+            pv_hot={},
+            pv_ptl=None,
+        )
+
+    decoder._fused_body(tr)
+
+    assert len(calls) == (2 if reseed else 1)
+    assert all(call["pli_on_device"] is True for call in calls)
+
+
+def test_fused_pli_requires_device_weights_before_single_user_capture(expect_error):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder.target_has_pli = True
+    decoder.target = SimpleNamespace(_pli_dev_ready=False)
+    with expect_error(RuntimeError, "initialized before fused trace capture"):
+        decoder._capture_fused_trace(1, None, 0, max_new_tokens=1)
 
 
 def test_fused_pli_requires_device_weights_before_capture(expect_error):

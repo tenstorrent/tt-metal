@@ -55,12 +55,10 @@ def resolve_route(route, target_has_pli, pli_device, trace=True, greedy=True):
     """Return an executable route, rejecting unsupported explicit requests."""
     if route not in ROUTES:
         raise ValueError(f"Unknown speculative route: {route!r}")
-    if target_has_pli and route == "fused-batch-dim":
-        raise ValueError("PLI targets cannot use fused-batch-dim")
     if route == "auto":
         if not trace or not greedy or (target_has_pli and not pli_device):
             return "host-loop"
-        return "fused-packed" if target_has_pli else "fused-batch-dim"
+        return "fused-batch-dim"
     if route != "host-loop" and not trace:
         raise ValueError(f"{route} requires GEMMA4_SPEC_TRACE=1")
     if route != "host-loop" and not greedy:
