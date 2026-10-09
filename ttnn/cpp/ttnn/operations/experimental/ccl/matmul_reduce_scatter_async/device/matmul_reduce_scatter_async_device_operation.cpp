@@ -89,7 +89,11 @@ std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperatio
     // the matmul LABEL -- not of any tensor in tensor_args -- along reduce_scatter_params.cluster_axis (nullopt: the
     // whole mesh) for reduce_scatter_params.dim; the caller's persistent output buffer IS that result and takes the
     // label. Not delegated to ReduceScatterMinimalAsyncDeviceOperation, whose hook labels its own 2-3 tensors from
-    // its own input. No honest label (nullopt, already warned about): {} keeps the union default for both.
+    // its own input. The host prim always passes cluster_axis = nullopt, and the program factory ranks that
+    // whole-mesh ring by `tensor_args.input`'s device-storage coordinates (get_linearized_index_from_physical_coord),
+    // so the label is spelled over those coordinates (over_storage_ring_order, as the helper's Tensor overload does
+    // for a plain reduce_scatter) rather than over the matmul label's. No honest label (nullopt, already warned
+    // about): {} keeps the union default for both.
     const auto& input_topology = tensor_args.input.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};
@@ -99,12 +103,15 @@ std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperatio
     auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
     TensorTopology mm_topology(std::move(shape), std::move(placements), input_topology.mesh_coords());
 
-    auto reduce_scatter_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
-        mm_topology,
-        args.reduce_scatter_params.cluster_axis,
-        tensor_args.input.device()->shape(),
-        static_cast<uint32_t>(tensor_args.input.logical_shape().rank()),
-        static_cast<int32_t>(args.reduce_scatter_params.dim));
+    auto reduce_scatter_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            mm_topology,
+            args.reduce_scatter_params.cluster_axis,
+            tensor_args.input.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input.logical_shape().rank()),
+            static_cast<int32_t>(args.reduce_scatter_params.dim)),
+        tensor_args.input,
+        args.reduce_scatter_params.cluster_axis);
     if (!reduce_scatter_topology.has_value()) {
         return {};
     }
