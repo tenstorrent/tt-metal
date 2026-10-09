@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T09:47:11.662118+00:00",
+  "generated_at": "2026-10-09T10:09:44.887274+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 97545,
-      "sha256": "83151348b4e48cb6664d9d8d1ab4c911e5417aabdb8e9dc7682f4a0eee70313a"
+      "bytes": 99314,
+      "sha256": "44488d362abd226503fed3bd295e894c76d7d8bda5ff6c5fa856fa067342e6d5"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 30903,
-      "sha256": "c34a9b90348fc092c70fde22bca8067e6d98dcca862127912f893bed05d05c03"
+      "bytes": 31411,
+      "sha256": "c4c9af7deca974243f2e0cce980b7e093094a895768bbc92bd4253190ccae24c"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -3803,6 +3803,56 @@
       "path": "galaxy-evidence/post-head-cpu-v1/transfer-source.py.snapshot",
       "bytes": 1337,
       "sha256": "9e89912ade8a277145d0406026767bd469525f265dbfb4ecd045d5f8b23ad365"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/README.md",
+      "bytes": 3243,
+      "sha256": "ee89b8c08ca81d88c053e0c4582f7abc671ae21a550c91346d4f6ea11c21388f"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/bandwidth-estimate.json",
+      "bytes": 2316,
+      "sha256": "f6769f9f87a9f0ff78efe943ad413f2694867af8aca53fe82b044e290a50e711"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/controller.py.gz",
+      "bytes": 2021,
+      "sha256": "a7f996723a946ce44d2da9cb7d3a471c7fbc992f01fc036622ac54781eecde81"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/imports.log.gz",
+      "bytes": 49,
+      "sha256": "64d726e97efb82cfbc1b88e93c354e95d45ccb8c624cbc89701a16ccddd34776"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/launch.json",
+      "bytes": 2579,
+      "sha256": "0cdb4b03df8100d89cd5cf15eab1475e9de5c976c060bfc136c390b71f5e0be0"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "5046df4fbc02be6836fdbcedf4f0a1b81dd07688c58cf2ef9c0fd0277d8caf05"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/source-manifest.json",
+      "bytes": 21671,
+      "sha256": "73ee67ce619698028df06677f0b52fd9dd2d6f89d4523aafe3320ad58ede80e3"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/status-at-launch.json",
+      "bytes": 573,
+      "sha256": "2b6be632ac8f0157373df18aae1bb4ab7ef263b44493be8639cf7e377d7f7c9a"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/unit.log.gz",
+      "bytes": 52,
+      "sha256": "14bd7e003df3522077522be88fa52810cc312befa299716bfb862835d467f413"
+    },
+    {
+      "path": "galaxy-evidence/precision-perf-v1/unit.xml.gz",
+      "bytes": 767,
+      "sha256": "2c81511928937e0c9890fa572bfd1a6345cc739967304d00b9ecd929ac7f840f"
     },
     {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",

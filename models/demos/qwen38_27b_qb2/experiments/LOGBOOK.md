@@ -1290,3 +1290,29 @@ No session connection is needed for that queue to continue.
   the corrected anchored patch added the validated import instructions.
 
 [Image identity result and queued recovery](../galaxy-evidence/image-recovery-v2/README.md).
+
+## Oct 9, 09:49-10:09 UTC: quantify precision tradeoff; queue matched performance
+
+- The user asked how much BFP8 costs. Rechecked the exact active qualification:
+  four replicas loaded at the first check, seven at collection, no timed decode
+  measurements yet. Explained that loading and numerical-error results cannot
+  be used as inference throughput measurements.
+- Derived an explicitly unmeasured bandwidth model from the recorded padded
+  matrix geometry. Streamed weights rise from 3.925 to 7.113 GB/chip/step.
+  At B16 the traffic-only TPS reductions are 30.1% at 16K and 24.7% at 32K.
+  The calculation omits HiFi2 compute cost and prefill, so these are not actual
+  engine predictions. The estimate retains its inputs, hash and assumptions.
+- Launched a persistent three-policy, two-context comparison after the exact
+  queued chunked-state job. It shares the coordination lock with image checks.
+  Uses frozen active-qualification source, B16 on one TP4, 128 output tokens,
+  one warmup and three measurements. BFP4/LoFi -> BFP4/HiFi2 -> BFP8/HiFi2
+  separates fidelity from weight precision while keeping head/KV/state fixed.
+- Eighteen native tests and frozen-import/plan validation passed. Observed
+  PID 1491803, invocation `122b1077bed2438d9802360ab6277514`; source-manifest
+  hash matches the current accuracy bundle. The controller stops on failure
+  or unproven cleanup. This does not promote any policy or bypass GPQA.
+- Read the earlier completed head G0 timing only as a baseline: aggregate
+  281.33 decode tok/s with one short-context user per replica. It is not
+  comparable to a B16/32K measurement, and the new BFP8 G0 has no timing yet.
+
+[Precision cost estimate and persistent comparison](../galaxy-evidence/precision-perf-v1/README.md).

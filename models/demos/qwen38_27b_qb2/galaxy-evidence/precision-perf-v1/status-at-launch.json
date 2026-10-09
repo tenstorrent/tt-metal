@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-chunked-state-v2-20261009.service",
+  "predecessor_invocation": "4c0c8fa5f3b249f79fee72c77d1c137f",
+  "hardware_opened": false,
+  "cleanup_completed": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "runs": [],
+  "is_gpqa_score": false,
+  "serving_qualified": false,
+  "updated_at": "2026-10-09T10:08:18Z",
+  "predecessor": {
+    "MainPID": "1457806",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "4c0c8fa5f3b249f79fee72c77d1c137f"
+  }
+}

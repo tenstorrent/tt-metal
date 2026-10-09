@@ -1,0 +1,55 @@
+{
+  "created_at": "2026-10-09T10:07:57.836044+00:00",
+  "measured_hardware": false,
+  "source_capacity_sha256": "4871c1b63212419038a0df9cfb5348ce3e084de884fb21eac9e9293666fb73fb",
+  "source_capacity_path": "galaxy-evidence/decoder-precision-controls-v1/capacity-estimate.json",
+  "streamed_weights_per_chip_bytes": {
+    "bfloat4_b": 3924889600,
+    "bfloat8_b": 7112560640
+  },
+  "added_streamed_bytes_per_chip_per_step": 3187671040,
+  "recurrent_read_write_per_user_chip_bytes": 75497472,
+  "kv_read_per_context_token_per_user_chip_bytes": 8704,
+  "cells": [
+    {
+      "context_tokens": 16384,
+      "batch_per_tp4_replica": 16,
+      "bfp4_total_streamed_bytes": 7414550528,
+      "bfp8_total_streamed_bytes": 10602221568,
+      "bandwidth_only_throughput_ratio": 0.6993393300116325,
+      "bandwidth_only_throughput_drop_percent": 30.06606699883675
+    },
+    {
+      "context_tokens": 32768,
+      "batch_per_tp4_replica": 16,
+      "bfp4_total_streamed_bytes": 9696251904,
+      "bfp8_total_streamed_bytes": 12883922944,
+      "bandwidth_only_throughput_ratio": 0.7525853690793387,
+      "bandwidth_only_throughput_drop_percent": 24.74146309206613
+    },
+    {
+      "context_tokens": 131072,
+      "batch_per_tp4_replica": 8,
+      "bfp4_total_streamed_bytes": 13655674880,
+      "bfp8_total_streamed_bytes": 16843345920,
+      "bandwidth_only_throughput_ratio": 0.8107459732086295,
+      "bandwidth_only_throughput_drop_percent": 18.92540267913705
+    },
+    {
+      "context_tokens": 262016,
+      "batch_per_tp4_replica": 4,
+      "bfp4_total_streamed_bytes": 13349228544,
+      "bfp8_total_streamed_bytes": 16536899584,
+      "bandwidth_only_throughput_ratio": 0.8072388948237808,
+      "bandwidth_only_throughput_drop_percent": 19.276110517621923
+    }
+  ],
+  "assumptions": [
+    "One read of padded DRAM-sharded decoder projection weights and BFP8 head per decode step",
+    "One FP32 recurrent-state read and write per active user; BFP8 KV unchanged",
+    "Same effective bandwidth for both policies; pure traffic roofline, no fixed overhead",
+    "Does not model HiFi2 compute cost, prefill, CCL, temporary traffic or measured reader efficiency",
+    "Batch sizes at longer contexts are reduced to stay near the current token-pool capacity; not hardware admission proof"
+  ],
+  "promoted": false
+}

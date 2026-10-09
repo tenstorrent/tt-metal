@@ -1,5 +1,13 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 10:09 UTC update: BFP8 G0 has loaded seven of eight replicas; no new
+accuracy or throughput result yet. A matched BFP4/LoFi, BFP4/HiFi2, BFP8/HiFi2
+performance comparison is persistently queued after the accuracy/state chain,
+with 18 preflight tests passing. It will measure separate prefill/decode at
+16K and 32K, B16, one TP4. The current 30%/25% estimated TPS penalties are
+traffic-only assumptions, not measured performance.
+[Precision comparison](../galaxy-evidence/precision-perf-v1/README.md).
+
 Oct 9 09:46 UTC update: BFP8 G0 is live, with three of eight replicas loaded;
 full GPQA remains queued behind G0. The native v5 image's failed config-digest
 lookup is repaired: the imported manifest-ID image passed strict pinned OCI
