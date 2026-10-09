@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 from models.tt_transformers.tt.common import rope_scaling_model_factory
@@ -289,6 +290,7 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
