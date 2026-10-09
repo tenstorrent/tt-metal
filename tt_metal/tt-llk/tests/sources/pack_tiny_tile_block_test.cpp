@@ -165,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (tiny_pack_mode == 0)
         {
             // Single call packs all tiles from sparse DEST to dense L1.
-            // num_tiles is passed at runtime — no prior mop_cfg patching needed.
+            // num_tiles is passed at runtime; no prior mop_cfg patching needed.
             _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
                 0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
         }

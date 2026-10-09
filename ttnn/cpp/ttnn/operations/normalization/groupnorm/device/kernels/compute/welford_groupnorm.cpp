@@ -430,7 +430,6 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-        // main's per-tile pack: the block pack read slower at the SDXL VAE's 128 x 1024 x 1024 group_norm
         PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(mean_dst, dfb_ex_partial_id, 2)));
 #else
         pack_block(mean_dst, dfb_ex_partial_id, 2);
