@@ -14,7 +14,7 @@ over the ring), so there is no explicit AllGather here:
 Grouped V (cache stays n_kv heads, 1/chip at TP=4 — NO inflation). No balancing / zigzag for chunked
 prefill (is_balanced=False). Validated op-level by tests/unit/test_ring_joint_cache_read_sp_vs_ref.py; this
 is that mechanism as a callable model forward. The model runs it at q_chunk=128 / k_chunk=1024, HiFi2
-(attention/prefill.py).
+(dense_sp_sdpa_configs).
 """
 
 import ttnn
@@ -30,6 +30,24 @@ def dense_cache_read_ok(kv_cache, seq_len, sp):
         return False
     cache_local = kv_cache.max_seq_len // sp
     return kv_cache.k.dtype == ttnn.bfloat8_b and cache_local > seq_len and cache_local % seq_len == 0
+
+
+def dense_sp_sdpa_configs(mesh_device, cache_read):
+    """ring_joint program / compute configs of the dense SP layers: dense_sp_attention when cache_read, else
+    dense_sp_attention_nocache."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
+        q_chunk_size=128,
+        # k1024 halves the softmax steps; it fits L1 with the bf8 cache, the no-cache path's bf16 K/V only at k512.
+        k_chunk_size=1024 if cache_read else 512,
+        exp_approx_mode=False,
+    )
+    # HiFi2: the call is math-bound at q128; K and V sit in SrcA and keep full precision.
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+    )
+    return program_config, compute_kernel_config
 
 
 def dense_sp_attention(
@@ -150,8 +168,8 @@ def dense_sp_attention_nocache(
 
     Each device's query shard attends to the full `logical_n` sequence reconstructed across the SP ring
     (grouped V, no inflation, is_balanced=False). For callers without a KV cache, or with one that
-    dense_cache_read_ok rejects; otherwise every chunk, cold or not, uses dense_sp_attention (cache-read). Validated op-level by
-    tests/unit/test_ring_joint_sp_vs_ref.py. Returns the per-device query-shard output.
+    dense_cache_read_ok rejects; otherwise every chunk, cold or not, uses dense_sp_attention (cache-read).
+    Validated op-level by tests/unit/test_ring_joint_sp_vs_ref.py. Returns the per-device query-shard output.
 
     n_kv is the GLOBAL KV-head count (e.g. 4); the ring-gather persistent buffer shards it across the TP
     cols (1/device at TP=4), matching the per-device KV head that tt_k/tt_v already carry.

@@ -7,7 +7,7 @@ from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
-from .dense_sp import dense_cache_read_ok, dense_sp_attention, dense_sp_attention_nocache
+from .dense_sp import dense_cache_read_ok, dense_sp_attention, dense_sp_attention_nocache, dense_sp_sdpa_configs
 from .kv_cache import write_index_k_chunk, write_kv_chunk
 from .msa import index_branch_forward, msa_sp_attention_cache_read, msa_sp_attention_nocache
 from .operations import (
@@ -236,18 +236,7 @@ def attention_forward(
         # SP ring. q/k/v are the per-device shards (seq_len = S/sp rows).
         sp = mesh_device.shape[mesh_config.sp_axis]
         cache_read = dense_cache_read_ok(kv_cache, seq_len, sp)
-        grid = mesh_device.compute_with_storage_grid_size()
-        sp_prog = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
-            q_chunk_size=128,
-            # k1024 halves the softmax steps; the no-cache path's bf16 K/V CBs only fit k512 in L1.
-            k_chunk_size=1024 if cache_read else 512,
-            exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf
-        )
-        # HiFi2: the call is math-bound at q128; K and V sit in SrcA and keep full precision.
-        sp_kcfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
-        )
+        sp_prog, sp_kcfg = dense_sp_sdpa_configs(mesh_device, cache_read)
         if cache_read:
             # Cache-read for every chunk, cold ones included (kv_actual 0): ring_joint over the valid
             # prefix in the cache, which the seam already wrote this chunk into (write_chunk=False).
