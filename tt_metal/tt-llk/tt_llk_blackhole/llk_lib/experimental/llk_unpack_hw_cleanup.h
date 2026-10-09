@@ -8,6 +8,7 @@
 
 #include "ckernel_template.h"
 #include "experimental/llk_hw_cleanup.h"
+#include "experimental/llk_unpack_AB_custom_mm.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -35,6 +36,7 @@ inline void _llk_unpack_hw_cleanup_configure_current_bank_()
  * @note On return both cfg banks use Float16_b 32x32 tiles with four faces (2048 bytes), and
  *       bank 0 is selected.
  * @note On return MOP CFG is NOP-poisoned to a 1x1 double-loop template.
+ * @note On return the second bank holds no banked custom_mm configuration: the next bank init copies it again.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_cleanup_canonical_()
@@ -48,6 +50,7 @@ inline void _llk_unpack_hw_cleanup_canonical_()
     _llk_unpack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
 
     hw_cleanup::select_cfg_state(0);
+    custom_mm_bank_key = ~std::uint64_t {0};
 
     // 1x1 NOP double-loop so accidental MOP runs (template or unpack-template) are inert.
     ckernel_template(1, 1).program();

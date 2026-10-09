@@ -15,6 +15,39 @@ from this catalog.
 
 
 PERF_TEST_SCHEMAS = {
+    "perf_custom_mm": {
+        "version": 1,
+        "columns": [
+            "c_dimm",
+            "clear_src",
+            "dense_layout",
+            "dest_acc",
+            "finalize",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "in0_face_c_dim",
+            "in0_face_r_dim",
+            "in1_face_c_dim",
+            "in1_face_r_dim",
+            "k_dimm",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "r_dimm",
+            "split_acc",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_custom_mm": "perf_custom_mm"},
+    },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
         "columns": [

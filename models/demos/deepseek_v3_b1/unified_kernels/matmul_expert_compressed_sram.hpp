@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
+#include <type_traits>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
@@ -209,50 +210,64 @@ struct MatmulExpertCompressedSRAM {
                 }
 
                 if (num_sram_experts > 0) {
+                    // The expert loop, compiled once per bank mode so that a one-bank section runs no bank code
+                    auto sum_experts = [&](auto banked_mode) {
+                        constexpr bool banked = decltype(banked_mode)::value;
+                        uint32_t sram_idx = 0;
+                        for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
+                            uint32_t raw_idx;
+                            if constexpr (CTArgs::enable_indexing) {
+                                raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                            } else {
+                                raw_idx = EXPERT_SRAM_FLAG | exp_i;  // synthesized: slot=exp_i, SRAM-flagged
+                            }
+                            if (!(is_sram_expert(raw_idx))) {
+                                continue;
+                            }
+
+                            uint32_t slot = expert_slot(raw_idx);
+                            uint32_t expert_base = sram_base_addrs[slot];
+                            uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
+                            // compact_in0=1: cb_in0 metadata is full-size (num_active_experts ×
+                            // num_tiles_k pages, padded by the producer) but the actual data is
+                            // packed compactly at offsets 0..num_sram_experts-1. So index by
+                            // the running sram_idx (compact) instead of exp_i (TopK slot, which
+                            // has DRAM gaps).
+                            const uint32_t in0_slot_idx = CTArgs::compact_in0 ? sram_idx : exp_i;
+
+                            UNPACK(({
+                                unified_kernels::override_cb_rd_ptr(cb_in1, expert_base);
+                                unified_kernels::override_cb_rd_ptr(
+                                    cb_in0, in0_base + (k_offset + in0_slot_idx * num_tiles_k) * in0_page_size);
+                            }));
+
+                            if (++sram_idx < num_sram_experts) {
+                                if constexpr (CTArgs::use_compression) {
+                                    compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                } else {
+                                    custom_mm_block<false, false, banked>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                }
+                            } else {
+                                if constexpr (CTArgs::use_compression) {
+                                    compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                } else {
+                                    custom_mm_block<true, false, banked>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                }
+                            }
+                        }
+                    };
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
-
-                    uint32_t sram_idx = 0;
-                    for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                        uint32_t raw_idx;
-                        if constexpr (CTArgs::enable_indexing) {
-                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
-                        } else {
-                            raw_idx = EXPERT_SRAM_FLAG | exp_i;  // synthesized: slot=exp_i, SRAM-flagged
-                        }
-                        if (!(is_sram_expert(raw_idx))) {
-                            continue;
-                        }
-
-                        uint32_t slot = expert_slot(raw_idx);
-                        uint32_t expert_base = sram_base_addrs[slot];
-                        uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
-                        // compact_in0=1: cb_in0 metadata is full-size (num_active_experts ×
-                        // num_tiles_k pages, padded by the producer) but the actual data is
-                        // packed compactly at offsets 0..num_sram_experts-1. So index by
-                        // the running sram_idx (compact) instead of exp_i (TopK slot, which
-                        // has DRAM gaps).
-                        const uint32_t in0_slot_idx = CTArgs::compact_in0 ? sram_idx : exp_i;
-
-                        UNPACK(({
-                            unified_kernels::override_cb_rd_ptr(cb_in1, expert_base);
-                            unified_kernels::override_cb_rd_ptr(
-                                cb_in0, in0_base + (k_offset + in0_slot_idx * num_tiles_k) * in0_page_size);
-                        }));
-
-                        if (++sram_idx < num_sram_experts) {
-                            if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
-                            } else {
-                                custom_mm_block<false>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
-                            }
-                        } else {
-                            if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
-                            } else {
-                                custom_mm_block<true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
-                            }
-                        }
+                    if constexpr (CTArgs::use_compression) {
+                        sum_experts(std::false_type{});
+                    } else if (num_sram_experts >= 3) {
+                        // From 3 experts the plain calls alternate the configuration banks, so each expert's setup
+                        // overlaps the previous call; below that the bank's own steps cost more than they hide.
+                        custom_mm_block_bank_init(cb_in0, cb_in1);
+                        sum_experts(std::true_type{});
+                        custom_mm_block_bank_end();
+                    } else {
+                        sum_experts(std::false_type{});
                     }
 
                     tile_regs_commit();

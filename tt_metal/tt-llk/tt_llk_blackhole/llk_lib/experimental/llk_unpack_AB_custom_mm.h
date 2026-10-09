@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -73,6 +74,29 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     }
 }
 
+// The reuse blocks sit at replay entries 5 to 31 of the custom_mm program; the reuse_dest_srcb unpack runs the same blocks
+// there, so it can share a program a custom_mm init recorded.
+constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_OFFSET = 5;
+constexpr std::uint32_t CUSTOM_MM_REUSE_BLOCKS_LEN    = 27;
+
+inline void _llk_unpack_AB_custom_mm_reuse_blocks_insns()
+{
+    // Loop 8 times to fill up the replay buffer
+    for (std::uint32_t i = 0; i < 8; i++)
+    {
+        // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
+        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+        TTI_NOP;
+    }
+
+    // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
+    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+    // This last iteration uses inner_increment instead of block_increment
+    TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
+    TTI_NOP;
+}
+
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
 {
     load_replay_buf(
@@ -83,20 +107,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             // Full unpack (both SrcA and SrcB)
             _llk_unpack_AB_custom_mm_iter_insns(post1);
 
-            // Loop 8 times to fill up the replay buffer
-            for (std::uint32_t i = 0; i < 8; i++)
-            {
-                // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
-                TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-                TTI_NOP;
-            }
-
-            // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
-            // This last iteration uses inner_increment instead of block_increment
-            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_NOP;
+            _llk_unpack_AB_custom_mm_reuse_blocks_insns();
         });
 
     // Mop is configured to cover pairs of inner (kt) iterations. An odd tail
@@ -279,20 +290,26 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
-    reset_config_context();
+    // No second context poll here: the next call polls before it writes its configuration.
+    switch_config_context(unp_cfg_context);
 
     // Reset counters at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+// Key of the configuration the second bank holds, and whether the next banked call starts a sequence; kernel data, so
+// each kernel starts with no configuration in the second bank
+inline std::uint64_t custom_mm_bank_key   = ~std::uint64_t {0};
+inline bool custom_mm_bank_sequence_start = true;
+
 /**
  * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
  *
  * @tparam read_transposed: Walk the weight tiles column by column (ct_dim tiles with a stride of kt_dim, then the
  *                          next tile) instead of row by row, values = <true/false>
+ * @tparam banked: Alternate the two configuration banks, so a call is configured while the previous one runs; the
+ *                 calls between bank init and bank end share one weight tile size, as SCRATCH_SEC0/1 are not banked.
  * @param base_address_a: L1 address of the weights (SrcA), in the 16-byte-word encoding of L1_ADDRESS().
  * @param base_address_b: L1 address of the activations (SrcB), in the same encoding.
  * @param tile_index_a: First weight tile to read.
@@ -304,7 +321,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.
  */
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool banked = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -317,15 +334,71 @@ inline void _llk_unpack_AB_custom_mm_(
 {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
+    const std::uint32_t block_increment = read_transposed && ct_dim > 1 ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
+    if constexpr (banked)
+    {
+        // SCRATCH_SEC0/1 are global, not banked: the calls of a sequence must write the same increments
+        static_assert(!read_transposed, "banked custom_mm calls do not support read_transposed");
+        LLK_ASSERT(custom_mm_bank_key != ~std::uint64_t {0}, "banked custom_mm call before the bank init");
+        // The first call of a sequence waits for every earlier call, which may read bank 1 or SCRATCH; a later call
+        // writes the bank the call before the one in flight used, while that call runs
+        wait_for_next_context(custom_mm_bank_sequence_start ? 1 : 2);
+        custom_mm_bank_sequence_start = false;
+        flip_cfg_state_id();
+        cfg = get_cfg_pointer();
+    }
+    else
+    {
+        // Wait for all contexts to be free
+        wait_for_next_context(1);
+    }
     reset_config_context();
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+}
+
+/**
+ * @brief Copy the unpacker configuration into the second bank for banked calls, unless it already holds the one keyed by
+ *        key (the operands' formats, face geometry and transpose; not ~0). Call after the init, outside a sequence.
+ */
+inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
+{
+    LLK_ASSERT(ckernel::cfg_state_id == 0, "custom_mm bank init: call outside a banked sequence");
+    custom_mm_bank_sequence_start = true;
+    if (key == custom_mm_bank_key)
+    {
+        return;
+    }
+    custom_mm_bank_key = key;
+    // No call may still read bank 1, and the first bank's words must have landed
+    wait_for_idle();
+    tensix_sync();
+    volatile std::uint32_t* bank0 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    volatile std::uint32_t* bank1 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+    for (std::uint32_t i = ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32; i <= ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + 3; i++)
+    {
+        bank1[i] = bank0[i];
+    }
+    for (std::uint32_t i = UNP0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32; i <= THCON_SEC1_REG11_Metadata_cntxt_switch_unpacr_count_ADDR32; i++)
+    {
+        bank1[i] = bank0[i];
+    }
+}
+
+/**
+ * @brief Return the unpack thread to the first configuration bank after a sequence of banked calls.
+ * @note Call before any other unpack LLK or init.
+ */
+inline void _llk_unpack_AB_custom_mm_bank_end_()
+{
+    if (ckernel::cfg_state_id != 0)
+    {
+        flip_cfg_state_id();
+    }
+    custom_mm_bank_sequence_start = true;
 }
