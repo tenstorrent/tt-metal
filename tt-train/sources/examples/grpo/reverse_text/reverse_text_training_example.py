@@ -240,7 +240,7 @@ if __name__ == "__main__":
         transformer_config=transformer_config,
         device_config=device_config,
         model_source=model_source,
-        dataset=train_dataset,
+        dataset_func=lambda: train_dataset,
         config=grpo_config,
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
