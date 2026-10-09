@@ -224,9 +224,7 @@ void kernel_main() {
         const uint32_t my_end = (my_start + per < token_end_idx) ? my_start + per : token_end_idx;
 
         const uint32_t hist_l1 = get_write_ptr(cb_hist);
-        const uint32_t hist_page = get_tile_size(cb_hist);
         volatile tt_l1_ptr uint32_t* hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1);
-        volatile tt_l1_ptr uint32_t* other = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1 + hist_page);
         for (uint32_t e = 0; e < n_routed_experts; ++e) {
             hist[e] = 0;
         }
@@ -269,13 +267,26 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
         noc_semaphore_wait(sem, dispatch_core_idx);
         noc_semaphore_set(sem, 0);
-        for (uint32_t j = 0; j < dispatch_core_idx; ++j) {
-            const uint32_t x = get_arg_val<uint32_t>(rt_args + 2 * j), y = get_arg_val<uint32_t>(rt_args + 2 * j + 1);
-            noc_async_read(get_noc_addr(x, y, hist_l1), hist_l1 + hist_page, n_routed_experts * 4);
+        // read the earlier cores' histograms in batches into the (idle) input-row scratch, one barrier per batch
+        // (one at a time, the last of 64 cores waited on 63 serial NoC round trips)
+        constexpr uint32_t hist_bytes = (n_routed_experts * 4 + l1_alignment - 1) / l1_alignment * l1_alignment;
+        constexpr uint32_t hist_batch = (read_batch_size * aligned_input_page_size) / hist_bytes;
+        static_assert(hist_batch >= 1, "input scratch must hold one histogram");
+        for (uint32_t j0 = 0; j0 < dispatch_core_idx; j0 += hist_batch) {
+            const uint32_t n = (j0 + hist_batch < dispatch_core_idx) ? hist_batch : dispatch_core_idx - j0;
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t j = j0 + i;
+                const uint32_t x = get_arg_val<uint32_t>(rt_args + 2 * j), y = get_arg_val<uint32_t>(rt_args + 2 * j + 1);
+                noc_async_read(get_noc_addr(x, y, hist_l1), input_base + i * hist_bytes, n_routed_experts * 4);
+            }
             noc_async_read_barrier();
             invalidate_l1_cache();
-            for (uint32_t e = 0; e < n_routed_experts; ++e) {
-                offsets[e] += other[e];
+            for (uint32_t i = 0; i < n; ++i) {
+                volatile tt_l1_ptr uint32_t* h =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_base + i * hist_bytes);
+                for (uint32_t e = 0; e < n_routed_experts; ++e) {
+                    offsets[e] += h[e];
+                }
             }
         }
         token_start_idx = my_start;
