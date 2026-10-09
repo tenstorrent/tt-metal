@@ -41,6 +41,9 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+#if defined(NOC_API_V1)
+uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
+#endif
 
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -117,7 +120,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DISPATCH DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DISPATCH DM0-FW: initialized\n");
+    }
 
     mailboxes->launch_msg_rd_ptr = 0;
     noc_index = 0;

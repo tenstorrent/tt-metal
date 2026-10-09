@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
