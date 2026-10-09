@@ -77,3 +77,23 @@ delivery +45, y writes 0. bfp8 x + bf16 h (64-row): 383.1 / 350.2 / 295.1 -> bf1
 h traffic). bf16 x + h: 375.5 / 335.1 / 294.4 -> +21 compute, +41 x path, +40 y writes. Two of the three parts come
 from the 64-row sub-blocks that the bf16 h buffers force; the levers are 128-row sub-blocks with bf16 h (h held row by
 row on the down cores) and the y writes kept off the h traffic.
+
+## Next ideas (not tried)
+Stakes: bf16 x + h is 375.5 vs 275.6 us per expert at M 2048 (+21 compute, +41 x path, +40 y writes). In the model's
+final chunk the flat op is 101.0 ms (bf16/bf16) vs 82.8 ms (bfp8/bfp8) on the slowest chip (RT profiler).
+A. 128-row sub-blocks with bf16 h: hold h on the down cores row tile by row tile. Today the down cores take h as whole
+   sub-block buffers; at 128 rows a bf16 h buffer is 512 KB and three do not fit, so the plan drops bf16 h to 64-row
+   sub-blocks (mt 2), and the 64-row sub-blocks cause both the x path cost (x delivered in half-size blocks, +41) and,
+   through the small y out CB, part of the y cost. Instead: gate/up still computes 128-row sub-blocks (x ring and
+   full-sync DST as for bfp8 h), but hands h over per 32-row row tile into a ring of row-tile slots on the down cores
+   (128 KB each at I 2048; 4-6 slots), released as soon as the down matmul has consumed that row tile. Expected: the
+   x path cost goes away (bfp8 h at 128 rows: 275.6 vs 410.7 at 64 rows), leaving +21 compute and the y share.
+   Check: plan L1 budget at 1427 KB, the early down "done" per row tile, bit-identical output vs today's bf16 h.
+B. Keep the row-major y writes off the h (and bf16 x) traffic. With bfp8 h the y writes cost ~0; with bf16 h they cost
+   +33..40 us because they contend with the doubled h exchange on NOC1 (VC changes alone did not separate them).
+   Options, cheapest first: (1) h exchange on NOC0, y stays on NOC1 (MIMO_FL_DN_NOC0 / H_VC probes are the starting
+   point); (2) y writer moved to the down core's NCRISC on NOC0 (possible since "done" no longer waits on y);
+   (3) y written in the h exchange's quiet windows (after a sub-block's h is consumed, before the next one arrives).
+   Re-measure with the isolation switches (MIMO_FL_YRM_NOWRITE, MIMO_FL_X_RESIDENT): the target is "normal" close to
+   "no y writes" (335.1 at M 2048).
+Do A first: it shrinks the sub-block count and so also the number of h/y interleavings B has to manage.
