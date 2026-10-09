@@ -75,6 +75,9 @@ constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 // timestamp got corrupted (e.g. wraparound, swapped halves) under load.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
+// Quiesce + drain window before unregistering the callback.
+constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
+
 // Upper bound for the callback consumer to drain records already published to the host ring.
 constexpr auto kPostQuiesceDrainTimeout = std::chrono::seconds(5);
 
