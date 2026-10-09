@@ -416,6 +416,11 @@ class MultichipDecoder(OptimizedDecoder):
         BF16 for the residual add — swept as a yes/no switch in the datatype sweep."""
         if self.D == 1:
             return x
+        if getattr(self, "_sp_active", False):
+            # sequence-parallel prefill (see prefill_forward): reduce and keep this chip's rows only
+            return ttnn.reduce_scatter(
+                x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+            )
         ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
         if self._ag_reduce and len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and x.shape[-2] <= TILE:
             # Decode-sized partial (<= 1 tile row): ONE all_gather of the D partials + a local sum beats the
@@ -1458,6 +1463,7 @@ class MultichipDecoder(OptimizedDecoder):
         start_pos=0,
         rope_mats=None,
         runtime_offsets=None,
+        seq_parallel=False,
     ):
         fill_page_table = page_table if fill_page_table is None else fill_page_table
         seq = x_BSH.shape[-2]
@@ -1479,6 +1485,17 @@ class MultichipDecoder(OptimizedDecoder):
                 rope_mats=rope_mats,
                 runtime_offsets=runtime_offsets,
             )
+        if seq_parallel:
+            # Sequence-parallel residual (LagunaModel.prefill_layers): this chip holds 1/D of the rows of the
+            # residual stream. Each all-reduce becomes its reduce-scatter half (_reduce), the residual adds and
+            # the two RMSNorms run on the local rows, and the normed rows are all-gathered for attention / MoE --
+            # the same link traffic as the all-reduces, a 1/D share of the add / norm work.
+            self._sp_active = True
+            try:
+                return self._prefill_forward_sp(x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos,
+                                                 user_id, start_pos, rope_mats)
+            finally:
+                self._sp_active = False
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])
@@ -1525,6 +1542,40 @@ class MultichipDecoder(OptimizedDecoder):
         h = ttnn.add(residual, o)
         ln2 = self._rms(h, self.w["post_ln"])
         mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, seq, cfg.hidden))
+        return ttnn.add(h, mlp_out)
+
+    def _sp_gather(self, x):
+        return ttnn.all_gather(
+            x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+        )
+
+    def _prefill_forward_sp(self, x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos, user_id,
+                            start_pos, rope_mats):
+        """Single-shot cold prefill with the residual split over the mesh by rows (see prefill_forward)."""
+        cfg = self.cfg
+        residual = x_BSH  # [1, seq / D, H]
+        ln = self._sp_gather(self._rms(x_BSH, self.w["input_ln"]))  # [1, seq, H]
+        seq = ln.shape[-2]
+        q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
+        cdt = kv_cache["dtype"]
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
+        ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
+        attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
+        attn = self._gate(attn, ln)
+        o = self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o))  # reduce-scatter: local rows
+        h = ttnn.add(residual, o)
+        ln2 = self._sp_gather(self._rms(h, self.w["post_ln"]))
+        rows = h.shape[-2]
+        mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, rows, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
     def prefill_forward_packed(self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats):

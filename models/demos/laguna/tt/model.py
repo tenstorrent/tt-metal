@@ -388,10 +388,25 @@ class LagunaModel:
                 None if (_no_hoist or seq > self.layers[0].PIPE_CHUNK) else self._build_prefill_rope(start_pos, seq)
             )
         h = hidden_1SH
+        # Sequence-parallel residual for cold single-shot prefill (MultichipDecoder.prefill_forward): each chip keeps
+        # 1/D of the rows between layers; gathered back after the last layer.
+        D = int(getattr(self.layers[0], "D", 1))
+        sp = (
+            os.environ.get("TT_LAGUNA_PREFILL_SP", "1") == "1"
+            and D > 1
+            and runtime_offsets is None
+            and rope_ctx is not None
+            and seq <= self.layers[0].PIPE_CHUNK
+            and seq % (D * 32) == 0
+            and hasattr(self.layers[0], "_prefill_forward_sp")
+        )
+        if sp:
+            h = ttnn.mesh_partition(h, len(h.shape) - 2, cluster_axis=self.layers[0].tp_axis)
         for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
             pt = page_table[i] if per_layer else page_table
             fill_pt = fill_page_table[i] if fill_per_layer else fill_page_table
             rm = rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None
+            kw = {"seq_parallel": True} if sp else {}
             h = dec.prefill_forward(
                 h,
                 kv,
@@ -402,7 +417,10 @@ class LagunaModel:
                 start_pos=start_pos,
                 rope_mats=rm,
                 runtime_offsets=runtime_offsets,
+                **kw,
             )
+        if sp:
+            h = self.layers[-1]._sp_gather(h)
         return h
 
     def prefill_layers_packed(self, hidden_1SH, kv_cache, fill_page_table, seg_len, num_segs):
