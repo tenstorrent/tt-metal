@@ -11,8 +11,12 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// SCALAR_BLOCK_ALIAS true runs the standard scalar broadcast multiply the compute API aliases next to the block form,
+// on the same buffers at the same MATH_FIDELITY, so the python test can compare the two lane by lane.
+
 #ifdef LLK_TRISC_UNPACK
 #include "experimental/llk_unpack_AB_scalar_block.h"
+#include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -31,11 +35,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_scalar_block_init_(ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
-    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    if constexpr (SCALAR_BLOCK_ALIAS)
     {
-        _llk_unpack_AB_scalar_block_(
-            L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]), L1_ADDRESS(params.buffer_B[block]), params.NUM_TILES_IN_BLOCK);
+        _llk_unpack_AB_init_<BroadcastType::SCALAR>(ckernel::DEFAULT_TENSOR_SHAPE);
+        for (int block = 0; block < params.NUM_BLOCKS; ++block)
+        {
+            for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_unpack_AB_<BroadcastType::SCALAR>(
+                    L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK + tile]), L1_ADDRESS(params.buffer_B[block]));
+            }
+        }
+    }
+    else
+    {
+        _llk_unpack_AB_scalar_block_init_(ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
+        for (int block = 0; block < params.NUM_BLOCKS; ++block)
+        {
+            _llk_unpack_AB_scalar_block_(
+                L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]), L1_ADDRESS(params.buffer_B[block]), params.NUM_TILES_IN_BLOCK);
+        }
     }
 }
 #endif
@@ -43,6 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "experimental/llk_math_eltwise_mul_scalar_block.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_binary.h"
 
 using namespace ckernel;
 
@@ -53,15 +73,38 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_eltwise_mul_scalar_block_init_();
     LLK_ASSERT(
         (params.DST_INDEX + params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "Scalar block must fit acquired DEST");
-    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    if constexpr (SCALAR_BLOCK_ALIAS)
     {
-        _llk_math_wait_for_dest_available_<dest_sync>();
-        _llk_math_eltwise_mul_scalar_block_(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+            ckernel::DEFAULT_TENSOR_SHAPE, false /* acc_to_dest */);
+        for (int block = 0; block < params.NUM_BLOCKS; ++block)
+        {
+            _llk_math_wait_for_dest_available_<dest_sync>();
+            for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+            {
+                _llk_math_eltwise_binary_<
+                    EltwiseBinaryType::ELWMUL,
+                    BroadcastType::SCALAR,
+                    dest_sync,
+                    is_fp32_dest_acc_en,
+                    MATH_FIDELITY,
+                    EltwiseBinaryReuseDestType::NONE>(ckernel::DEFAULT_TENSOR_SHAPE, params.DST_INDEX + tile, true /* clear_fp32_dst_acc */);
+            }
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
+    }
+    else
+    {
+        _llk_math_eltwise_mul_scalar_block_init_<MATH_FIDELITY>();
+        for (int block = 0; block < params.NUM_BLOCKS; ++block)
+        {
+            _llk_math_wait_for_dest_available_<dest_sync>();
+            _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
     }
 }
 #endif

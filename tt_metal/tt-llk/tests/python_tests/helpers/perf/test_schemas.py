@@ -168,6 +168,36 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
+    "perf_eltwise_mul_scalar_block": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "num_blocks",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_eltwise_mul_scalar_block": "perf_eltwise_mul_scalar_block"
+        },
+    },
     "perf_eltwise_unary_datacopy": {
         "version": 2,
         "columns": [
