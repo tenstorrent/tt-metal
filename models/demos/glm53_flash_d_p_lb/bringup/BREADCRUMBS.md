@@ -295,5 +295,10 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   way at [16, 2560, 512] <-> [64, 640, 512] bf16, 2 links.
 - Layer-3 A/B (tests/test_ab_layers.py GLM_AB_CAPTURE_MLA=1, two builds via GLM_AB_SAVE / GLM_AB_REF): MLA output vs the
   replicated path rel 4.1e-3, PCC 0.999993 (bf16 head partial sums); layer output 4.8e-2 (MoE routing amplification).
-- Full model, back to back: DRAM allocated per chip after load 29.90 -> 28.22 GB (of 31.83); warm 56k prefill 7.39 ->
-  7.28 s; last-chunk top1 0.630 -> 0.637.
+- Full model, back to back: DRAM allocated per chip after load 29.90 -> 28.22 GB (of 31.83); last-chunk top1 0.630 ->
+  0.637. Runtime (device profile, layer 3; the wall-time 7.39 -> 7.28 s was noise): MLA 7.31 -> 8.35 ms per DSA layer
+  (+1.73 ms collectives: all-to-alls 0.68 + 0.67, reduce-scatter 0.25, q gather 0.13; -0.7 ms from quarter-size
+  q_b / o_proj reads, w_uk / w_uv shapes and the 16-head concat) = ~+11 ms per chunk, ~+0.12 s at 56k.
+- Perf measurement: test_perf's warm number is Python wall time over eager dispatch (host dispatch ~60% of device time),
+  so host load moves it: the same code measured 7.09 and 7.40 s today. Decide on device time (profiler) or interleaved
+  A/B runs, not single wall-time runs hours apart.
