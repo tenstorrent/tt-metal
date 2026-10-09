@@ -78,8 +78,7 @@ inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, co
  * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
  * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param src_a_format: Effective SrcA register format (input 1).
  * @param src_b_format: Effective SrcB register format (input 0).
@@ -87,6 +86,8 @@ inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, co
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_block_no_mop_ runs the configured matmul with matching template args and source formats.
+ * @note Pass the source register formats: init asserts that the fidelity adds precision for them and skips phases they cannot use.
+ *       Run init again whenever either format changes.
  * @note Reload before every matmul that is interleaved with another replay-using op: every Quasar LLK
  *       records its replay buffer at slot 0, so an intervening op overwrites this one's image. Unlike the
  *       MOP path there is no MOP config holding the length, so a stale image would silently replay the
@@ -97,7 +98,7 @@ inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const D
 {
     validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
+    _llk_math_matmul_addrmod_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
     _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -116,8 +117,7 @@ inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const D
  *    Input 0 [rt_dim, kt_dim] x Input 1 [kt_dim, ct_dim] = Output [rt_dim, ct_dim],
  *    be aware that this function does not iterate over kt_dim; iterate over kt_dim externally to this function.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param src_a_format: Effective SrcA register format (input 1).
  * @param src_b_format: Effective SrcB register format (input 0).

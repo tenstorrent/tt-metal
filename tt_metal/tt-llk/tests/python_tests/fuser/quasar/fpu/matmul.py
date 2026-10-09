@@ -39,7 +39,7 @@ class MatmulFpu(Fpu):
         ct_dim = block.block_cols
         src_b_shape = compute_unit.src_a.tile_shape.cpp_value
         src_a_shape = compute_unit.src_b.tile_shape.cpp_value
-        src_b_format, src_a_format = fidelity_source_formats(
+        src_a_format, src_b_format = fidelity_source_formats(
             config, operation, compute_unit
         )
 

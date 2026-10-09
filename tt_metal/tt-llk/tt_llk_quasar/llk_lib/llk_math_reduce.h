@@ -461,12 +461,11 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
  * @brief Sets up addrmods for reduce operations.
  *
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @param fidelity: Resolved source-format phase schedule.
  * @param final_fidelity: Phase schedule for the final pool, whose SrcA is copied back from dest (REDUCE_SCALAR only).
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  */
-template <ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const MathFidelitySchedule final_fidelity, const TensorShape& tensor_shape)
 {
     std::uint16_t addr_mod_0_dest_incr;
@@ -517,14 +516,15 @@ inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam EN_32BIT_DEST: Set to true when destination registers use 32-bit addressing.
- * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
- * <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path).
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity for SUM/AVG; MAX always runs LoFi, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path). Requires LoFi.
  * @param src_a_format: Effective SrcA register format for the data operand.
  * @param src_b_format: Effective SrcB register format for the scaler operand.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note Pass the source register formats: for SUM/AVG, init asserts that the fidelity adds precision for them and skips phases they
+ *       cannot use. Run init again whenever either format changes.
  * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
  *       FPU path to it.
  */
@@ -548,7 +548,7 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const auto fidelity       = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);
     const auto final_fidelity = math_fidelity_schedule<FIDELITY>(dest_src_format<EN_32BIT_DEST>(src_a_format), src_b_format);
-    _llk_math_reduce_addrmod_<REDUCE_DIMENSION, FIDELITY>(fidelity, final_fidelity, tensor_shape);
+    _llk_math_reduce_addrmod_<REDUCE_DIMENSION>(fidelity, final_fidelity, tensor_shape);
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {

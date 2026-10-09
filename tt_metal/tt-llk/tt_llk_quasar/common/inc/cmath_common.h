@@ -25,10 +25,15 @@ constexpr std::uint32_t math_fidelity_phases()
 }
 
 /**
- * @brief Check whether the requested final phase contributes for these source formats.
+ * @brief Check whether a fidelity request is valid for these source register formats.
+ *
+ * The request is valid when both formats can run on the FPU and the final phase adds precision for them.
+ *
  * @param fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  * @param src_a_format: Effective SrcA register format.
  * @param src_b_format: Effective SrcB register format.
+ * @note Accepted pairs: two floats (Float16/Tf32/Float32, Float16_b, MxFp4_2x_A/MxFp4_2x_B) or two integers (Int8/UInt8/Int8_2x/UInt8_2x,
+ *       LoFi only). Any other format or a mixed int/float pair is rejected at every fidelity.
  * @note Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
  */
 constexpr bool is_math_fidelity_supported(const MathFidelity fidelity, const DataFormat src_a_format, const DataFormat src_b_format)
@@ -78,6 +83,12 @@ inline void validate_math_fidelity(const DataFormat src_a_format, const DataForm
     LLK_ASSERT(is_math_fidelity_supported(fidelity, src_a_format, src_b_format), "Unsupported or redundant math fidelity for source register formats");
 }
 
+/**
+ * @brief Fidelity phases an op issues for its source formats.
+ *
+ * phase_count is the number of FPU passes. phase_increment is the fidelity counter step between them:
+ * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1 under HiFi3.
+ */
 struct MathFidelitySchedule
 {
     std::uint8_t phase_count;
