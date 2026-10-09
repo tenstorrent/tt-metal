@@ -58,9 +58,10 @@ class TtRouter:
             return t
         return ttnn.slice(t, [0, 0, 0, 0], [1, 1, s, self.num_experts])
 
-    def __call__(self, x: ttnn.Tensor):
+    def __call__(self, x: ttnn.Tensor, dense: bool = True):
         """x: replicated [1, 1, S, H] TILE (bf16 or fp32), S a multiple of 32 and <= max_rows.
-        Returns (dense [1, 1, S, E] bf16, idx [1, 1, S, k] uint16/uint32, weights [1, 1, S, k] fp32), replicated."""
+        Returns (dense [1, 1, S, E] bf16, idx [1, 1, S, k] uint16/uint32, weights [1, 1, S, k] fp32), replicated;
+        dense=False: no dense matrix (None in its place; the all-gather experts take idx / weights)."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         s = x.shape[-2]
         assert s <= self.max_rows and s % TILE == 0, f"router rows {s} (max {self.max_rows}, tile aligned)"
@@ -81,6 +82,8 @@ class TtRouter:
         wts = ttnn.div(top, tsum_s, memory_config=mc)
         ttnn.deallocate(top)
         ttnn.deallocate(tsum_s)
+        if not dense:
+            return None, idx, wts
         src = ttnn.typecast(wts, ttnn.bfloat16, memory_config=mc)
         zeros = self._rows(self.zeros, s)
         dense = ttnn.scatter(zeros, dim=-1, index=idx, src=src)

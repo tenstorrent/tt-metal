@@ -1,0 +1,6 @@
+# The source op's own tests, run in place against this fork (models/demos/common/bringup/testing/fork_source.py).
+# New op: its source exists only on mstaletovic/mimo-v2-dp (no upstream tests in this tree); its own tests are tests/unit/.
+upstream_sha: b45a923d73c06ca2b4e7bb5642e882f77b732b8c
+swap:
+  ttnn.experimental.fabric_all_gather: ttnn.bringup.fabric_all_gather
+tests: []

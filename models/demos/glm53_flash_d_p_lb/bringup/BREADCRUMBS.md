@@ -107,3 +107,55 @@ Warm 56k prefill / 56k top1 vs text (all rows; last chunk top1 / top5):
 Lower fidelity is *more* accurate here (LoFi should equal HiFi4 on bfp4 weights, yet outputs differ): a HiFi4-path
 precision issue to find (split KDA vs MLA/indexer HiFi2 next). CPU reference per chunk (s56320 golden): 0.967,
 0.953, 0.955, 0.949, 0.948, 0.937, 0.933 at 0..30k: the device's position decay is device error, not the model.
+
+## MiMo all-gather MoE ops on GLM (2026-10-08, GLM_EXPERTS_MODE=ag, tt/experts_ag.py)
+
+What was done:
+- New experts mode `ag` (glm53_flash_d_p/tt/experts_ag.py, port of MiMo's MoeAgBlock): fabric_all_gather of x /
+  top-k over axis 0 (split layout; replicated input needs no gather) -> moe_ag_route_plan -> flat_routed_expert in
+  indexed mode (clamped_silu, bfp4, row-major y) -> moe_ag_local_reduce with fused send-back (fabric_all_gather axis 0)
+  -> fabric_reduce_scatter axis 1 (split) / reduce_scatter + all_gather (replicated). Own laid-out weight cache under
+  generated/glm53_flash_d_p/tt_cache/flat/2x4 (~6 GB per MoE layer, ~250 GB, ~75 min to build from fp8).
+- flat_routed_expert: new opt-in `down_fp32` (fp32 DEST, full-sync DST for the down projection; the Python builder's
+  MIMO_FL_DN_ACC=fp32full, missing from the C++ op, so MiMo itself runs bf16 down). On by default in `ag`
+  (GLM_AG_DOWN_FP32). fabric_all_gather semaphores must be L1_SMALL.
+- Tests: tests/test_experts_ag.py (ag vs unified on the layer-4 golden, both layouts, timing), test_flat_scale_probe.py
+  (one chip, random weights), test_flat_diag.py (flat y vs CPU math on the same bfp4 weights; reductions).
+
+Results:
+- Layer 4 (chunk 2048, bfp4): split call 2.34 ms (unified 5.56 ms). vs golden PCC 0.9883 (unified 0.9884), rel L2
+  0.160 (0.154), scale coefficient 1.024 (unified 1.003 at LoFi, 1.012 at HiFi4). bf16 down: 1.048.
+- Gain breakdown (layer 4, chip 0, 4 experts): bfp4 weights themselves +1.05% (CPU fp32 math, quantized vs exact);
+  flat y vs CPU math on the quantized weights +1.0% (not reproduced by bfp8 x / h rounded on the host);
+  bf16 reductions +0.1%. MiMo's own sweep (expert_precision_results.tsv, flatpy_dnfp32full) shows the same ~+1-1.5%.
+- Ladder s4096 (all 45 layers): ag top1_match 0.9747, L44 0.9492, final hidden 0.9442, state 0.9666; unified (same
+  day, spec defaults) 0.9684, 0.9520, 0.9472, 0.9676. Both fail the same gates (L41-44, final hidden, state: bfp4).
+- Warm 56k prefill (test_perf): ag 10.99 s (5124 tok/s; kda_moe 18.6, dsa_moe 46.7 ms/layer) vs unified 13.77 s.
+- 56k all-row top-1 vs text (test_accuracy): unified 0.8814, ag 0.8701, ag with routing weights x 0.979
+  (GLM_AG_SCALE, experimental, default off) 0.8810.
+
+Open: the remaining ~2% gain (flat +1% and the bfp4 weights' +1%, which unified at LoFi appears to cancel) is not
+explained. Next steps proposed: weight bits held by each path vs bfp4(fp32) / bfp4(bf16(fp32)) (test_weight_bits.py,
+not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error on the exact device bits.
+
+### Follow-up (2026-10-08): root cause of the ag gain, KV-cache PCC, MoE-FFN dedupe
+- Precision analysis (tests/test_weight_bits.py, test_flat_diag.py, test_flat_stage_probe.py, test_bfp8_rounding.py):
+  unified holds bfp4(fp32 W) bit for bit, the flat op bfp4(bf16(W)) (0.03-0.23% of elements one step smaller: -0.24%
+  on the output, not the gain). The flat expert is +1.25% vs fp32 math on its own bits; the cause is the packer
+  rounding bf16 -> bfp8 ties away from zero (+0.28% per pack on bf16-valued data, ~10% of elements; fp32 sources
+  are unbiased) at the x tilize, the h pack and the y pack. LoFi = HiFi4 for bfp4 x bfp8. Unified at LoFi sits
+  -0.7% vs its own bits (bf16 operands truncated), cancelling the bfp4 weights' own +1.05%. Packer stochastic
+  rounding (flat op option pack_stochastic_rounding, GLM_AG_PACK_SRND) removes it (coef 1.0005) but is NOT used
+  (owner); the 0.979 routing scale was removed. Default ag: fp32 full-sync down only.
+- KV cache PCC, s4096 ladder (owner's metric), ag vs unified: kv_latent min 0.9666 / mean 0.9840 vs 0.9693 / 0.9853;
+  index_key 0.9881 / 0.9951 vs 0.9887 / 0.9953; layers and top1 as before (L44 0.9492 vs 0.9520).
+- MoE FFN (ag only): the router hands idx / weights straight to the experts (no dense scatter + top-k); the experts
+  gather x as tiles and the shared expert reuses that gather (no second axis-0 all_gather). Warm 56k prefill
+  10.99 -> 10.74 s (5246 tok/s; unified 13.77 s). Tried and reverted: one fp32 reduce_scatter for shared + routed
+  partials (no gain, 10.76 s).
+- Per-op device time, chunk 5120 at 51200 (test_profile_ops GLM_PROF_LAYERS=2-4): kda_moe 18.7 ms (attention 8.5,
+  experts 3.9, shared 3.8), dsa_moe 45.7 ms (indexer 24.8). ag block 4.05 ms (flat 1.96, two 5120x4096 gathers
+  0.95, local reduce 0.49, fabric RS 0.35) vs unified 9.57 ms (dispatch 2.50, expert 3.22, combine 2.14).
+- Tried and reverted: fabric_all_gather for the model's other row gathers (gather_half, gather_rows, KDA input,
+  shared expert): 10.73 s vs 10.74 s, no gain (ttnn.all_gather is as fast at these shapes). Needs the tensors'
+  topology re-declared 2D (split-layout tensors carry a 1D one), as MiMo's gather_full does.

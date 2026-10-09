@@ -220,15 +220,31 @@ class TtGlmBlock:
             self.shared = build_mlp(mesh, loader, cfg, layer, name="mlp.shared_experts")
             add = build_moe_add(cfg)
 
+            from models.demos.glm53_flash_d_p.tt.experts_ag import TtExpertsAg
+
+            ag = isinstance(self.experts, TtExpertsAg)
+
             def router(ctx, x):
+                if ag:  # top-k straight into the experts: the router output is idx, its weights ride along
+                    _, idx, wts = self.router(x, dense=False)
+                    self._router_wts = wts
+                    return idx
                 dense, idx, wts = self.router(x)
                 ttnn.deallocate(idx)
                 ttnn.deallocate(wts)
                 return dense
 
+            def experts(ctx, x, r, split=False):
+                if not ag:
+                    return self.experts(x, dense=r, split=split)
+                wts, self._router_wts = self._router_wts, None
+                out = self.experts(x, idx=r, wts=wts, split=split)
+                ttnn.deallocate(wts)
+                return out
+
             steps.update(
                 router=router,
-                experts=lambda ctx, x, r: self.experts(x, dense=r),
+                experts=experts,
                 shared_expert=lambda ctx, x: self.shared(x),
                 moe_add=lambda ctx, a, b: add(a, b),
             )
@@ -243,6 +259,9 @@ class TtGlmBlock:
                     return out
 
                 def shared_all(ctx, x):
+                    xa = self.experts.gathered_x if ag else None  # the all-gather experts already gathered these rows
+                    if xa is not None:
+                        return self.shared(xa, split=True)
                     xa = ttnn.all_gather(x, dim=-2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     out = self.shared(xa, split=True)
                     ttnn.deallocate(xa)
@@ -250,7 +269,7 @@ class TtGlmBlock:
 
                 steps.update(
                     ffn_norm=ffn_norm_half,
-                    experts=lambda ctx, x, r: self.experts(x, dense=r, split=True),
+                    experts=lambda ctx, x, r: experts(ctx, x, r, split=True),
                     shared_expert=shared_all,
                 )
         else:
