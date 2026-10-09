@@ -301,6 +301,32 @@ class SpeculativeDecoder:
             return "fused-packed"
         return route
 
+    def _fused_packed_choice(self, route):
+        """Verify layout for a single-user fused route: True packed, False batch-dim.
+
+        ``None`` (auto) defers to ``_fused_packed_enabled``. An explicit route
+        decides on its own, and must not contradict ``GEMMA4_SPEC_FUSED_PACKED``.
+        """
+        if self._route == "auto":
+            return None
+        packed = route == "fused-packed"
+        env = os.environ.get("GEMMA4_SPEC_FUSED_PACKED")
+        if env in ("0", "1") and (env == "1") != packed:
+            raise ValueError(f"GEMMA4_SPEC_FUSED_PACKED={env} contradicts GEMMA4_SPEC_ROUTE={self._route}")
+        return packed
+
+    def _prepare_fused_pli(self):
+        """Upload the device PLI weights the fused bodies use (PLI targets only).
+
+        The fused bodies compute PLI on device from the candidate IDs. The upload
+        is idempotent and must precede the seed and any trace capture.
+        """
+        if not self.target_has_pli:
+            return
+        if not self._fused_pli_device:
+            raise ValueError("fused speculative decoding of a PLI target requires GEMMA4_PLI=device")
+        self.target.init_pli_device_weights()
+
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
             return min(accepted, K)
@@ -1407,6 +1433,7 @@ class SpeculativeDecoder:
             page_table=v_pt,
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=self._page_tables_per_layer(K + 1),
+            pli_on_device=self.target_has_pli,
         )
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
@@ -1480,7 +1507,7 @@ class SpeculativeDecoder:
         hidden.deallocate(True)
         return h
 
-    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens, *, _nested=False):
+    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens, *, packed=None, _nested=False):
         """Greedy speculative decode using the fully on-device fused iteration.
 
         Each iteration reads back only the ``2K+1`` token ids; the drafter
@@ -1489,18 +1516,28 @@ class SpeculativeDecoder:
         anchor position ``p+m+1`` (slice ``vhidden[m+1]``) — no extra reseed
         forward, so the whole iteration is one device program (this is the eager
         twin of the fused trace). Returns ``(generated_ids, accepts_per_iter)``.
+
+        ``packed`` selects the traced verify layout: True packed, False
+        batch-dim, None ``_fused_packed_enabled()``. PLI targets compute PLI on
+        device in either layout.
         """
         if not _nested:
             self._last_metrics = None
             self._last_route = None
             self._metrics_active = False
-        if self.target_has_pli:
-            raise NotImplementedError("Fused device drafting requires device PLI; use the host loop for this target")
-        # Name the body that runs: the traced capture switches to packed verify
-        # whenever _fused_packed_enabled() holds; the eager iteration never does.
+        if self.target_has_pli and not self._fused_pli_device:
+            raise ValueError("fused speculative decoding of a PLI target requires GEMMA4_PLI=device")
+        if packed is None:
+            packed = self._use_trace and self._fused_packed_enabled()
+        elif packed and not self._use_trace:
+            raise ValueError("packed verify in the fused body requires GEMMA4_SPEC_TRACE=1")
+        elif packed and self._fused_reseed:
+            raise ValueError("packed verify in the fused body does not support GEMMA4_SPEC_FUSED_RESEED=1")
+        # Name the body that runs: the traced capture uses packed verify when
+        # `packed` holds; the eager iteration never does.
         if not self._use_trace:
             self._last_route = "fused-batch-dim-eager"
-        elif self._fused_packed_enabled():
+        elif packed:
             self._last_route = "fused-packed-traced"
         else:
             self._last_route = "fused-batch-dim-traced"
@@ -1508,8 +1545,9 @@ class SpeculativeDecoder:
         if max_new_tokens <= 0:
             self._metrics_finish()
             return [], []
+        self._prepare_fused_pli()
         if self._use_trace:
-            return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens)
+            return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens, packed=packed)
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
         self._last_fused_setup_s = 0.0
         K = self.draft_len
@@ -1589,6 +1627,7 @@ class SpeculativeDecoder:
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
                 page_tables_per_layer=tr["d_ptl"],
+                pli_on_device=self.target_has_pli,
             )
             seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
@@ -1633,6 +1672,7 @@ class SpeculativeDecoder:
                 hot_pt_full=tr["pv_hot"].get("full_attention"),
                 hot_pt_sliding=tr["pv_hot"].get("sliding_attention"),
                 page_tables_per_layer=tr["pv_ptl"],
+                pli_on_device=self.target_has_pli,
             )
             mask_full.deallocate(True)
             mask_slide.deallocate(True)
@@ -1644,6 +1684,7 @@ class SpeculativeDecoder:
                 page_table=tr["v_pt"],
                 kv_cache=self.tt_kv_cache,
                 page_tables_per_layer=tr["v_ptl"],
+                pli_on_device=self.target_has_pli,
             )
         tail_rows = K if self._fused_reseed else K + 1
         tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
@@ -1670,17 +1711,7 @@ class SpeculativeDecoder:
         So auto only enables where the KV amortization outweighs the acceptance
         cost. Reseed mode is excluded structurally: its seed forward writes the
         anchor KV around the staging, and the staged hot block goes stale.
-        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides.
-
-        Capability comes first. For a per-layer-input target the batch-dimension
-        body is not an option at all -- `_fused_body` does not pass PLI inputs to
-        `ttnn_verify_forward`, so verification raises there -- and the policy below
-        would choose it, since that policy keys off boundedness and a >131072
-        context that a PLI target such as E2B never reaches. So decide capability
-        before performance, and do not let the env override select a body that
-        cannot run."""
-        if self.target_has_pli:
-            return not self._fused_reseed
+        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides."""
         env = os.environ.get("GEMMA4_SPEC_FUSED_PACKED")
         if env in ("0", "1"):
             return env == "1" and not self._fused_reseed
@@ -1688,15 +1719,20 @@ class SpeculativeDecoder:
         max_seq = int(getattr(self.target, "max_seq_len", 0) or 0)
         return bounded and max_seq > 131072 and not self._fused_reseed
 
-    def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos, max_new_tokens=None):
+    def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos, max_new_tokens=None, packed=None):
         """Capture ONE fused iteration at the real first-call inputs.
 
         Allocates persistent input buffers (anchor token, recurrent hidden, the
         drafter + verify position tensors, page tables), runs a compile pass, then
         captures the fused body. The compile + capture write the SAME KV positions
-        with the SAME tokens (deterministic), so the writes are idempotent."""
+        with the SAME tokens (deterministic), so the writes are idempotent.
+        ``packed`` selects packed verify; None defers to ``_fused_packed_enabled()``."""
         from loguru import logger as _lg
 
+        if self.target_has_pli and not getattr(self.target, "_pli_dev_ready", False):
+            raise RuntimeError("device PLI weights must be initialized before fused trace capture")
+        if packed is None:
+            packed = self._fused_packed_enabled()
         K = self.draft_len
         v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
         d_pu, d_pi = self._pos_tensors([anchor_pos])
@@ -1720,7 +1756,7 @@ class SpeculativeDecoder:
             "d_ptl": self._page_tables_per_layer(1),
             "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
         }
-        if self._fused_packed_enabled():
+        if packed:
             # PACKED verify inside the trace (shift mode: rows = anchor,d0..dK-1
             # at positions c..c+K, exactly _pv_host_inputs' layout). S_k is fixed
             # at capture to cover the WHOLE generation so mask/table widths (and
@@ -1794,7 +1830,7 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(host_h, tr["h"])
         host_h.deallocate(True)
 
-    def _generate_fused_traced(self, anchor_token, anchor_pos, max_new_tokens):
+    def _generate_fused_traced(self, anchor_token, anchor_pos, max_new_tokens, packed=None):
         """Greedy spec-decode via the single fused trace (one replay per iter)."""
         from loguru import logger as _lg
 
@@ -1808,7 +1844,7 @@ class SpeculativeDecoder:
         self._use_trace = False
         anchor_hidden = self.seed(anchor_token, anchor_pos)
         self._use_trace = True
-        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos, max_new_tokens=max_new_tokens)
+        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos, max_new_tokens=max_new_tokens, packed=packed)
         anchor_hidden.deallocate(True)
         tr = self._fused_trace
         self._last_fused_setup_s = time.perf_counter() - setup_t0
@@ -2004,6 +2040,8 @@ class SpeculativeDecoder:
         """
         from loguru import logger as _lg
 
+        if self.target_has_pli:
+            raise NotImplementedError("serving sessions do not support per-layer-input targets")
         if not self._fused_packed_enabled():
             raise NotImplementedError("the serving width set is packed-verify only")
         K = self.draft_len
@@ -2047,6 +2085,8 @@ class SpeculativeDecoder:
         Mirrors ``_generate_fused_traced``'s setup block exactly; the caller
         then drives one ``serving_step`` per engine step.
         """
+        if self.target_has_pli:
+            raise NotImplementedError("serving sessions do not support per-layer-input targets")
         self._pv_a_prev = -1
         self._use_trace = False
         anchor_hidden = self.seed(anchor_token, anchor_pos)
@@ -2075,6 +2115,8 @@ class SpeculativeDecoder:
 
         from loguru import logger as _lg
 
+        if self.target_has_pli:
+            raise NotImplementedError("serving sessions do not support per-layer-input targets")
         if not self._fused_packed_enabled():
             raise NotImplementedError("the serving width set is packed-verify only")
         self._use_trace = True
@@ -2580,11 +2622,8 @@ class SpeculativeDecoder:
         S_k = ((max_seq_len + 63) // 64) * 64
 
         setup_t0 = time.perf_counter()
-        if self.target_has_pli:
-            if not self._fused_pli_device:
-                raise ValueError("traced fused-packed PLI requires GEMMA4_PLI=device")
-            # Weight upload precedes capture; no allocation may occur inside it.
-            self.target.init_pli_device_weights()
+        # Weight upload precedes capture; no allocation may occur inside it.
+        self._prepare_fused_pli()
         # Eager (untraced) batched seed, then capture (mirrors the single-user path:
         # an active verify trace would collide with the fused capture allocations).
         self._use_trace = False
@@ -2660,7 +2699,7 @@ class SpeculativeDecoder:
                 g = [gids[b * P + j] for j in range(P)]
                 m = next((i for i in range(K) if drafts[i] != g[i]), K)
                 committed = drafts[:m] + [g[m]]
-                rows_b.append(self._fused_shift_seed_row(m, K))
+                rows_b.append(min(m + 1, K))
                 if done[b]:
                     continue
                 accepts[b].append(m)
@@ -2712,6 +2751,8 @@ class SpeculativeDecoder:
             self._metrics_finish()
             return outs, accepts
         if route == "fused-packed":
+            if self._fused_reseed:
+                logger.warning("GEMMA4_SPEC_FUSED_RESEED=1 has no effect: the batched fused body only shift-seeds")
             return self._generate_fused_traced_batched(anchor_tokens, anchor_positions, max_new_tokens, max_seq_len)
         if self.target_has_pli and self._pli_dev_host:
             self.target.init_pli_device_weights()
@@ -2811,13 +2852,10 @@ class SpeculativeDecoder:
         if max_new_tokens <= 0:
             self._metrics_finish()
             return [], []
-        if route == "fused-packed":
-            outs, accepts = self.generate_batched(
-                [anchor_token], [anchor_pos], max_new_tokens, self.target.max_seq_len, _nested=True
+        if route in ("fused-packed", "fused-batch-dim"):
+            return self.generate_fused(
+                anchor_token, anchor_pos, max_new_tokens, packed=self._fused_packed_choice(route), _nested=True
             )
-            return outs[0], accepts[0]
-        if route == "fused-batch-dim":
-            return self.generate_fused(anchor_token, anchor_pos, max_new_tokens, _nested=True)
         if self.target_has_pli and self._pli_dev_host:
             self.target.init_pli_device_weights()
         if self._use_trace:

@@ -27,7 +27,7 @@ def test_legacy_site_override_and_warning(monkeypatch):
 @pytest.mark.parametrize(
     "has_pli,device,trace,greedy,expected",
     [
-        (True, True, True, True, "fused-packed"),
+        (True, True, True, True, "fused-batch-dim"),
         (True, False, True, True, "host-loop"),
         (False, True, True, True, "fused-batch-dim"),
         (True, True, False, True, "host-loop"),
@@ -41,7 +41,6 @@ def test_auto_route(has_pli, device, trace, greedy, expected):
 @pytest.mark.parametrize(
     "route,has_pli,device,trace,greedy,message",
     [
-        ("fused-batch-dim", True, True, True, True, "cannot use"),
         ("fused-packed", True, False, True, True, "requires device PLI"),
         ("fused-packed", True, True, False, True, "requires GEMMA4_SPEC_TRACE"),
         ("fused-packed", True, True, True, False, "requires greedy"),
@@ -50,6 +49,11 @@ def test_auto_route(has_pli, device, trace, greedy, expected):
 def test_unsupported_explicit_route(route, has_pli, device, trace, greedy, message, expect_error):
     with expect_error(ValueError, message):
         pli_env.resolve_route(route, has_pli, device, trace, greedy)
+
+
+@pytest.mark.parametrize("route", ["fused-packed", "fused-batch-dim"])
+def test_pli_device_explicit_fused_routes_are_executable(route):
+    assert pli_env.resolve_route(route, True, True, True, True) == route
 
 
 def test_legacy_route_alias_conflict_and_warning(monkeypatch, expect_error):
