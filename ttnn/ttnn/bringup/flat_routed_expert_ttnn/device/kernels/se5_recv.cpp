@@ -66,6 +66,13 @@
 #define SE_MARK(name)
 #endif
 
+// The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
+#ifdef SE_H_VC
+constexpr uint8_t h_vc = SE_H_VC;
+#else
+constexpr uint8_t h_vc = 0;
+#endif
+
 void kernel_main() {
     constexpr uint32_t x_cb = get_compile_time_arg_val(0);
     constexpr uint32_t x_blk = get_compile_time_arg_val(1);
@@ -243,7 +250,10 @@ void kernel_main() {
                 SE_MARK("W_LANDED");
             }
         }
-#ifdef SE_X_RELAY2
+#if defined(SE_X_RESIDENT)
+        // perf probe: x is resident - a slot's block counts as arrived as soon as compute has freed the slot
+        const uint32_t arrived_p = (x_cons + x_slots) * xp;
+#elif defined(SE_X_RELAY2)
         // Two relays alternate runs of SE_X_RELAY2 blocks (a super-block; relay A the even runs, B the odd ones), each
         // counting its own blocks (A in XARR, B in semaphore 3): the contiguous prefix ends at the first block either
         // has not delivered.
@@ -347,7 +357,7 @@ void kernel_main() {
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
 #ifdef SE_GU_ONLY
                 // Down cores keep h K-tile-major ([K][rows] per group): this core's NP K-tiles are one run.
-                noc_async_write(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes);
+                noc_async_write(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes, noc_index, h_vc);
 #else
                 for (uint32_t m = 0; m < mt; ++m) {
                     for (uint32_t p = 0; p < np; ++p) {  // h_all: row-major within K-blocks of KBLK tiles

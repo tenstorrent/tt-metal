@@ -5,6 +5,7 @@
 #include "flat_routed_expert_program_factory.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -130,6 +131,27 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
     }
+    // perf probe (read at program build, not hashed): MIMO_FL_X_RESIDENT=1 - x never moves. The relay kernels
+    // (read / tilize / multicast / helpers) return at once and the gate/up receivers treat a landing slot's x as
+    // present as soon as the slot is free: the compute runs on whatever the landing ring holds (garbage outputs).
+    if (std::getenv("MIMO_FL_ZONES")) {  // device-profiler zones in the kernels that have them
+        dyn_def["SE_ZONES"] = "1";
+    }
+    if (const char* wz = std::getenv("MIMO_FL_WAITZ")) {  // gate/up x / weight wait zones on sub-block WAITZ
+        dyn_def["SE_WAITZ"] = wz;
+    }
+    if (std::getenv("MIMO_FL_DZ")) {  // detail zones in the down compute (a sample of sub-blocks)
+        dyn_def["SE_DZ"] = "1";
+    }
+    if (const char* hv = std::getenv("MIMO_FL_H_VC")) {  // (perf probe: the h exchange's unicast VC)
+        dyn_def["SE_H_VC"] = hv;
+    }
+    if (const char* fv = std::getenv("MIMO_FL_FWD_VC")) {  // (perf probe: the weight forward's unicast VC)
+        dyn_def["SE_FWD_VC"] = fv;
+    }
+    if (std::getenv("MIMO_FL_X_RESIDENT")) {
+        dyn_def["SE_X_RESIDENT"] = "1";
+    }
     auto with = [](Defines base, std::initializer_list<std::pair<const std::string, std::string>> extra) {
         for (const auto& kv : extra) {
             base[kv.first] = kv.second;
@@ -212,6 +234,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     auto yrm_def = [&](Defines d, uint32_t pw = 0) {
         if (yrm) {
             d["SE_Y_RM"] = "1";
+            // perf probes (read at program build): MIMO_FL_YRM_NOWRITE - the writers drop the y writes;
+            // MIMO_FL_YRM_PACKTILE - the down compute packs tiles instead of untilizing (y is garbage either way)
+            if (std::getenv("MIMO_FL_YRM_NOWRITE")) {
+                d["SE_YRM_NOWRITE"] = "1";
+            }
+            if (const char* vc = std::getenv("MIMO_FL_YRM_VC")) {
+                d["SE_YRM_VC"] = vc;
+            }
+            if (std::getenv("MIMO_FL_YRM_PACKTILE")) {
+                d["SE_YRM_PACKTILE"] = "1";
+            }
             if (pw) {
                 d["SE_Y_RM_ROWS"] = std::to_string(yrm_rows(pw));
             }
@@ -322,12 +355,23 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";
         }
+        // perf probes (read at program build; not in the program hash, so a process uses one setting):
+        // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
+        // barrier (must divide RM_CHUNKS)
+        if (const char* skip = std::getenv("MIMO_FL_XRD_SKIP")) {
+            xrd_def["XRD_SKIP_READS"] = skip;
+        }
+        uint32_t xrd_batch = XRD_BATCH;
+        if (const char* b = std::getenv("MIMO_FL_XRD_BATCH")) {
+            xrd_batch = static_cast<uint32_t>(std::stoul(b));
+            TT_FATAL(xrd_batch > 0 && RM_CHUNKS % xrd_batch == 0, "MIMO_FL_XRD_BATCH must divide {}", RM_CHUNKS);
+        }
         const auto kxr =
             dm("se11_xrd.cpp",
                p.relays,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
-               {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, XRD_BATCH, idx_arg, p.H / t.x.logical_shape()[-1]},
+               {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
                xrd_def);
         const auto ktz = cp("se11_tz.cpp", p.relays, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
         const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + NR);
@@ -415,21 +459,30 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 H_TILE,    ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
                 p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E},
                with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}}));
+        // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
+        // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
+        const bool gu_full_sync = p.gu_fp32 && p.gu_rp && std::getenv("MIMO_FL_GU_FULL_SYNC");
+        const bool gu_rp = p.gu_rp && !gu_full_sync;
         Defines cdef = with(
             dyn_def,
-            {{"SE_DST_TILES", std::to_string(p.gu_rp ? 4 : p.dst_tiles)},
+            {{"SE_DST_TILES", std::to_string(gu_rp ? 4 : p.dst_tiles)},
              {"SE_GU_ONLY", "1"},
              {"SE_ACT", std::to_string(cfg.activation)},
              {"SE_XMT", std::to_string(MT)}});
-        if (p.gu_rp) {
+        if (gu_rp) {
             cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / (2 * NP)));
             cdef["SE_XSLOTS"] = std::to_string(p.x_slots);
         }
         if (p.gu_l1acc) {
             cdef["SE_GU_L1ACC"] = "1";
         }
-        const auto kc = cp(
-            "se3_compute.cpp", p.gu, {KBLK, MTG, p.nk_gu, 0, 1, E, S, p.slot, 1, 1, NP, 0, p.ring_g}, cdef, p.gu_fp32);
+        const auto kc =
+            cp("se3_compute.cpp",
+               p.gu,
+               {KBLK, MTG, p.nk_gu, 0, 1, E, S, p.slot, 1, 1, NP, 0, p.ring_g},
+               cdef,
+               p.gu_fp32,
+               gu_full_sync);
         for (uint32_t r = 0; r < n_rd; ++r) {
             const uint32_t sg = p.sg_rd(r);
             for (uint32_t j = 0; j < p.r_; ++j) {
@@ -471,11 +524,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         for (uint32_t d : ds) {
             cores.push_back(p.down[d]);
         }
+        // perf probe (read at program build): MIMO_FL_DN_NOC0=1 - the down cores' h chain / y writes on NOC0, their
+        // weight reads on NOC1 (default: the other way round)
+        const bool dn_noc0 = std::getenv("MIMO_FL_DN_NOC0") != nullptr;
         const auto kr =
             dm("se6_drecv.cpp",
                cores,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_1,
+               dn_noc0 ? NOC::NOC_0 : NOC::NOC_1,
                {2,     p.h_tiles, H_TILE, H_PIECES, 16, out,    V,  S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,   DONE,     GO, p.hbuf, MT, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
@@ -484,7 +540,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             dm("se6_dw.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
-               NOC::NOC_0,
+               dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E},
                dyn_def);
         const auto kc =

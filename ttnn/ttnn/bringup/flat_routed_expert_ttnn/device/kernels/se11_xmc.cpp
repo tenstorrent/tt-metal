@@ -28,6 +28,9 @@
 #endif
 
 void kernel_main() {
+#ifdef SE_X_RESIDENT
+    return;  // perf probe: x never moves (program factory, MIMO_FL_X_RESIDENT)
+#endif
     constexpr uint32_t sb_cb = get_compile_time_arg_val(0);
     constexpr uint32_t mt = get_compile_time_arg_val(1);
     constexpr uint32_t tb = get_compile_time_arg_val(2);
