@@ -82,99 +82,116 @@ inline volatile std::uint32_t& reg(std::uint32_t addr)
     return *reinterpret_cast<volatile std::uint32_t*>(addr);
 }
 
-// The request bit is synchronized and edge detected (tt_tensix.sv): hold it until STATUS_0 shows it, then let it fall.
-inline void request(std::uint32_t cntl)
-{
-    reg(DBG_CNTL_0) = cntl | REQ;
-    while (!(reg(DBG_STATUS_0) & REQ))
-    {
-    }
-    reg(DBG_CNTL_0) = cntl;
-    while (reg(DBG_STATUS_0) & REQ)
-    {
-    }
-}
+constexpr std::uint32_t DBG_REGS        = DBG_CNTL_0 - 0x80U;
+constexpr std::uint32_t PC_BUF_OVERRIDE = 0xFFB12090U; // TRISC_PC_BUF_OVERRIDE: bit 10 * t = override enable of TRISC t
+constexpr std::uint32_t RELEASE_ALL     = (1U << 0) | (1U << 10) | (1U << 20);
+static_assert(REQ == 1U << 31 && READ_VALID == 1U << 30 && REG_STATUS == 0, "serve() tests REQ and READ_VALID by sign");
+static_assert(DBG_CNTL_1 == DBG_CNTL_0 + 4 && DBG_STATUS_0 == DBG_CNTL_0 + 8 && DBG_STATUS_1 == DBG_CNTL_0 + 12 && PC_BUF_OVERRIDE == DBG_CNTL_0 + 16);
 
-inline std::uint32_t read(std::uint32_t trisc, std::uint32_t index)
+// Serve loop, one rendezvous per pass: wait until all TRISCs park, let them halt, flush them and release them together.
+// Pinned in assembly (GCC's code for the C version) in its own 1 KiB section, so no other BRISC change moves its timing.
+__attribute__((noinline, noipa, section(".text.llk_dbg_serve"), aligned(1024))) void serve()
 {
-    request(((trisc + 1) << 17) | index);
-    while (!(reg(DBG_STATUS_0) & READ_VALID))
-    {
-    }
-    return reg(DBG_STATUS_1);
-}
-
-inline void write(std::uint32_t trisc, std::uint32_t index, std::uint32_t value)
-{
-    reg(DBG_CNTL_1) = value;
-    request(((trisc + 1) << 17) | WR | index);
-}
-
-inline bool kernel_complete(std::uint32_t trisc)
-{
-    const std::uint32_t v =
-        reg(host_signal::NOC_OVERLAY_START_ADDR + trisc * host_signal::NOC_STREAM_REG_SPACE_SIZE + host_signal::STREAM_SCRATCH_REG_INDEX * 4);
-    return (v & 0xFFFFFFU) == (ckernel::KERNEL_COMPLETE & 0xFFFFFFU);
-}
-
-// A BRISC read of a PC buffer returns once that TRISC is blocked on its word 0 read and idle, so this waits without polling.
-inline void wait_all_parked()
-{
-    for (std::uint32_t t = 0; t < 3; ++t)
-    {
-        (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(PC_BUF[t]));
-    }
-}
-
-inline void release_all()
-{
-    for (std::uint32_t t = 0; t < 3; ++t)
-    {
-        reg(PC_BUF[t]) = 0;
-    }
-}
-
-inline void spin(std::uint32_t n)
-{
-    for (std::uint32_t i = 0; i < n; ++i)
-    {
-        asm volatile("nop");
-    }
-}
-
-void serve()
-{
-    for (;;)
-    {
-        wait_all_parked();
-        const bool done = kernel_complete(0) && kernel_complete(1) && kernel_complete(2);
-        release_all(); // on to the ebreak, or out of the kernel
-        if (done)
-        {
-            return;
-        }
-        for (std::uint32_t t = 0; t < 3; ++t)
-        {
-            while (!(read(t, REG_STATUS) & STATUS_PAUSED))
-            {
-            }
-        }
-        spin(512);                                               // fetch ahead of the halted cores has settled
-        for (std::uint32_t addr = 0; addr < 64 * 16; addr += 16) // every L1 bank arbiter last granted BRISC (asm: address 0 is valid L1)
-        {
-            std::uint32_t v;
-            asm volatile("lw %0, 0(%1)\n\tandi %0, %0, 0" : "=r"(v) : "r"(addr) : "memory");
-        }
-        reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = 0b1110;
-        spin(64);
-        for (std::uint32_t t = 0; t < 3; ++t)
-        {
-            write(t, REG_COMMAND, COMMAND_FLUSH | COMMAND_CONTINUE);
-        }
-        wait_all_parked();
-        spin(512);
-        release_all();
-    }
+    asm volatile(
+        "li    t0, 0x00ffffff\n\t"
+        "li    t4, %[wr_cmd]\n\t"
+        "li    t3, %[req_wr_cmd]\n\t"
+        "li    t1, %[pcb0]\n\t"
+        "li    a7, %[pcb1]\n\t"
+        "li    a6, %[pcb2]\n\t"
+        "li    s0, %[slot0]\n\t"
+        "li    t2, %[complete]\n\t"
+        "li    s2, %[slot1]\n\t"
+        "li    s1, %[slot2]\n\t"
+        "li    t6, %[req]\n\t"
+        "li    a5, %[dbg]\n\t"
+        "li    a0, %[tstep]\n\t"
+        "li    a1, %[tend]\n\t"
+        "li    t5, %[flush_cmd]\n\t"
+        "li    s4, %[release]\n"
+        "1:\n\t" // arrive
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, %[scratch](s0)\n\tand   a4, a4, t0\n\tbeq   a4, t2, 9f\n"
+        "2:\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // on to the ebreak
+        // halted? The debug request bit is synchronized and edge detected (tt_tensix.sv): hold it until STATUS_0
+        // shows it, then let it fall
+        "lui   a2, %%hi(%[tstep])\n"
+        "3:\n\t"
+        "or    s3, a2, t6\n"
+        "4:\n\t"
+        "sw    s3, %[cntl0](a5)\n"
+        "5:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 5b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "6:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 6b\n"
+        "7:\n\t"
+        "lw    a4, %[status0](a5)\n\tslli  a3, a4, 1\n\tbgez  a3, 7b\n\t" // read valid
+        "lw    a4, %[status1](a5)\n\tandi  a4, a4, %[paused]\n\tbeqz  a4, 4b\n\t"
+        "add   a2, a2, a0\n\tbne   a2, a1, 3b\n\t"
+        "li    a4, 512\n" // fetch ahead of the halted cores settles
+        "8:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 8b\n\t"
+        "li    a3, 1024\n" // 64 L1 reads from address 0 (a4 = 0): every bank arbiter last granted BRISC
+        "10:\n\t"
+        "lw    a2, 0(a4)\n\tandi  a2, a2, 0\n\taddi  a4, a4, 16\n\tbne   a4, a3, 10b\n\t"
+        "lui   a4, %%hi(%[icinv])\n\tli    a3, 14\n\tsw    a3, %%lo(%[icinv])(a4)\n\t" // TRISC 0-2 icaches
+        "li    a4, 64\n"
+        "11:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 11b\n\t"
+        "lui   a3, %%hi(%[tstep])\n\t" // flush: COMMAND = FLUSH | CONTINUE, TRISC 0, 1, 2
+        "addi  s3, a5, %[cntl1]\n"
+        "12:\n\t"
+        "sw    t5, 0(s3)\n\t"
+        "or    a4, a3, t3\n\t"
+        "sw    a4, %[cntl0](a5)\n\t"
+        "or    a2, a3, t4\n"
+        "13:\n\t"
+        "lw    a4, %[status0](a5)\n\tbgez  a4, 13b\n\t"
+        "sw    a2, %[cntl0](a5)\n"
+        "14:\n\t"
+        "lw    a4, %[status0](a5)\n\tbltz  a4, 14b\n\t"
+        "add   a3, a3, a0\n\tbne   a3, a1, 12b\n\t"
+        "lw    a4, 0(t1)\n\tand   a4, a4, a4\n\t" // all parked on their hold read: nothing below depends on data
+        "lw    a4, 0(a7)\n\tand   a4, a4, a4\n\t"
+        "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
+        "li    a4, 512\n"
+        "15:\n\t"
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 15b\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "j     1b\n"
+        "9:\n\t" // TRISC 0 is done: done if all are, else serve
+        "lw    a4, %[scratch](s2)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
+        "lw    a4, %[scratch](s1)\n\tand   a4, a4, t0\n\tbne   a4, t2, 2b\n\t"
+        "sw    zero, 0(t1)\n\tsw    zero, 0(a7)\n\tsw    zero, 0(a6)\n\t" // out of the kernel
+        :
+        : [pcb0] "i"(PC_BUF[0]),
+          [pcb1] "i"(PC_BUF[1]),
+          [pcb2] "i"(PC_BUF[2]),
+          [slot0] "i"(host_signal::NOC_OVERLAY_START_ADDR),
+          [slot1] "i"(host_signal::NOC_OVERLAY_START_ADDR + host_signal::NOC_STREAM_REG_SPACE_SIZE),
+          [slot2] "i"(host_signal::NOC_OVERLAY_START_ADDR + 2 * host_signal::NOC_STREAM_REG_SPACE_SIZE),
+          [scratch] "i"(host_signal::STREAM_SCRATCH_REG_INDEX * 4),
+          [complete] "i"(ckernel::KERNEL_COMPLETE & 0xFFFFFFU),
+          [req] "i"(REQ),
+          [dbg] "i"(DBG_REGS),
+          [cntl0] "i"(DBG_CNTL_0 - DBG_REGS),
+          [cntl1] "i"(DBG_CNTL_1 - DBG_REGS),
+          [status0] "i"(DBG_STATUS_0 - DBG_REGS),
+          [status1] "i"(DBG_STATUS_1 - DBG_REGS),
+          [override] "i"(PC_BUF_OVERRIDE - DBG_REGS),
+          [paused] "i"(STATUS_PAUSED),
+          [tstep] "i"(1U << 17), // debug target field: TRISC t is t + 1
+          [tend] "i"(4U << 17),
+          [wr_cmd] "i"(WR | REG_COMMAND),
+          [req_wr_cmd] "i"(REQ | WR | REG_COMMAND),
+          [flush_cmd] "i"(COMMAND_FLUSH | COMMAND_CONTINUE),
+          [icinv] "i"(TENSIX_CFG_BASE + 4 * RISCV_IC_INVALIDATE_InvalidateAll_ADDR32),
+          [release] "i"(RELEASE_ALL)
+        : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s0", "s1", "s2", "s3", "s4", "memory");
 }
 } // namespace dbg_barrier
 #endif
