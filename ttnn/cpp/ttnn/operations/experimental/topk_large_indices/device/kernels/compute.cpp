@@ -422,7 +422,7 @@ FORCE_INLINE void reduce_split_segmented_row(
 
         if (later) {
             if (split) {
-                // copy_init sets no unpack format; the unpack to Dst needs c_4's format, the next copy the input's.
+                // copy_init sets no formats: the unpack to Dst needs c_4's, the merge and transposes the input's.
                 reconfig_data_format_srca(input_cb, acc_cb);
                 copy_init(acc_cb);
                 acc.wait_front(2 * tiles_per_sequence);
@@ -431,6 +431,8 @@ FORCE_INLINE void reduce_split_segmented_row(
                 }
                 acc.pop_front(2 * tiles_per_sequence);
                 reconfig_data_format_srca(acc_cb, input_cb);
+                // The next copy init configures the unpacker from the RISC, after the last unpack to Dst has finished.
+                UNPACK((ckernel::tensix_sync()));
             }
             if (!split) {
                 topk_xl_separate_indices_row_major_global_init();

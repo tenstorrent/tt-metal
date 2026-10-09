@@ -271,7 +271,7 @@ template <typename MoveAcc>
 inline void hold_accumulator(MoveAcc&& move_acc) {
     take_math_token();
     move_acc();
-    ckernel::t6_semaphore_post<ckernel::p_stall::NONE>(S2F);
+    ckernel::t6_semaphore_post<ckernel::p_stall::PACK>(S2F);
 }
 
 #endif  // TRISC_PACK
