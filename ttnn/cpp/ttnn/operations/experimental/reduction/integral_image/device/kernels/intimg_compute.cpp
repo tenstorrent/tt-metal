@@ -71,7 +71,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
 
     bool enable_reload = false;
 
-    compute_kernel_hw_startup(cb_input, cb_acc, cb_cumsum_stage_0);
+    reconfig_data_format(cb_input, cb_acc);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
@@ -189,8 +189,7 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        reconfig_data_format(cb_cumsum_stage_X, cb_axis_3_buffer_read);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read);
 
         constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
@@ -255,6 +254,10 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
 
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
+
+    // The helpers below all run inside loops, so the startup goes here.
+    // Its operands are cumsum_cube_axis_2's: the first helper to run.
+    compute_kernel_hw_startup(dfb::input, dfb::acc, dfb::cumsum_stage_0);
 
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
