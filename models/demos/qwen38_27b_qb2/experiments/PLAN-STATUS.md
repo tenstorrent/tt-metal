@@ -1,5 +1,14 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+21:56 UTC update: optional 64K prefill-budget sweep exhausted contiguous DRAM at
+32K/B32 and closed devices cleanly. Original followers stopped before hardware;
+audited recovery restored image-hardware-v3 (eight workers loading) and
+bfp8-gdn-v2 (waiting), with original source/precision pins. The new standalone
+GDN epilogue passed all nine B1/B16/B32 simulator comparisons bit-for-bit after
+matching native final-multiply rounding. It is not integrated or timed on
+hardware. [Recovery](../galaxy-evidence/capacity-recovery-v1/README.md),
+[epilogue evidence](../galaxy-evidence/gdn-epilogue-simulator-v1/README.md).
+
 Latest update: corrected native BFP8 GPQA completed **176/198 (88.89%)**, no
 truncations, and the user accepted it. The strict original 177 gate remains
 unchanged in its receipt. BFP8 native 32K B16/B32 measures 11.749/7.354 TSU;

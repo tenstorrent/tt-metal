@@ -1,0 +1,29 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--wait",
+    "--unit=qwen38-clean-oom-audit-v1-20261009.service",
+    "--property=RuntimeMaxSec=120",
+    "--property=MemoryMax=1G",
+    "--property=CPUQuota=100%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/clean-oom-control-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/clean-oom-control-v1/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/clean-oom-source-v1",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/clean-oom-source-v1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.release_queue_after_capacity",
+    "--previous-unit",
+    "qwen38-gpqa-first-v2-20261009.service",
+    "--previous-invocation",
+    "a6b386c9e3734c849202bb266bf4ff23",
+    "--queue",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/queue.json",
+    "--sweep",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-budget64k/sweep.json",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/clean-oom-control-v1/audit.json"
+  ],
+  "created_at": 1791582724.3914313
+}

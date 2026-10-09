@@ -7,10 +7,16 @@ import hashlib
 import json
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 
-from models.demos.qwen38_27b_qb2.demo.overnight_plan import load_followup, perf_cases, remaining_stage_seconds
+from models.demos.qwen38_27b_qb2.demo.overnight_plan import (
+    load_followup,
+    optional_capacity_result,
+    perf_cases,
+    remaining_stage_seconds,
+)
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
 from models.demos.qwen38_27b_qb2.demo.run_overnight_qualification import check_g0
@@ -133,7 +139,19 @@ def run(args):
                 f"--timeout={max(60, seconds - 180)}",
                 f"--junitxml={directory}/hardware.xml",
             ]
-            stage(case["name"], command, perf_env, seconds)
+            try:
+                stage(case["name"], command, perf_env, seconds)
+            except subprocess.CalledProcessError as error:
+                receipt_path = directory / "sweep.json"
+                measured = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+                if not optional_capacity_result(case["name"], measured, error.returncode):
+                    raise
+                # Keep the failed benchmark and unmeasured cells intact. Clean
+                # allocator exhaustion is a capacity result, not a hardware pass.
+                state.setdefault("capacity_limits", []).append(case["name"])
+                state["stages"][-1]["outcome"] = "optional_allocator_limit_with_clean_shutdown"
+                save(status, state)
+                continue
             measured = json.loads((directory / "sweep.json").read_text())
             if measured.get("state") != "completed" or measured.get("cleanup_completed") is not True:
                 raise ValueError("Performance sweep did not complete and release devices")

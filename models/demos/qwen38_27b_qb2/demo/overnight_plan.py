@@ -5,6 +5,13 @@
 import json
 from pathlib import Path
 
+from models.demos.qwen38_27b_qb2.tests.sweep_recovery import can_restart
+
+
+def optional_capacity_result(name, receipt, returncode):
+    """Only the optional 64K-budget allocator limit may release later work."""
+    return name == "bfp8-budget64k" and can_restart(receipt, returncode)
+
 
 def load_followup(path):
     value = json.loads(Path(path).read_text())

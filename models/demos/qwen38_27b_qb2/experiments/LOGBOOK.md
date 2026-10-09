@@ -1583,3 +1583,33 @@ No session connection is needed for that queue to continue.
 - First staging/capture SSH attempts were sandbox-rejected before remote action;
   authorized retries succeeded. No weights/native install/firmware/NFS changed.
   Evidence: galaxy-evidence/bfp8-gdn-followup-v1/ and tau-verified-preparation-v1/.
+
+## Oct 9, 20:59-21:56 UTC: capacity recovery and fused GDN epilogue
+
+- Original perf queue completed the 16K budget sweep, then the optional 64K
+  budget ran out of contiguous device DRAM at 32K/B32: 71.3 MB required per bank,
+  63.4 MB largest free block. Clean device closure is recorded. Dependent
+  container and GDN jobs stopped before hardware access, retaining their failures.
+- Added a narrow clean-allocator-limit outcome for that optional experiment and
+  an explicit recovery audit of exact stopped invocation, exit code, preceding
+  stages, raw OOM receipt and lock availability. 35 targeted tests passed.
+  Started image-hardware-v3 and bfp8-gdn-v2, preserving source snapshots and all
+  failed evidence. Container reset succeeded; eight workers are loading.
+- 16K prefill budget worsened matched 32K/B32 input TPS (4692 to3714), with no
+  useful decode change. 64K improves B16 prefill (5321 to5870) but cannot admit
+  B32 in this run. Keep 32K as the working budget; missing cells remain not_run.
+- Implemented standalone GDN epilogue consuming raw FP32 recurrence rows,
+  combining output tiling, gated RMSNorm and z multiplication in one program.
+  No default/model path changed and no speedup claimed.
+- Simulator v1 failed in the test reference: explicit deallocation of padded
+  gate freed an alias of the candidate gate. Retain reference intermediates.
+  v2 executed but exceeded the unchanged 0.1% per-head RMS gate (0.28624%).
+  v3 isolated a bit-identical norm and different final multiply. v4 preserves
+  the BF16 intermediate and uses native-style SFPU multiply plus explicit BF16
+  RNE. All nine B1/B16/B32 allocation/rebinding cases now match bit-for-bit;
+  unchanged inputs and zero padding also pass. Hardware/eval gates remain open.
+- Preserved failed and passing simulator logs, manifests and exact compressed
+  source for all four attempts. CPU simulator units use separate cache, one
+  CPU,8GiB/45min bounds; no physical devices. Some sandbox-blocked SSH attempts
+  were retried after escalation; interrupted initial launch was verified absent
+  before starting it. Current physical runs were not restarted on poll timeout.

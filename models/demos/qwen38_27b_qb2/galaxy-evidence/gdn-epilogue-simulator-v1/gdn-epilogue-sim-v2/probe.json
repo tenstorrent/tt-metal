@@ -1,0 +1,49 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cleanup_completed": true,
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "cases": [
+    {
+      "min_pcc": 0.9999967872072065,
+      "max_relative_rms": 0.0028624008816256373,
+      "max_abs_error": 0.015625,
+      "bit_identical": false,
+      "batch": 1,
+      "allocation": 0,
+      "input_hashes": [
+        "c34804244c06be72fbdc6457c6fd269ac2fdf3bd3c7f182fa389f5d44fd0c876",
+        "30c248109a6d2dbab39f91ad6cc2b690cbd49aecf474babd093af62f9cd27835",
+        "fd279e2048ce3274207d17a30130dfe55a10cb9c096242604f287358d0ae77aa"
+      ],
+      "output_sha256": "fc160bec6871873e846652e2ca474e0e15e58f00d449c0b3540b4bbf5fb1d6fe",
+      "native_sha256": "81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": false
+    }
+  ],
+  "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+  "compiler_fallback": "Simulator uses explicit instructions instead of SFPLOADMACRO; hardware instruction parity unqualified",
+  "updated_at": "2026-10-09T21:47:33Z",
+  "reference_buffers": [
+    {
+      "batch": 1,
+      "allocation": 0,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 1,
+      "allocation": 1,
+      "padded_gate_aliases_gate": true
+    }
+  ],
+  "active_case": [
+    1,
+    0
+  ],
+  "error": "AssertionError",
+  "detail": "{'min_pcc': 0.9999967872072065, 'max_relative_rms': 0.0028624008816256373, 'max_abs_error': 0.015625, 'bit_identical': False, 'batch': 1, 'allocation': 0, 'input_hashes': ['c34804244c06be72fbdc6457c6fd269ac2fdf3bd3c7f182fa389f5d44fd0c876', '30c248109a6d2dbab39f91ad6cc2b690cbd49aecf474babd093af62f9cd27835', 'fd279e2048ce3274207d17a30130dfe55a10cb9c096242604f287358d0ae77aa'], 'output_sha256': 'fc160bec6871873e846652e2ca474e0e15e58f00d449c0b3540b4bbf5fb1d6fe', 'native_sha256': '81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014', 'inputs_unchanged': True, 'padding_zero': True, 'passed': False}"
+}

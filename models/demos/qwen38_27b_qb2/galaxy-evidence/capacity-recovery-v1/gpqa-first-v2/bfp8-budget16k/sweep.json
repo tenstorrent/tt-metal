@@ -1,0 +1,1819 @@
+{
+  "state": "completed",
+  "created_at": "2026-10-09T19:46:36.727715+00:00",
+  "replicas": 1,
+  "chips": 4,
+  "batches": [
+    8,
+    16,
+    32
+  ],
+  "input_lengths": [
+    32768,
+    16384
+  ],
+  "output_tokens": 128,
+  "warmup_runs": 1,
+  "measured_runs": 3,
+  "max_pool_tokens_per_replica": 1179648,
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "capacity_note": "Capacity and implementation guards are not tested; they are not measured OOM failures.",
+  "cells": [
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 263168,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 1841025728,
+          "total_bytes_free_per_bank": 2406313664,
+          "largest_contiguous_bytes_free_per_bank": 2340303744
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2218929088,
+          "total_bytes_free_per_bank": 2028410304,
+          "largest_contiguous_bytes_free_per_bank": 2022423424
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016,
+          50.434762195684016
+        ],
+        "prefill_s": 50.064767613075674,
+        "prefill_s_per_replica": [
+          50.064767613075674
+        ],
+        "decode_s": 8.329204426612705,
+        "elapsed_s": 58.7639712896198,
+        "output_sha256_per_replica": [
+          "476f4ab2dadbfe25524de5f6237c390556df07f3593c290dd54f450c6334956c"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2220742464,
+          "total_bytes_free_per_bank": 2026596928,
+          "largest_contiguous_bytes_free_per_bank": 1982425984
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627,
+            47.29647914599627
+          ],
+          "prefill_s": 47.20184108009562,
+          "prefill_s_per_replica": [
+            47.20184108009562
+          ],
+          "decode_s": 7.008343616034836,
+          "elapsed_s": 54.304825455881655,
+          "output_sha256_per_replica": [
+            "476f4ab2dadbfe25524de5f6237c390556df07f3593c290dd54f450c6334956c"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756,
+            47.299114905297756
+          ],
+          "prefill_s": 47.20462283864617,
+          "prefill_s_per_replica": [
+            47.20462283864617
+          ],
+          "decode_s": 7.008401125203818,
+          "elapsed_s": 54.307518273126334,
+          "output_sha256_per_replica": [
+            "476f4ab2dadbfe25524de5f6237c390556df07f3593c290dd54f450c6334956c"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583,
+            47.29570039268583
+          ],
+          "prefill_s": 47.20216353191063,
+          "prefill_s_per_replica": [
+            47.20216353191063
+          ],
+          "decode_s": 7.0085454802028835,
+          "elapsed_s": 54.3042483269237,
+          "output_sha256_per_replica": [
+            "476f4ab2dadbfe25524de5f6237c390556df07f3593c290dd54f450c6334956c"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 18.121108899329244,
+        "aggregate_decode_tokens_per_second": 144.96887119463395,
+        "aggregate_e2e_tokens_per_second": 18.856519497183882,
+        "tpot_ms": 55.18426082837652,
+        "ttft_p50_s": 47.29647914599627,
+        "ttft_p90_s": 47.299114905297756,
+        "decode_s": 7.008401125203818,
+        "elapsed_s": 54.304825455881655,
+        "samples": 3,
+        "prefill_s": 47.20216353191063,
+        "aggregate_input_tokens_per_second": 5553.6437397150185,
+        "aggregate_e2e_input_tokens_per_second": 4827.268991279074
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2220742464,
+          "total_bytes_free_per_bank": 2026596928,
+          "largest_contiguous_bytes_free_per_bank": 1982425984
+        }
+      ]
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 526336,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 1895425600,
+          "total_bytes_free_per_bank": 2351913792,
+          "largest_contiguous_bytes_free_per_bank": 1997577088
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2645331840,
+          "total_bytes_free_per_bank": 1602007552,
+          "largest_contiguous_bytes_free_per_bank": 1600322432
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942,
+          113.77930999686942
+        ],
+        "prefill_s": 113.58836072310805,
+        "prefill_s_per_replica": [
+          113.58836072310805
+        ],
+        "decode_s": 12.100766006857157,
+        "elapsed_s": 125.88008078094572,
+        "output_sha256_per_replica": [
+          "d08e4e9f0ee6abcdc0059685b7f659c2c5f4c049eb41f2c405e17276962eb4a1"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2647457408,
+          "total_bytes_free_per_bank": 1599881984,
+          "largest_contiguous_bytes_free_per_bank": 1496961920
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228,
+            111.05243651103228
+          ],
+          "prefill_s": 110.9273979109712,
+          "prefill_s_per_replica": [
+            110.9273979109712
+          ],
+          "decode_s": 10.789086979813874,
+          "elapsed_s": 121.84152616467327,
+          "output_sha256_per_replica": [
+            "d08e4e9f0ee6abcdc0059685b7f659c2c5f4c049eb41f2c405e17276962eb4a1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847,
+            111.09077820181847
+          ],
+          "prefill_s": 110.92931569786742,
+          "prefill_s_per_replica": [
+            110.92931569786742
+          ],
+          "decode_s": 10.788353863172233,
+          "elapsed_s": 121.87913433788344,
+          "output_sha256_per_replica": [
+            "d08e4e9f0ee6abcdc0059685b7f659c2c5f4c049eb41f2c405e17276962eb4a1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545,
+            111.08231067005545
+          ],
+          "prefill_s": 110.92547340504825,
+          "prefill_s_per_replica": [
+            110.92547340504825
+          ],
+          "decode_s": 10.788961881306022,
+          "elapsed_s": 121.8712748750113,
+          "output_sha256_per_replica": [
+            "d08e4e9f0ee6abcdc0059685b7f659c2c5f4c049eb41f2c405e17276962eb4a1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 11.771290083066493,
+        "aggregate_decode_tokens_per_second": 188.34064132906389,
+        "aggregate_e2e_tokens_per_second": 16.804616199349578,
+        "tpot_ms": 84.95245575831514,
+        "ttft_p50_s": 111.08231067005545,
+        "ttft_p90_s": 111.09077820181847,
+        "decode_s": 10.788961881306022,
+        "elapsed_s": 121.8712748750113,
+        "samples": 3,
+        "prefill_s": 110.9273979109712,
+        "aggregate_input_tokens_per_second": 4726.406729749366,
+        "aggregate_e2e_input_tokens_per_second": 4301.981747033492
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2647457408,
+          "total_bytes_free_per_bank": 1599881984,
+          "largest_contiguous_bytes_free_per_bank": 1496961920
+        }
+      ]
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 1052672,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 1997323584,
+          "total_bytes_free_per_bank": 2250015808,
+          "largest_contiguous_bytes_free_per_bank": 1496961920
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 3491235712,
+          "total_bytes_free_per_bank": 756103680,
+          "largest_contiguous_bytes_free_per_bank": 750941056
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306,
+          344.91604355117306
+        ],
+        "prefill_s": 344.57285036565736,
+        "prefill_s_per_replica": [
+          344.57285036565736
+        ],
+        "decode_s": 18.99751682486385,
+        "elapsed_s": 363.91356510296464,
+        "output_sha256_per_replica": [
+          "3d733df5d40484c93f8ff00439021e4643b0bcddec6a74eb80d715d00f89ffee"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 3493758080,
+          "total_bytes_free_per_bank": 753581312,
+          "largest_contiguous_bytes_free_per_bank": 596134784
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256,
+            282.6050268742256
+          ],
+          "prefill_s": 282.35764811886474,
+          "prefill_s_per_replica": [
+            282.35764811886474
+          ],
+          "decode_s": 17.27456028526649,
+          "elapsed_s": 299.879589733202,
+          "output_sha256_per_replica": [
+            "3d733df5d40484c93f8ff00439021e4643b0bcddec6a74eb80d715d00f89ffee"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342,
+            282.6259593167342
+          ],
+          "prefill_s": 282.3455439340323,
+          "prefill_s_per_replica": [
+            282.3455439340323
+          ],
+          "decode_s": 17.27423083083704,
+          "elapsed_s": 299.9001928619109,
+          "output_sha256_per_replica": [
+            "3d733df5d40484c93f8ff00439021e4643b0bcddec6a74eb80d715d00f89ffee"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695,
+            282.63082440709695
+          ],
+          "prefill_s": 282.35625644400716,
+          "prefill_s_per_replica": [
+            282.35625644400716
+          ],
+          "decode_s": 17.274454541970044,
+          "elapsed_s": 299.9052818133496,
+          "output_sha256_per_replica": [
+            "3d733df5d40484c93f8ff00439021e4643b0bcddec6a74eb80d715d00f89ffee"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 7.351896390791419,
+        "aggregate_decode_tokens_per_second": 235.2606845053254,
+        "aggregate_e2e_tokens_per_second": 13.657877178778621,
+        "tpot_ms": 136.01932710212634,
+        "ttft_p50_s": 282.6259593167342,
+        "ttft_p90_s": 282.63082440709695,
+        "decode_s": 17.274454541970044,
+        "elapsed_s": 299.9001928619109,
+        "samples": 3,
+        "prefill_s": 282.35625644400716,
+        "aggregate_input_tokens_per_second": 3713.6630624224845,
+        "aggregate_e2e_input_tokens_per_second": 3496.416557767327
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 3493758080,
+          "total_bytes_free_per_bank": 753581312,
+          "largest_contiguous_bytes_free_per_bank": 596134784
+        }
+      ]
+    },
+    {
+      "input_tokens": 16384,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 132096,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9a6ec32574dd7a5ca6df663447fe9efbcb437a686279ac8862f90bd61b155e39",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2193990208,
+          "total_bytes_free_per_bank": 2053349184,
+          "largest_contiguous_bytes_free_per_bank": 726602624
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2376201024,
+          "total_bytes_free_per_bank": 1871138368,
+          "largest_contiguous_bytes_free_per_bank": 726602624
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495,
+          21.868334291968495
+        ],
+        "prefill_s": 21.772783043328673,
+        "prefill_s_per_replica": [
+          21.772783043328673
+        ],
+        "decode_s": 7.393605284858495,
+        "elapsed_s": 29.26194217102602,
+        "output_sha256_per_replica": [
+          "220108e95a92a5b83f38c49eaee9be834e610751b6a9ed8a0ea67c8e75e1fff6"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2376796992,
+          "total_bytes_free_per_bank": 1870542400,
+          "largest_contiguous_bytes_free_per_bank": 726504320
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381,
+            21.8401897973381
+          ],
+          "prefill_s": 21.7708419598639,
+          "prefill_s_per_replica": [
+            21.7708419598639
+          ],
+          "decode_s": 6.620812173001468,
+          "elapsed_s": 28.46100450400263,
+          "output_sha256_per_replica": [
+            "220108e95a92a5b83f38c49eaee9be834e610751b6a9ed8a0ea67c8e75e1fff6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883,
+            21.886350716929883
+          ],
+          "prefill_s": 21.772821287624538,
+          "prefill_s_per_replica": [
+            21.772821287624538
+          ],
+          "decode_s": 6.620611658785492,
+          "elapsed_s": 28.506964940112084,
+          "output_sha256_per_replica": [
+            "220108e95a92a5b83f38c49eaee9be834e610751b6a9ed8a0ea67c8e75e1fff6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982,
+            21.83786842226982
+          ],
+          "prefill_s": 21.76965696597472,
+          "prefill_s_per_replica": [
+            21.76965696597472
+          ],
+          "decode_s": 6.620709037873894,
+          "elapsed_s": 28.45857973303646,
+          "output_sha256_per_replica": [
+            "220108e95a92a5b83f38c49eaee9be834e610751b6a9ed8a0ea67c8e75e1fff6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 19.182235508839618,
+        "aggregate_decode_tokens_per_second": 153.45788407071694,
+        "aggregate_e2e_tokens_per_second": 35.979053369531954,
+        "tpot_ms": 52.13156722735349,
+        "ttft_p50_s": 21.8401897973381,
+        "ttft_p90_s": 21.886350716929883,
+        "decode_s": 6.620709037873894,
+        "elapsed_s": 28.46100450400263,
+        "samples": 3,
+        "prefill_s": 21.7708419598639,
+        "aggregate_input_tokens_per_second": 6020.529671826224,
+        "aggregate_e2e_input_tokens_per_second": 4605.31883130009
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2376796992,
+          "total_bytes_free_per_bank": 1870542400,
+          "largest_contiguous_bytes_free_per_bank": 726504320
+        }
+      ]
+    },
+    {
+      "input_tokens": 16384,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 264192,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9a6ec32574dd7a5ca6df663447fe9efbcb437a686279ac8862f90bd61b155e39",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2194088512,
+          "total_bytes_free_per_bank": 2053250880,
+          "largest_contiguous_bytes_free_per_bank": 726504320
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2558507904,
+          "total_bytes_free_per_bank": 1688831488,
+          "largest_contiguous_bytes_free_per_bank": 726504320
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375,
+          48.616760877892375
+        ],
+        "prefill_s": 48.47842850908637,
+        "prefill_s_per_replica": [
+          48.47842850908637
+        ],
+        "decode_s": 10.956624204292893,
+        "elapsed_s": 59.573387385345995,
+        "output_sha256_per_replica": [
+          "36cb375e1c8177a123109a82c65f5d1298ffffb7faf09b2628c4af303d64672d"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2559185792,
+          "total_bytes_free_per_bank": 1688153600,
+          "largest_contiguous_bytes_free_per_bank": 726324096
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674,
+            48.604300937149674
+          ],
+          "prefill_s": 48.47744378587231,
+          "prefill_s_per_replica": [
+            48.47744378587231
+          ],
+          "decode_s": 10.03490887908265,
+          "elapsed_s": 58.63921198900789,
+          "output_sha256_per_replica": [
+            "36cb375e1c8177a123109a82c65f5d1298ffffb7faf09b2628c4af303d64672d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446,
+            48.60432868497446
+          ],
+          "prefill_s": 48.47653446532786,
+          "prefill_s_per_replica": [
+            48.47653446532786
+          ],
+          "decode_s": 10.034208494238555,
+          "elapsed_s": 58.638539974112064,
+          "output_sha256_per_replica": [
+            "36cb375e1c8177a123109a82c65f5d1298ffffb7faf09b2628c4af303d64672d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605,
+            48.60795940691605
+          ],
+          "prefill_s": 48.47872558794916,
+          "prefill_s_per_replica": [
+            48.47872558794916
+          ],
+          "decode_s": 10.034834647551179,
+          "elapsed_s": 58.64279687870294,
+          "output_sha256_per_replica": [
+            "36cb375e1c8177a123109a82c65f5d1298ffffb7faf09b2628c4af303d64672d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 12.655913571131146,
+        "aggregate_decode_tokens_per_second": 202.49461713809833,
+        "aggregate_e2e_tokens_per_second": 34.9254352255604,
+        "tpot_ms": 79.01444604371007,
+        "ttft_p50_s": 48.60432868497446,
+        "ttft_p90_s": 48.60795940691605,
+        "decode_s": 10.034834647551179,
+        "elapsed_s": 58.63921198900789,
+        "samples": 3,
+        "prefill_s": 48.47744378587231,
+        "aggregate_input_tokens_per_second": 5407.545850765261,
+        "aggregate_e2e_input_tokens_per_second": 4470.455708871731
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2559185792,
+          "total_bytes_free_per_bank": 1688153600,
+          "largest_contiguous_bytes_free_per_bank": 726324096
+        }
+      ]
+    },
+    {
+      "input_tokens": 16384,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 528384,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9a6ec32574dd7a5ca6df663447fe9efbcb437a686279ac8862f90bd61b155e39",
+      "dram_before_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2194268736,
+          "total_bytes_free_per_bank": 2053070656,
+          "largest_contiguous_bytes_free_per_bank": 726324096
+        }
+      ],
+      "dram_after_cache": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2923105408,
+          "total_bytes_free_per_bank": 1324233984,
+          "largest_contiguous_bytes_free_per_bank": 726324096
+        }
+      ],
+      "warmup": {
+        "ttft_s": [
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964,
+          122.51198418810964
+        ],
+        "prefill_s": 122.26145940506831,
+        "prefill_s_per_replica": [
+          122.26145940506831
+        ],
+        "decode_s": 17.195293803233653,
+        "elapsed_s": 139.70728070521727,
+        "output_sha256_per_replica": [
+          "847d8b74343d909bd3b208040a3fafe98a99223a91d64e7c481cdc56ed60e56f"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "dram_after_warmup": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2923947136,
+          "total_bytes_free_per_bank": 1323392256,
+          "largest_contiguous_bytes_free_per_bank": 725980032
+        }
+      ],
+      "samples": [
+        {
+          "ttft_s": [
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121,
+            113.43293122528121
+          ],
+          "prefill_s": 113.18178846873343,
+          "prefill_s_per_replica": [
+            113.18178846873343
+          ],
+          "decode_s": 15.78546878695488,
+          "elapsed_s": 129.2184024862945,
+          "output_sha256_per_replica": [
+            "847d8b74343d909bd3b208040a3fafe98a99223a91d64e7c481cdc56ed60e56f"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339,
+            113.44624193804339
+          ],
+          "prefill_s": 113.18226991593838,
+          "prefill_s_per_replica": [
+            113.18226991593838
+          ],
+          "decode_s": 15.785575550049543,
+          "elapsed_s": 129.2318204427138,
+          "output_sha256_per_replica": [
+            "847d8b74343d909bd3b208040a3fafe98a99223a91d64e7c481cdc56ed60e56f"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981,
+            113.45687164179981
+          ],
+          "prefill_s": 113.18500528484583,
+          "prefill_s_per_replica": [
+            113.18500528484583
+          ],
+          "decode_s": 15.78555206535384,
+          "elapsed_s": 129.24242629110813,
+          "output_sha256_per_replica": [
+            "847d8b74343d909bd3b208040a3fafe98a99223a91d64e7c481cdc56ed60e56f"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 8.045331545846905,
+        "aggregate_decode_tokens_per_second": 257.45060946710095,
+        "aggregate_e2e_tokens_per_second": 31.69498027628331,
+        "tpot_ms": 124.29568555396725,
+        "ttft_p50_s": 113.44624193804339,
+        "ttft_p90_s": 113.45687164179981,
+        "decode_s": 15.78555206535384,
+        "elapsed_s": 129.2318204427138,
+        "samples": 3,
+        "prefill_s": 113.18226991593838,
+        "aggregate_input_tokens_per_second": 4632.244965482615,
+        "aggregate_e2e_input_tokens_per_second": 4056.9574753642637
+      },
+      "dram_after_measurement": [
+        {
+          "replica": 0,
+          "device_ids": [
+            0,
+            4,
+            12,
+            8
+          ],
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 2923947136,
+          "total_bytes_free_per_bank": 1323392256,
+          "largest_contiguous_bytes_free_per_bank": 725980032
+        }
+      ]
+    }
+  ],
+  "updated_at": "2026-10-09T20:41:51.574951+00:00",
+  "configuration": {
+    "topology": "linear",
+    "num_links": 2,
+    "native_layers": 64,
+    "environment": {
+      "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+      "QWEN_BATCHED_PREFILL": "1",
+      "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+      "QWEN_COMPACT_DECODE_ATTENTION": "1",
+      "QWEN_DECODE_BUCKETS": "0",
+      "QWEN_PREFILL_MAX_BATCH_TOKENS": "16384",
+      "QWEN_SWEEP_RESULTS": "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-budget16k",
+      "QWEN_COMPACT_DECODE_MLP": "1",
+      "QWEN_PREFILL_BATCHED_HEAD": "1",
+      "QWEN_PREFILL_STARTUP_WARMUP": "1",
+      "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+      "QWEN_GALAXY_SWEEP": "1",
+      "QWEN_BATCHED_DECODE_ROPE": "1",
+      "QWEN_PRECISION_CONFIG": "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/config/precision_accurate_decode_bfp8_all.json"
+    }
+  },
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "28687cccf1e53a7427b19f9c9468f363c86c013add7fbd40afe4d124885ddfad",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "tt/dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "tt/dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "bda53aae8011aa35e99a8888a638f8fc1581968199f6f374ea2848f388b176d0",
+    "tt/gdn_step/compute_math.hpp": "c3f00d246fa3f99eb216140776b735fecf053613fb40262f7fff557063f5e639",
+    "tt/gdn_step/model_adapter.py": "3724234bef696eeecd7dc1c5f888c9ac369f3e7871aacc58ae1bd5ac3d945deb",
+    "tt/gdn_step/op.py": "834c3f6b4f3980a6bc335ab7078767211eb0e3bb1aa8b7ee4c45a6bece2472dc",
+    "tt/gdn_step/prepare_compute.cpp": "0e9f16810ef84e0441e43431a425ebe461c41672b99769ff480f7d8549195c8e",
+    "tt/gdn_step/prepare_reader.cpp": "c9f30a86d923b85ec5c1d006e2bf3cd6b79e675267db0a1bb2e11ede384e52ca",
+    "tt/gdn_step/prepare_writer.cpp": "c76787b3bffea7861c043aad2233ddc21075fa577827efb4bd80ca44835c85a2",
+    "tt/gdn_step/reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "tt/gdn_step/shared_qk.py": "a4e71be1421024d8cb59a7a83ab8c549fe1598a7b0e4f1f1ba610567fe9aa713",
+    "tt/gdn_step/workspace.py": "0f6e34f2617b124f95318f3992bfe90fa3e62de0e4e3d4669e72da6dd92fc350",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "74cde91a050d40f2d5a7e678c929b9854c0d9d7a7e9ef9dcb0e357619c0b557f",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "280ea0b2d8cf3bb9221116b092fff3c5bfaac136db881b1a0503fe21e60cc0f6",
+    "tt/prefill_schedule.py": "a18a210057682998669c995e86b0ad8c471a20f5161670f2087f0f165af98a59",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "effective_precision_override": "468eb9897af338088865ad8d96c813c3a707e2331780ef7d3fdb857e18f10063"
+  },
+  "setup_s_per_replica": [
+    311.62407963583246
+  ],
+  "precision": {
+    "config_id": "decoder_bfp8_hifi2_head_bfp8_hifi2_accurate_decode",
+    "weight_groups": {
+      "attention": "bfloat8_b",
+      "output": "bfloat8_b",
+      "gate": "bfloat8_b",
+      "up": "bfloat8_b",
+      "down": "bfloat8_b",
+      "head": "bfloat8_b"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi2",
+      "output": "HiFi2",
+      "gate": "HiFi2",
+      "up": "HiFi2",
+      "down": "HiFi2",
+      "head": "HiFi2"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "native"
+  },
+  "dram_after_model_load": [
+    {
+      "replica": 0,
+      "device_ids": [
+        0,
+        4,
+        12,
+        8
+      ],
+      "num_banks": 8,
+      "total_bytes_per_bank": 4247339392,
+      "total_bytes_allocated_per_bank": 1841025728,
+      "total_bytes_free_per_bank": 2406313664,
+      "largest_contiguous_bytes_free_per_bank": 2340303744
+    }
+  ],
+  "cleanup_completed": true
+}

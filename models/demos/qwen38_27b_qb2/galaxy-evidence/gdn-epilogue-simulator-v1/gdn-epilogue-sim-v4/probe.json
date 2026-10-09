@@ -1,0 +1,265 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "cases": [
+    {
+      "min_pcc": 0.9999999999999998,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999997,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 1,
+      "allocation": 0,
+      "input_hashes": [
+        "c34804244c06be72fbdc6457c6fd269ac2fdf3bd3c7f182fa389f5d44fd0c876",
+        "30c248109a6d2dbab39f91ad6cc2b690cbd49aecf474babd093af62f9cd27835",
+        "fd279e2048ce3274207d17a30130dfe55a10cb9c096242604f287358d0ae77aa"
+      ],
+      "output_sha256": "81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014",
+      "native_sha256": "81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999994,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999999,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 1,
+      "allocation": 1,
+      "input_hashes": [
+        "1d56fa04c5f858f976afa9dc85464414b1c85298a0c4999fb39b72eb1a0ed515",
+        "8f6c668b2337e3ee4f4465537d1b3d1b71cc2bfd8075fba39ea13518b6be4ad8",
+        "018b33f786b2b205233306f4492a3ea64a4243811d6023edffbdbc98ce1c2af3"
+      ],
+      "output_sha256": "2d6810743a2c01f8128c77be59c8b8578248ba0372d667884cc93ed475375862",
+      "native_sha256": "2d6810743a2c01f8128c77be59c8b8578248ba0372d667884cc93ed475375862",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999998,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999997,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 1,
+      "allocation": 0,
+      "input_hashes": [
+        "c34804244c06be72fbdc6457c6fd269ac2fdf3bd3c7f182fa389f5d44fd0c876",
+        "30c248109a6d2dbab39f91ad6cc2b690cbd49aecf474babd093af62f9cd27835",
+        "fd279e2048ce3274207d17a30130dfe55a10cb9c096242604f287358d0ae77aa"
+      ],
+      "output_sha256": "81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014",
+      "native_sha256": "81b3a38e82fe35afdfaddfe6be60e9d8e44c6d25b7683bc01fd4dbc7ead86014",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999989,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999991,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 16,
+      "allocation": 0,
+      "input_hashes": [
+        "2c2148d772ffc89aedd28a2a3e4a86ebd1437ccf397c72c43cba81ffdfc45a7c",
+        "fdbb52b4cbd112bc39b316c9adbdb8a5c820acbd49d06ab987371f8977b8bf71",
+        "92f6b635b92b4454252824b1db4a8e4f8e7a1848739b0350d4f14f692a363fa2"
+      ],
+      "output_sha256": "b2128604f0c013615fdeb8aeb9a9b088947fe66c76c5e1713e91b4f9c673ac20",
+      "native_sha256": "b2128604f0c013615fdeb8aeb9a9b088947fe66c76c5e1713e91b4f9c673ac20",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999988,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.999999999999999,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 16,
+      "allocation": 1,
+      "input_hashes": [
+        "42c765797c56c1a446c21f03c4e9797081e1a268817cf4b830d3ca003de7db74",
+        "303d1d9bee8b6823863a2c009f21451fa1cfc44a52c37aa59c243512d715b875",
+        "43247cd54ce74a8b892053aec4e61a77e95e32754fccc1a6347e74ade048add9"
+      ],
+      "output_sha256": "61d3c8edb2575a46fd23ec7fefe69e3180af31d5e4e7bd0fb412a450e2a02139",
+      "native_sha256": "61d3c8edb2575a46fd23ec7fefe69e3180af31d5e4e7bd0fb412a450e2a02139",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999989,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999991,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 16,
+      "allocation": 0,
+      "input_hashes": [
+        "2c2148d772ffc89aedd28a2a3e4a86ebd1437ccf397c72c43cba81ffdfc45a7c",
+        "fdbb52b4cbd112bc39b316c9adbdb8a5c820acbd49d06ab987371f8977b8bf71",
+        "92f6b635b92b4454252824b1db4a8e4f8e7a1848739b0350d4f14f692a363fa2"
+      ],
+      "output_sha256": "b2128604f0c013615fdeb8aeb9a9b088947fe66c76c5e1713e91b4f9c673ac20",
+      "native_sha256": "b2128604f0c013615fdeb8aeb9a9b088947fe66c76c5e1713e91b4f9c673ac20",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999984,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999988,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 32,
+      "allocation": 0,
+      "input_hashes": [
+        "0b8f7b06c94eb8979ae915695b65e9fd798146f74d5e3eb8a8395e300eea1e98",
+        "12e086453c40a0eae8ffe16cd5b530edab19c0b46b3acb964f23049ebed0e148",
+        "c0658e2f580f595b209d86a74c12f7d65302e858fcc0371430f3412ac4daa923"
+      ],
+      "output_sha256": "d0d1b0fa74a7ecedf019ecd0817166a14449cc6fd76202cc099a4a3343458d2b",
+      "native_sha256": "d0d1b0fa74a7ecedf019ecd0817166a14449cc6fd76202cc099a4a3343458d2b",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999988,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.999999999999999,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 32,
+      "allocation": 1,
+      "input_hashes": [
+        "383f2fd191b373ffae617cbe31c0562593abf89373ca5c86117f63b669a8fd82",
+        "aef94df5cb4d1028fe98577db067891c159aea1489099c29e78d84efabd88b34",
+        "5352486167a91c7afe9bff86b54cf92e0dee3bf1b2a5a75914cc7b1cffa9ba7e"
+      ],
+      "output_sha256": "e5ccf9ae26e43547eb94c606350e1f8052b3239965f24f5b627377236e15b6b8",
+      "native_sha256": "e5ccf9ae26e43547eb94c606350e1f8052b3239965f24f5b627377236e15b6b8",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    },
+    {
+      "min_pcc": 0.9999999999999984,
+      "max_relative_rms": 0.0,
+      "max_abs_error": 0.0,
+      "bit_identical": true,
+      "normalized_before_z": {
+        "min_pcc": 0.9999999999999988,
+        "max_relative_rms": 0.0,
+        "max_abs_error": 0.0,
+        "bit_identical": true
+      },
+      "batch": 32,
+      "allocation": 0,
+      "input_hashes": [
+        "0b8f7b06c94eb8979ae915695b65e9fd798146f74d5e3eb8a8395e300eea1e98",
+        "12e086453c40a0eae8ffe16cd5b530edab19c0b46b3acb964f23049ebed0e148",
+        "c0658e2f580f595b209d86a74c12f7d65302e858fcc0371430f3412ac4daa923"
+      ],
+      "output_sha256": "d0d1b0fa74a7ecedf019ecd0817166a14449cc6fd76202cc099a4a3343458d2b",
+      "native_sha256": "d0d1b0fa74a7ecedf019ecd0817166a14449cc6fd76202cc099a4a3343458d2b",
+      "inputs_unchanged": true,
+      "padding_zero": true,
+      "passed": true
+    }
+  ],
+  "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+  "compiler_fallback": "Simulator uses explicit instructions instead of SFPLOADMACRO; hardware instruction parity unqualified",
+  "updated_at": "2026-10-09T21:55:17Z",
+  "reference_buffers": [
+    {
+      "batch": 1,
+      "allocation": 0,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 1,
+      "allocation": 1,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 16,
+      "allocation": 0,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 16,
+      "allocation": 1,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 32,
+      "allocation": 0,
+      "padded_gate_aliases_gate": true
+    },
+    {
+      "batch": 32,
+      "allocation": 1,
+      "padded_gate_aliases_gate": true
+    }
+  ],
+  "active_case": [
+    32,
+    0
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_health_proven": false,
+  "device_reset_required": true,
+  "passed_hardware_test": false,
+  "physical_devices_accessed": false,
+  "invocation": "3b2511cb887244949a9f0645571fc6e3",
+  "previous_unit": "qwen38-gpqa-first-v2-20261009.service",
+  "previous": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "ExecMainStatus": "1",
+    "ActiveState": "failed",
+    "InvocationID": "a6b386c9e3734c849202bb266bf4ff23"
+  },
+  "reason": "Optional 64K prefill budget exhausted DRAM; benchmark confirms clean closure; next job resets under lock",
+  "sources": {
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/queue.json": "5205194601994e7102864c211078d79aee76be0b6897e965008fb4049967a12a",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-budget64k/sweep.json": "b9646d30164185cf9219e172c905789bf25f7bc379f21338b9ba8aa4b40d5484"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "models/demos/qwen38_27b_qb2/demo/probe_gdn_epilogue.py": "e79807131a47fa1b5463852e41c4a008be192ea2a875e0c87ae178d00e469e41",
+  "models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py": "65d0b2de301bc72ff0e64980406d935d310530dedc37fcfb4b1796637dcfef1f",
+  "models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp": "5b6e0c20b0e858a375a4fe25f9c7281668450659c5bf6120fafcb614d0dce303",
+  "models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp": "90b30db5229ceb88bf5052f6a84e5c46dd71d33656d49b1afc1ec0b06a28ff3d",
+  "models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp": "c0b7af5513341e81227810872fcc6b0dd47cac8c7deee83007eeaebf628d5695"
+}

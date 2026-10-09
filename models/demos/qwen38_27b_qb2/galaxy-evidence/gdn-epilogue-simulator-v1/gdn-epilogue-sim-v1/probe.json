@@ -1,0 +1,16 @@
+{
+  "state": "running",
+  "passed": false,
+  "cleanup_completed": false,
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "cases": [],
+  "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+  "compiler_fallback": "Simulator uses explicit instructions instead of SFPLOADMACRO; hardware instruction parity unqualified",
+  "updated_at": "2026-10-09T21:46:16Z",
+  "active_case": [
+    1,
+    0
+  ]
+}

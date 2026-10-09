@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T19:50:35.107108+00:00",
+  "generated_at": "2026-10-09T21:58:37.316659+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -39,13 +39,18 @@
     },
     {
       "path": "demo/overnight_plan.py",
-      "bytes": 1713,
-      "sha256": "b6724bfc1e17876a58bc6f3c89cc36365dc78d26085e20267943b68c31ef61d3"
+      "bytes": 1998,
+      "sha256": "30598ce7e672d2f326da7b38b59a5dd97447e7e3d1284c4163f9aac043b9f43a"
     },
     {
       "path": "demo/probe_chunked_prefill.py",
       "bytes": 8176,
       "sha256": "6648ddacae732a5994f014d111ac7ecf76816d3eb45128e78964a6d578ab56fe"
+    },
+    {
+      "path": "demo/probe_gdn_epilogue.py",
+      "bytes": 8041,
+      "sha256": "afa9fd0d7db43c419af331398407710f6204c825b10c8a21e9db18e8ca388935"
     },
     {
       "path": "demo/probe_hf_head.py",
@@ -56,6 +61,11 @@
       "path": "demo/probe_hf_layers.py",
       "bytes": 12539,
       "sha256": "c7223dfec8e119da22f4b4b7ee058049db5ac017dc5629e742a316e858a1fd20"
+    },
+    {
+      "path": "demo/release_queue_after_capacity.py",
+      "bytes": 3305,
+      "sha256": "8540653bce4435052d2d6b73a6a313be2aaeefe0e9afa7830dcf746254bba1fd"
     },
     {
       "path": "demo/run_accuracy_followup.py",
@@ -74,8 +84,8 @@
     },
     {
       "path": "demo/run_eight_hour_experiments.py",
-      "bytes": 6747,
-      "sha256": "6ba3f5ab5a3cffc225095bf222578b160c3158be90f165ccb197d1a46898afd0"
+      "bytes": 7557,
+      "sha256": "8294b76671a1d87c9921e860a6568752c7f197b2bd912dc4deef6b00c276d98a"
     },
     {
       "path": "demo/run_galaxy_serving.py",
@@ -109,18 +119,18 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 117407,
-      "sha256": "2401f080cb2613a00302990a936c238e55d369bc42b4923632cf2db192bfd8a2"
+      "bytes": 119566,
+      "sha256": "e76e47cc7fde4fa1fc450b1eca3f99560f90b6908605dcd73653e542a2744ab7"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 6502,
-      "sha256": "cda6e70ac7749bf4b907fc66a058fcce01b01d120595f191181ec6d2497ec853"
+      "bytes": 7060,
+      "sha256": "791513fa021f1f881cbc1db45531fe89b6e2128b615b9e7e56d47b65347d3c8f"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 35224,
-      "sha256": "0ce7fd51ef9c24ecdfc194642a5499f9c4f73b123f7f22966345235d20fcc6be"
+      "bytes": 35841,
+      "sha256": "73c5ca601c50e29f50384d3e47febee8b530e455bf5c676efdede417b1e4de1b"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -1145,6 +1155,92 @@
       }
     },
     {
+      "path": "galaxy-evidence/capacity-recovery-v1/README.md",
+      "bytes": 2881,
+      "sha256": "3ec0a7ec69746d5ea1338c81e6569cda5ec167678f0a25960b5217087e41cca7"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/bfp8-gdn-control-v2/launch.json",
+      "bytes": 2142,
+      "sha256": "b085649209fbe87f8ba4d0436586b6913e9df338cce0a0eebe3e21e93c45c6b4"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/bfp8-gdn-v2/queue.json",
+      "state": "waiting",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 600,
+      "sha256": "a6f1a910f46cd7acb3f368c00cd297827ced10c29f5ed820501255e8d42ee0b8"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/clean-oom-control-v1/audit.json",
+      "state": "completed",
+      "cleanup_completed": true,
+      "bytes": 918,
+      "sha256": "346600ce23c2f720a966a521165ed640f0c0c8619f4192f28790a214e59b77f1"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/clean-oom-control-v1/launch.json",
+      "bytes": 1235,
+      "sha256": "06ec8b34ec8fa2152139e6322f83e04a16c03af0fdfc0a59c17c215fc1edfe7c"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/clean-oom-control-v1/preflight.log.gz",
+      "bytes": 52,
+      "sha256": "8aad19533ab3084df3e8af9b605260f497b80d9130b7641382f9b63aad935b4f"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/clean-oom-control-v1/unit.xml",
+      "junit": {
+        "tests": 35,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "bytes": 11419,
+      "sha256": "7e36e6b4ff5d4bdb1dc4a70930cfc031d3b72c6066fe3e7877a3027b851c8304"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/gpqa-first-v2/bfp8-budget16k/sweep.json",
+      "state": "completed",
+      "cleanup_completed": true,
+      "bytes": 58069,
+      "sha256": "b19351fb40ca957f12137f18cb2966266079c9c2b1718cd52d8c86fa7e5bf37c"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/gpqa-first-v2/bfp8-budget64k/sweep.json",
+      "state": "allocation_failed",
+      "cleanup_completed": true,
+      "bytes": 69076,
+      "sha256": "b9646d30164185cf9219e172c905789bf25f7bc379f21338b9ba8aa4b40d5484"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/gpqa-first-v2/queue.json",
+      "state": "failed",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 6923,
+      "sha256": "5205194601994e7102864c211078d79aee76be0b6897e965008fb4049967a12a"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/image-hardware-control-v3/launch.json",
+      "bytes": 2422,
+      "sha256": "e0bcb0cb2b54f5f62fc3fffb197463a363274fec54961ea4433dc54197123a64"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/image-hardware-v3/status.json",
+      "state": "starting",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 1807,
+      "sha256": "c7b03198f57c2f5e2c912ebc14fdf8501f26ba1d1bbbd47d0df7013bd6d00ce2"
+    },
+    {
+      "path": "galaxy-evidence/capacity-recovery-v1/units.txt",
+      "bytes": 421,
+      "sha256": "b3569f4b20f9a52d5cce17909d13cb98d62f91adcd1858973b5f223117afa74e"
+    },
+    {
       "path": "galaxy-evidence/chunked-prefill-hardware-v1/README.md",
       "bytes": 3450,
       "sha256": "6cd6d1735396c05a1b5b55ff70c4ec25bfb229e7f481cd943295cfe745662a67"
@@ -1926,6 +2022,236 @@
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.svg",
       "bytes": 168827,
       "sha256": "66c33ba17fa8c54318721d13d53f938f5832fbf874a114eb94046f36f579f61e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/README.md",
+      "bytes": 2868,
+      "sha256": "ea43104454b1586a2ce88010848ec9f54465ad92223c93711293ba71bb478fe3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v1/models/demos/qwen38_27b_qb2/demo/probe_gdn_epilogue.py.gz",
+      "bytes": 2591,
+      "sha256": "4eb383a9cd0d1c3282540ef9d77c7c93a2968c9603b4b05f0aa04d3e14cf6baa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp.gz",
+      "bytes": 1195,
+      "sha256": "5bf1110ac73373ad5c4a5b875396f928c75418dd2e05c3139a6f43876aad2998"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py.gz",
+      "bytes": 1996,
+      "sha256": "f6479ea0b988e78d9b0d44e44b7e161beb6a7324d328a543ac42616fbb5210aa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp.gz",
+      "bytes": 1131,
+      "sha256": "47de15c28b81c91a4f757496adb158d44b0f4b453509b4fd0325c5bf20f6fdce"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp.gz",
+      "bytes": 402,
+      "sha256": "7d54d20c7620ae9a17308621ef22fccb949393c12c972c4018291258a2797890"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v2/models/demos/qwen38_27b_qb2/demo/probe_gdn_epilogue.py.gz",
+      "bytes": 2774,
+      "sha256": "aeb95f2c362372ba87e04bcfab4a2708e409966528b9d325066ec93ace08c5a2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp.gz",
+      "bytes": 1195,
+      "sha256": "5bf1110ac73373ad5c4a5b875396f928c75418dd2e05c3139a6f43876aad2998"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py.gz",
+      "bytes": 1996,
+      "sha256": "f6479ea0b988e78d9b0d44e44b7e161beb6a7324d328a543ac42616fbb5210aa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp.gz",
+      "bytes": 1131,
+      "sha256": "47de15c28b81c91a4f757496adb158d44b0f4b453509b4fd0325c5bf20f6fdce"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp.gz",
+      "bytes": 402,
+      "sha256": "7d54d20c7620ae9a17308621ef22fccb949393c12c972c4018291258a2797890"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v3/models/demos/qwen38_27b_qb2/demo/probe_gdn_epilogue.py.gz",
+      "bytes": 2829,
+      "sha256": "63eeb95f685ad74bfcbdf50ad32571e627e52a891c9e23c3ab3e6fa9ae2589f2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v3/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp.gz",
+      "bytes": 1316,
+      "sha256": "4b171dbd104a9555c2dc06f35f14ac52f41d153779ff2fa85e98fabb1dfb364d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v3/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py.gz",
+      "bytes": 2029,
+      "sha256": "64fbd49f956d5c4ba6af96469a4bcd7c3b54e42a6d23b4a0f0f782862b01714b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v3/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp.gz",
+      "bytes": 1131,
+      "sha256": "47de15c28b81c91a4f757496adb158d44b0f4b453509b4fd0325c5bf20f6fdce"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v3/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp.gz",
+      "bytes": 402,
+      "sha256": "7d54d20c7620ae9a17308621ef22fccb949393c12c972c4018291258a2797890"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v4/models/demos/qwen38_27b_qb2/demo/probe_gdn_epilogue.py.gz",
+      "bytes": 2829,
+      "sha256": "63eeb95f685ad74bfcbdf50ad32571e627e52a891c9e23c3ab3e6fa9ae2589f2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v4/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/compute.cpp.gz",
+      "bytes": 1502,
+      "sha256": "1071abbab28585f02327466fb1dc2dd39fb4318befb4141268f772e54ea5807e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v4/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/op.py.gz",
+      "bytes": 2029,
+      "sha256": "64fbd49f956d5c4ba6af96469a4bcd7c3b54e42a6d23b4a0f0f782862b01714b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v4/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/reader.cpp.gz",
+      "bytes": 1131,
+      "sha256": "47de15c28b81c91a4f757496adb158d44b0f4b453509b4fd0325c5bf20f6fdce"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-source-v4/models/demos/qwen38_27b_qb2/tt/gdn_epilogue/writer.cpp.gz",
+      "bytes": 402,
+      "sha256": "7d54d20c7620ae9a17308621ef22fccb949393c12c972c4018291258a2797890"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/launch.json",
+      "scope": "CPU-only epilogue arithmetic/layout/rebinding test; no physical hardware or performance claims",
+      "bytes": 2150,
+      "sha256": "66d1c8303a81bdd9c1bcccf36e07093c780d743968d1f07bcada70778dfa49d8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/preflight.log.gz",
+      "bytes": 375,
+      "sha256": "6ef4dc4199c6a5eca61bfd7dd2903a93f3f5b46b903c40a19e7b1222d85a4c12"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/probe.json",
+      "state": "running",
+      "passed": false,
+      "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+      "cleanup_completed": false,
+      "bytes": 520,
+      "sha256": "e234e420e803f543cd3f0f6a68c7b127a67d61b1c9477569ec3c458ad777ad4d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/run.log.gz",
+      "bytes": 3561,
+      "sha256": "1ed446a9aef3d8eba191eaa5b8bcb1e3ab3807fd74fcbf02830801fe2638ff84"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/source-manifest.json",
+      "bytes": 639,
+      "sha256": "2a018319053a6e90a742f01f6b1ab094a60b3ed30417584eba12ae5e37b6a6d5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/launch.json",
+      "scope": "CPU-only epilogue arithmetic/layout/rebinding test; no physical hardware or performance claims",
+      "bytes": 2149,
+      "sha256": "f4208cb4080585cf98cab12abf76a9f88382fab941ab7ad1c8a5af82844254e6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/preflight.log.gz",
+      "bytes": 375,
+      "sha256": "5e7fc185bd81b1fb67407274ff60fbf98804bc3767ff6df6400cba6bc2cfe3a0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/probe.json",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+      "cleanup_completed": true,
+      "bytes": 2118,
+      "sha256": "f7e16dbd95d2e9e1c330d7b62dc801d83bd799658090b203d76ae8c2942431e5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/run.log.gz",
+      "bytes": 5394,
+      "sha256": "b6def622f2d3cefb0f9ccf1546ea8e1e1186957785ed1c9895d082fcf870bc53"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/source-manifest.json",
+      "bytes": 639,
+      "sha256": "4f5eddac55c7e0718a902ebeb951b9fc7e7e3af7f3f34df42e529a57bf002059"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/launch.json",
+      "scope": "CPU-only epilogue arithmetic/layout/rebinding test; no physical hardware or performance claims",
+      "bytes": 2150,
+      "sha256": "d5b5b4f26263314872546fa3578aa8f9da241db6872bbd83bd4da279bf6bc5e4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/preflight.log.gz",
+      "bytes": 375,
+      "sha256": "025ea780fc5a9d4808d5baf2a0d565e1f31a4985c5dbd023d0bd2f438c82b07f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/probe.json",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+      "cleanup_completed": true,
+      "bytes": 2416,
+      "sha256": "ef1e29ec812859570967380f4b497f396afd18e4b37f6d0ad5b861c4e468f17e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/run.log.gz",
+      "bytes": 5420,
+      "sha256": "ab3fc939e2e735740a83d932008aef9df4c802e2a575cab00f414dd523871299"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/source-manifest.json",
+      "bytes": 639,
+      "sha256": "6b166eed889506897c58b473c757e7b575338c0bdf2519b6b9e9f70f4b87b588"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/launch.json",
+      "scope": "CPU-only epilogue arithmetic/layout/rebinding test; no physical hardware or performance claims",
+      "bytes": 2150,
+      "sha256": "4e04ae4b269f4637297676c19c4ba4becde34aa67cd5c3e14b04c4deb89824d1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/preflight.log.gz",
+      "bytes": 375,
+      "sha256": "81df78515255c5ad5fef75af8f992e4fd49982a9cc93cc3b70047d95a946750a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/probe.json",
+      "state": "completed",
+      "passed": true,
+      "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
+      "cleanup_completed": true,
+      "bytes": 8984,
+      "sha256": "1c4a9b4453c5fc32b67df328aeff57eeffb44d057675ab86967e8b2a73d45ff1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/run.log.gz",
+      "bytes": 11024,
+      "sha256": "2207cd6b2a87bbd91bc6dfde37936a8fceaabfcfa51b7f601e5db25450016712"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/source-manifest.json",
+      "bytes": 639,
+      "sha256": "bba0fc389f19c900f48c01b5023dbae0c6038ca21b8d952b010d77be8a76c30f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-simulator-v1/units.txt",
+      "bytes": 421,
+      "sha256": "b3569f4b20f9a52d5cce17909d13cb98d62f91adcd1858973b5f223117afa74e"
     },
     {
       "path": "galaxy-evidence/gdn-matched-comparison-v4/README.md",
@@ -6283,8 +6609,8 @@
     },
     {
       "path": "tests/unit/test_overnight_plan.py",
-      "bytes": 1350,
-      "sha256": "ad3d8aa1e09f79c3706f5785461655974354ea2ec98c7076dc12031c7420a90e"
+      "bytes": 3332,
+      "sha256": "01280e38c5c0bbd6a0e251d1c7de59d48c33ed3edb41d9856031172f2f862c7d"
     },
     {
       "path": "tests/unit/test_reference_comparison.py",
@@ -6295,6 +6621,26 @@
       "path": "tests/unit/test_tau_verified_benchmark.py",
       "bytes": 2036,
       "sha256": "95b8f9c884a25490e49944cdc6e6c5972de97e54f9af6803d8308863ef3d4467"
+    },
+    {
+      "path": "tt/gdn_epilogue/compute.cpp",
+      "bytes": 6834,
+      "sha256": "5e380a87e72c8f28afbf44be441a8a2dd9289df4ae8c68137a5af4dc5c914568"
+    },
+    {
+      "path": "tt/gdn_epilogue/op.py",
+      "bytes": 4943,
+      "sha256": "bbcd1cfbf24c43f957c045e6379252b20cf252f75f092adb84439ff736549a2d"
+    },
+    {
+      "path": "tt/gdn_epilogue/reader.cpp",
+      "bytes": 3207,
+      "sha256": "17c53f372247a4e2d2a029c3a99bb44a9194b97836a38f2e6572f831527302a3"
+    },
+    {
+      "path": "tt/gdn_epilogue/writer.cpp",
+      "bytes": 799,
+      "sha256": "90b30db5229ceb88bf5052f6a84e5c46dd71d33656d49b1afc1ec0b06a28ff3d"
     }
   ]
 }

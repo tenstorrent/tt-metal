@@ -14,6 +14,15 @@ BFP8 native/shared-QK/native queue now follows container qualification, then
 profiles B16/B32 and runs fresh G0/full GPQA. No optimized BFP8 speed or accuracy
 result is claimed yet. [Launch and bounds](../galaxy-evidence/bfp8-gdn-followup-v1/README.md).
 
+The optional 64K prefill-budget sweep hit a clean DRAM allocator limit at B32.
+Container and BFP8 followers have been restored in fresh v3/v2 units after an
+audited release; the working budget stays 32K.
+[Recovery](../galaxy-evidence/capacity-recovery-v1/README.md).
+The standalone fused GDN output-layout/norm/z epilogue now matches native output
+bit-for-bit in all nine B1/B16/B32 simulator cases. Hardware timing and model
+integration remain untested; no speedup is credited.
+[Numerical evidence](../galaxy-evidence/gdn-epilogue-simulator-v1/README.md).
+
 The completed physical HTTP sweep exposes a separate serving bottleneck: long
 full-prefill steps repeatedly interrupt decode. At 32K/C128, median client
 stream speed is 2.705 tok/s/user and whole-burst output is 172.26 tok/s including
