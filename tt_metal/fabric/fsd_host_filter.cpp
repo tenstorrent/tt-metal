@@ -189,6 +189,18 @@ void align_factory_descriptor_with_live(
         rank = live.get_rank_for_hostname(live_hostname->second);
     }
 
+    for (auto& [asic_id, descriptor] : fsd.get_asic_descriptors()) {
+        (void)asic_id;
+        if (const auto live_asic = live.find_asic_id(descriptor.physical_node_id); live_asic.has_value()) {
+            descriptor.mpi_rank = live.get_mpi_rank_for_asic(*live_asic);
+            continue;
+        }
+        const auto rank = fsd_ranks.find(descriptor.host_name);
+        if (rank != fsd_ranks.end()) {
+            descriptor.mpi_rank = rank->second;
+        }
+    }
+
     // This process's own host, under the descriptor's spelling of it.
     const auto my_canonical = ::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(live.my_host_name());
     std::string my_fsd_hostname;
@@ -203,8 +215,7 @@ void align_factory_descriptor_with_live(
         "The local host '{}' is not in the factory descriptor, so there is nothing here to map onto.",
         live.my_host_name());
 
-    fsd.set_discovery_data(
-        my_fsd_hostname, live.get_rank_for_hostname(live.my_host_name()), live.get_all_hostnames_unique());
+    fsd.set_discovery_data(my_fsd_hostname, live.get_local_mpi_rank());
 
     // The factory file has no board id, so it cannot tell a rev C galaxy from a rev AB one. The live
     // descriptor can, from the board id, and the grouping the mapper loads is chosen from this flag.

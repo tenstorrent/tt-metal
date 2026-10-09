@@ -29,30 +29,9 @@ namespace tt::tt_fabric {
 
 namespace {
 
-// The export is keyed per physical host, but discovery suffixes its host keys with "__rank<N>" when
-// several ranks report the same host (PhysicalSystemDescriptor::my_host_name()), which happens
-// whenever a mock run gives more ranks than cluster descriptors. Undo that suffix so the ranks
-// sharing a host land on one key.
-//
-// Only the exact "__rank<digits>" marker is stripped. A plain trailing "_<digits>" is NOT: that
-// shape can be the tail of a genuine cluster id (e.g. "rack_1"), and stripping it would collapse
-// distinct physical hosts onto one mapping key.
-HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled) {
-    if (!mock_enabled) {
-        return hostname;
-    }
-    constexpr std::string_view kRankMarker = tt::tt_metal::kHostRankSuffixMarker;
-    const auto pos = hostname.rfind(kRankMarker);
-    if (pos == std::string::npos || pos + kRankMarker.size() == hostname.size()) {
-        return hostname;
-    }
-    const std::string_view tail = std::string_view(hostname).substr(pos + kRankMarker.size());
-    if (!std::all_of(
-            tail.begin(), tail.end(), [](const char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
-        return hostname;
-    }
-    return hostname.substr(0, pos);
-}
+// The export key is the machine name. Ranks that share a machine already share it; the MPI rank on
+// each chip is what separates them.
+HostName hostname_for_mapping_export(const HostName& hostname, bool /*mock_enabled*/) { return hostname; }
 
 // yaml-cpp does not terminate a document. Files copied into the repo as goldens are rejected by
 // pre-commit's end-of-file-fixer without a trailing newline.

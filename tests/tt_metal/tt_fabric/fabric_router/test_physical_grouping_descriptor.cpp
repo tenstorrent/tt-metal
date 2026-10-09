@@ -4253,6 +4253,47 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
     run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
 }
 
+// Each discovered host is one row of the 2x4 grouping. Either row fits that grouping, so
+// get_valid_groupings still commits the full 8-chip mesh.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_PartialHostFitsLargerGrouping) {
+    const auto psd = build_grid_mock_psd(
+        2, 4, {"host0", "host0", "host0", "host0", "host1", "host1", "host1", "host1"});
+    const auto pgd = pinned_pgd(2, 4, {rect_host(0, 2, 0, 4)});
+    const auto mgd = single_mesh_mgd(2, 4, 2, 1);
+    const auto committed = committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, psd));
+    ASSERT_FALSE(committed.empty());
+    EXPECT_EQ(committed.front().mesh_node_to_asic_position.size(), 8u);
+}
+
+// Every discovered chip sits on tray 5. The grouping only names tray 1, so nothing is committed.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_HostOutsideGroupingCommitsNothing) {
+    const auto psd = build_mock_psd(
+        {"host0", "host0"},
+        std::vector<MockLink>{{0, 1, 2}},
+        {{5, 1}, {5, 2}});
+    const auto pgd = pinned_pgd(1, 2, {rect_host(0, 1, 0, 2)});
+    const auto mgd = single_mesh_mgd(1, 2, 1, 1);
+    const auto committed =
+        committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, psd, std::nullopt, /*require_placement=*/false));
+    EXPECT_TRUE(committed.empty());
+}
+
+// The two chips sit on the grouping's slots. The link commits the 1x2 mesh. The same slots with no
+// link are containment-only, and get_valid_groupings commits nothing.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_SlotsFitButDisconnectedCommitsNothing) {
+    const auto pgd = pinned_pgd(1, 2, {rect_host(0, 1, 0, 2)});
+    const auto mgd = single_mesh_mgd(1, 2, 1, 1);
+    const std::vector<std::pair<uint32_t, uint32_t>> positions{{1, 1}, {1, 2}};
+    const auto linked = build_mock_psd({"host0", "host0"}, std::vector<MockLink>{{0, 1, 2}}, positions);
+    const auto unlinked = build_mock_psd({"host0", "host0"}, std::vector<MockLink>{}, positions);
+    const auto linked_commit = committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, linked));
+    ASSERT_FALSE(linked_commit.empty());
+    EXPECT_EQ(linked_commit.front().mesh_node_to_asic_position.size(), 2u);
+    const auto unlinked_commit =
+        committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, unlinked, std::nullopt, /*require_placement=*/false));
+    EXPECT_TRUE(unlinked_commit.empty());
+}
+
 TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdColumnSplitMgdCommits) {
     auto psd = build_grid_mock_psd(2, 4, std::vector<std::string>(8, "host0"));
     const std::vector<PinnedHost> hosts{rect_host(0, 2, 0, 4)};

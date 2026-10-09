@@ -700,8 +700,8 @@ void add_rank_binding_constraints(
         }
     } else {
         // Host-grouped path: config.hostname_to_asics defines which ASICs belong to which host.
-        // Constraint: all ASICs on the same host must map to fabric nodes of the same rank
-        // (ControlPlane/TopologyMapper "same-host same-rank" invariant).
+        // One MPI rank per machine still maps that whole host onto one mesh rank. Several MPI ranks
+        // on one machine already carry distinct mesh ranks, and those chips stay in their own pools.
 
         std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId> asics_in_host_config;
         for (const auto& [_, asic_set] : config.hostname_to_asics) {
@@ -721,30 +721,44 @@ void add_rank_binding_constraints(
         unset_hosts.reserve(config.hostname_to_asics.size());
 
         for (const auto& [hostname, asic_set] : config.hostname_to_asics) {
-            std::set<tt::tt_metal::experimental::PhysicalNodeId> host_asics_in_mesh;
-            std::optional<MeshHostRankId> host_rank;
+            (void)hostname;
+            std::map<MeshHostRankId, std::set<tt::tt_metal::experimental::PhysicalNodeId>> bound_ranks;
+            std::set<tt::tt_metal::experimental::PhysicalNodeId> unset_asics;
             for (const auto& asic_id : asic_set) {
                 auto it = asic_ranks.find(asic_id);
                 if (it == asic_ranks.end()) {
                     continue;
                 }
-                host_asics_in_mesh.insert(asic_id);
-                if (it->second != ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
-                    if (host_rank.has_value() && host_rank.value() != it->second) {
-                        TT_THROW(
-                            "Host consistency violated: host {} has ASICs with inconsistent ranks ({} and {}). "
-                            "Each host in the PSD must have exactly one rank binding.",
-                            hostname,
-                            host_rank->get(),
-                            it->second.get());
-                    }
-                    host_rank = it->second;
+                if (it->second == ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+                    unset_asics.insert(asic_id);
+                } else {
+                    bound_ranks[it->second].insert(asic_id);
                 }
             }
-            if (host_asics_in_mesh.empty()) {
+            if (bound_ranks.empty() && unset_asics.empty()) {
                 continue;
             }
 
+            if (bound_ranks.size() > 1) {
+                for (const auto& [rank, asics] : bound_ranks) {
+                    claimed_ranks.insert(rank);
+                    rank_to_asics[rank].insert(asics.begin(), asics.end());
+                }
+                if (!unset_asics.empty()) {
+                    unset_hosts.push_back(std::move(unset_asics));
+                }
+                continue;
+            }
+
+            std::optional<MeshHostRankId> host_rank;
+            std::set<tt::tt_metal::experimental::PhysicalNodeId> host_asics_in_mesh;
+            if (bound_ranks.size() == 1) {
+                host_rank = bound_ranks.begin()->first;
+                host_asics_in_mesh = std::move(bound_ranks.begin()->second);
+                host_asics_in_mesh.insert(unset_asics.begin(), unset_asics.end());
+            } else {
+                host_asics_in_mesh = std::move(unset_asics);
+            }
             if (host_rank.has_value()) {
                 claimed_ranks.insert(host_rank.value());
                 for (const auto& asic_id : host_asics_in_mesh) {

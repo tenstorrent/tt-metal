@@ -662,7 +662,8 @@ private:
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
-        const std::unordered_set<FabricNodeId>& requested_exit_nodes);
+        const std::unordered_set<FabricNodeId>& requested_exit_nodes,
+        uint32_t neighbor_mpi_rank);
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // Build this mesh's PortDescriptorTable by gathering cables toward every requested neighbor mesh.

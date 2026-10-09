@@ -310,7 +310,7 @@ public:
 
     // Host-group variants of one flattened mesh: the rounds-attributed variant plus an "_hostedge" split for each
     // galaxy seam the mesh's physical footprint wraps. flattened_declared_hosts supplies both the rounds and seam
-    // geometry (the caller keeps only hosts that place on the PSD). Public for unit tests.
+    // geometry, including a full host kept only for that grid when a slice cannot embed it.
     std::vector<GroupingInfo> build_pgd_host_group_variants(
         const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
 

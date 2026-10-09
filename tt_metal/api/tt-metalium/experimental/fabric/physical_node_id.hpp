@@ -76,9 +76,9 @@ namespace tt::tt_metal::experimental {
 
 // Lowercase, then take the first DNS label if the name is an FQDN.
 //
-// The trailing "__rank<N>" that run_local_discovery appends when two ranks report the same host is
-// deliberately kept: that suffix is the only thing telling those hosts apart, so removing it here
-// would give their chips the same address and merge them into one solver node.
+// The host name is the machine. Ranks that share it are told apart by ASICDescriptor::mpi_rank, not
+// by a suffix on this id. Chips on those ranks must occupy disjoint tray and ASIC locations, or they
+// would be one solver node.
 //
 // This is the one canonicalization. The FSD host filter uses it too, so a mix of FQDN and short
 // names for the same machine still lands on one string.
