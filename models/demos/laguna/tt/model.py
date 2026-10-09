@@ -391,14 +391,15 @@ class LagunaModel:
         # Sequence-parallel residual for cold single-shot prefill (MultichipDecoder.prefill_forward): each chip keeps
         # 1/D of the rows between layers; gathered back after the last layer.
         D = int(getattr(self.layers[0], "D", 1))
+        l0 = self.layers[0]
+        single_shot = runtime_offsets is None and seq <= l0.PIPE_CHUNK
+        one_chunk = seq <= getattr(l0, "_prefill_pipe_chunk", l0.PIPE_CHUNK)  # the pipelined path in one chunk
         sp = (
             os.environ.get("TT_LAGUNA_PREFILL_SP", "1") == "1"
             and D > 1
-            and runtime_offsets is None
-            and rope_ctx is not None
-            and seq <= self.layers[0].PIPE_CHUNK
             and seq % (D * 32) == 0
-            and hasattr(self.layers[0], "_prefill_forward_sp")
+            and hasattr(l0, "_prefill_forward_sp")
+            and ((single_shot and rope_ctx is not None) or (not single_shot and one_chunk))
         )
         if sp:
             h = ttnn.mesh_partition(h, len(h.shape) - 2, cluster_axis=self.layers[0].tp_axis)

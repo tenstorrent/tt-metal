@@ -1492,6 +1492,19 @@ class MultichipDecoder(OptimizedDecoder):
             # the same link traffic as the all-reduces, a 1/D share of the add / norm work.
             self._sp_active = True
             try:
+                if runtime_offsets is not None or seq * self.D > self.PIPE_CHUNK:
+                    return self._prefill_pipelined(
+                        x_BSH,
+                        kv_cache,
+                        page_table,
+                        fill_page_table,
+                        user_id,
+                        start_pos,
+                        fill_page_table_base_pos=fill_page_table_base_pos,
+                        rope_mats=rope_mats,
+                        runtime_offsets=runtime_offsets,
+                        seq_parallel=True,
+                    )
                 return self._prefill_forward_sp(x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos,
                                                  user_id, start_pos, rope_mats)
             finally:
@@ -1621,9 +1634,11 @@ class MultichipDecoder(OptimizedDecoder):
         fill_page_table_base_pos=0,
         rope_mats=None,
         runtime_offsets=None,
+        seq_parallel=False,
     ):
         cfg = self.cfg
-        seq = x_BSH.shape[-2]
+        # seq_parallel (one outer chunk only): x_BSH holds this chip's 1/D of the rows; see prefill_forward
+        seq = x_BSH.shape[-2] * (self.D if seq_parallel else 1)
         bs = kv_cache["block_size"]
         cdt = kv_cache["dtype"]
         CH = (self._prefill_pipe_chunk // bs) * bs  # env-gated outer chunk (TT_LAGUNA_PREFILL_FAST)
@@ -1637,12 +1652,19 @@ class MultichipDecoder(OptimizedDecoder):
         fill_base = int(fill_page_table_base_pos)
         if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
             raise ValueError(f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned")
+        if seq_parallel and len(expected_chunks) != 1:
+            raise ValueError(f"sequence-parallel pipelined prefill needs one outer chunk, got {expected_chunks}")
         for chunk_idx, c in enumerate(range(0, seq, CH)):
             ch = min(CH, seq - c)
             gpos = start_pos + c
-            xc = ttnn.slice(x_BSH, [0, c, 0], [1, c + ch, cfg.hidden])
-            residual = xc
-            ln = self._rms(xc, self.w["input_ln"])
+            if seq_parallel:
+                xc = x_BSH
+                residual = xc
+                ln = self._sp_gather(self._rms(xc, self.w["input_ln"]))
+            else:
+                xc = ttnn.slice(x_BSH, [0, c, 0], [1, c + ch, cfg.hidden])
+                residual = xc
+                ln = self._rms(xc, self.w["input_ln"])
             q, k, v = self._qkv_roped(
                 ln,
                 ch,
@@ -1700,9 +1722,11 @@ class MultichipDecoder(OptimizedDecoder):
             o = self._reduce(o)
             h = ttnn.add(residual, o)
             ln2 = self._rms(h, self.w["post_ln"])
-            mlp_out = ttnn.reshape(self._mlp(ln2, ch, sharded=False), (1, ch, cfg.hidden))
+            if seq_parallel:
+                ln2 = self._sp_gather(ln2)
+            mlp_out = ttnn.reshape(self._mlp(ln2, ch, sharded=False), (1, h.shape[-2], cfg.hidden))
             outs.append(ttnn.add(h, mlp_out))
-        return ttnn.concat(outs, dim=1)
+        return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=1)
 
     # ---- decode: reuse optimized body + all_reduce after WO --------------- #
     def decode_forward(
