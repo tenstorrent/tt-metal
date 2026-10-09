@@ -615,6 +615,15 @@ RUNS = [
         None,
         None,
     ),
+    (
+        "v17",
+        "device/suite719_v17_timed.csv",
+        "suite719",
+        "Real-case suite (719)",
+        "Not in training; the rules were tuned on this suite. All 713 cases: legacy, rules and v17 timed in one session.",
+        "usage/usage_v17_wh.json",
+        "miss/v17suite.done",
+    ),
 ]
 for vid, path, sid, label, note, usage, done in RUNS:
     add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
