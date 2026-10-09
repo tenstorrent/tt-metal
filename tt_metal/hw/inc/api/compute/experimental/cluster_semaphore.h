@@ -22,8 +22,10 @@ namespace ckernel {
  * Backed by cluster semaphore register `index`, a 16-bit counter. The kernel picks the index
  * (0..TENSIX_GLOBAL_SEM_USER_COUNT - 1; 27-31 are reserved); the host does not allocate it.
  *
- *  - One producer thread and one consumer thread per semaphore. down() checks the count and then
- *    subtracts in two steps, so a second consumer could take it below 0, which is fatal on TRISC.
+ *  - One decrementer (consumer) per semaphore; several producers may share it. up() is one atomic add,
+ *    so concurrent posts are exact. down() checks the count and then subtracts in two steps, so a second
+ *    consumer could win the count in between. The hardware does not stall a subtract larger than the count:
+ *    it leaves the count unchanged and raises a semaphore error, which is fatal on TRISC.
  *  - Firmware sets every one of these semaphores to 0 at boot and nothing resets them between kernels,
  *    so a kernel must leave each semaphore it uses at 0. A prefilled ring must initialize its count
  *    before any participant uses it, and reset it after all participants finish.
@@ -41,7 +43,8 @@ namespace ckernel {
  *  - up(n): wait for this thread's engine work, then add n. Call wait_not_full(n) BEFORE writing
  *    the shared buffer; up() does not enforce capacity. Updates larger than 7 use multiple accesses.
  *  - down(n): wait for this thread's engine work and for the count to reach n, then subtract n.
- *  - wait_min(n): wait until the count is at least n. Does not modify it.
+ *  - wait_min(n): wait until the count is at least n. Does not modify it. On the decrementer, returns without
+ *    a read when its cached lower bound already covers n. Use one object per semaphore per thread.
  *  - wait_not_full(n): wait until the count is at most capacity - n. Does not modify it.
  *  - set(value): initialize the count while no other thread uses the semaphore.
  *  - value(): the current count.
@@ -68,7 +71,9 @@ public:
     ALWI void down(std::uint32_t n) {
         ASSERT(n <= capacity_);
         wait_engine_done();
+        decrementer_ = true;
         wait_min(n);
+        min_seen_ -= n;
         for (std::uint32_t step; n > 0; n -= step) {
             step = n < kMaxStep ? n : kMaxStep;
             tensix_global_sem_fetch_sub(index_, step);
@@ -79,9 +84,14 @@ public:
     // (engine instructions included) until the read returns.
     ALWI void wait_min(std::uint32_t n) {
         ASSERT(n <= capacity_);
-        WAYPOINT("CSMW");
-        while (value() < n) {
+        if (decrementer_ && min_seen_ >= n) {
+            return;
         }
+        WAYPOINT("CSMW");
+        std::uint32_t seen;
+        while ((seen = value()) < n) {
+        }
+        min_seen_ = seen;
         WAYPOINT("CSMD");
     }
 
@@ -97,6 +107,7 @@ public:
         ASSERT(value <= capacity_);
         tensix_global_sem_init(index_, value);
         fence();
+        min_seen_ = value;
     }
 
     ALWI std::uint32_t value() const { return tensix_global_sem_read(index_) & TENSIX_GLOBAL_SEM_VALUE_MASK; }
@@ -125,6 +136,9 @@ private:
 
     std::uint32_t index_;
     std::uint32_t capacity_;
+    // Lower bound on the count.
+    bool decrementer_ = false;
+    std::uint32_t min_seen_ = 0;
 };
 
 }  // namespace ckernel
