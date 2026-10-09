@@ -472,6 +472,13 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     logger.info(
         f"=== packed-verify batch bench | ctx={ctx} P={P} (K={K}) reps={reps} tp={tp} H_local={H} S_k={S_k} ==="
     )
+    # PLI targets need a PLI source on these direct model calls; mirror the
+    # mechanism SpeculativeDecoder._verify selects.
+    device_pli = spec.target_has_pli and spec._pli_dev_host
+
+    def _pli(token_ids):
+        return {"pli_on_device": device_pli, "token_ids_host": None if device_pli else token_ids}
+
     rows = []
     for B in Bs:
         pt_b = page_table_torch[:B].to(torch.int32)
@@ -496,6 +503,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
                 embed_idx_full=None,
                 embed_idx_sliding=None,
                 hot_pt=None,
+                **_pli([t for u in range(B) for t in tokens_per_user]),
             )
 
         try:
@@ -510,13 +518,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         # ── batch-alias baseline ──────────────────────────────────────────────
         if B * P <= 32:
             # single-pass: B*P pseudo-users, each user's row replicated P times.
-            x_a = spec._tokens_tensor([tokens_per_user[p] for u in range(B) for p in range(P)])
+            alias_ids = [tokens_per_user[p] for u in range(B) for p in range(P)]
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c + p for u in range(B) for p in range(P)])
             pt_alias = _from(pt_b.repeat_interleave(P, dim=0), ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             alias_ms, alias_lh = _run(_alias_call, B * P)
@@ -541,13 +555,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         else:
             # batch-alias can't fit B*(K+1)>32 users in one decode pass; the
             # no-packing cost is P sequential batch-B decodes.
-            x_a = spec._tokens_tensor([tokens_per_user[0]] * B)
+            alias_ids = [tokens_per_user[0]] * B
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c] * B)
             pt_alias = _from(pt_b, ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             one_ms, _ = _run(_alias_call, B)
