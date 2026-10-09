@@ -181,6 +181,9 @@ static uint64_t rt_profiler_remote_wr_idx_noc_addr = 0;
 static uint32_t num_pages_acquired = 0;
 // Counts go signals handed over by dispatch_d, regardless of their transport.
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
+// Per-sub-device, per-target GO counter written into the worker go_count byte; decoupled from num_mcasts_sent
+// (flow control). Full rationale at the override in process_go_signal_mcast_cmd. This is the multicast (tensix) half.
+static uint8_t go_count_per_sync[max_num_worker_sems] = {0};
 static uintptr_t cmd_ptr;
 
 extern "C" {
@@ -557,11 +560,15 @@ FORCE_INLINE void init_go_signal_mcast_noc_write(
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached,
     uint32_t go_signal_value,
     uint32_t multicast_go_offset) {
+    // The per-go write targets word 0 ({signal, go_count}) of the 8-byte go_msg_t slot; word 1 (the done-return
+    // address) is written separately by the reconfigure command, so slots stride by sizeof(go_msg_t).
     uint64_t dst_noc_addr_multicast =
-        cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+        cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(go_msg_t) * multicast_go_offset);
     uint32_t num_dests = num_worker_cores_to_mcast;
-    // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
-    uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+    // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination. Word 0 of slot k sits
+    // at (sizeof(go_msg_t)/sizeof(uint32_t)) * k uint32s from the (L1_ALIGNMENT-aligned) go_messages base.
+    constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
+    uint32_t storage_offset = (multicast_go_offset * go_msg_words) % (L1_ALIGNMENT / sizeof(uint32_t));
     aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
 
     cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
@@ -581,11 +588,13 @@ FORCE_INLINE void issue_go_signal_mcast_noc_write() {
 }
 
 #ifdef FDS_SIGNALLING
-// In an FDS build, RUN_MSG_GO uses the FDS go wire with token sub-device index + 1. The token is
-// pushed into the auto dispatch queue and the hardware paces it onto the wire; a trailing idle push
-// follows so a repeat of the same group is seen as a new go. The wire holds the last released value
-// until the next release. DM0 receives the go through a machine-external interrupt before writing
-// the worker mailbox signal byte. All other go commands use the NOC path.
+// In an FDS build, a program GO (signal byte RUN_MSG_GO) uses the FDS go wire with token sub-device
+// index + 1. The token is pushed into the auto dispatch queue and the hardware paces it onto the wire; a
+// trailing idle push follows so a repeat of the same group is seen as a new go. The wire holds the last
+// released value until the next release. DM0 receives the go through a machine-external interrupt and
+// advances its go_count there (see worker_go_signalling.h). All other go commands (control signals, which
+// carry a non-zero control nibble and whose go_count DOES travel over L1) use the NOC path.
+// GO-COUNTER CONVERSION: UNVERIFIED on Quasar HW (FDS is not built on Wormhole) -- FDS owner to validate.
 FORCE_INLINE void wait_for_workers_and_send_go_signal(
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage,
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached,
@@ -594,8 +603,9 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
     uint32_t wait_count,
     uint32_t wait_stream) {
     wait_for_workers(wait_count, wait_stream);
+    // A program GO carries signal == RUN_MSG_GO (byte 0); control codes take the NOC path. go_count rides byte 1.
     const bool use_fds_go =
-        multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET && (go_signal_value >> 24) == RUN_MSG_GO;
+        multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET && (go_signal_value & 0xFFu) == RUN_MSG_GO;
 
     if (use_fds_go) {
         DPRINT("DISPATCH_S: go FDS\n");
@@ -607,7 +617,7 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
         init_go_signal_mcast_noc_write(
             aligned_go_signal_storage, aligned_go_signal_storage_uncached, go_signal_value, multicast_go_offset);
         // The unicast-target go path, unreachable today because active ethernet is not supported with FDS.
-        ASSERT((go_signal_value >> 24) != RUN_MSG_GO);
+        ASSERT((go_signal_value & 0xFFu) != RUN_MSG_GO);
         ASSERT((tracked_sub_device_mask & (1U << multicast_go_offset)) == 0);
         issue_go_signal_mcast_noc_write();
     } else {
@@ -682,10 +692,33 @@ void process_go_signal_mcast_cmd() {
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
     uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
+    // Override the go_count byte (byte 1 of go_msg_t word 0) with a per-sub-device GO counter in go_count_per_sync[]:
+    // EVERY go-signal (program GO or control RESET/REPLAY/FROM_HOST) advances it by 1, so even a control go-signal
+    // creates a go_count != go_processed delta the worker acts on (it reads the signal byte only inside that delta
+    // check). Decoupled from num_mcasts_sent (flow control). The signal byte (byte 0) is preserved; word 1 (the
+    // done-return address) is written separately by the reconfigure command.
+    const uint32_t go_signal_base = go_signal_value & 0x000000FF;  // signal byte (byte 0); go_count rides byte 1
+    // Sub-device reconfig RESET re-baselines the counter to 0 so the bump yields a deterministic go_count = 1
+    // (paired with the host zeroing go_processed on reconfig -> the worker always detects it, 1 != 0).
+    const bool go_count_reset = (go_signal_value & 0xFFu) == RUN_MSG_RESET_READ_PTR;
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
+    // Fold the per-sub-device multicast GO counter (go_count_per_sync[]) into go_signal_value's go_count byte before
+    // the send. EVERY go-signal (program GO or control RESET/REPLAY/FROM_HOST) advances the counter by 1, so even a
+    // control go-signal creates a go_count != go_processed delta the worker acts on (it reads the signal byte only
+    // inside that delta check). Decoupled from num_mcasts_sent (flow control).
+    // The low 3 bytes (control nibble + master coords) are preserved. The NOC mcast write itself (storage offset,
+    // DEVICE_PRINT ordering, write accounting) lives in wait_for_workers_and_send_go_signal.
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        uint8_t& mcast_go_count = go_count_per_sync[sync_index];
+        if (go_count_reset) {
+            mcast_go_count = 0;
+        }
+        mcast_go_count++;
+        go_signal_value = go_signal_base | (static_cast<uint32_t>(mcast_go_count) << 8);
+    }
     wait_for_workers_and_send_go_signal(
         aligned_go_signal_storage,
         aligned_go_signal_storage_uncached,
@@ -693,7 +726,6 @@ void process_go_signal_mcast_cmd() {
         multicast_go_offset,
         wait_count,
         wait_stream);
-    *aligned_go_signal_storage_uncached = go_signal_value;
 
     if (telemetry_enabled) {
         static uint32_t local_launch_seq_counter = 0;
@@ -759,6 +791,57 @@ void set_num_worker_sems() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Processes CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR: reseeds this sub-device's per-sync GO-counter baseline and writes the
+// done-return address (go_msg_t word 1: {master_x, master_y, offset}) to the sub-device's workers via tensix mcast,
+// leaving the per-go word 0 untouched. Emitted at sub-device setup and on CQ-ownership change, before the new owner's
+// first go (the workers are idle then, so no in-flight done reads a half-written address). Targets workers the same way
+// the go does: grid-wide mcast to slot [multicast_go_offset].
+FORCE_INLINE
+void process_set_go_signal_noc_addr_cmd() {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    // Read every field into a local before the staging store below (the staging buffer aliases this command).
+    const uint32_t multicast_go_offset = cmd->set_go_signal_noc_addr.multicast_go_offset;
+    const uint32_t sync_index = cmd->set_go_signal_noc_addr.sync_index;
+    const uint8_t baseline = cmd->set_go_signal_noc_addr.go_count;
+    const uint8_t master_x = cmd->set_go_signal_noc_addr.master_x;
+    const uint8_t master_y = cmd->set_go_signal_noc_addr.master_y;
+    const uint8_t cfg_offset = cmd->set_go_signal_noc_addr.offset;
+
+    // Reseed the GO-counter baseline so the new owner's first go advances from the worker's current go_processed
+    // (the host-authoritative count), not this CQ's stale local counter.
+    ASSERT(sync_index < max_num_worker_sems);
+    go_count_per_sync[sync_index] = baseline;
+
+    // go_msg_t word 1 payload: {master_x, master_y, offset, 0}.
+    const uint32_t addr_value = static_cast<uint32_t>(master_x) | (static_cast<uint32_t>(master_y) << 8) |
+                                (static_cast<uint32_t>(cfg_offset) << 16);
+    constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
+    constexpr uint32_t addr_word = offsetof(go_msg_t, master_x) / sizeof(uint32_t);  // word 1 of the slot
+
+    // Staging: the 16-byte command is NOC-aligned; CPU stores via the uncached alias, the NOC reads the cached alias.
+    volatile uint32_t tt_l1_ptr* aligned_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
+    volatile uint32_t tt_l1_ptr* aligned_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
+
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        uint64_t dst = cq_mcast_noc_addr(
+            worker_mcast_grid,
+            mcast_go_signal_addr + sizeof(go_msg_t) * multicast_go_offset + offsetof(go_msg_t, master_x));
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        // Word 1 of slot k is at (go_msg_words*k + addr_word) uint32s from the L1_ALIGNMENT-aligned go_messages base.
+        uint32_t storage_offset = (multicast_go_offset * go_msg_words + addr_word) % (L1_ALIGNMENT / sizeof(uint32_t));
+        aligned_storage_uncached[storage_offset] = addr_value;
+        cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_storage[storage_offset])),
+            dst,
+            sizeof(uint32_t),
+            num_dests,
+            noc_index);
+        noc_increment_nonposted_writes_acked(noc_index, num_dests);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
+        noc_increment_nonposted_writes_issued(noc_index, 1);
+    }
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
 // that we never count locally. This function will wait for dispatch_d to publish its NOC 1 deltas into dispatch_d's
 // normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
@@ -891,6 +974,10 @@ void kernel_main() {
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
                 DPRINT("CQ_DISPATCH_SET_NUM_WORKER_SEMS\n");
                 set_num_worker_sems();
+                break;
+            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR:
+                DPRINT("CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR\n");
+                process_set_go_signal_noc_addr_cmd();
                 break;
             case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
                 DPRINT("CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS\n");

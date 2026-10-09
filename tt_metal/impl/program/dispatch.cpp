@@ -1057,11 +1057,7 @@ BatchedTransfers assemble_runtime_args_commands(
     std::vector<CQDispatchWritePackedUnicastSubCmd> unique_sub_cmds;
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> unique_rt_data_and_sizes;
     std::vector<std::vector<RtaDataPair>> unique_rt_args_data;
-    // Dispatch Commands to Multicast Common Runtime Args to Workers
-    std::variant<std::vector<CQDispatchWritePackedMulticastSubCmd>, std::vector<CQDispatchWritePackedUnicastSubCmd>>
-        common_sub_cmds;
-    std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> common_rt_data_and_sizes;
-    std::vector<std::vector<RtaDataPair>> common_rt_args_data;  // Data per kernel group
+    // Common Runtime Args are multicast to TENSIX workers via the kernel-group transfers map below.
 
     program_command_sequence.runtime_args_command_sequences = {};
     uint32_t command_count = 0;
@@ -1074,9 +1070,10 @@ BatchedTransfers assemble_runtime_args_commands(
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
-        const auto core_type = hal.get_programmable_core_type(programmable_core_type_index);
-        if (core_type == HalProgrammableCoreType::IDLE_ETH || core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            // Fast dispatch not supported on IDLE_ETH, and no longer supported on ACTIVE_ETH
+        // Fast dispatch only targets TENSIX. Non-multicast programmable cores (idle/active ETH and DRAM)
+        // are never fast-dispatched (ACTIVE_ETH with a non-empty kernel group is rejected in the launch
+        // generator), so skip them and count only TENSIX unique RTAs.
+        if (!hal.get_supports_receiving_multicasts(programmable_core_type_index)) {
             continue;
         }
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
@@ -1103,41 +1100,8 @@ BatchedTransfers assemble_runtime_args_commands(
 
     uint32_t count_word_offset = is_watcher_assert_enabled(metal_ctx) ? 1 : 0;
 
-    // Non-multicast cores (e.g. DRAM programmable cores): unicast common RTAs to each core.
-    // ACTIVE_ETH no longer uses fast dispatch; TENSIX common RTAs go through the multicast path below.
-    for (uint32_t p_idx = 0; p_idx < hal.get_programmable_core_type_count(); p_idx++) {
-        auto programmable_core_type = hal.get_programmable_core_type(p_idx);
-        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH ||
-            programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ||
-            programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            // IDLE_ETH/ACTIVE_ETH: not fast-dispatch targets. TENSIX: handled via multicast.
-            continue;
-        }
-
-        for (auto& kg : program.get_kernel_groups(p_idx)) {
-            for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
-                uint32_t common_size = kg->crta_sizes[idx];
-                if (common_size == 0) {
-                    continue;
-                }
-                uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
-                auto kernel_id = get_device_local_kernel_handle(kg->kernel_ids[idx]);
-                auto kernel = program.get_kernel(kernel_id);
-                if (kernel->common_runtime_args().empty()) {
-                    continue;
-                }
-
-                uint32_t num_sub_cmds = kg->core_ranges.num_cores();
-                uint32_t max_packed_cmds = calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
-                    max_runtime_args_len,
-                    constants.max_prefetch_command_size,
-                    constants.packed_write_max_unicast_sub_cmds,
-                    true);
-                command_count += div_up(num_sub_cmds, max_packed_cmds);
-            }
-        }
-    }
-
+    // Only TENSIX is fast-dispatched: its common RTAs go through the multicast path below, so no
+    // non-multicast (unicast) common-RTA commands are counted here.
     program_command_sequence.runtime_args_command_sequences.reserve(command_count);
 
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -1177,11 +1141,10 @@ BatchedTransfers assemble_runtime_args_commands(
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         auto programmable_core_type = hal.get_programmable_core_type(index);
-        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH ||
-            programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            // Fast dispatch not supported on IDLE_ETH, and no longer supported on ACTIVE_ETH.
-            // Remaining targets: TENSIX (unique RTAs unicast, common RTAs multicast above) and any
-            // non-multicast programmable cores such as DRAM (both unique and common RTAs unicast below).
+        // Fast dispatch only targets TENSIX: its unique RTAs are unicast per-core here, its common RTAs
+        // are multicast above. Non-multicast programmable cores (idle/active ETH and DRAM) are never
+        // fast-dispatched, so skip them.
+        if (!hal.get_supports_receiving_multicasts(index)) {
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
@@ -1277,103 +1240,8 @@ BatchedTransfers assemble_runtime_args_commands(
             }
         }
 
-        // Common RTAs
-        // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
-        // Non-multicast cores: unicast to each core.
-        if (!metal_ctx.hal().get_supports_receiving_multicasts(index)) {
-            for (auto& kg : program.get_kernel_groups(index)) {
-                for (size_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
-                    auto kernel_id = get_device_local_kernel_handle(kg->kernel_ids[idx]);
-                    auto kernel = program.get_kernel(kernel_id);
-
-                    const auto& common_rt_args = kernel->common_runtime_args();
-                    if (common_rt_args.empty()) {
-                        continue;
-                    }
-
-                    uint32_t crta_offset = kg->crta_offsets[idx];
-                    uint32_t common_size = kg->crta_sizes[idx];
-
-                    common_rt_args_data.resize(common_rt_args_data.size() + 1);
-                    common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
-
-                    TT_ASSERT(
-                        (kernel->common_runtime_args_data().size() + count_word_offset) * sizeof(uint32_t) ==
-                        common_size);
-                    TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
-                    // Back up pointer to include count word for dispatch (same as RTAs)
-                    // common_runtime_args_data().data() points to args; backing up includes count
-                    common_rt_data_and_sizes.back().emplace_back(
-                        kernel->common_runtime_args_data().data() - count_word_offset,
-                        common_rt_args.size() * sizeof(uint32_t),
-                        common_size);
-                    common_rt_args_data.back().emplace_back(
-                        RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
-
-                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
-                        std::vector<CQDispatchWritePackedUnicastSubCmd>());
-                    auto& unicast_sub_cmd = std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
-                    unicast_sub_cmd.reserve(kernel->logical_cores().size());
-                    LOG_TRACE_LAZY(
-                        tt::LogDispatch,
-                        "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
-                        kernel->logical_cores().size(),
-                        crta_offset,
-                        common_size);
-                    for (const CoreRange& core_range : kg->core_ranges.ranges()) {
-                        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                                CoreCoord core_coord(x, y);
-                                CoreCoord virtual_core_coords =
-                                    device->virtual_core_from_logical_core(core_coord, core_type);
-                                LOG_TRACE_LAZY(
-                                    tt::LogDispatch,
-                                    "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
-                                    core_coord,
-                                    virtual_core_coords,
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
-                                unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                    .noc_xy_addr =
-                                        device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
-                            }
-                        }
-                    }
-
-                    // Fill out the command for this kernel group and then reset the vectors for the next group
-                    // NOTE: Common rtas are always expected to fit in one prefetch cmd
-                    // TODO: use a linear write instead of a packed-write
-                    std::visit(
-                        [&](auto&& sub_cmds) {
-                            generate_runtime_args_cmds(
-                                metal_ctx,
-                                program_command_sequence.runtime_args_command_sequences,
-                                program_command_sequence.rta_updates,
-                                crta_offset,
-                                sub_cmds,
-                                common_rt_data_and_sizes,
-                                common_size / sizeof(uint32_t),
-                                common_rt_args_data,
-                                constants,
-                                true,
-                                get_dispatch_write_offset(programmable_core_type));
-                            sub_cmds.clear();
-                        },
-                        common_sub_cmds);
-                    common_rt_data_and_sizes.clear();
-                    common_rt_args_data.clear();
-                }
-
-                for (auto& data_per_kernel : common_rt_data_and_sizes) {
-                    for (auto& data_and_sizes : data_per_kernel) {
-                        RecordDispatchData(
-                            program.get_context_id(),
-                            program.get_id(),
-                            DISPATCH_DATA_RTARGS,
-                            std::get<1>(data_and_sizes));
-                    }
-                }
-            }
-        }
+        // Common RTAs for TENSIX are multicast above (via the kernel-group transfers map). Non-multicast
+        // programmable cores (DRAM) are never fast-dispatched, so there is no unicast common-RTA path here.
     }
 
     TT_ASSERT(
@@ -2309,9 +2177,9 @@ public:
                     "Fast dispatch to ACTIVE_ETH is unsupported; use slow/host dispatch instead");
                 continue;
             }
-            if (core_type == HalProgrammableCoreType::IDLE_ETH) {
-                // Fast dispatch not supported on idle ethernet. Remaining launch-message targets are TENSIX
-                // (multicast) and any non-multicast programmable cores (unicast below).
+            // Fast dispatch only targets TENSIX, whose launch messages are multicast below. Non-multicast
+            // programmable cores (idle ethernet and DRAM) are never fast-dispatched, so skip them.
+            if (!hal.get_supports_receiving_multicasts(programmable_core_type_index)) {
                 continue;
             }
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
@@ -2330,57 +2198,27 @@ public:
                 kernel_config.sub_device_origin_x() = origin.x;
                 kernel_config.sub_device_origin_y() = origin.y;
 
-                if (hal.get_supports_receiving_multicasts(programmable_core_type_index)) {
-                    for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
-                        CoreCoord virtual_start = device->virtual_core_from_logical_core(
-                            core_range.start_coord, kernel_group->get_core_type());
-                        CoreCoord virtual_end =
-                            device->virtual_core_from_logical_core(core_range.end_coord, kernel_group->get_core_type());
+                for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
+                    CoreCoord virtual_start =
+                        device->virtual_core_from_logical_core(core_range.start_coord, kernel_group->get_core_type());
+                    CoreCoord virtual_end =
+                        device->virtual_core_from_logical_core(core_range.end_coord, kernel_group->get_core_type());
 
-                        CoreRange virtual_range(virtual_start, virtual_end);
-                        auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
-                        LOG_TRACE_LAZY(
-                            tt::LogDispatch,
-                            "Launch Message (MCAST): logical_range={}, "
-                            "virtual_range={}, noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
-                            core_range,
-                            virtual_range,
-                            noc_xy,
-                            core_range.size(),
-                            kernel_group->launch_msg.size());
-
-                        multicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                            .noc_xy_addr = noc_xy, .num_mcast_dests = (uint32_t)core_range.size()});
-                        multicast_cmds.data.emplace_back(
-                            kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
-                    }
-                } else {
-                    // Need to unicast to each core in the kernel group
+                    CoreRange virtual_range(virtual_start, virtual_end);
+                    auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                     LOG_TRACE_LAZY(
                         tt::LogDispatch,
-                        "Launch Message (UNICAST): num_cores={}, msg_size={} bytes",
-                        kernel_group->core_ranges.num_cores(),
+                        "Launch Message (MCAST): logical_range={}, "
+                        "virtual_range={}, noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
+                        core_range,
+                        virtual_range,
+                        noc_xy,
+                        core_range.size(),
                         kernel_group->launch_msg.size());
-                    for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
-                        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                                CoreCoord logical_coord({x, y});
-                                CoreCoord virtual_coord = device->virtual_core_from_logical_core(
-                                    logical_coord, kernel_group->get_core_type());
-                                auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
-                                LOG_TRACE_LAZY(
-                                    tt::LogDispatch,
-                                    "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
-                                    logical_coord,
-                                    virtual_coord,
-                                    noc_xy);
-                                unicast_cmds.sub_cmds.emplace_back(
-                                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
-                                unicast_cmds.data.emplace_back(
-                                    kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
-                            }
-                        }
-                    }
+
+                    multicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                        .noc_xy_addr = noc_xy, .num_mcast_dests = (uint32_t)core_range.size()});
+                    multicast_cmds.data.emplace_back(kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
                 }
             }
         }
@@ -2392,15 +2230,6 @@ public:
                 constants.max_prefetch_command_size,
                 constants.packed_write_max_unicast_sub_cmds,
                 multicast_cmds.payload);
-        }
-
-        if (!unicast_cmds.sub_cmds.empty()) {
-            calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
-                unicast_cmds.sub_cmds.size(),
-                launch_msg_sizeB,
-                constants.max_prefetch_command_size,
-                constants.packed_write_max_unicast_sub_cmds,
-                unicast_cmds.payload);
         }
     }
 
@@ -2415,7 +2244,7 @@ public:
         uint32_t aligned_launch_msg_sizeB = tt::align(launch_msg_sizeB, l1_alignment);
         uint32_t launch_msg_size_words = aligned_launch_msg_sizeB / sizeof(uint32_t);
 
-        program_command_sequence.launch_messages.reserve(multicast_cmds.sub_cmds.size() + unicast_cmds.sub_cmds.size());
+        program_command_sequence.launch_messages.reserve(multicast_cmds.sub_cmds.size());
 
         // Launch Message address is resolved when the program is enqueued
         constexpr uint32_t unresolved_launch_msg_addr = 0;
@@ -2456,44 +2285,9 @@ public:
                 }
             }
         }
-
-        if (!unicast_cmds.sub_cmds.empty()) {
-            uint32_t curr_sub_cmd_idx = 0;
-            for (const auto& [num_sub_cmds_in_cmd, unicast_launch_msg_payload_sizeB] : unicast_cmds.payload) {
-                uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
-                device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH,
-                    num_sub_cmds_in_cmd,
-                    unresolved_launch_msg_addr,
-                    aligned_launch_msg_sizeB,
-                    unicast_launch_msg_payload_sizeB,
-                    unicast_cmds.sub_cmds,
-                    unicast_cmds.data,
-                    constants.packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
-                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-                program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
-                    &(reinterpret_cast<CQDispatchCmd*>(
-                          reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
-                          ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
-                         ->write_packed);
-                uint32_t curr_sub_cmd_data_offset_words =
-                    (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
-                     tt::align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)) /
-                    sizeof(uint32_t);
-                for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
-                    auto msg_ptr = dev_msgs_factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<std::byte*>(
-                        ((uint32_t*)device_command_sequence.data() + curr_sub_cmd_data_offset_words)));
-                    program_command_sequence.launch_messages.emplace_back(
-                        false, dev_msgs::launch_msg_t{msg_ptr}, msg_ptr);
-                    curr_sub_cmd_data_offset_words += launch_msg_size_words;
-                }
-            }
-        }
     }
 
     bool has_multicast_launch_cmds() const { return !multicast_cmds.sub_cmds.empty(); }
-    bool has_unicast_launch_cmds() const { return !unicast_cmds.sub_cmds.empty(); }
 
 private:
     template <typename T>
@@ -2505,8 +2299,8 @@ private:
 
     uint32_t launch_msg_sizeB{0};
 
+    // Only TENSIX is fast-dispatched, so launch messages are always multicast.
     LaunchMessageCmds<CQDispatchWritePackedMulticastSubCmd> multicast_cmds;
-    LaunchMessageCmds<CQDispatchWritePackedUnicastSubCmd> unicast_cmds;
 };
 
 class GoSignalGenerator {
@@ -2562,12 +2356,9 @@ public:
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
-            metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_GO,
-                // Dispatch X/Y resolved when the program is enqueued
-                0,
-                0,
-                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
+            // go_signal carries only go_msg_t word 0 ({signal, go_count}); go_count is a dispatcher-overridden
+            // placeholder. The done-return address (word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR.
+            metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_GO),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             dispatcher_for_go_signal);
@@ -2943,7 +2734,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -3097,13 +2887,9 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal wait count. go_signal carries only word 0 ({signal, go_count}); the done-return address
+    // (dispatch_core/offset, word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR on CQ-ownership change, not here.
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(0, dev_msgs::RUN_MSG_GO);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3112,7 +2898,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id) {
@@ -3289,13 +3074,9 @@ void update_traced_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal wait count. go_signal carries only word 0 ({signal, go_count}); the done-return address
+    // (dispatch_core/offset, word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR on CQ-ownership change, not here.
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(0, dev_msgs::RUN_MSG_GO);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3608,7 +3389,6 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
@@ -3654,12 +3434,9 @@ void reset_worker_dispatch_state_on_device(
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
-                metal_ctx.hal().make_go_msg_u32(
-                    dev_msgs::RUN_MSG_RESET_READ_PTR,
-                    dispatch_core.x,
-                    dispatch_core.y,
-                    metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(i) +
-                        metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+                // go_signal word 0: RESET_READ_PTR control (go_count is a dispatcher-overridden placeholder). The
+                // done-return address (word 1) was already established by SET_GO_SIGNAL_NOC_ADDR at setup.
+                metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_RESET_READ_PTR),
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 dispatcher_for_go_signal);
@@ -3751,6 +3528,43 @@ void set_num_worker_sems_on_dispatch(
     submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
+// Emits CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR to one device: writes this sub-device's done-return address (go_msg_t
+// word 1 = {master_x, master_y, offset}) to its workers and reseeds the dispatcher's go_count baseline. Used both at
+// sub-device setup (before the reset gos, which now notify via the split-out word 1) and on CQ-ownership change
+// (before the new owner's first go). Targets workers identically to the go signal.
+void set_go_signal_noc_addr_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset,
+    uint8_t num_unicast_txns,
+    uint8_t noc_data_start_index) {
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
+    calculator.add_dispatch_set_go_signal_noc_addr();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
+    // Must target the same dispatcher that sends the go (its go_count_per_sync is the one reseeded).
+    DispatcherSelect dispatcher_for_go_signal = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()
+                                                    ? DispatcherSelect::DISPATCH_SUBORDINATE
+                                                    : DispatcherSelect::DISPATCH_MASTER;
+    command_sequence.add_dispatch_set_go_signal_noc_addr(
+        sync_index,
+        go_count,
+        master_x,
+        master_y,
+        offset,
+        multicast_go_offset,
+        num_unicast_txns,
+        noc_data_start_index,
+        dispatcher_for_go_signal);
+    submit_setup_commands(manager, cq_id, command_sequence.data(), command_sequence.size_bytes());
+}
+
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
@@ -3814,7 +3628,8 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-    calculator.add_dispatch_write_linear<true, true>(go_msg_size);
+    uint32_t single_go_msg_size = go_msg_size / dev_msgs::go_message_num_entries;
+    calculator.add_dispatch_write_linear<true, true>(single_go_msg_size);
     calculator.add_dispatch_wait();
 
     std::vector<std::pair<const void*, uint32_t>> data;
@@ -3860,18 +3675,24 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     CoreCoord virtual_end = device->virtual_core_from_logical_core(all_core_range_logical.end_coord, CoreType::WORKER);
     CoreRange all_core_range_virtual{virtual_start, virtual_end};
 
-    // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
-    // garbage in the GO message entries they aren't using.
-    std::vector<uint32_t> go_data(dev_msgs::go_message_num_entries, dev_msgs::RUN_MSG_DONE);
-    TT_ASSERT(
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
-            metal_ctx.hal().get_alignment(HalMemType::L1) ==
-        0);
+    // Clear ONLY the "unused" GO message slot (go_message_num_entries - 1), which unassigned cores watch (see
+    // SubDeviceManager::populate_sub_device_data). The active sub-device slots [0..num_sub_devices) are left to
+    // reset_worker_dispatch_state_on_device's RESET go-signal, which syncs each slot's go_count to the dispatcher's
+    // mcast count and the worker's go_processed. Clearing an active slot here would write a fixed go_count that
+    // desyncs it from go_processed (the GO counter has no fixed "idle" value), making the worker phantom-run until
+    // the byte wraps. Tag the clear with RESET_READ_PTR_FROM_HOST so an unassigned worker routes to the control
+    // branch (go_processed = go_count) instead of reading go_count != go_processed as a program GO.
+    constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
+    uint32_t unused_go_msg_addr =
+        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) +
+        unused_go_message_index * single_go_msg_size;
+    std::vector<uint32_t> go_data(1, dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST);
+    TT_ASSERT(unused_go_msg_addr % metal_ctx.hal().get_alignment(HalMemType::L1) == 0);
     command_sequence.add_dispatch_write_linear<true, true>(
         all_core_range_logical.size(),
         device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG),
-        go_msg_size,
+        unused_go_msg_addr,
+        single_go_msg_size,
         go_data.data());
     // Wait for previous writes before updating index.
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);

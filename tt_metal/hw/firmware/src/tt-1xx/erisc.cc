@@ -115,38 +115,49 @@ void __attribute__((noinline)) Application(void) {
 
     DEVICE_PRINT_INITIALIZE_LOCK();
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    // GO is a counter now: catch go_processed up to go_count so the host's go_count==go_processed quiesce
+    // (slow-dispatch launch, e.g. configure_fabric launching this router) sees us idle. See idle_erisc.cc.
+    mailboxes->go_processed = mailboxes->go_messages[0].go_count;
     DeviceProfilerInit();
     while (routing_info->routing_enabled) {
-        // FD: assume that no more host -> remote writes are pending
-        uint8_t go_message_signal = mailboxes->go_messages[0].signal;
-        if (go_message_signal == RUN_MSG_GO) {
-            // Only include this iteration in the device profile if the launch message is valid. This is because all
-            // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
-            // "invalid" iterations.
-            DeviceZoneScopedMainN("ERISC-FW");
-            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
-            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
-            // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            uint32_t enables = launch_msg_address->kernel_config.enables;
-            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
-            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-            if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
-                WAYPOINT("R");
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
+        // FD: assume that no more host -> remote writes are pending. GO is a counter: act when it advances.
+        if (mailboxes->go_messages[0].go_count != mailboxes->go_processed) {
+            uint8_t go_message_signal = mailboxes->go_messages[0].signal;
+            if (go_message_signal != RUN_MSG_GO) {
+                // Control tick (host read-ptr reset): consume without running a kernel. The dispatcher-driven
+                // resets / done-notify were removed with fast dispatch to ethernet.
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                    mailboxes->launch_msg_rd_ptr = 0;
+                }
+                mailboxes->go_processed = mailboxes->go_messages[0].go_count;
+            } else {
+                // Only include this iteration in the device profile if the launch message is valid. This is because
+                // all workers get a go signal regardless of whether they're running a kernel or not. We don't want
+                // to profile "invalid" iterations.
+                DeviceZoneScopedMainN("ERISC-FW");
+                uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+                launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+                DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+                DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+                // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
+                uint32_t enables = launch_msg_address->kernel_config.enables;
+                my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+                my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+                if (enables &
+                    (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
+                    WAYPOINT("R");
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
-                iram_setup();
+                    iram_setup();
 #endif
-                extern void kernel_init();
-                kernel_init();
-                WAYPOINT("D");
+                    extern void kernel_init();
+                    kernel_init();
+                    WAYPOINT("D");
+                }
+                // Count this processed program GO (done == go_count == go_processed) for the host's quiesce.
+                mailboxes->go_processed++;
+                DEVICE_PRINT_KERNEL_FINISHED();
             }
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-            DEVICE_PRINT_KERNEL_FINISHED();
-            // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance, and the
-            // dispatcher-driven resets (RUN_MSG_RESET_READ_PTR / RUN_MSG_REPLAY_TRACE) no longer apply here.
-            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
         } else {
             internal_::risc_context_switch();
         }

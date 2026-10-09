@@ -255,6 +255,9 @@ int __attribute__((noinline)) main(void) {
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // GO is a counter now: catch go_processed up to go_count so the host's go_count==go_processed quiesce
+    // (slow-dispatch launch, llrt.cpp) sees this core idle at boot. See idle_erisc.cc for the model.
+    mailboxes->go_processed = mailboxes->go_messages[0].go_count;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
@@ -265,25 +268,29 @@ int __attribute__((noinline)) main(void) {
         // Wait...
         WAYPOINT("GW");
 
-        uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
+        // GO is a counter: wait until go_count advances past what this core has processed.
+        while (mailboxes->go_messages[0].go_count == mailboxes->go_processed) {
             invalidate_l1_cache();
-
-            // While the go signal for kernel execution is not sent, check if the worker was signalled
-            // to reset its launch message read pointer.
+            // If this active-eth core was signalled to disable, exit the firmware.
             if (flag_disable[0] != 1) {
                 aerisc_ptp_trace_exit();
                 return 0;
-            } else if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
-                // Host-driven (slow dispatch) read-pointer reset. The dispatcher-driven resets
-                // (RUN_MSG_RESET_READ_PTR / RUN_MSG_REPLAY_TRACE) and the done notify were removed
-                // with fast dispatch to ethernet.
-                mailboxes->launch_msg_rd_ptr = 0;
-            } else {
-                internal_::risc_context_switch();
             }
+            internal_::risc_context_switch();
         }
         WAYPOINT("GD");
+
+        // A go_count advance may be a control tick (host read-ptr reset) rather than a program GO; the signal
+        // byte says which. Consume a control tick (sync go_processed, reset rd ptr) without running a kernel.
+        // The dispatcher-driven resets / done-notify were removed with fast dispatch to ethernet.
+        uint8_t go_message_signal = mailboxes->go_messages[0].signal;
+        if (go_message_signal != RUN_MSG_GO) {
+            if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                mailboxes->launch_msg_rd_ptr = 0;
+            }
+            mailboxes->go_processed = mailboxes->go_messages[0].go_count;
+            continue;
+        }
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
@@ -337,7 +344,8 @@ int __attribute__((noinline)) main(void) {
             }
 
             wait_subordinate_eriscs();
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            // Count this processed program GO (done == go_count == go_processed) for the host's quiesce.
+            mailboxes->go_processed++;
             DEVICE_PRINT_KERNEL_FINISHED();
             // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
             // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.

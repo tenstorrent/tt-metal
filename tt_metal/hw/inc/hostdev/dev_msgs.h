@@ -90,12 +90,19 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
-// Messages for host to tell brisc to go
+// go_msg_t.signal control codes (a full byte). The GO signal is a COUNTER (go_msg_t.go_count): a counter advance
+// (go_count != go_processed) is work to service; "DONE" = (go_count == go_processed). The signal byte says what an
+// advance means: RUN_MSG_GO = run a program; the others are control ticks serviced without running a program. The
+// values are distinct bytes (historically high-nibble-aligned, from when control shared a byte with the offset nibble;
+// that packing is gone -- the offset now lives in go_msg_t::offset).
+constexpr uint32_t RUN_MSG_GO = 0x80;  // program launch: the worker runs a program on this signal
 constexpr uint32_t RUN_MSG_INIT = 0x40;
-constexpr uint32_t RUN_MSG_GO = 0x80;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
 constexpr uint32_t RUN_MSG_REPLAY_TRACE = 0xf0;
+constexpr uint32_t RUN_MSG_NONE = 0;  // vestigial (no control); a program launch now uses RUN_MSG_GO
+// Host-side run-state token (NOT a go_msg field value): labels the DONE abstract run state for the host wait API
+// (wait_until_cores_done) and watcher display; never written to or read from go_count.
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
@@ -221,14 +228,33 @@ static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
+// A go_message slot carries both the run-state signal and the dispatch return address, updated by DISJOINT partial
+// writes so the two never clobber each other: the per-go write touches only {signal, go_count} (bytes 0-1); the
+// reconfigure write (CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR, emitted at setup and on CQ-ownership change) touches only the
+// return address {master_x, master_y, offset} (bytes 2-4). This lets two command queues bounce work to the same
+// workers without a per-go address overwriting the other owner's address. One slot per go_message_index; the worker
+// reads its own slot for both the GO decision and the done-return address. See the trace-relaxation-pass design note.
 struct go_msg_t {
+    // Word 0 (bytes 0-3): the per-go payload, overwritten by the 4-byte go write each launch.
     union {
         uint32_t all;
         struct {
-            uint8_t dispatch_message_offset;
-            uint8_t master_x;
-            uint8_t master_y;
-            uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
+            uint8_t signal;    // byte 0: run-state control (RUN_MSG_GO / RESET_READ_PTR / RESET_READ_PTR_FROM_HOST /
+                               // REPLAY_TRACE / INIT). Full byte.
+            uint8_t go_count;  // byte 1: GO counter: worker runs (go_count - go_processed) programs. See go_processed.
+            uint8_t pad0_[2];
+        };
+    };
+    // Word 1 (bytes 4-7): the done-return address, overwritten by the 4-byte reconfigure write
+    // (CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR) on CQ-ownership change. Disjoint from word 0, so the per-go write never
+    // clobbers it.
+    union {
+        uint32_t addr_all;
+        struct {
+            uint8_t master_x;  // byte 4: owning dispatcher coords (done-return core).
+            uint8_t master_y;  // byte 5.
+            uint8_t offset;    // byte 6: completion-stream index for this core's sub-device.
+            uint8_t pad1_;
         };
     };
 } __attribute__((packed));
@@ -441,6 +467,13 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    // Op-to-op done/go: the GO counter lives in go_messages[go_message_index].go_count (dispatch/host write).
+    // The worker drains go_count - go_processed, which lets dispatch run ahead; a single per-core byte suffices
+    // since the run-ahead is bounded well under its range. The watcher derives running = (go_count != go_processed).
+    // NOTE: on sub-device reconfiguration, go_count/go_processed must be reset so they (and expected completion
+    // counts) agree.
+    volatile uint8_t go_processed;
+    volatile uint8_t go_processed_pad_[3];  // pad so the host can write go_processed as an aligned 32-bit word
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4

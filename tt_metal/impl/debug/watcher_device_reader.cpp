@@ -1172,7 +1172,27 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             launch_msg_.kernel_config().brisc_noc_id());
     }
     if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
-        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
+        // Derive the run state from the signal byte, else from (go_count != go_processed) -> running / done.
+        auto go_msg = mbox_data_.go_messages()[mbox_data_.go_message_index()];
+        uint8_t ctrl = go_msg.signal();
+        // The signal byte is only meaningful while a counter delta is pending (go_count != go_processed). The worker
+        // acks a control by catching go_processed up to go_count, but the signal PERSISTS in the mailbox afterward, so
+        // interpreting it unconditionally would report INIT/RESET/REPLAY forever (e.g. a booted idle core shown as
+        // INIT instead of DONE). With no delta the core is DONE regardless of the stale signal. Only KNOWN control
+        // codes decode; any other value (RUN_MSG_GO, garbage/desync) falls through to GO so the watcher never aborts.
+        bool known_control = ctrl == dev_msgs::RUN_MSG_INIT || ctrl == dev_msgs::RUN_MSG_RESET_READ_PTR ||
+                             ctrl == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST ||
+                             ctrl == dev_msgs::RUN_MSG_REPLAY_TRACE;
+        bool pending = go_msg.go_count() != mbox_data_.go_processed();
+        uint32_t run_state;
+        if (!pending) {
+            run_state = dev_msgs::RUN_MSG_DONE;
+        } else if (known_control) {
+            run_state = ctrl;
+        } else {
+            run_state = dev_msgs::RUN_MSG_GO;
+        }
+        DumpRunState(run_state);
     } else {
         LogRunningKernels();
         TT_THROW(

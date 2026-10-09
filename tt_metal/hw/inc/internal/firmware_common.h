@@ -211,7 +211,8 @@ void wait_for_go_message() {
 #endif
     uint32_t go_message_index = mailboxes->go_message_index;
 
-    while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
+    // GO is active while the counter is ahead of what this core has processed.
+    while (mailboxes->go_messages[go_message_index].go_count == mailboxes->go_processed) {
         invalidate_l1_cache();
     }
 }
@@ -231,16 +232,23 @@ void zero_semaphore_regions() {
 #if !defined(COMPILE_FOR_TRISC)
 #include "noc_address_backend.h"
 
-FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
-    go_msg_t go_message;
-    go_message.all = go_message_in->all;
+// The dispatch return address (where "done" flows back to) is built from the owning dispatcher's coords and the
+// sub-device completion offset carried in the worker's go_message slot (bytes written by the reconfigure command when
+// the owning CQ changes, independent of the per-go signal write). The caller passes its own go_messages slot. See
+// dev_msgs.h / the trace-relaxation note.
+FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_msg) {
 #ifdef ARCH_QUASAR
     constexpr uint32_t dispatch_message_stride = L1_ALIGNMENT;
 #else
     constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
 #endif
-    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset;
-    return noc_address_backend::dispatch_address(go_message.master_x, go_message.master_y, local_addr);
+    // Snapshot word 1 with a single volatile word load, then extract the bytes from the register copy. Reading
+    // go_msg->offset / master_x / master_y directly would emit three separate non-coalescable volatile byte loads,
+    // bloating the inlined code at every call site (notably the size-critical eth kernel).
+    go_msg_t go_msg_snapshot;
+    go_msg_snapshot.addr_all = go_msg->addr_all;
+    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_msg_snapshot.offset;
+    return noc_address_backend::dispatch_address(go_msg_snapshot.master_x, go_msg_snapshot.master_y, local_addr);
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
@@ -280,7 +288,7 @@ bool is_message_go() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
     uint32_t go_message_index = mailboxes->go_message_index;
 
-    return mailboxes->go_messages[go_message_index].signal == RUN_MSG_GO;
+    return mailboxes->go_messages[go_message_index].go_count != mailboxes->go_processed;
 }
 
 #define EARLY_RETURN_FOR_DEBUG \

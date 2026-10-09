@@ -121,6 +121,19 @@ public:
         uint8_t multicast_go_offset,
         DispatcherSelect dispatcher_type);
 
+    // Writes a sub-device's done-return address (go_msg_t word 1) to its workers and reseeds the dispatcher go_count
+    // baseline. Emitted at sub-device setup and on CQ-ownership change (before the new owner's first go).
+    void add_dispatch_set_go_signal_noc_addr(
+        uint8_t sync_index,
+        uint8_t go_count,
+        uint8_t master_x,
+        uint8_t master_y,
+        uint8_t offset,
+        uint8_t multicast_go_offset,
+        uint8_t num_unicast_txns,
+        uint8_t noc_data_start_index,
+        DispatcherSelect dispatcher_type);
+
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
 
     void add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream);

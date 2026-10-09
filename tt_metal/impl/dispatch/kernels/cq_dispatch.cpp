@@ -20,6 +20,7 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "hostdev/dev_msgs.h"  // go_msg_t, RUN_MSG_GO / RUN_MSG_RESET_READ_PTR (GO-counter override)
 
 #include <array>
 
@@ -1169,6 +1170,10 @@ static void process_delay_cmd() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Per-target GO counters (multicast/unicast). File scope so both the go handler and the reconfigure handler (which
+// reseeds them on CQ-ownership change) can reach them.
+static uint8_t go_count_per_sync[max_num_worker_sems] = {0};
+
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
 #if defined(ARCH_QUASAR) && defined(FDS_SIGNALLING)
@@ -1191,14 +1196,35 @@ void process_go_signal_mcast_cmd() {
     uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
+    // Per-target GO counter override (mirrors cq_dispatch_subordinate.cpp). When dispatch_s is disabled, dispatch_d
+    // sends the go signal directly, so it must supply the worker's go_count: the byte in the command is a placeholder,
+    // replaced here with this dispatcher's incrementing per-target count (worker runs while go_count != go_processed).
+    // Multicast (tensix) and unicast (eth) go-message slots are written by different commands, so they use separate
+    // counters (go_count_per_sync[*], at file scope so the reconfigure command can reseed them). EVERY go-signal
+    // advances the counter, so a control go-signal still creates a go_count != go_processed delta the worker acts on.
+    // The write only touches go_msg_t word 0 ({signal, go_count}); word 1 (the done-return address) is left intact.
+    const uint32_t go_signal_base = go_signal_value & 0x000000FF;  // signal byte (byte 0); go_count rides byte 1
+    // A sub-device reconfig RESET re-baselines the target's counter to 0 so the bump yields a deterministic
+    // go_count = 1 (paired with the host zeroing go_processed), which the worker always detects (1 != 0).
+    const bool go_count_reset = (go_signal_value & 0xFFu) == RUN_MSG_RESET_READ_PTR;
+    const uint32_t sync_index = stream - first_stream_used;
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
+        // The per-go write targets word 0 ({signal, go_count}) of the 8-byte go_msg_t slot; word 1 (the done-return
+        // address) is written separately by the reconfigure command, so slots stride by sizeof(go_msg_t).
         uint64_t dst_noc_addr_multicast =
-            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(go_msg_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
-        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
-        aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
+        constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
+        uint32_t storage_offset = (multicast_go_offset * go_msg_words) % (L1_ALIGNMENT / sizeof(uint32_t));
+        uint8_t& mcast_go_count = go_count_per_sync[sync_index];
+        if (go_count_reset) {
+            mcast_go_count = 0;
+        }
+        mcast_go_count++;
+        aligned_go_signal_storage_uncached[storage_offset] =
+            go_signal_base | (static_cast<uint32_t>(mcast_go_count) << 8);
 
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
@@ -1219,7 +1245,6 @@ void process_go_signal_mcast_cmd() {
         WAYPOINT("WCD");
     }
 
-    *aligned_go_signal_storage_uncached = go_signal_value;
 
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -1260,6 +1285,50 @@ void process_notify_dispatch_s_go_signal_cmd() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Processes CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR on the dispatch_d-direct path (dispatch_s disabled): reseeds this
+// sub-device's per-sync GO-counter baseline and writes the done-return address (go_msg_t word 1) to the sub-device's
+// workers via tensix mcast, leaving the per-go word 0 untouched. See the matching handler in cq_dispatch_subordinate.cpp.
+FORCE_INLINE
+void process_set_go_signal_noc_addr_cmd() {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    // Read every field into a local before the staging store below (the staging buffer aliases this command).
+    const uint32_t multicast_go_offset = cmd->set_go_signal_noc_addr.multicast_go_offset;
+    const uint32_t sync_index = cmd->set_go_signal_noc_addr.sync_index;
+    const uint8_t baseline = cmd->set_go_signal_noc_addr.go_count;
+    const uint8_t master_x = cmd->set_go_signal_noc_addr.master_x;
+    const uint8_t master_y = cmd->set_go_signal_noc_addr.master_y;
+    const uint8_t cfg_offset = cmd->set_go_signal_noc_addr.offset;
+
+    ASSERT(sync_index < max_num_worker_sems);
+    go_count_per_sync[sync_index] = baseline;
+
+    const uint32_t addr_value = static_cast<uint32_t>(master_x) | (static_cast<uint32_t>(master_y) << 8) |
+                                (static_cast<uint32_t>(cfg_offset) << 16);
+    constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
+    constexpr uint32_t addr_word = offsetof(go_msg_t, master_x) / sizeof(uint32_t);  // word 1 of the slot
+
+    volatile uint32_t tt_l1_ptr* aligned_storage = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
+    volatile uint32_t tt_l1_ptr* aligned_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
+
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        uint64_t dst = cq_mcast_noc_addr(
+            worker_mcast_grid,
+            mcast_go_signal_addr + sizeof(go_msg_t) * multicast_go_offset + offsetof(go_msg_t, master_x));
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        uint32_t storage_offset = (multicast_go_offset * go_msg_words + addr_word) % (L1_ALIGNMENT / sizeof(uint32_t));
+        aligned_storage_uncached[storage_offset] = addr_value;
+        cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_storage[storage_offset])),
+            dst,
+            sizeof(uint32_t),
+            num_dests,
+            noc_index);
+        noc_nonposted_writes_acked[noc_index] += num_dests;
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
+        noc_nonposted_writes_num_issued[noc_index] += 1;
+    }
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
     bool done = false;
 re_run_command:
@@ -1391,6 +1460,7 @@ re_run_command:
                 dispatch_telemetry_base);
             break;
 
+        case CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR: process_set_go_signal_noc_addr_cmd(); break;
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
             // DPRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
             // cmd->set_write_offset.offset1,

@@ -142,32 +142,40 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_DISPATCH_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
         wait_subordinates();
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        // Report init done by catching the processed counter up to the GO counter (done == go_count == go_processed).
+        mailboxes->go_processed = mailboxes->go_messages[0].go_count;
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         DeviceProfilerInit();
         while (1) {
             WAYPOINT("GW");
-            uint8_t go_message_signal = RUN_MSG_DONE;
             DPRINT("DISPATCH DM0-FW: waiting for GO message\n");
-            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+            // Wait for new work: the GO counter advanced past what we've processed, or a preloaded launch message.
+            while ((mailboxes->go_messages[mailboxes->go_message_index].go_count == mailboxes->go_processed) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
-                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+            }
+            // A new counter tick may be a control event (reset read ptr / replay trace) rather than a program GO.
+            if (mailboxes->go_messages[mailboxes->go_message_index].go_count != mailboxes->go_processed) {
+                uint8_t signal = mailboxes->go_messages[mailboxes->go_message_index].signal;
+                if ((signal == RUN_MSG_RESET_READ_PTR) || (signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (signal == RUN_MSG_REPLAY_TRACE)) {
                     mailboxes->launch_msg_rd_ptr = 0;
-                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    uint32_t go_message_index = mailboxes->go_message_index;
+                    if (signal == RUN_MSG_RESET_READ_PTR || signal == RUN_MSG_REPLAY_TRACE) {
+                        if (signal == RUN_MSG_REPLAY_TRACE) {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        uint32_t go_message_index = mailboxes->go_message_index;
                         uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                        mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
                         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                         notify_dispatch_core_done(dispatch_addr, noc_index);
+                    } else {
+                        // RESET_READ_PTR_FROM_HOST: host-driven, no dispatcher notify.
+                        mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
                     }
+                    continue;  // handled a control event; back to waiting (no program to run)
                 }
             }
 
@@ -213,13 +221,14 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                uint32_t go_message_index = mailboxes->go_message_index;
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                // Count this processed program GO (done == go_count == go_processed).
+                mailboxes->go_processed++;
 
                 if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                     launch_msg_address->kernel_config.enables = 0;
                     launch_msg_address->kernel_config.preload = 0;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                    uint64_t dispatch_addr =
+                        calculate_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index]);
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                     notify_dispatch_core_done(dispatch_addr, noc_index);

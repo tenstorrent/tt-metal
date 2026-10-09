@@ -380,7 +380,8 @@ int main() {
 
     // Wait for all cores to be finished initializing before reporting initialization done.
     wait_ncrisc_trisc();
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // Report init done: clearing go_processed to 0 clears the host's init sentinel (done == go_count == go_processed).
+    mailboxes->go_processed = 0;
 
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
@@ -393,38 +394,41 @@ int main() {
     DeviceProfilerInit();
     while (1) {
         WAYPOINT("GW");
-        uint8_t go_message_signal = RUN_MSG_DONE;
         // kernel_configs.preload is last in the launch message. so other data is
         // valid by the time it's set. All multicast data from the dispatcher is
         // written in order, so it will arrive in order. We also have a barrier
         // before mcasting the launch message (as a hang workaround), which
         // ensures that the unicast data will also have been received.
+        // Wait for a program GO: spin until the GO counter advances (go_count != go_processed), or a launch message
+        // is preloaded. The go_msg.signal byte says what the tick is: RUN_MSG_GO = a program; a control code
+        // (reset read ptr / replay trace / host reset) is serviced here without running a program.
         while (
-            ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
-            // While the go signal for kernel execution is not sent, check if the worker was signalled
-            // to reset its launch message read pointer.
-            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
-                (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+            uint32_t go_message_index = mailboxes->go_message_index;
+            if (mailboxes->go_messages[go_message_index].go_count != mailboxes->go_processed) {
+                uint8_t signal = mailboxes->go_messages[go_message_index].signal;
+                if (signal == RUN_MSG_GO) {
+                    break;  // a program GO: fall through to run it
+                }
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                if (signal == RUN_MSG_RESET_READ_PTR || signal == RUN_MSG_REPLAY_TRACE) {
+                    if (signal == RUN_MSG_REPLAY_TRACE) {
                         DeviceIncrementTraceCount();
                         DeviceTraceOnlyProfilerInit();
                     }
-                    uint32_t go_message_index = mailboxes->go_message_index;
-                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
-                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
-                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
-                    // is not issued.
+                    // Querying the noc_index is safe here: a reset is only seen after a program GO, which sets
+                    // noc_index to a valid value. noc_index is initialized to 0 so no invalid NOC txn is issued.
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    // Notify dispatcher that this has been done
+                    // Consume the control: sync go_processed to the bumped go_count (dispatch advances go_count for
+                    // every go-signal, control included, so this control was seen via the delta); ack + notify.
+                    mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     notify_dispatch_core_done(dispatch_addr, noc_index);
+                } else {
+                    // RESET_READ_PTR_FROM_HOST: host-driven, no dispatcher notify. Consume: sync to the bumped count.
+                    mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
                 }
             }
         }
@@ -591,8 +595,10 @@ int main() {
 
             } while (reload_next_stage(launch_msg_address, reload_stage, reload_round));
 
-            uint32_t go_message_index = mailboxes->go_message_index;
-            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            // Count this processed program GO (done == go_count == go_processed). Always advances, in both fast
+            // and slow dispatch (the host polls go_processed in slow dispatch); the drain in the outer loop runs
+            // one program per increment until caught up.
+            mailboxes->go_processed++;
             DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
@@ -601,7 +607,7 @@ int main() {
                 // if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index]);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch

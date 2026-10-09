@@ -578,6 +578,45 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_addr(
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset,
+    uint8_t num_unicast_txns,
+    uint8_t noc_data_start_index,
+    DispatcherSelect dispatcher_type) {
+    uint32_t lengthB = sizeof(CQDispatchCmd);
+    TT_ASSERT(
+        lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
+        "Data for set go signal noc addr must fit within one page");
+    this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
+    auto initialize_cmd = [&](CQDispatchCmd* cmd) {
+        *cmd = {};
+        cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR;
+        cmd->set_go_signal_noc_addr.multicast_go_offset = multicast_go_offset;
+        cmd->set_go_signal_noc_addr.num_unicast_txns = num_unicast_txns;
+        cmd->set_go_signal_noc_addr.noc_data_start_index = noc_data_start_index;
+        cmd->set_go_signal_noc_addr.sync_index = sync_index;
+        cmd->set_go_signal_noc_addr.go_count = go_count;
+        cmd->set_go_signal_noc_addr.master_x = master_x;
+        cmd->set_go_signal_noc_addr.master_y = master_y;
+        cmd->set_go_signal_noc_addr.offset = offset;
+    };
+    CQDispatchCmd* cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd cmd{};
+        initialize_cmd(&cmd);
+        this->memcpy(cmd_dst, &cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_cmd(cmd_dst);
+    }
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream) {
     this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_SUBORDINATE);
     auto initialize_flush_cmd = [&](CQDispatchCmd* flush_cmd) {

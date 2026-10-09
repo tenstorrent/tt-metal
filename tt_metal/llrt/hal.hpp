@@ -720,10 +720,11 @@ public:
         return this->core_info_[index].get_realtime_profiler_msgs_factory();
     }
 
-    // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
+    // This interface guarantees that word 0 of go_msg_t ({signal, go_count}) is 4B and has the same layout for all
+    // core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
-    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+    uint32_t make_go_msg_u32(uint8_t go_count, uint8_t signal) const;
 
     // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
     void set_iram_text_size(

@@ -85,7 +85,7 @@ void kernel_main() {
     // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
-    go_message_in->signal = RUN_MSG_DONE;
+    *GET_MAILBOX_ADDRESS_DEV(go_processed) = go_message_in->go_count;
 #else
     signal_completion_before_hang();
 #endif

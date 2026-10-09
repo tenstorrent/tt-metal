@@ -199,7 +199,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -210,7 +209,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id);
@@ -258,7 +256,6 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
@@ -269,6 +266,20 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
 
+// Writes a sub-device's done-return address (go_msg_t word 1) to its workers and reseeds the dispatcher go_count
+// baseline. Emitted at sub-device setup (before the reset gos) and on CQ-ownership change (before the first go).
+// (Tensix multicast only now that eth fast dispatch is removed; the unicast params are vestigial.)
+void set_go_signal_noc_addr_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset,
+    uint8_t num_unicast_txns,
+    uint8_t noc_data_start_index);
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id);

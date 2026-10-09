@@ -59,8 +59,9 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 17,  // unicast packed large write with uint32_t length
     CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 18,
-    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 19,  // dispatch_s: wait on the last program and signal its profiler record
-    CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
+    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 19,   // dispatch_s: wait on the last program and signal its profiler record
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR = 20,  // write go_msg_t word-1 done-return addr on workers + reseed go_count
+    CQ_DISPATCH_CMD_MAX_COUNT,                // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -428,6 +429,21 @@ struct CQDispatchSetSubDeviceWorkerCountsCmd {
     uint32_t num_sub_devices;
 } __attribute__((packed));
 
+// Writes the done-return address (go_msg_t word 1: master_x/master_y/offset) to a sub-device's workers and reseeds the
+// dispatcher's per-sync go_count baseline. Emitted on CQ-ownership change (before the new owner's first go) and at
+// sub-device setup. Targets workers the same way the go signal does: grid-wide mcast to slot [multicast_go_offset],
+// plus num_unicast_txns unicasts to the eth cores listed in go_signal_noc_data from noc_data_start_index.
+struct CQDispatchSetGoSignalNocAddrCmd {
+    uint8_t multicast_go_offset;   // go_message slot to mcast to (CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = no mcast)
+    uint8_t num_unicast_txns;      // number of unicast (eth) cores to write the address to
+    uint8_t noc_data_start_index;  // start index into go_signal_noc_data for the unicast core coords
+    uint8_t sync_index;            // which go_count_per_sync[]/_unicast[] baseline to reseed
+    uint8_t go_count;              // host-authoritative go_count baseline for this sub-device
+    uint8_t master_x;              // owning dispatcher coords written into go_msg_t word 1
+    uint8_t master_y;
+    uint8_t offset;  // completion-stream offset written into go_msg_t word 1
+} __attribute__((packed));
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -445,6 +461,7 @@ struct CQDispatchCmd {
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
         CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
+        CQDispatchSetGoSignalNocAddrCmd set_go_signal_noc_addr;
         CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
         CQDispatchRtProfilerFlushCmd rt_profiler_flush;
     } __attribute__((packed));

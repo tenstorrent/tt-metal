@@ -74,8 +74,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
-    CoreCoord dispatch_core);
+    const DispatchArray<uint32_t>& expected_num_workers_completed);
 
 uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
 

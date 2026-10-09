@@ -30,12 +30,14 @@ static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
     "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
 
+// The dispatch message offset (the completion-stream index) lives in go_msg_t::offset, a full byte, written
+// independently of the signal byte. The host writes offset = sub_device_index + cq_id * DISPATCH_MESSAGE_ENTRIES
+// (DispatchMemMap::get_dispatch_message_update_offset + get_completion_counter_offset), so its maximum,
+// MAX_NUM_HW_CQS * DISPATCH_MESSAGE_ENTRIES - 1, must fit in that byte.
 static_assert(
-    DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
-        std::numeric_limits<dev_msgs::go_msg_t::FieldTraits<false, dev_msgs::go_msg_t::Field::dispatch_message_offset>::
-                                element_type>::max(),
-    "DISPATCH_MESSAGES_MAX_OFFSET does not match the maximum value of go_msg_t::dispatch_message_offset. "
-    "Fix the value in dispatch_settings.hpp");
+    DispatchSettings::MAX_NUM_HW_CQS * DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= 256,
+    "Dispatch message offset (sub_device_index + cq_id * DISPATCH_MESSAGE_ENTRIES) must fit in go_msg_t::offset (one "
+    "byte).");
 
 DispatchSettings::DispatchSettings(
     uint32_t num_hw_cqs,
