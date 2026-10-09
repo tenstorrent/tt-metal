@@ -28,7 +28,8 @@ Precision (tests/test_flat_stage_probe.py, test_bfp8_rounding.py): the packer ro
 math on its own bfp4 weights (coef 1.0005). Partial sums are bf16 (+0.1%); the unified path adds them in fp32.
 Knobs: GLM_AG_GATHER_OP (fabric | high_bw), GLM_AG_RS_OP (fabric | ttnn), GLM_MOE_LINKS (links of every collective),
 GLM_AG_DOWN_FP32 (default 1: fp32 DEST down projection; 0: bf16 DEST, ~3-4% output gain with bfp4 weights),
-GLM_AG_PACK_SRND (default 0; 1: stochastic rounding in the flat expert's packers, analysis only).
+GLM_AG_PACK_SRND (default 0; 1: stochastic rounding in the flat expert's packers, analysis only),
+GLM_AG_XBF16 / GLM_AG_HBF16 (default 0: the flat expert's x / h as bfp8 tiles; 1: bf16).
 """
 
 from __future__ import annotations
@@ -248,6 +249,10 @@ class TtExpertsAg:
         # unbiased packer rounding: the default rounds bf16 -> bfp8 ties away from zero (x tilize, h, y packs), +1.25%
         # on the experts' output at layer 4 (tests/test_flat_stage_probe.py); 56k top-1 0.870 -> 0.884 (unified 0.881)
         self.pack_srnd = os.environ.get("GLM_AG_PACK_SRND", "0") == "1"
+        # x / h tile formats in the flat expert (default bfp8 / bfp8): bf16 x + h halves the experts' error vs fp32
+        # math at LoFi (rel L2 0.019 -> 0.010, layer 4) at ~+0-10% expert time at <= 256 rows per expert, +36% at 2048
+        self.x_bf16 = os.environ.get("GLM_AG_XBF16", "0") == "1"
+        self.h_bf16 = os.environ.get("GLM_AG_HBF16", "0") == "1"
         # split call: the gathered x, all S rows as tiles (persistent, valid until the next MoE layer's call); the
         # model's shared expert reads it instead of all-gathering the same rows again
         self.gathered_x = None
@@ -282,6 +287,8 @@ class TtExpertsAg:
             act="clamped_silu",
             pin=1,
             cache_prefix=prefix,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
         )
 
     def _block(self, s):
