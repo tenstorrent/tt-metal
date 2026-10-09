@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T21:58:37.316659+00:00",
+  "generated_at": "2026-10-09T22:08:47.535490+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -93,6 +93,11 @@
       "sha256": "d5ea1af215fa7a0d56166516fc103abf0debe07753def52e0da9b8747faa9028"
     },
     {
+      "path": "demo/run_gdn_epilogue.py",
+      "bytes": 6486,
+      "sha256": "a8ba02ea58cf4b4780aab54197674476d46c6a63893276261c39925ef023809e"
+    },
+    {
       "path": "demo/run_gpqa_audit_followup.py",
       "bytes": 5201,
       "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"
@@ -119,8 +124,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 119566,
-      "sha256": "e76e47cc7fde4fa1fc450b1eca3f99560f90b6908605dcd73653e542a2744ab7"
+      "bytes": 121131,
+      "sha256": "77e935a5025776f86bb07cf500333a3da9750050a5e1c3f385875eb70d90df9e"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -129,8 +134,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 35841,
-      "sha256": "73c5ca601c50e29f50384d3e47febee8b530e455bf5c676efdede417b1e4de1b"
+      "bytes": 36369,
+      "sha256": "badc41faea4fee8e41e20458547fd9cc47677b7f10122c480e93ef203cf488af"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -2022,6 +2027,61 @@
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.svg",
       "bytes": 168827,
       "sha256": "66c33ba17fa8c54318721d13d53f938f5832fbf874a114eb94046f36f579f61e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/README.md",
+      "bytes": 4068,
+      "sha256": "057796594966190f5fbec7a9a0931aac9098279c3446d591a84e9efca831892d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/bfp8-gdn-v2/queue.json",
+      "bytes": 600,
+      "sha256": "a3cbdf968b54164ed3fd8b56ead460c33e55d539c1e69c40c7e85c0166a15138"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/capture.json",
+      "bytes": 113,
+      "sha256": "dc0c319880dddfdecb3bbc505ba6796b20d7dfde598b865873ed6d5376b22740"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-control-v1/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "3759af5344a7f8e8718958a47274b5a7120592f28a8e8d717bffce0e728bf1cd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-control-v1/launch.json",
+      "bytes": 1894,
+      "sha256": "ee06649bc2bd26c4d1e8b416e1778c0e9631f916ce45723a263a3c17f1b4ea79"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-control-v1/preflight.log",
+      "bytes": 1726,
+      "sha256": "9007bc6458508cb61762830690361098134118ba9da8340305ed3bcc466a3ee7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-control-v1/source-manifest.json",
+      "bytes": 21927,
+      "sha256": "cb9294da0c9ef81b0091a38f0b6973f3991d65a1e5be7fc1eb66e4a69d6ac39b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-control-v1/unit.xml",
+      "bytes": 146809,
+      "sha256": "65788ced6abc417ba7d9d8e8326ffeb147ad2246b0be0883268ee65d7556d8b9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-v1/queue.json",
+      "bytes": 607,
+      "sha256": "8622ca00e04485dce4cc1e01cae98c04b0d802f1d2a41666ad7abd428534a637"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/image-hardware-v3/status.json",
+      "bytes": 1807,
+      "sha256": "c7b03198f57c2f5e2c912ebc14fdf8501f26ba1d1bbbd47d0df7013bd6d00ce2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-v1/units.txt",
+      "bytes": 528,
+      "sha256": "d01dbea42287e3121c2c82844f28aba7cf6af40dad33ddb4b711d21404021c31"
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/README.md",
@@ -6508,6 +6568,11 @@
       "sha256": "fe05c2da5a0f9fedb6a87bc09fddeb603bbaf45e2d4087f5a5eb96bb688031b8"
     },
     {
+      "path": "tests/gdn_epilogue.py",
+      "bytes": 2124,
+      "sha256": "6bf53dca7ef576b9eca251a915481b85c4129086a4f83ac030658386ac0ab3cf"
+    },
+    {
       "path": "tests/gpqa_documents.py",
       "bytes": 1407,
       "sha256": "bf49f832f4f204d847e8a1bbbfb56fc94ebdc7c41bec65e08b8cfa15d6f17828"
@@ -6548,6 +6613,11 @@
       "sha256": "b4cc3078549745d6a52f5b51eef134bc09a4c996910740e4834375ddeb25f81b"
     },
     {
+      "path": "tests/test_gdn_epilogue.py",
+      "bytes": 9516,
+      "sha256": "ade9adcc4f901e3b81df791164528a568cf5a1bf71b307c27782c1b0a5b3f66b"
+    },
+    {
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1132,
       "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
@@ -6581,6 +6651,11 @@
       "path": "tests/unit/test_decoder_accuracy_followup.py",
       "bytes": 2164,
       "sha256": "509422a5eb93b4fc2a890f94fb3651c1ad6f20d66c6ecc41fde46aebe6f43b24"
+    },
+    {
+      "path": "tests/unit/test_gdn_epilogue.py",
+      "bytes": 2757,
+      "sha256": "18841073ac0a6b59ff0aacb5494d78306a22843d887ccf0fc0cd46b2577c7dfb"
     },
     {
       "path": "tests/unit/test_gpqa_audit_followup.py",

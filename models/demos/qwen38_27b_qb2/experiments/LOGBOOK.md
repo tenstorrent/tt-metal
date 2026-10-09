@@ -1613,3 +1613,26 @@ No session connection is needed for that queue to continue.
   CPU,8GiB/45min bounds; no physical devices. Some sandbox-blocked SSH attempts
   were retried after escalation; interrupted initial launch was verified absent
   before starting it. Current physical runs were not restarted on poll timeout.
+
+## Oct 9, 22:00-22:08 UTC: physical epilogue follower
+
+- Verified recovered image-hardware-v3 and bfp8-gdn-v2 still active. Container
+  progressed through layer 63 and workers started reporting model loaded.
+- Added a physical TP4 epilogue test: B32/B16/B8/B1, DRAM and interleaved L1,
+  all-rank native intermediate/final checks, zero padding, input preservation,
+  independent allocation rebinding and changed-input trace replay.
+- Matched native/fused/native trace brackets use five samples of 100 replays.
+  Native drift above 3% withholds a speedup claim; linear 48-layer savings are
+  labeled projections, not measured full-model improvements.
+- Added and tested an exact-predecessor/clean-receipt gate. The new persistent
+  unit waits behind BFP8 performance/profiles/full GPQA, then uses the existing
+  hardware lock. No model path or precision policy was changed.
+- Frozen-source preflight: 450 tests and 40 subtests passed, one skipped;
+  physical pytest collection passed. This inherits the older frozen BFP8 source
+  plus new epilogue files, so its test count differs from the local latest tree.
+- Launched qwen38-gdn-epilogue-hardware-v1-20261009.service, invocation
+  16c50a2f3e4e428fbefe4c87c662cacb, waiting on exact BFP8 v2 invocation.
+  Host limits 32 GiB and 8 CPUs; hardware bound 90 minutes; no reboot resume.
+  Stored launch, source manifest, preflight and three-service status snapshots.
+- Initial staging/collection helper SSH attempts hit sandbox network denial;
+  retried with escalation. Pre-commit checks passed before freezing source.

@@ -1,5 +1,13 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+22:07 UTC update: added a persistent physical TP4 epilogue follower after
+image-hardware-v3 and bfp8-gdn-v2. It covers B1/B8/B16/B32 in DRAM and L1,
+native output equality, changing-input trace replay and native/fused/native
+timings. Preflight: 450 tests and 40 subtests passed, one skipped; hardware test
+collected. All three services were active at capture, with only the container
+opening hardware. No epilogue timing or full-model promotion yet.
+[Queue and commands](../galaxy-evidence/gdn-epilogue-hardware-v1/README.md).
+
 21:56 UTC update: optional 64K prefill-budget sweep exhausted contiguous DRAM at
 32K/B32 and closed devices cleanly. Original followers stopped before hardware;
 audited recovery restored image-hardware-v3 (eight workers loading) and

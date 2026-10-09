@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "hardware_started": false,
+  "cleanup_completed": false,
+  "predecessor_unit": "qwen38-bfp8-gdn-v2-20261009.service",
+  "predecessor_invocation": "c3f1a7cad8e64f04bf68976b09a505fc",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_model": false,
+  "started_at": 1791583619.6586494,
+  "updated_at": "2026-10-09T22:07:39Z",
+  "predecessor": {
+    "MainPID": "2628723",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "c3f1a7cad8e64f04bf68976b09a505fc"
+  }
+}
