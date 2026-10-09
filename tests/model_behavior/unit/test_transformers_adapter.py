@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import re
 import sys
 from pathlib import Path
@@ -197,14 +198,33 @@ def test_open_adapter_reserves_l1_small_by_family(
 @pytest.mark.parametrize("warmup_mode", ["eager", "traced"])
 def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, backend, warmup_mode):
     from models.common.warmup.warmup_utils import WarmupForwardMixin
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
     bound = []
-    prefill_captures = []
+    prefill_prepares = []
+    prefill_records = []
+    slot_warmups = []
+
+    def checked(name, calls):
+        signature = inspect.signature(getattr(Qwen36Model, name))
+
+        def call(*args, **kwargs):
+            signature.bind(None, *args, **kwargs)
+            calls.append(kwargs)
+
+        return call
+
+    def warmup_gdn_slot_ops():
+        assert not prefill_records, "Compile GDN slot ops before any trace capture"
+        slot_warmups.append(True)
+
     model = SimpleNamespace(
         _bind_gdn_prefill_scratch=lambda: bound.append(True) or "batched-state",
         _unbind_gdn_prefill_scratch=lambda previous: bound.pop(),
-        capture_prefill_trace_chunked=lambda *args, **kwargs: prefill_captures.append(kwargs),
+        prepare_prefill_trace_chunked=checked("prepare_prefill_trace_chunked", prefill_prepares),
+        record_prefill_trace_chunked=checked("record_prefill_trace_chunked", prefill_records),
+        warmup_gdn_slot_ops=warmup_gdn_slot_ops,
     )
 
     class CompileCheckedGenerator(WarmupForwardMixin):
@@ -226,6 +246,7 @@ def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, 
                 assert key in self.compiled, "Cannot compile a new sampling configuration during trace capture"
                 self.replays += 1
             else:
+                assert not prefill_records, "Compile decode before recording the prefill trace"
                 assert kwargs["prepare_trace"]
                 self.compiled.add(key)
                 self.prepared_variants.add(kwargs["sampling_params"] is not None)
@@ -245,7 +266,9 @@ def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, 
     adapter.generator = CompileCheckedGenerator()
     adapter.warmup()
 
-    assert prefill_captures == [dict(chunk_size=2048, capture_chunk_trace=True)]
+    assert prefill_prepares == [dict(chunk_size=2048)]
+    assert prefill_records == [{}]
+    assert slot_warmups == [True]
     assert len(adapter.generator.compiled) == 6  # Four penalty/logprob combinations, greedy, and host sampling.
     assert adapter.generator.captures == int(adapter.enable_trace)
     assert adapter.generator.replays == (6 if adapter.enable_trace else 0)

@@ -237,6 +237,9 @@ string get_l1_target_str(
 constexpr uint64_t watcher_ring_buf_sem_peek_addr =
     TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
 
+// A NOC sanitize record still partially written after this many consecutive polls is reported as corruption.
+constexpr uint32_t max_partial_sanitize_polls = 3;
+
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
     TT_FATAL(
@@ -414,7 +417,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
+        log_debug(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     DumpData dump_data;
@@ -717,9 +720,15 @@ void WatcherDeviceReader::Core::Dump() const {
 }
 
 void WatcherDeviceReader::Core::DumpL1Status() const {
+    const auto& hal = reader_.env.get_hal();
+    // The L1[0] canary guards the reset jump that generate_risc_startup_addr writes at L1[0]. The
+    // qsr.s1 simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
+    // live reset vector there and DM firmware data may overwrite it; skip the canary on that model only.
+    if (reader_.env.get_rtoptions().is_qsr_s1_simulator()) {
+        return;
+    }
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    const auto& hal = reader_.env.get_hal();
     const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
@@ -735,21 +744,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
 
+    // Quasar DMs publish this record through the cache and flush it to L1 a 64B line at a time, so a
+    // poll can see it partially written. Re-check a partial record on later polls instead of failing.
+    // A published value never equals its field's sentinel.
+    const bool all_sentinel =
+        san.noc_addr() == DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() == DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() == DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() == DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() == DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() == DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() == DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool no_sentinel =
+        san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool complete = san.return_code() == dev_msgs::DebugSanitizeOK ? all_sentinel : no_sentinel;
+    const std::pair<CoreCoord, int> record_key{virtual_coord_, noc};
+    if (!complete) {
+        if (++reader_.partial_sanitize_polls_[record_key] < max_partial_sanitize_polls) {
+            return;
+        }
+        error_msg = fmt::format(
+            "Watcher unexpected noc debug state on core {}, partially written record noc{} risc {} {{0x{:08x}, {} }} "
+            "return code {}",
+            virtual_coord_.str(),
+            noc,
+            san.which_risc(),
+            san.noc_addr(),
+            san.len(),
+            san.return_code());
+        error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str_, error_msg);
+        DumpWaypoints(true);
+        DumpRingBuffer(true);
+        LogRunningKernels();
+        reader_.watcher_server.set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+        TT_THROW("{}: {}", core_str_, error_msg);
+    }
+    reader_.partial_sanitize_polls_.erase(record_key);
+
     switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 || san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 ||
-                san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 || san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 || san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8) {
-                error_msg = fmt::format(
-                    "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                    virtual_coord_.str(),
-                    san.which_risc(),
-                    san.noc_addr(),
-                    san.len());
-                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
-            }
-            break;
+        case dev_msgs::DebugSanitizeOK: break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
@@ -840,9 +875,25 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
+    // On the qsr.s1 model an assert record can reach the host partially written through the cached L1
+    // alias: the firmware claims the record before filling it, and its TRISC boot assert shows up with
+    // the claim but failure code 0, or with a garbled claim. On that model only, such a record is
+    // reported and polling continues.
+    const bool qsr_s1 = reader_.env.get_rtoptions().is_qsr_s1_simulator();
+    const bool tolerant_record = qsr_s1;
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+            if (tolerant_record) {
+                log_warning(
+                    tt::LogMetal,
+                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring "
+                    "(qsr.s1 simulator, partial record)",
+                    core_str_,
+                    assert_status.which(),
+                    assert_status.line_num());
+                return;
+            }
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
@@ -850,6 +901,19 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 assert_status.line_num());
         }
         return;  // no assert tripped, nothing to do
+    }
+    if (tolerant_record) {
+        // The firmware claims the record (claim == 0xDEADBEEF) before filling it, so a tripped record
+        // without the claim was not written by assert_and_hang().
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {}: tripped={} which={} line_num=0x{:x} claim=0x{:x} hw_fault_info=0x{:016x}",
+            core_str_,
+            assert_status.tripped(),
+            assert_status.which(),
+            assert_status.line_num(),
+            assert_status.claim(),
+            assert_status.hw_fault_info());
     }
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
@@ -859,6 +923,17 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
+        if (tolerant_record) {
+            DumpWaypoints(true);
+            DumpRingBuffer(true);
+            log_warning(
+                tt::LogMetal,
+                "Watcher assert record on {} has unknown failure code {}; continuing to poll (qsr.s1 simulator, "
+                "partial record)",
+                core_str_,
+                assert_status.tripped());
+            return;
+        }
         TT_THROW(
             "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
             virtual_coord_.str(),
@@ -871,6 +946,13 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+    if (qsr_s1 && assert_status.claim() != 0xDEADBEEF) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {} noted; continuing to poll (qsr.s1 simulator, partial record)",
+            core_str_);
+        return;
+    }
     reader_.watcher_server.set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }

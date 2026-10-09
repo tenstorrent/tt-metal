@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack_ab import unpack_ab_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 from helpers.llk_params import BroadcastType
 
 
@@ -73,23 +73,25 @@ class UnpackerAB(Unpacker):
         block: BlockData,
     ) -> str:
         bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0
-        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP1)
-        id_a = bfd_current(BfdResource.UNP0)
-        id_b = bfd_current(BfdResource.UNP1)
+            BfdResource.UNP0, result_name="bfd_a"
+        ) + compute_unit.src_b.bfd_alloc_and_program(
+            BfdResource.UNP1, result_name="bfd_b"
+        )
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             return (
-                bfd_program
+                "{\n"
+                + bfd_program
                 + f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
-                f"({id_a}, {id_b}, 1);\n"
+                "(bfd_a, bfd_b, 1);\n}\n"
             )
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return (
-            bfd_program
-            + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, {tensor_shape}, 1);\n"
+            "{\n"
+            + bfd_program
+            + f"_llk_unpack_binary_operands_init_(bfd_a, bfd_b, {tensor_shape}, 1);\n}}\n"
         )
 
     def unpack(
