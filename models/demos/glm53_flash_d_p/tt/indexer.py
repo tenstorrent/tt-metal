@@ -157,18 +157,29 @@ class TtIndexer:
         ttnn.deallocate(a)
         return b
 
-    def __call__(self, x: ttnn.Tensor, q_resid: ttnn.Tensor, start: int, q_local: bool = False) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, start: int, q_local: bool = False, x_local: bool = False
+    ) -> ttnn.Tensor:
         """x (attn_norm) [1, 1, S, H], q_resid [1, 1, S, 1536], both replicated bf16 TILE; start a multiple of 4.
         q_local: q_resid is already this chip's [1, 1, S/4, 1536] rows (the split residual layout).
         Returns this chip's [1, 1, S/4, 2176] uint32 ROW_MAJOR token ids (0xFFFFFFFF = none). Updates the cache."""
-        s = x.shape[-2]
+        # x_local: x is this chip's [1, 1, S/n, H] rows (split layout): keys pooled on the chip's own rows (S/n is a
+        # whole number of pools), then all-gathered into the replicated cache - no full-row x, no 8x key projections
+        s = x.shape[-2] * (self.ndev if x_local else 1)
         assert start % KP == 0 and start % s == 0, f"chunk start {start} must be a multiple of S={s}"
         c = self.consts[s]
         sq, p0 = s // self.ndev, start // KP
         kv = p0 + s // KP
         assert kv + ttnn.TILE_SIZE <= self.cache_rows, f"chunk end {start + s} past max_seq"
 
-        pooled = self._pooled_keys(x, s)
+        if x_local:
+            from models.demos.glm53_flash_d_p.tt.common import gather_rows
+
+            own = self._pooled_keys(x, x.shape[-2])
+            pooled = gather_rows(own)
+            ttnn.deallocate(own)
+        else:
+            pooled = self._pooled_keys(x, s)
         ttnn.fill_cache(self.cache, pooled, batch_idx=0, update_idx=p0)
         ttnn.deallocate(pooled)
 
@@ -187,7 +198,7 @@ class TtIndexer:
             q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
         )
         ttnn.deallocate(q)
-        xl = self._local_rows(x)
+        xl = x if x_local else self._local_rows(x)
         wdt = ttnn.float32 if self.score_mode == "heads" else ttnn.bfloat16
         wts = ttnn.linear(
             xl,
@@ -197,7 +208,8 @@ class TtIndexer:
             compute_kernel_config=mm_config(self.mm),
             memory_config=MC,
         )
-        ttnn.deallocate(xl)
+        if xl is not x:
+            ttnn.deallocate(xl)
         score = self._scores_heads(qh, wts, kv) if self.score_mode == "heads" else self._scores_op(qh, wts, kv)
         ttnn.deallocate(qh)
         ttnn.deallocate(wts)
