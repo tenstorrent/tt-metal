@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ttnn.tools import trace_allocation_tracker
 import torch
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
@@ -78,6 +77,7 @@ class TtTransformer(LightweightModule):
         self.is_prefill_setup = False
         self.is_decode_setup = False
         self.prefetcher_setup = None
+        self._global_cb_addresses = None
         # Device-side prefill inputs, reused across requests. Keyed by the host inputs' shape /
         # dtype / layout signature. Callers must keep page-table widths fixed at the
         # configured block-pool size as well as padding prompts to prefill buckets.
@@ -208,6 +208,8 @@ class TtTransformer(LightweightModule):
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
+        if self.prefetcher_setup is not None:
+            self._global_cb_addresses = self.prefetcher_setup.release_global_cb()
         # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
         # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
         # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
@@ -304,6 +306,7 @@ class TtTransformer(LightweightModule):
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
             is_qwen=self.args.is_qwen,
+            global_cb_addresses=self._global_cb_addresses,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
@@ -961,19 +964,7 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 if self.use_prefetcher:
                     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                    # The global CB is rebuilt on every prefill->decode switch, which on-device
-                    # prefill sampling makes once per request. It cannot be cached: it is
-                    # top-anchored in L1 and deliberately not held across prefill (keeping it
-                    # alive there fails with "static dataflow buffers clash with L1 buffers"),
-                    # and it cannot be reordered before the traces because the switch is what
-                    # creates it. Acknowledge it: the decode trace binds this CB at capture and
-                    # replays correctly across every later rebuild, so the rebuild lands where
-                    # the trace expects. NOTE this is an acknowledgement - it tells the checker
-                    # the program is prepared for this buffer, it does not stop a replay writing
-                    # it. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-                    # Re-create global CB for decode (if it was not already created)
-                    with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
-                        self.prefetcher_setup.create_global_cb()
+                    self.prefetcher_setup.create_global_cb()
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
@@ -1014,9 +1005,7 @@ class TtTransformer(LightweightModule):
         batch_size=1,
     ):
         if mode == "decode" and self.use_prefetcher:
-            # Same rebuild-per-switch as in switch_mode; see the note there.
-            with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
-                self.prefetcher_setup.create_global_cb()
+            self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,
