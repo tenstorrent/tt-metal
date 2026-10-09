@@ -210,6 +210,26 @@ extern "C" __attribute__((noinline, used)) void reference_issue_mmio_semaphore_s
     ckernel::semaphore_post(hal::to_underlying(selector));
 }
 
+extern "C" __attribute__((noinline, used)) std::uint8_t read_mmio_semaphore()
+{
+    return hs::semaphore::read<hs::Semaphore::S7>();
+}
+
+extern "C" __attribute__((noinline, used)) std::uint8_t reference_read_mmio_semaphore()
+{
+    return ckernel::semaphore_read(7);
+}
+
+extern "C" __attribute__((noinline, used)) std::uint8_t read_runtime_mmio_semaphore(hs::Semaphore selector)
+{
+    return hs::semaphore::read(selector);
+}
+
+extern "C" __attribute__((noinline, used)) std::uint8_t reference_read_runtime_mmio_semaphore(hs::Semaphore selector)
+{
+    return ckernel::semaphore_read(hal::to_underlying(selector));
+}
+
 extern "C" __attribute__((noinline, used)) void issue_misc_descriptors()
 {
     hm::run<hm::FlushTdma {hm::FlushScope::Packer}>();
