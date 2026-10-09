@@ -123,7 +123,11 @@ def load_model(
     # before any rank might proceed to create that dir to save.
     ttnn.distributed_context_barrier()
 
-    if create_cache:
+    if create_cache and _read_only_enabled():
+        # A deployment on a near-full shared filesystem cannot afford an unplanned cache write: one
+        # missed transformer key is tens of GB. The weights are already loaded; only the save is skipped.
+        logger.warning(f"TT_DIT_CACHE_READ_ONLY is set; not writing the missing cache at '{cache_dir}'.")
+    elif create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
         # Opt-in (TT_DIT_CACHE_VERIFY=1): only a cache that reads back exactly is marked complete.
@@ -182,6 +186,10 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
 
 def _verify_env_enabled() -> bool:
     return os.environ.get("TT_DIT_CACHE_VERIFY", "0") in ("1", "true", "True")
+
+
+def _read_only_enabled() -> bool:
+    return os.environ.get("TT_DIT_CACHE_READ_ONLY", "0") in ("1", "true", "True")
 
 
 def model_cache_dir(
