@@ -50,7 +50,16 @@ void kernel_main() {
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = n;
     cb_push_back(cb_meta, 1);
 
-    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    // rows 1-31 of the activation tiles are zeroed ONCE for both CB slots (each expert overwrites only row 0), so
+    // the output tile's padding rows stay zero
+    if (n > 0) {
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        const uint32_t x_base = get_write_ptr(cb_x);
+        for (uint32_t off = 0; off < 2 * Kt * x_page; off += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros, x_base + off, MEM_ZEROS_SIZE);
+        }
+        noc_async_read_barrier();
+    }
     for (uint32_t u = 0; u < n; ++u) {
         cb_reserve_back(cb_w, Kt);
         uint32_t wdst = get_write_ptr(cb_w);
@@ -61,10 +70,6 @@ void kernel_main() {
         }
         cb_reserve_back(cb_x, Kt);
         const uint32_t x_l1 = get_write_ptr(cb_x);
-        for (uint32_t off = 0; off < Kt * x_page; off += MEM_ZEROS_SIZE) {
-            noc_async_read(zeros, x_l1 + off, MEM_ZEROS_SIZE);
-        }
-        noc_async_read_barrier();
         for (uint32_t kt = 0; kt < Kt; ++kt) {
             const uint64_t src = x.get_noc_addr(experts[u] * Kt + kt);
             noc_async_read(src, x_l1 + kt * x_page, 32);

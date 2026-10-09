@@ -24,7 +24,7 @@ void kernel_main() {
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const uint32_t nt = core_index / slot_groups;
-    const uint32_t first_slot = (core_index % slot_groups) * slots;
+    const uint32_t group = core_index % slot_groups;  // active expert j goes to group j % slot_groups
 
     const auto out = TensorAccessor(out_args, out_addr, out_page);
     const auto sp = TensorAccessor(sp_args, sp_addr, sp_page);
@@ -39,7 +39,7 @@ void kernel_main() {
     uint32_t seen = 0;
     for (uint32_t e = 0; e < num_experts && n < slots; ++e) {
         if (spv[e] != 0) {
-            if (seen >= first_slot) {
+            if (seen % slot_groups == group) {
                 experts[n++] = e;
             }
             ++seen;

@@ -34,7 +34,7 @@ void kernel_main() {
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const uint32_t nt = core_index / slot_groups;
-    const uint32_t first_slot = (core_index % slot_groups) * slots;
+    const uint32_t group = core_index % slot_groups;  // active expert j goes to group j % slot_groups
 
     const auto in0 = TensorAccessor(in0_args, in0_addr, in0_page);
     const auto w = TensorAccessor(w_args, w_addr, w_page);
@@ -53,7 +53,7 @@ void kernel_main() {
     for (uint32_t e = 0; e < num_experts && n < slots; ++e) {
         const uint32_t v = spv[e];
         if (v != 0) {
-            if (seen >= first_slot) {
+            if (seen % slot_groups == group) {
                 meta[1 + n] = v << 16;  // bf16 -> fp32 bits
                 experts[n++] = e;
             }
@@ -66,14 +66,11 @@ void kernel_main() {
         return;
     }
 
-    // one token: only row 0 of each activation tile is real -- zero the CB and fetch row 0 (face 0 and face 1)
-    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    // one token: only row 0 of each activation tile is real -- fetch just row 0 (face 0 and face 1). Rows 1-31
+    // keep whatever the CB held: matmul rows are independent, so they only reach output rows 1-31, which the
+    // down kernel never reads.
     cb_reserve_back(cb_in0, Kt);
     const uint32_t x_l1 = get_write_ptr(cb_in0);
-    for (uint32_t off = 0; off < Kt * in0_page; off += MEM_ZEROS_SIZE) {
-        noc_async_read(zeros, x_l1 + off, MEM_ZEROS_SIZE);
-    }
-    noc_async_read_barrier();
     for (uint32_t kt = 0; kt < Kt; ++kt) {
         const uint64_t src = in0.get_noc_addr(kt);
         noc_async_read(src, x_l1 + kt * in0_page, 32);
