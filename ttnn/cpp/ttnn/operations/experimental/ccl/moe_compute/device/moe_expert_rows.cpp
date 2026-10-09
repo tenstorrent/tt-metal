@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/types/arch.hpp>
@@ -1145,6 +1146,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     const uint32_t layer_w2 = args.layer_id * s.local_experts * layout.w2_tiles;
 
     std::vector<CoreCoord> all_cores;
+    all_cores.reserve(plan.cores.size());
     for (const auto& c : plan.cores) {
         all_cores.push_back(c.core);
     }
@@ -1210,8 +1212,9 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     const double row_tile_cycles = jc.busiest * tile_cycles + jc.reloads * kReloadTileCycles;
     const double single_cycles = jc.busiest * tile_cycles + jc.single_reloads * kReloadTileCycles;
     const double job_most = std::max({stream_cycles, M * row_tile_cycles, single_cycles});
+    const uint32_t ctl_entries = plan.ctl_bytes / 4;
     double deal_unit = 1.0;
-    while (job_most * (plan.ctl_bytes / 4) / deal_unit >= 4.0e9) {
+    while (job_most * ctl_entries / deal_unit >= 4.0e9) {
         deal_unit *= 2.0;
     }
     auto deal_units = [&](double cycles) { return static_cast<uint32_t>(std::ceil(cycles / deal_unit)); };
