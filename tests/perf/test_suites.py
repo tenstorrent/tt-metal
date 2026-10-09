@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Entry point for every registered perf suite. Select one by node id, e.g. ``test_perf[pgm_dispatch]``."""
+"""The pytest entry point, with one test per suite in suites.yaml.
+
+CI runs a single suite by node id, e.g. ``tests/perf/test_suites.py::test_perf[pgm_dispatch]``.
+"""
 
 import pytest
 

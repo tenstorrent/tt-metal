@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Classifies every case against its golden value using the suite's policy."""
+"""Compares measured values with the golden and gives every case a status.
+
+PASS, REGRESSION when worse than tolerance, STALE when better than tolerance so the golden needs an update, and
+NEW, MISSING or ERROR when the set of cases changed. A case outside tolerance keeps that status only if its
+re-run agrees. Tolerances come from the suite's Policy, with optional per-case overrides.
+"""
 
 from __future__ import annotations
 

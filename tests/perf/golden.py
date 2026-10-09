@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden files: accepted values per environment, plus the measurement identity they were taken with."""
+"""Loads and saves golden files, the checked-in accepted value for every case.
+
+Each suite has one JSON golden holding a value per case for each environment (the CI SKU), the measurement
+settings those values were taken with, and the provenance and context of the last update. Files are written
+with one case per line so updates produce small diffs.
+"""
 
 from __future__ import annotations
 

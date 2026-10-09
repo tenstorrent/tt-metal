@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""pytest plugin for runtime perf suites. Load it with ``-p tests.perf.plugin`` (CI also passes --noconftest)."""
+"""pytest plugin with the perf command line options and the `perf` fixture.
+
+Load it with ``-p tests.perf.plugin``; CI also passes --noconftest so the repository conftest is not imported.
+The fixture runs one suite through session and fails the test when the comparison fails.
+"""
 
 from __future__ import annotations
 

@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reads benchmark output that follows the perf contract (tests/perf/perf_contract.hpp).
+"""Parses benchmark output into one value per case and metric.
 
-The output is Google Benchmark JSON. Gated metrics are declared in the context block as
-``perf.metric.<name> = "unit=..;better=..;aggregate=.."``. Each case reports one value per repetition, either as
-iteration rows or, for binaries that only report aggregates, as the aggregate row named by the declared
-aggregation.
+Benchmarks write Google Benchmark JSON that follows perf_contract.hpp: gated metrics are declared in the context
+block as ``perf.metric.<name> = "unit=..;better=..;aggregate=.."``, and each case reports one value per
+repetition, as iteration rows or as the aggregate row named by the declared aggregation. This module validates
+that JSON, merges repetitions and aggregates them. It is the only module that knows the JSON shape; the rest of
+the package works on plain dicts.
 """
 
 from __future__ import annotations
