@@ -228,9 +228,9 @@ def test_msa_native_kv_cache_program_cache(device):
 
 @run_for_blackhole()
 def test_msa_native_kv_cache_no_room(device):
-    # L1 pinned so no slot fits: the cache request resolves to zero slots, which hashes like the cache-off program,
-    # so it hits the warmed streamed program instead of building one or failing at launch. The streamed kernels
-    # need the same L1 as one slot, so there is no headroom at which only they fit.
+    # L1 pinned so the streamed program fits but two slots do not: the cache request resolves to zero slots, which
+    # hashes like the cache-off program, so it hits the warmed streamed program instead of building one. One slot
+    # would still fit here (the streamed kernels need the same L1 as one slot), which is why two is the minimum.
     d, H, S, topk, nblk = _D, 16, 64, 16, 20
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=19)
@@ -238,7 +238,7 @@ def test_msa_native_kv_cache_no_room(device):
     off = run_op_msa_native(q, k, v, indices, device)
     assert device.num_program_cache_entries() == 1
     info = ttnn._ttnn.reports.get_device_info(device)
-    headroom = 100 * 1024  # per bank: the ~68 KiB base CBs fit, a 64 KiB bf16 block slot does not
+    headroom = 160 * 1024  # per bank: the ~68 KiB base CBs plus one 64 KiB bf16 block fit, a second block does not
     tiles_per_bank = (info.l1_bank_size - headroom) // 2048
     pinned = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
