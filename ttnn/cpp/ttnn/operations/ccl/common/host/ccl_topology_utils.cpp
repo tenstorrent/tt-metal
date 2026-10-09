@@ -298,35 +298,6 @@ std::optional<TensorTopology> scatter_output_topology(
     return result;
 }
 
-// A whole-mesh reduce_scatter's ring rank is the index into the tensor's device-storage coordinates
-// (get_linearized_index_from_physical_coord without a cluster_axis), not the label's coordinate order the pure
-// overload has to assume: spell `label` over the storage coordinates so piece i sits on ring rank i whatever
-// coordinates the input label carried. Only for a tensor stored on every device of the mesh: on a multi-host mesh the
-// storage holds this host's shard while the label is global, and a single-host sub-mesh tensor's label already
-// carries its own device list, so both keep the label's coordinates. With a cluster_axis the label is returned as is.
-// mesh_partition and all_to_all do not rank by storage order (row * num_cols + col over the mesh view, and
-// MeshDeviceView::get_ring_devices), so their Tensor overloads do not come through here.
-std::optional<TensorTopology> over_reduce_scatter_ring_order(
-    std::optional<TensorTopology> label, const Tensor& input, std::optional<uint32_t> cluster_axis) {
-    if (!label.has_value() || cluster_axis.has_value() || !input.device_storage().is_uniform_storage()) {
-        return label;
-    }
-    const auto storage_coords = input.device_storage().get_coords();
-    if (storage_coords.size() != label->mesh_coords().size()) {
-        return fail(
-            fmt::format(
-                "whole-mesh reduce_scatter label {} has {} coordinates for a tensor stored on {} devices",
-                describe(*label),
-                label->mesh_coords().size(),
-                storage_coords.size()),
-            Family::Scatter);
-    }
-    return TensorTopology(
-        label->distribution_shape(),
-        label->placements(),
-        std::vector<MeshCoordinate>(storage_coords.begin(), storage_coords.end()));
-}
-
 }  // namespace
 
 CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
@@ -504,13 +475,48 @@ std::optional<TensorTopology> reduce_scatter_output_topology(
         in, cluster_axis, mesh_shape, tensor_rank, scatter_dim, ScatterKind::Reduction, "reduce_scatter");
 }
 
+// A whole-mesh ring whose rank is the index into a tensor's device-storage coordinates
+// (get_linearized_index_from_physical_coord without a cluster_axis: reduce_scatter, the fused matmul + reduce_scatter
+// ops and all_to_all_async_generic) puts piece i on storage coordinate i, not on the i-th coordinate of the label the
+// pure overloads have to assume is the ring order: spell `label` over the storage coordinates so piece i sits on ring
+// rank i whatever coordinates the input label carried. Only for a tensor stored on every device of the mesh: on a
+// multi-host mesh the storage holds this host's shard while the label is global, and a single-host sub-mesh tensor's
+// label already carries its own device list, so both keep the label's coordinates. With a cluster_axis the label is
+// returned as is. mesh_partition and all_to_all_async do not rank by storage order (row * num_cols + col over the mesh
+// view, and MeshDeviceView::get_ring_devices), so their labels do not come through here.
+std::optional<TensorTopology> over_storage_ring_order(
+    std::optional<TensorTopology> label,
+    const Tensor& ring_tensor,
+    std::optional<uint32_t> cluster_axis,
+    const char* op) {
+    if (!label.has_value() || cluster_axis.has_value() || !ring_tensor.device_storage().is_uniform_storage()) {
+        return label;
+    }
+    const auto storage_coords = ring_tensor.device_storage().get_coords();
+    if (storage_coords.size() != label->mesh_coords().size()) {
+        return fail(
+            fmt::format(
+                "whole-mesh {} label {} has {} coordinates for a tensor stored on {} devices",
+                op,
+                describe(*label),
+                label->mesh_coords().size(),
+                storage_coords.size()),
+            Family::Scatter);
+    }
+    return TensorTopology(
+        label->distribution_shape(),
+        label->placements(),
+        std::vector<MeshCoordinate>(storage_coords.begin(), storage_coords.end()));
+}
+
 std::optional<TensorTopology> reduce_scatter_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t scatter_dim) {
-    return over_reduce_scatter_ring_order(
+    return over_storage_ring_order(
         reduce_scatter_output_topology(
             input.tensor_topology(), cluster_axis, mesh_shape_of(input, "reduce_scatter"), rank_of(input), scatter_dim),
         input,
-        cluster_axis);
+        cluster_axis,
+        "reduce_scatter");
 }
 
 std::optional<TensorTopology> mesh_partition_output_topology(
