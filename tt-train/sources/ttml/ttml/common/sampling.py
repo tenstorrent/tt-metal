@@ -5,7 +5,7 @@
 """Host-side helpers for ``ttml.ops.sample.sample_op``.
 
 This lives in the ttml package (rather than in an example) so that every caller of the
-sampler -- not just the GRPO completers -- can build a validated positions tensor.
+sampler -- not just the GRPO rollout samplers -- can build a validated positions tensor.
 """
 
 from __future__ import annotations

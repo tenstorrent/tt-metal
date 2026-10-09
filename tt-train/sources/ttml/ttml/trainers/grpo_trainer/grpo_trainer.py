@@ -41,66 +41,6 @@ except ImportError:  # pragma: no cover - wandb is optional
     _wandb = None
 
 
-class GRPOCompleter(ABC):
-    """Abstract base for model-specific completion engines used in GRPO training.
-
-    Subclass this for each model architecture (Llama, Qwen, etc.).
-    """
-
-    @abstractmethod
-    def generate(self, prompts: List[List[int]]) -> List[List[int]]:
-        """Generate completions for a batch of tokenised prompts.
-
-        For N prompts returns N * completions_per_prompt completions.
-        """
-
-    @abstractmethod
-    def generate_str(self, prompt_strs: List[str]) -> List[str]:
-        """Generate completions from string prompts, returning decoded strings.
-        For N strs returns N * completions_per_prompt strs.
-        """
-
-    @abstractmethod
-    def compute_nlog_probs(self, prompts: List[List[int]], completions: List[List[int]]) -> tuple:
-        """Compute per-token negative log probabilities for prompt+completion pairs.
-
-        Each prompt[i] and completion[i] are concatenated, and the standard
-        next-token-prediction shift is applied (input = seq[:-1],
-        target = seq[1:]).  The model runs a forward pass and returns
-        cross-entropy at every position.
-
-        Dimension glossary:
-            B: Global batch size (number of prompt+completion pairs).
-            B_local: Per-device batch size (``B // total_devices``).
-                On a single device B_local == B.
-            T: ``max(len(prompt[i]) + len(completion[i])) - 1`` across the
-                batch — the sequence length after the next-token shift.
-            T_padded: ``T`` rounded up to the tile boundary (multiple of 32).
-
-        Args:
-            prompts: B lists of token IDs (the original prompts).
-            completions: B lists of token IDs (the generated completions).
-
-        Returns:
-            nlog_probs: Tensor [B_local, T_padded] — negative log-probability
-                of each target token.  Prompt and padding positions contain
-                meaningless values; use ``mask`` to ignore them.
-            mask: Tensor [B_local, T_padded] — binary mask where 1.0 marks
-                completion-token positions and 0.0 marks prompt tokens,
-                left-padding, and tile-padding.
-        """
-
-    @property
-    @abstractmethod
-    def tokenizer(self) -> Any:
-        """The tokenizer used by this completion engine."""
-
-    @property
-    @abstractmethod
-    def model(self) -> Any:
-        """The underlying tt model used for forward passes and optimization."""
-
-
 @dataclass
 class RolloutBatch:
     """Describes multiple rollout samples (not a specific count).

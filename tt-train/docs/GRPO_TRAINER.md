@@ -271,12 +271,6 @@ a batch into as many calls as it needs and pads the per-token log-probs to
 at version 0. Temperature, `top_k`, `top_p` and `seed` are baked into the trace
 at construction.
 
-### GRPOCompleter (not used by the trainer)
-
-`GRPOCompleter` and its subclasses (`LlamaGRPOCompleter`, `Qwen3GRPOCompleter`)
-are no longer accepted by `GRPOTrainer`. They remain for standalone generation
-(e.g. `boolq_accuracy_example.py`).
-
 ---
 
 ## GRPOConfig

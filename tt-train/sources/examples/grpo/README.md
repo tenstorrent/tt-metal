@@ -64,7 +64,8 @@ Notes:
 
 [`boolq_accuracy_example.py`](boolq_accuracy_example.py) — evaluates
 a model on the BoolQ validation set with greedy decoding
-(`temperature=0`) and writes per-question results to CSV. Runs on 1
+(`temperature=0`) through a `TTMLRolloutSampler` on the model built by
+`setup_ttml_model`, and writes per-question results to CSV. Runs on 1
 device (p150) with `PROMPTS_TO_VALIDATE=20` by default; see
 [`boolq_accuracy_example.yaml`](boolq_accuracy_example.yaml) for the
 device / transformer config.
@@ -74,7 +75,8 @@ python3 boolq_accuracy_example.py
 ```
 
 To evaluate a fine-tuned checkpoint, change `MODEL_ID` at the top of
-the script to the directory containing `model.safetensors`.
+the script to a `GRPOTrainer` checkpoint directory (the one containing
+`model.safetensors`).
 
 A companion plotting helper
 ([`boolq_plot_example.py`](boolq_plot_example.py)) turns the
