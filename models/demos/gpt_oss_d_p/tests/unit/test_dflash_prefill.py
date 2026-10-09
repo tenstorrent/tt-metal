@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -18,7 +19,7 @@ from models.demos.gpt_oss_d_p.tt.dflash import (
     reference_linear_reduced_hidden,
     slice_dflash_fc_weight,
 )
-from models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss import _resolve_dflash_checkpoint_path
+from models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss import GptOssPrefillAdapter, _resolve_dflash_checkpoint_path
 
 TARGETS = (1, 3, 5, 7, 9)
 HIDDEN = 4
@@ -186,14 +187,15 @@ def test_handoff_real_range_excludes_padded_tail(expect_error):
         )
 
 
-def test_adapter_resolves_drafter_path_only_when_opted_in(monkeypatch, tmp_path, expect_error):
-    monkeypatch.setenv("TT_HF_DRAFT_MODEL", str(tmp_path / "draft"))
-    monkeypatch.delenv("PREFILL_DFLASH", raising=False)
-    assert _resolve_dflash_checkpoint_path() is None
-
+def test_adapter_uses_runner_resolved_drafter(monkeypatch, tmp_path, expect_error):
+    draft = str(tmp_path / "draft")
     monkeypatch.setenv("PREFILL_DFLASH", "1")
-    assert _resolve_dflash_checkpoint_path() == tmp_path / "draft"
+    monkeypatch.setenv("TT_HF_DRAFT_MODEL", draft)
+    assert GptOssPrefillAdapter.supports_dflash is False
+    assert _resolve_dflash_checkpoint_path(SimpleNamespace(dflash_enabled=False, dflash_checkpoint_path=draft)) is None
 
-    monkeypatch.delenv("TT_HF_DRAFT_MODEL")
-    with expect_error(ValueError, "TT_HF_DRAFT_MODEL"):
-        _resolve_dflash_checkpoint_path()
+    enabled = SimpleNamespace(dflash_enabled=True, dflash_checkpoint_path=draft)
+    assert _resolve_dflash_checkpoint_path(enabled) == tmp_path / "draft"
+
+    with expect_error(ValueError, "dflash_checkpoint_path"):
+        _resolve_dflash_checkpoint_path(SimpleNamespace(dflash_enabled=True, dflash_checkpoint_path=""))

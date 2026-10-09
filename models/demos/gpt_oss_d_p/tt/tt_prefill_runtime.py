@@ -320,6 +320,8 @@ class TtPrefillRuntime:
                 f"{'2 cache-backed ring chunks' if ring else 'one all-gather fallback chunk'} of {chunk} tokens"
             )
             # prefill_chunk consumes (deallocates) its input tensor, so build a fresh input per call.
+            # Only the final pipeline rank can publish a handoff; earlier ranks return raw hidden states.
+            warm_dflash = self.dflash_accumulator is not None and self.config.is_last_rank
             warm_result = self.prefill_chunk(
                 self.make_chunk_input([0] * chunk, chunk),
                 kv_caches,
@@ -327,9 +329,9 @@ class TtPrefillRuntime:
                 actual_start=0,
                 actual_end=chunk,
                 chunk_size=chunk,
-                dflash_handoff=self.dflash_accumulator is not None,
+                dflash_handoff=warm_dflash,
             )
-            if warm_result is not None:
+            if warm_dflash:
                 # Compile warmup has no handoff consumer.
                 ttnn.deallocate(warm_result.reduced_hidden)
             if ring:
@@ -376,6 +378,10 @@ class TtPrefillRuntime:
 
         Every SP chunk writes K/V. A chunked request, including actual_start == 0, then uses the
         cache-backed RingJointSDPA path; an equal-sized one-shot request uses the all-gather fallback.
+
+        ``dflash_handoff`` returns a ``DFlashPrefillResult`` whose device ``reduced_hidden`` the caller
+        owns. ``dflash_sink`` instead receives that result and returns None; the sink then owns
+        ``reduced_hidden`` and must deallocate it, even if it raises.
         """
         if d2h_service is not None:
             raise NotImplementedError(
@@ -460,46 +466,50 @@ class TtPrefillRuntime:
 
             logits_tt, reduced_hidden = out
             assert owner_row is not None and final_in_tile is not None
-            shards = ttnn.get_device_tensors(logits_tt)
-            mesh_cols = self.config.mesh_shape[1]
+            try:
+                shards = ttnn.get_device_tensors(logits_tt)
+                mesh_cols = self.config.mesh_shape[1]
 
-            def shard_index(tp_coordinate: int) -> int:
-                coordinates = [0, 0]
-                coordinates[self.config.sp_axis] = owner_row
-                coordinates[self.config.tp_axis] = tp_coordinate
-                return coordinates[0] * mesh_cols + coordinates[1]
+                def shard_index(tp_coordinate: int) -> int:
+                    coordinates = [0, 0]
+                    coordinates[self.config.sp_axis] = owner_row
+                    coordinates[self.config.tp_axis] = tp_coordinate
+                    return coordinates[0] * mesh_cols + coordinates[1]
 
-            # Queue every TP shard's D2H first, then materialize them. Calling
-            # to_torch directly in the comprehension serializes eight blocking
-            # transfers even though the shards live on independent devices.
-            host_shards = [
-                ttnn.from_device(shards[shard_index(tp_coordinate)], blocking=False)
-                for tp_coordinate in range(self.config.tp_factor)
-            ]
-            logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
-            logits = logits[..., final_in_tile, : self.model.vocab_size].reshape(-1).float()
-            y0 = int(torch.argmax(logits).item())
-            ttnn.deallocate(logits_tt)
-            timings = {
-                f"fc_layer_{layer_id}_enqueue": duration
-                for layer_id, duration in self.dflash_accumulator.fc_enqueue_ms.items()
-            }
-            timings["head_and_feature_enqueue"] = enqueue_ms
-            result = DFlashPrefillResult(
-                slot_id=slot_id,
-                actual_start=actual_start,
-                actual_end=actual_end,
-                chunk_size=chunk_size,
-                reduced_hidden=reduced_hidden,
-                layout=DFlashFeatureLayout(
-                    mesh_shape=self.config.mesh_shape,
-                    sp_axis=self.config.sp_axis,
-                    tp_axis=self.config.tp_axis,
-                ),
-                logits=logits,
-                y0=y0,
-                timings_ms=timings,
-            )
+                # Queue every TP shard's D2H first, then materialize them. Calling
+                # to_torch directly in the comprehension serializes eight blocking
+                # transfers even though the shards live on independent devices.
+                host_shards = [
+                    ttnn.from_device(shards[shard_index(tp_coordinate)], blocking=False)
+                    for tp_coordinate in range(self.config.tp_factor)
+                ]
+                logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
+                logits = logits[..., final_in_tile, : self.model.vocab_size].reshape(-1).float()
+                y0 = int(torch.argmax(logits).item())
+                ttnn.deallocate(logits_tt)
+                timings = {
+                    f"fc_layer_{layer_id}_enqueue": duration
+                    for layer_id, duration in self.dflash_accumulator.fc_enqueue_ms.items()
+                }
+                timings["head_and_feature_enqueue"] = enqueue_ms
+                result = DFlashPrefillResult(
+                    slot_id=slot_id,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    chunk_size=chunk_size,
+                    reduced_hidden=reduced_hidden,
+                    layout=DFlashFeatureLayout(
+                        mesh_shape=self.config.mesh_shape,
+                        sp_axis=self.config.sp_axis,
+                        tp_axis=self.config.tp_axis,
+                    ),
+                    logits=logits,
+                    y0=y0,
+                    timings_ms=timings,
+                )
+            except BaseException:
+                ttnn.deallocate(reduced_hidden)
+                raise
             if dflash_sink is not None:
                 dflash_sink(result)
                 return None

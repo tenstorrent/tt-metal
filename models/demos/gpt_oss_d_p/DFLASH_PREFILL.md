@@ -99,7 +99,8 @@ The pre-P/D ladder now mirrors Kimi's test semantics:
 
 1. `gpt_oss_dflash_prefill` in the tt-metal Blaze prefill matrix runs the real
    36-layer producer on SC1, gates target KV and independent-HF features, emits
-   the versioned handoff, and enforces the 3,000 token/s 1k-prefill floor.
+   the versioned handoff, and reports DFlash-disabled/enabled prefill latency.
+   It sets no `PREFILL_TSU_MIN`, so throughput is reported, not gated.
 2. The outer Blaze `gpt-oss / dflash-prefill` Galaxy leg consumes a staged
    true-prefill trace. It feeds identical fc-only features to HF and TT DFlash,
    reconstructs the block-offset/circular device caches, and requires K and V
@@ -136,7 +137,10 @@ CPU-only cache-addressing and malformed-capture checks live in
 ## Downstream dependencies
 
 This change does not implement generic P/D transport or reload consumption.
-Those stacks must:
+The common prefill runner does not publish the handoff yet either:
+`GptOssPrefillAdapter.supports_dflash` stays `False`, so the runner never
+enables DFlash for GPT-OSS. Producers call `TtPrefillRuntime.prefill_chunk`
+with `dflash_handoff` or `dflash_sink` directly. Those stacks must:
 
 1. migrate target KV with the FC-target-aware migration layout;
 2. transport the typed feature/y0 handoff without treating padded rows as real;
