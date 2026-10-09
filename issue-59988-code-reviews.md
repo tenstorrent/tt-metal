@@ -245,3 +245,12 @@ Other distributed exceptions outside the coordinated region remain preexisting l
 During draft preparation, main gained #59473 (non-32-aligned KDA prompt ends). A plain merge would have retained old convolution-history rows for fresh one/two-token requests. The final integration adds a native `select_request_history` reader to the existing chronological-selection implementation. It directly gathers the selected rows and synthesizes zeros only for missing external-history rows at absolute start zero. Generic explicit-state callers retain their existing selection path.
 
 Astra reviewed the new kernel, validation/factory, cache bindings and both Python routes, finding no confirmed correctness bug. The review checked index mapping, predecessor preservation, scratch separation/barriers, trace-bound metadata, allocation ownership and inactive-rank placeholders. Follow-ups were addressed with direct input-rebinding/invalid-input tests and a documented selection-record provenance precondition. Post-merge execution and profile evidence are recorded in the validation document.
+
+
+## Claude Code / Opus 5.5 — integration follow-up
+
+A fresh read-only invocation confirmed model `claude-opus-5-5`, completed successfully in 30 turns, and found no confirmed defects in the selector, Python routing, or integration with unaligned prompt ends. The reviewer inspected source independently and did not execute tests. Raw stream and report are local artifacts under `/tmp/kda-59988/claude-merge-review*`.
+
+The suggested width hardening is included: positive channel widths must be multiples of 32, keeping each BF16 row aligned to 64 bytes, with a rejection test for width 16. Consolidating identical per-coordinate programs, using NoC zero-fill for the rare missing-prefix rows, and additional targeted multi-device microtests remain optional follow-ups. The adapter matrix already covers predecessor-based short tails against exact generic controls, and the NaN short-request matrix covers fresh one/two-token requests on all three LB mesh layouts.
+
+A device run during development caught an unaligned scalar read in the initial selector. The final kernel reads the scalar at the aligned scratch base, saves the predicate after a barrier, then reads selection metadata at the same base. The corrected direct tests passed; the earlier failed diagnostic remains in the local logs.

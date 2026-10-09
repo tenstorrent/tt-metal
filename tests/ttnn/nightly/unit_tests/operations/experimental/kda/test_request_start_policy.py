@@ -188,11 +188,14 @@ def test_request_history_selection_rebinds_inputs(device, channels):
             ttnn.deallocate(tensor)
 
 
-@pytest.mark.parametrize("invalid", ["layout", "dtype", "shape"])
+@pytest.mark.parametrize("invalid", ["layout", "dtype", "shape", "width"])
 def test_request_history_selection_rejects_invalid_inputs(device, expect_error, invalid):
-    qkv = ttnn.from_torch(torch.zeros(1, 32, 32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    channels = 16 if invalid == "width" else 32
+    qkv = ttnn.from_torch(
+        torch.zeros(1, 32, channels), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     carry = ttnn.from_torch(
-        torch.zeros(1, 2 if invalid == "shape" else 3, 32),
+        torch.zeros(1, 2 if invalid == "shape" else 3, channels),
         device=device,
         dtype=ttnn.float32 if invalid == "dtype" else ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT if invalid == "layout" else ttnn.ROW_MAJOR_LAYOUT,

@@ -56,7 +56,7 @@ void SelectRequestHistoryOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_actual_start(in.projected_qkv, in.actual_start, name);
     const auto& shape = in.projected_qkv.logical_shape();
     TT_FATAL(
-        shape.rank() == 3 && shape[0] == 1 && shape[1] >= 3 && shape[2] % 16 == 0,
+        shape.rank() == 3 && shape[0] == 1 && shape[1] >= 3 && shape[2] > 0 && shape[2] % 32 == 0,
         "select_request_history requires [1, rows>=3, aligned width] QKV");
     TT_FATAL(
         in.layer_history.logical_shape() == Shape({1, kda_chronology::selection::history_rows, shape[2]}) &&
