@@ -2455,7 +2455,7 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            if pli_env.pli_on_device("GEMMA4_DECODE_PLI_DEV"):
+            if pli_env.pli_on_device(default=False):
                 # Host preparation precedes trace capture; upload the opt-in
                 # table here so no weight allocation occurs inside capture.
                 self.init_pli_device_weights()
@@ -2565,7 +2565,7 @@ class Gemma4Model:
             pli_combined = self._decode_pli_combined
 
         pli_stacked = None
-        if pli_env.pli_on_device("GEMMA4_DECODE_PLI_DEV") and self.hidden_size_per_layer_input:
+        if pli_env.pli_on_device(default=False) and self.hidden_size_per_layer_input:
             if x.dtype not in (ttnn.uint32, ttnn.int32):
                 raise ValueError("device PLI decode requires token-id input")
             pli_stacked = self.compute_pli_device(x_embed, input_embeds)

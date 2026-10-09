@@ -1037,30 +1037,44 @@ def _run_spec_decode(
         draft_len=draft_len,
     )
 
-    # Route selection belongs to the decoder: generate() resolves GEMMA4_SPEC_ROUTE
-    # (auto -> fused-packed for a device-PLI target, fused-batch-dim otherwise;
-    # host-loop for sampling or when tracing is off). The fused greedy path is
-    # HOST-DISPATCH bound when untraced (~10 tok/s/u, slower than plain decode);
-    # the single fused Metal trace removes that overhead. Default tracing to the
-    # demo's `enable_trace`; GEMMA4_SPEC_TRACE overrides (=1 on, =0 off). The route
-    # is resolved after the trace setting is final.
-    _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
-    spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
-    route = spec._effective_route(greedy=not temperature or temperature <= 0)
+    # Greedy uses the fully on-device fused iteration (argmax + re-embed on
+    # device, only 2K+1 ids read back per iter). With GEMMA4_SPEC_TRACE=1 the
+    # whole iteration is ONE metal trace replayed per step (K draft steps +
+    # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
+    # (temp>0) falls back to the host-readback generate for batch=1.
+    # GEMMA4_SPEC_FUSED=0 forces the host generate() loop (draft + packed
+    # verify as separate calls) -- the validation vehicle for the packed
+    # verify's bounded-ring support before it is wired into the fused trace.
+    use_fused = (
+        batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
+    )
+    # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
+    # SLOWER than plain decode); the single fused Metal trace removes that
+    # overhead (>3x, exceeding plain decode). Default tracing to the demo's
+    # `enable_trace` so spec-decode is fast out of the box; GEMMA4_SPEC_TRACE
+    # overrides explicitly (=1 force on, =0 force off — e.g. to A/B the cost).
+    if use_fused:
+        _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
+        spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
     logger.info(
         f"Spec-decode generate (draft_len={draft_len}, temp={temperature}, "
-        f"route={route}, trace={spec._use_trace}, "
+        f"path={'fused' if use_fused else 'host'}, trace={spec._use_trace}, "
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
-    generated, accepts = spec.generate(
-        anchor_token=anchor_token,
-        anchor_pos=anchor_pos,
-        max_new_tokens=max_generated_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-    )
+    if use_fused:
+        generated, accepts = spec.generate_fused(
+            anchor_token=anchor_token, anchor_pos=anchor_pos, max_new_tokens=max_generated_tokens
+        )
+    else:
+        generated, accepts = spec.generate(
+            anchor_token=anchor_token,
+            anchor_pos=anchor_pos,
+            max_new_tokens=max_generated_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
 
     text = tokenizer.decode(generated)
     n_tokens = len(generated)
@@ -1072,7 +1086,7 @@ def _run_spec_decode(
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
     logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
-    logger.info(f"Effective route: {spec._last_route}; requested route: {spec._route}")
+    logger.info(f"Effective route: {spec._last_route}")
     logger.info(f"Time to First Token (TTFT): {prefill_elapsed * 1000.0 / batch_size:.1f} ms")
     logger.info(
         f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
@@ -1281,7 +1295,7 @@ def _run_spec_decode_batched(
         logger.info(f"[user {b}] {tokenizer.decode(outs[b]).strip()}")
     logger.info("=== Batched speculative decoding metrics ===")
     logger.info(f"Users (batch): {B}; prompt tokens (max): {max_prompt}; total generated tokens: {total_tokens}")
-    logger.info(f"Effective route: {spec._last_route}; requested route: {spec._route}")
+    logger.info(f"Effective route: {spec._last_route}")
     logger.info(f"Time to First Token (TTFT, mean prefill/user): {prefill_elapsed * 1000.0 / B:.1f} ms")
     logger.info(
         f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} "
