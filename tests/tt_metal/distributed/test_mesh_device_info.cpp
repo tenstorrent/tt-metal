@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 #include <cstdint>
 #include <string>
+#include <stdexcept>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/info.hpp>
@@ -56,8 +57,18 @@ TEST_F(MeshDeviceInfo1x1Test, OutOfBoundsCoordinateThrows) {
     ASSERT_EQ(mesh->shape(), MeshShape(1, 1));
 
     EXPECT_NO_THROW(mesh->get_info<info::l1_alignment>(MeshCoordinate(0, 0)));
-    EXPECT_ANY_THROW(mesh->get_info<info::l1_alignment>(MeshCoordinate(1, 0)));
-    EXPECT_ANY_THROW(mesh->get_info<info::l1_alignment>(MeshCoordinate(0, 1)));
+    EXPECT_THAT(
+        [&] { mesh->get_info<info::l1_alignment>(MeshCoordinate(1, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot query l1_alignment at")));
+    EXPECT_THAT(
+        [&] { mesh->get_info<info::dram_alignment>(MeshCoordinate(0, 1)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot query dram_alignment at")));
+    EXPECT_THAT(
+        [&] { mesh->get_info<info::architecture>(MeshCoordinate(1, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot query architecture at")));
+    EXPECT_THAT(
+        [&] { mesh->get_info<info::architecture_name>(MeshCoordinate(1, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot query architecture_name at")));
 }
 
 }  // namespace

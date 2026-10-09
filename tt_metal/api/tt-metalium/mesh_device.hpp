@@ -15,6 +15,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -370,11 +371,11 @@ public:
     template <class InfoType>
     typename InfoType::return_type get_info() const {
         const std::vector<MeshCoordinate> coords = local_coordinates();
-        TT_FATAL(!coords.empty(), "Cannot query a mesh device that has no local devices");
+        TT_FATAL(!coords.empty(), "Cannot query {}: mesh device has no local devices", InfoType::name);
         typename InfoType::return_type value = get_info<InfoType>(coords.front());
         for (const MeshCoordinate& coord : coords) {
             if (!(get_info<InfoType>(coord) == value)) {
-                throw_non_uniform_info(coord);
+                throw_non_uniform_info(coord, InfoType::name);
             }
         }
         return value;
@@ -404,9 +405,9 @@ private:
     // Coordinates of the devices that are local to this host, in row-major order.
     std::vector<MeshCoordinate> local_coordinates() const;
     // Throws if `coord` is out of bounds of this mesh or refers to a remote device.
-    void check_info_coordinate(const MeshCoordinate& coord) const;
+    void check_info_coordinate(const MeshCoordinate& coord, std::string_view property_name) const;
     // Throws because the device at `coord` reports a different value than the first local device.
-    [[noreturn]] void throw_non_uniform_info(const MeshCoordinate& coord) const;
+    [[noreturn]] void throw_non_uniform_info(const MeshCoordinate& coord, std::string_view property_name) const;
 };
 
 // Properties supported by MeshDevice::get_info (see <tt-metalium/info.hpp> for what each one means). Each is defined
