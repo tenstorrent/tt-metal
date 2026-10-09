@@ -223,6 +223,7 @@ using ProblemKey = std::tuple<
     bool,
     bool,
     bool,
+    bool,
     uint32_t,
     uint32_t,
     bool,
@@ -254,6 +255,7 @@ ProblemKey key_of(const RecipeBlockingProblem& p) {
         p.exp_mux_on_bottom_row,
         p.key_range,
         p.causal,
+        p.paged,
         p.sliding_window,
         p.q_offset,
         p.attention_sink,
@@ -370,38 +372,58 @@ RecipeL1Estimate recipe_l1_bytes(
 
 bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles) {
     // A program's RISC images, runtime args, semaphores and CB configs share one 70656 B kernel config buffer per core.
-    // Measured on one P150b (program bytes; BF16/BFP8 K/V; D64, D96, D128, D256; K128-K1024; Q128-Q544; with and
-    // without a joint segment, attention sink, K tail, attn_mask, causal / sliding-window / paged key range), only
-    // STANDARD's fused kernel comes near it. Each of these adds to its plain dense program (BFP8 Q256/K256: D64
-    // 67936 B, D128 66960 B, D96 69744 B; BF16 K/V ~2.1 KB less): an odd Q chunk of 7+ tiles (a single-row last group)
-    // 0.9-1.9 KB, a K tail 0.9 KB, a joint segment 2.2 KB (both 0.7 KB more with an odd Q chunk), an attention sink
-    // 2.5 KB, a key range with a sink 2.7 KB. Excluded, as measured over or within 20 B of the limit (worst: BFP8 D96
-    // Q224/K256 joint 73504 B; D64 72576 B; D128 Q224/K256 joint 71344 B, which op-chosen joint blocking hit):
-    // - an odd Q chunk of 7+ tiles with a joint segment, a sink or a K tail, or with a head dim of odd tile count
-    //   (one-tile PV subblocks: D96 BFP8 Q224 and Q288, K256 and K512, 69584-70640 B without features);
-    // - packed K/V with a head dim of odd tile count and a joint segment, a sink or a K tail (D96 BFP8 Q256/K256:
-    //   71840, 72272, 70656 B).
-    // The tightest admitted programs: BFP8 D64 Q256/K256 with a sink 70368 B (70384 B with a key range), BF16 D96
-    // Q256/K256 with a sink 70240 B, BFP8 D64 Q224/K256 dense 69728 B. FAST peaks at 68928 B (BFP8 Q224/K512 causal
-    // with a sink and window), BALANCED and ACCURATE at 64.1 KB. Ring and exp ring programs are not covered.
-    if ((p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) || p.policy.selection.recipe != Recipe::B) {
+    // Measured on one P150b (program bytes; BF16, BFP8, BFP4 and mixed K/V; D32-D256; Q32-Q512; K256-K1024; single
+    // features and their pairs and triples: joint segment, attention sink, K tail, attn_mask, causal / sliding-window /
+    // paged key range). A K tail of unaligned rows is the largest (aligned rows ~0.8 KB less). Excluded, as measured
+    // over or within 20 B of the limit (a "feature" is a joint segment, a sink or a K tail; "narrow" a PV head dim of
+    // odd tile count, one-tile PV subblocks; mixed K/V builds within ~0.4 KB of packed and counts as packed):
+    // STANDARD fused kernel (an attn_mask or a one-tile QK subblock runs the unfused kernel, far smaller):
+    // - an odd Q chunk of 7+ tiles with a feature, or narrow (BFP8 Q224/K256 joint: D96 73504 B, D64 72576 B);
+    // - packed K/V, narrow, with a feature or a paged sliding window (BFP8 D96 Q256/K256: sink + K tail 73184 B, sink
+    //   72272 B, joint 71840 B, K tail 70656 B, paged window 70768 B);
+    // - a sink with a K tail outside a key range at Q256+/K256, narrow or with packed D64 (BFP8 D64 Q256 71120 B, Q320
+    //   70736 B, Q448 70656 B, Q384 and Q512 within 0.3 KB; BF16 D96 Q256 70976 B).
+    // FAST, outside a key range (which pads an odd Q chunk to even): an odd Q chunk of 3+ tiles, narrow with a feature
+    // (BFP8 D96 Q224/K256 sink + K tail 73728 B, joint 72320 B, K tail 71200 B), or with packed K/V and a sink plus
+    // a K tail or an attn_mask (BFP8 Q224/K256 sink + K tail: D64 71424 B, D128 70928 B; D128 sink + attn_mask
+    // Q224/K512 70704 B).
+    // BALANCED, Q chunks of 5+ tiles (D96 Q160 and up add ~14 KB): D96 with a feature, an attn_mask or a key range
+    // (BFP8 Q256/K512 causal + window + sink + K tail 78016 B, attn_mask 72048 B, K tail 71504 B; BF16 joint 70720 B),
+    // D64 with a key range and a sink (BFP8 Q224/K384 causal + window + sink + K tail 72048 B, causal + sink 71776 B).
+    // The tightest admitted: STANDARD BFP8 D256 Q256/K256 sink + K tail 70464 B, D128 Q256/K384 70384 B, D64 Q256/K256
+    // causal + window + sink + K tail 70384 B and sink 70368 B; FAST BFP8 D64 Q224/K256 joint + K tail 70400 B (even Q
+    // chunks 69648 B); BALANCED BFP8 D96 Q160/K512 dense 70384 B. ACCURATE peaks at 64.9 KB. Ring and exp ring programs
+    // are not covered.
+    if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;
     }
-    // An attn_mask or a one-tile QK subblock runs the unfused kernel, which pads an odd chunk and is far smaller.
+    const Recipe recipe = p.policy.selection.recipe;
     const bool attn_mask = p.mask_page_bytes > 0 && !p.key_range;
-    if (attn_mask || recipe_subblock_width(k_tiles) < 2) {
-        return true;
-    }
     const bool k_tail = p.k_rows_unaligned || (p.k_rows + p.joint_k_rows) % (k_tiles * kTile) != 0;
     const bool feature = p.op == RecipeOp::Joint || p.attention_sink || k_tail;
-    const bool narrow_pv = (p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles) % 2 != 0;
+    const uint32_t pv_tiles = p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
+    const bool narrow_pv = pv_tiles % 2 != 0;
+    const bool packed =
+        p.policy.selection.kv_storage != KVStorage::BF16 || p.v_storage.value_or(KVStorage::BF16) != KVStorage::BF16;
+    if (recipe == Recipe::E) {
+        const bool odd = q_tiles % 2 != 0 && q_tiles >= 3 && !p.key_range;
+        return !(odd && ((narrow_pv && feature) || (packed && p.attention_sink && (k_tail || attn_mask))));
+    }
+    if (recipe == Recipe::C) {
+        return q_tiles < 5 || !((pv_tiles == 3 && (feature || p.mask_page_bytes > 0)) ||
+                                (pv_tiles == 2 && p.key_range && p.attention_sink));
+    }
+    if (recipe != Recipe::B || attn_mask || recipe_subblock_width(k_tiles) < 2) {
+        return true;
+    }
     if (q_tiles % 2 != 0 && q_tiles >= 7 && (feature || narrow_pv)) {
         return false;
     }
-    // K and V stored differently (one packed) build within ~0.4 KB of packed K/V: counted as packed.
-    const bool packed =
-        p.policy.selection.kv_storage != KVStorage::BF16 || p.v_storage.value_or(KVStorage::BF16) != KVStorage::BF16;
-    return !(narrow_pv && feature && packed);
+    if (p.attention_sink && k_tail && !p.key_range && k_tiles == 8 && q_tiles >= 8 &&
+        (narrow_pv || (packed && pv_tiles == 2))) {
+        return false;
+    }
+    return !(narrow_pv && packed && (feature || (p.paged && p.sliding_window > 0)));
 }
 
 namespace {
@@ -502,11 +524,14 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
     const auto k_range = tile_range(p.fixed_k_tiles, k_floor, k_cap);
     for (auto qi = q_range.rbegin(); qi != q_range.rend(); ++qi) {  // ascending Q
         const uint32_t qt = *qi;
-        bool any_fit = false;
+        bool any_fit = false, size_excluded = false;
         for (auto ki = k_range.rbegin(); ki != k_range.rend(); ++ki) {  // ascending K
             const uint32_t kt = *ki;
-            if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles) ||
-                (dense && !recipe_program_fits(p, qt, kt))) {
+            if (!recipe_geometry_supported(p.op, p.policy, qt, kt, p.d_tiles)) {
+                continue;
+            }
+            if (dense && !recipe_program_fits(p, qt, kt)) {
+                size_excluded = true;
                 continue;
             }
             // Ring / exp ring round STANDARD's odd Q chunk up to the next even one (sdpa.cpp); the even
@@ -662,8 +687,8 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                 }
             }
         }
-        if (dense && !any_fit && p.fixed_q_tiles == 0) {
-            break;  // nothing fits at this Q, so no larger Q fits either
+        if (dense && !any_fit && !size_excluded && p.fixed_q_tiles == 0) {
+            break;  // nothing fits L1 at this Q, so no larger Q fits either (FAST excludes odd Q chunks by size only)
         }
     }
     // Cheapest first; ties prefer larger K, then less Q padding, then larger Q, then a wider grid.
@@ -850,6 +875,7 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         problem.extra_l1_bytes = recipe_key_range_extra_bytes(*key_range);
         problem.key_range = true;
         problem.causal = key_range->causal;
+        problem.paged = key_range->page_table.has_value();
         problem.sliding_window = key_range->sliding_window;
         problem.q_offset = key_range->q_offset;
         if (key_range->q_offset_tensor) {

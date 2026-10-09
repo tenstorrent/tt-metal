@@ -306,9 +306,13 @@ terms; sliding windows also consider 128-row K chunks. When nothing in the searc
 the latest start its K/V length allows (one program serves every start). With more batch/heads than cores, every Q
 chunk reads its head's K/V from DRAM (no forwarding chain), which a fitted term adds (bge_m3 B8 S512: Q256/K512
 0.455 ms, where the roofline alone picked Q128 at 0.488). The chooser never picks a geometry whose program is known
-to overflow the kernel config buffer (`recipe_program_fits`: STANDARD odd Q chunks of 7+ tiles with a joint segment,
-a sink or a K tail, or a head dim of odd tile count; packed K/V with a head dim of odd tile count and one of those
-features; measured program sizes are listed there). Explicit chunk sizes are honored ([routed](#routing) calls choose
+to overflow the kernel config buffer (`recipe_program_fits`, measured over features and their combinations: STANDARD
+odd Q chunks of 7+ tiles with a joint segment, a sink or a K tail, or a head dim of odd tile count; packed K/V with a
+head dim of odd tile count and one of those features or a paged sliding window; a sink with a K tail at Q256+/K256
+for D64 packed or odd head-dim tiles; FAST odd Q chunks with some of those features; BALANCED Q chunks of 5+ tiles at
+D96 with any feature, and at D64 with a key range and a sink; measured program sizes are listed there). An excluded
+geometry always leaves a candidate (one-tile-subblock K chunks for STANDARD, even Q chunks for FAST, Q128 for
+BALANCED). Explicit chunk sizes are honored ([routed](#routing) calls choose
 theirs). Blocking never changes a recipe's arithmetic, only its rounding order. Without a recipe, chunk sizes must be
 explicit.
 
