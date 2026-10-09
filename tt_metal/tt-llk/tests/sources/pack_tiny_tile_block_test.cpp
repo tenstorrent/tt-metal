@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test: Pack tiny tiles from sparse DEST (Tile32x32 slots) to dense L1
-// using _llk_pack_block_contiguous_ with a single _llk_pack_ call.
+// using _llk_pack_block_contiguous_ with a single _llk_pack_ call
+// (tiny_pack_mode 0), _llk_pack_block_closed_ (1) or _llk_pack_ per tile (2).
 //
 // Math uses standard datacopy (Tile32x32 DEST addressing — sparse).
 // Pack uses the new block-contiguous MOP that reads from sparse DEST
@@ -150,7 +151,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // num_tiles is intentionally NOT passed here — the execute function
     // sets mop_cfg[0] = num_tiles at runtime, so mop_config only needs
     // the tile shape (face_r_dim, num_faces).
-    _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
+    if constexpr (tiny_pack_mode == 0)
+    {
+        _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
+    }
 #endif
 
     for (int block = 0; block < num_blocks; block++)
@@ -158,16 +162,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
 
 #ifdef ARCH_BLACKHOLE
-        // Single call packs all tiles from sparse DEST to dense L1.
-        // num_tiles is passed at runtime — no prior mop_cfg patching needed.
-        _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
-#else
-        for (int tile = 0; tile < num_tiles_in_block; ++tile)
+        if constexpr (tiny_pack_mode == 0)
         {
-            int res_idx = block * num_tiles_in_block + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+            // Single call packs all tiles from sparse DEST to dense L1.
+            // num_tiles is passed at runtime — no prior mop_cfg patching needed.
+            _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);
         }
+        else if constexpr (tiny_pack_mode == 1)
+        {
+            const std::uint32_t tile_stride = (L1_ADDRESS(params.buffer_Res[1]) - L1_ADDRESS(params.buffer_Res[0])) << 4;
+            _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, tile_stride, params.num_faces);
+        }
+        else
 #endif
+        {
+            for (int tile = 0; tile < num_tiles_in_block; ++tile)
+            {
+                int res_idx = block * num_tiles_in_block + tile;
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+            }
+        }
 
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
