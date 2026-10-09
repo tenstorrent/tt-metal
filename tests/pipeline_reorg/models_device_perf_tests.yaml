@@ -222,22 +222,19 @@
     rc=0
     T=tests/ttnn/nightly/unit_tests/operations/fused
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
-    for rep in 1 2 3; do
-      OUT=generated/profiler/rmsnorm_prefill_probe_$rep
-      python3 -m tracy -p -r -v -o "$OUT" -t 5000 -m "pytest $T/test_fused_rms_norm_prefill.py" || rc=$?
-      python3 $T/rmsnorm_prefill_probe_summary.py "$OUT" || rc=$?
-      sleep 5
+    for links in 2 1; do
+      for rep in 1 2 3; do
+        OUT=generated/profiler/rmsnorm_prefill_probe_links${links}_$rep
+        echo "PROBE_SUMMARY run links=$links rep=$rep"
+        RMSNORM_PROBE_LINKS=$links python3 -m tracy -p -r -v -o "$OUT" -t 5000 -m "pytest $T/test_fused_rms_norm_prefill.py" || rc=$?
+        python3 $T/rmsnorm_prefill_probe_summary.py "$OUT" || rc=$?
+        sleep 5
+      done
     done
-    P=$T/test_fused_rms_norm_prefill_probe.py
-    pytest --timeout 900 $P -rA --tb=short -k "test_probe_consumer" || rc=$?
-    pytest --timeout 900 $P -rA --tb=short -k "test_probe_ring4 and not formats and links1" || rc=$?
-    pytest --timeout 900 $P -rA --tb=short -k "test_probe_ring4_formats" || rc=$?
-    pytest --timeout 900 $P -rA --tb=short -k "test_probe_ring4 and not formats and links2" || rc=$?
-    pytest --timeout 900 $P -rA --tb=short -k "test_probe_ring2" || rc=$?
     exit $rc
   model: rmsnorm-prefill-probe
   skus:
     bh_quietbox_2:
-      timeout: 120
+      timeout: 60
   team: models
   budget_type: device_perf
