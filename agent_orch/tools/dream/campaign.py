@@ -124,6 +124,23 @@ def validate_spec(spec: dict) -> list[str]:
     return errs
 
 
+ROUND_ROOT_MEANING = {
+    "origin": (
+        "every round starts from the campaign's original code (the campaign root), as in the Dream-RSI paper. "
+        "A branch closed at its depth cap does NOT continue next round: its code is gone from the next tree and "
+        "survives only as history that next-round workers may port by hand"
+    ),
+    "best": (
+        "every round starts from the best attempt found so far, so a branch closed at its depth cap effectively "
+        "continues next round from the round best"
+    ),
+}
+
+
+def round_root_mode(cfg: dict) -> str:
+    return (cfg.get("search") or {}).get("round_root", "origin")
+
+
 def parse_gate(g: str) -> tuple[str, str, float]:
     for op in (">=", "<=", "==", ">", "<"):
         if op in g:

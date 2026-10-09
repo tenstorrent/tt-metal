@@ -92,7 +92,7 @@ button:focus-visible, .cell:focus { outline: 2px solid var(--accent); outline-of
       <div class="legend" id="gridLegend"></div>
       <svg id="grid" role="img" aria-label="Every attempt by round, branch and attempt, colored by score"></svg>
     </div>
-    <p class="note" style="margin-top:8px">Rows are branches, columns are attempts on that branch. Each round starts from the best node so far (outlined). Hover or focus a cell for its idea.</p>
+    <p class="note" style="margin-top:8px" id="gridNote">Rows are branches, columns are attempts on that branch. Hover or focus a cell for its idea.</p>
   </section>
   <section><h2>Best score vs. attempts</h2>
     <div class="box" id="progBox">
@@ -235,6 +235,10 @@ const rootNode = r => (r.root || "").includes("/n/") ? r.root.split("/").pop() :
 const lineageRoots = new Set((D.rounds || []).map(rootNode).filter(Boolean));
 
 /* ---------- grid ---------- */
+$("gridNote").textContent = "Rows are branches, columns are attempts on that branch. " + (D.round_root === "best"
+  ? "Each round starts from the best attempt so far (outlined), so improvements compound."
+  : "Every round starts from the campaign's original code, as in the Dream-RSI paper; earlier rounds reach workers only as history, so a round's best is what its search found again, plus what its workers ported.")
+  + " Hover or focus a cell for its idea.";
 function drawGrid() {
   const svg = $("grid"), box = $("gridBox"); svg.innerHTML = "";
   const lg = $("gridLegend"); lg.innerHTML = "";
@@ -246,7 +250,8 @@ function drawGrid() {
   const stops = []; for (let k = 0; k <= 10; k++) { const v = lo + (hi - lo) * k / 10; stops.push(rgb(ramp(v)) + " " + (k * 10) + "%"); }
   rp.style.background = "linear-gradient(90deg," + stops.join(",") + ")";
   sw.appendChild(document.createTextNode("faster than baseline"));
-  lg.insertAdjacentHTML("beforeend", '<span><i style="background:transparent;outline:2px solid var(--accent);outline-offset:-2px"></i>start of next round</span><span><i style="background:repeating-linear-gradient(45deg,var(--bad) 0 2px,transparent 2px 6px);border:1px solid var(--bad)"></i>invalid</span><span><i style="background:var(--band);border:1px dashed var(--muted)"></i>not run</span><span><i style="background:linear-gradient(225deg,var(--bad) 0 35%,var(--band) 35%)"></i>isolation flag</span>');
+  if (D.round_root === "best") lg.insertAdjacentHTML("beforeend", '<span><i style="background:transparent;outline:2px solid var(--accent);outline-offset:-2px"></i>start of next round</span>');
+  lg.insertAdjacentHTML("beforeend", '<span><i style="background:repeating-linear-gradient(45deg,var(--bad) 0 2px,transparent 2px 6px);border:1px solid var(--bad)"></i>invalid</span><span><i style="background:var(--band);border:1px dashed var(--muted)"></i>not run</span><span><i style="background:linear-gradient(225deg,var(--bad) 0 35%,var(--band) 35%)"></i>isolation flag</span>');
   const maxW = Math.max(...rounds.map(r => Math.max(r.W || 1, ...r.nodes.map(n => n.b), ...(r.lost || []).map(x => +x.split("-")[1].slice(1)))));
   const maxR = Math.max(...rounds.map(r => Math.max(r.R || 1, ...r.nodes.map(n => n.a))));
   const cw = 46, ch = 30, gap = 4, padL = 34, rg = 26, top = 40, perRow = Math.max(1, Math.floor(900 / (maxR * (cw + gap) + rg)));

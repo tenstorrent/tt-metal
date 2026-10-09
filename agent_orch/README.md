@@ -90,7 +90,7 @@ Required: `name`, `editable`, `eval.command`. Everything else has a default
 | `build.command`, `skip_if_only`, `check_file` | `./build_metal.sh --release --enable-ccache`, `*/kernels/*`, `ttnn/ttnn/_ttnn.so` | Rebuild only when a changed file isn't JIT-compiled |
 | `budget.max_attempts`, `max_hours`, `max_usd` | 60, 8, 300 | **Hard limits.** No new attempt starts past one; running workers are cut at the time limit |
 | `search.policy`, `W`, `R`, `max_rounds` | `fresh`, 4, 4, 6 | Starting policy (`dream policies`), parallel workers per step, depth, rounds |
-| `search.round_root` | `origin` | `origin`: every round starts from the campaign root (as in the paper); `best`: from the best attempt so far |
+| `search.round_root` | `origin` | `origin`: every round starts from the campaign root (as in the paper); `best`: from the best attempt so far. Workers, the policy (`config["defaults"]["round_root"]`), dreaming and the report are all told which |
 | `dreaming.enabled`, `revisions`, `cost_per_attempt`, `parallel_bonus` | true, 5, 0.005, 0.01 | Policy improvement between rounds |
 | `models.worker`, `policy_dev`, `summary` | `opus`, `opus`, `sonnet` | |
 | `isolation.enabled`, `on_violation` | `true`, `flag` | Workers see only this campaign (below); `invalidate` also scores audited attempts 0 |

@@ -64,11 +64,14 @@ free-form category words, e.g. `["compute", "cb-sizing"]`).
 ## 2. Read the complete history first
 
 Your tree contains only your own line of descent: `PARENT` and its ancestors back
-to the round root. Each round normally starts again from the campaign's original
-code, so the code of earlier rounds' best attempts is **not** in your worktree,
-only in the history. To build on one of them, read its diff
-(`git diff $R~1 $R` along its lineage) and port what you need; say so in
-`proposal.md`.
+to the round root. Your prompt's `ROUND_ROOT` says what the round root is:
+
+- `origin` (the default): every round starts again from the campaign's original
+  code, so the code of earlier rounds' attempts is **not** in your worktree, only
+  in the history. To build on one of them, read its diff (`git diff $R~1 $R` along
+  its lineage) and port what you need; say so in `proposal.md`.
+- `best`: the round starts from the best attempt so far, so its changes (and its
+  ancestors') are already in your tree.
 
 Read `BRIEF`, then `HISTORY`. Then read **every** node's `proposal.md`,
 `eval/summary.md` and `reflection.md` (and `eval/error.txt` for failures). All

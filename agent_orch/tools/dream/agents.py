@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .campaign import Campaign, ORCH_DIR
+from .campaign import ORCH_DIR, ROUND_ROOT_MEANING, Campaign, round_root_mode
 from .gitops import append_jsonl, now
 
 
@@ -154,6 +154,7 @@ Inputs:
 - HISTORY={c.home / 'history.md'}
 - SPEC={wt / c.campaign_rel / 'dream.yaml'}
 - BRIEF={brief if brief.exists() else '(none)'}
+- ROUND_ROOT={round_root_mode(c.cfg)}: {ROUND_ROOT_MEANING[round_root_mode(c.cfg)]}
 
 Work only inside WORKTREE (your current directory). Run the tools from it:
 agent_orch/bin/dream eval --campaign {c.name} --node {node}
@@ -207,6 +208,8 @@ Inputs:
 - NEXT={nxt}
 - ROUNDS={','.join(map(str, rounds))}
 - M={c.cfg['dreaming']['revisions']}
+- ROUND_ROOT={round_root_mode(c.cfg)}: {ROUND_ROOT_MEANING[round_root_mode(c.cfg)]}. Policies see it as
+  config["defaults"]["round_root"]; don't justify a rule by what the next round will do unless it holds in this mode.
 - REPLAY: {ORCH_DIR}/bin/dream replay --campaign {c.name} --rounds {','.join(map(str, rounds))} --policy <path>/policy.py --out <path>/replay.json --traces <path>/traces.jsonl
 
 Write only under {c.ledger}/policies/. Never edit ACTIVE. Your final message must be only the JSON reply described in POLICY_DEV.md §6."""
@@ -225,7 +228,9 @@ Read {c.home / 'history.md'} (all rounds so far). For details, read nodes with t
 
 Write two files:
 1. {rdir / 'summary.md'}: under 200 words. Best node of this round and of the campaign so far, what worked,
-   what failed and why, what the policy closed, what the next round should build on.
+   what failed and why, what the policy closed, and what the next round should build on. The next round starts from
+   {"the campaign root (original code), so name the wins it should port first" if round_root_mode(c.cfg) == "origin"
+    else "the best attempt so far, so name what to try on top of it"}.
 2. {rdir / 'insights.json'}: {{"worked": [...], "dead_ends": [...], "open_leads": [...]}}, covering the whole campaign so
    far, 3-8 short items each (one sentence, name node ids in parentheses). Dead ends must be things measured not to
    help, not untried ideas.

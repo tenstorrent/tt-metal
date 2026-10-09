@@ -96,7 +96,7 @@ class RoundView:
 @dataclass
 class PlanContext:
     round: int
-    defaults: dict  # campaign policy_defaults
+    defaults: dict  # search defaults: W, R, beta, max_steps, round_root ("origin" | "best": where the next round starts)
     history: list[dict]  # one summary per earlier round (see tree.round_summary)
 
 

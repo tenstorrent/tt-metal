@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from .campaign import ORCH_DIR, Campaign
+from .campaign import ORCH_DIR, Campaign, round_root_mode
 from .gitops import lineage, read_jsonl
 from .scoring import case_metrics
 from .tree import load_round, read_node_file, recorded_rounds
@@ -207,6 +207,7 @@ def collect(c: Campaign) -> dict:
         "dreaming": dreaming,
         "costs": {"total": round(sum(by_kind.values()), 2), "by_kind": by_kind},
         "isolation": c.cfg.get("isolation"),
+        "round_root": round_root_mode(c.cfg),
         "refs": {
             "prefix": c.ref_prefix,
             "best_branch": c.ref_best().removeprefix("refs/heads/"),

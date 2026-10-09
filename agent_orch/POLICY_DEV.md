@@ -16,7 +16,15 @@ happened, so no device time is used.
 | `NEXT` | the version to write if a candidate wins, e.g. `v2` |
 | `ROUNDS` | recorded rounds to replay on, e.g. `1,2` |
 | `M` | number of revisions to write this phase (default 5) |
+| `ROUND_ROOT` | `origin` or `best`: where each round starts (also `config["defaults"]["round_root"]` in a policy) |
 | `REPLAY` | the exact replay command line for this campaign |
+
+`ROUND_ROOT` matters for any rule about depth or stopping. With `origin` (the
+default), every round starts from the campaign's original code: closing a branch
+ends its line for good, and its code reaches the next round only as history that
+workers may port. With `best`, the next round starts from the best attempt so far,
+so a closed leading branch effectively continues there. Don't justify a rule by
+"the next round re-roots at the best" unless `ROUND_ROOT` is `best`.
 
 Write only under `$LEDGER/policies/`. Everything else is read-only. The driver
 commits the ledger and decides `ACTIVE` after you finish: it re-runs the replay of

@@ -5,6 +5,7 @@ machine: bh-qbge-15:48486       # 2x p300c = 4 BH chips; the test uses all 4
 
 editable:
   - ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/*
+  - tt_metal/hw/ckernels/blackhole/*
 brief: brief.md
 rules:
   - "Do not reduce math fidelity: every compute op stays at MathFidelity::HiFi4 (no HiFi3/HiFi2/LoFi), even if PCC holds. Decided 2026-10-08: lower fidelity raised mean abs error."
@@ -24,5 +25,11 @@ eval:
   timeout_s: 1200
 
 budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
-search: {policy: fresh, W: 4, R: 4, beta: 0.6, max_rounds: 6}
+search:
+  policy: fresh
+  W: 4
+  R: 4
+  beta: 0.6
+  max_rounds: 6
+  round_root: origin   # origin: every round from the campaign root (as in the paper) | best: from the best attempt so far
 dreaming: {revisions: 5, cost_per_attempt: 0.005, parallel_bonus: 0.01}

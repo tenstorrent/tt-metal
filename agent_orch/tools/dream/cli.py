@@ -46,6 +46,7 @@ from .campaign import (
     parse_machine,
     repo_root,
     spec_path_in,
+    round_root_mode,
     validate_spec,
 )
 
@@ -231,7 +232,9 @@ def cmd_policies(a):
             else o.get("kind", "")
         )
         al = f" (alias: {', '.join(p['aliases'])})" if p["aliases"] else ""
-        print(f"{p['name']}{al}\n    {org}\n    {p['description']}\n")
+        rr = f", round_root: {o['round_root']}" if o.get("round_root") else ""
+        caution = f"\n    Caution: {p['caution']}" if p.get("caution") else ""
+        print(f"{p['name']}{al}\n    {org}{rr}\n    {p['description']}{caution}\n")
 
 
 # ================================================================ check / start
@@ -525,6 +528,7 @@ def cmd_export_policy(a):
             "rounds_replayed": rep.get("rounds"),
             "replay_V": rep.get("objective_V"),
             "default_beta": rep.get("default_beta"),
+            "round_root": dump.get("round_root"),
         },
         "notes": dump.get("notes", ""),
         "exported_at": datetime.date.today().isoformat(),
@@ -717,7 +721,17 @@ def m_policy_dump(a):
     if rep:
         rep = {k: rep.get(k) for k in ("objective_V", "rounds", "default_beta")}
     title = next((l.lstrip("# ").strip() for l in notes.splitlines() if l.startswith("#")), "")
-    print(json.dumps({"policy": (d / "policy.py").read_text(), "notes": notes, "replay": rep, "title": title}))
+    print(
+        json.dumps(
+            {
+                "policy": (d / "policy.py").read_text(),
+                "notes": notes,
+                "replay": rep,
+                "title": title,
+                "round_root": round_root_mode(c.cfg),
+            }
+        )
+    )
 
 
 def w_eval(a):
@@ -764,13 +778,13 @@ def w_replay(a):
         c = here_campaign(a.campaign)
         dcfg = c.cfg["dreaming"]
         s = c.cfg["search"]
-        defaults = {"W": int(s["W"]), "R": int(s["R"]), "beta": float(s["beta"])}
+        defaults = {"W": int(s["W"]), "R": int(s["R"]), "beta": float(s["beta"]), "round_root": round_root_mode(c.cfg)}
         wanted = [int(x) for x in a.rounds.split(",")] if a.rounds else recorded_rounds(c)
         rounds = [load_round(c, r) for r in wanted]
         b = load_baseline(c)
         noise = b["noise_pct"] if b else 2.0
     else:
-        dcfg, defaults = {}, {"W": 4, "R": 4, "beta": 0.6}
+        dcfg, defaults = {}, {"W": 4, "R": 4, "beta": 0.6, "round_root": "origin"}
         rounds, noise = load_fixture(a.fixture)
         if a.rounds:
             keep = {int(x) for x in a.rounds.split(",")}

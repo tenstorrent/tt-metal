@@ -13,6 +13,11 @@ def result(text, usd):
     print(json.dumps({"type": "result", "result": text, "total_cost_usd": usd, "num_turns": 3}), flush=True)
 
 
+import os
+
+MODE = os.environ.get("ROUND_ROOT", "origin")
+if "NODE_ID=" in prompt or "policy-development" in prompt:
+    assert f"ROUND_ROOT={MODE}" in prompt, "prompt does not state the round_root mode"
 if "NODE_ID=" in prompt:
     import os, time
 

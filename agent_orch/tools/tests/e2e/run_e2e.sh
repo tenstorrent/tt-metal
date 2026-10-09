@@ -71,6 +71,7 @@ else:
     r1_best = max((n for n in data["rounds"][0]["nodes"] if n["valid"]), key=lambda n: n["score"])["id"]
     assert r2 == f"refs/dream/toy/n/{r1_best}", f"best mode: round 2 must start from {r1_best}, got {r2}"
 print("round 2 root:", r2)
+assert data["round_root"] == mode, data["round_root"]
 # isolation: the campaign ran in its own repo; nodes reach the user's repo only through `dream fetch`
 before = subprocess.run(["git", "-C", str(S / "toy"), "for-each-ref", "refs/dream/toy/n/"], capture_output=True,
                         text=True).stdout

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .campaign import Campaign, node_id
+from .campaign import Campaign, node_id, round_root_mode
 from .gitops import append_jsonl, now, round_manifest
 from .policy_api import ROOT, PlanContext, load_policy, validate
 from .tree import load_round, online_view, round_summary
@@ -28,7 +28,13 @@ def policy_beta(path: Path, fallback: float) -> float:
 
 def defaults(c: Campaign) -> dict:
     s = c.cfg["search"]
-    return {"W": int(s["W"]), "R": int(s["R"]), "beta": float(s["beta"]), "max_steps": int(s["max_steps"])}
+    return {
+        "W": int(s["W"]),
+        "R": int(s["R"]),
+        "beta": float(s["beta"]),
+        "max_steps": int(s["max_steps"]),
+        "round_root": round_root_mode(c.cfg),  # origin | best: where the next round starts (policies may use it)
+    }
 
 
 def plan_round(c: Campaign, rnd: int, root_ref: str, extra: dict | None = None) -> dict:
