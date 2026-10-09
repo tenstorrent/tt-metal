@@ -5,7 +5,6 @@
 // tail and one masked pack. Data valids per row: four SrcA and four SrcB per tile, then one of each for the reduce.
 
 #include <cstdint>
-#include <utility>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -116,30 +115,6 @@ inline void _calculate_fill_x_(const float value)
 
 static constexpr float REDUCE_SCALER = 1.0f;
 
-// mul_reduce_scalar_tile's later tiles, unrolled as the API is for a compile-time tile count.
-template <std::uint32_t... I>
-inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape, std::integer_sequence<std::uint32_t, I...>)
-{
-    ((_llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(I + 1),
-      _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape)),
-     ...);
-}
-
-inline void reduce_later_tiles(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape)
-{
-    switch (tile_cnt)
-    {
-        case 2: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 1> {}); break;
-        case 3: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 2> {}); break;
-        case 4: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 3> {}); break;
-        case 5: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 4> {}); break;
-        case 6: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 5> {}); break;
-        case 7: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 6> {}); break;
-        case 8: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 7> {}); break;
-        default: break;
-    }
-}
-
 inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
@@ -159,7 +134,12 @@ inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& t
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, DST_INDEX, VectorMode::RC_custom, 0.0f);
     _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    reduce_later_tiles(tile_cnt, tensor_shape);
+    // The tile count is a runtime argument here; the API unrolls this loop for its compile-time count.
+    for (std::uint32_t i = 1; i < tile_cnt; ++i)
+    {
+        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+    }
     _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
     _llk_math_mul_reduce_scalar_clear_dvalid_();
 }
