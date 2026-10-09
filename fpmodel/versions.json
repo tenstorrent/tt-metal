@@ -97,5 +97,15 @@
    "training adds the full sweeps of draw 1 (59 problems) and of the draw-2 problems v6 missed (41)",
    "a core reading DRAM while other cores also read gets the loaded per-core rate, 0.48 of 32 B/cycle (corecc, measured with 4 concurrent readers)"
   ]
+ },
+ "v12": {
+  "title": "v12: calibrated fit",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at dbc5f7a (frozen as frozen_v12_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v11",
+   "fit weighs the absolute log error at 0.5 (was 0.2) next to the within-problem error: predicted times stay calibrated, ranking unchanged"
+  ]
  }
 }

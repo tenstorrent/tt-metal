@@ -180,6 +180,9 @@ commit = {
     "v7": "0e8ab14",
     "v8": "0554d53",
     "v9": "bf6978e",
+    "v10": "a9fbdc9",
+    "v11": "2cf9cbc",
+    "v12": "dbc5f7a",
 }
 rules = rules_cv()
 CVPRED = {
@@ -191,6 +194,7 @@ CVPRED = {
     "v9": np.load("pred_cv_v9.npy"),
     "v10": np.load("pred_cv_v10.npy"),
     "v11": np.load("pred_cv_v11.npy"),
+    "v12": np.load("pred_cv_v12.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -255,7 +259,7 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
-FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11")}
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12")}
 FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
 
 
@@ -423,17 +427,26 @@ RUNS = [
         None,
     ),
     (
-        "v11",
+        "v12",
         "fresh/fresh5_timed.csv",
         "fresh96001",
         "Fresh random set, draw 5 (seeds 96001-7)",
-        "Out-of-sample: generated and picked after v11 was frozen.",
+        "Out-of-sample: generated and picked after v12 was frozen.",
         None,
         "fresh/chain_v10.done",
     ),
     (
         "v11",
         "miss/bh_unseen_v11_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v12",
+        "miss/bh_unseen_v12_timed.csv",
         "bh-unseen",
         "BH designed problems never used in training (1021)",
         BHU,
@@ -477,6 +490,7 @@ for vid, meta in V.items():
         "v9": "abl/v9.json",
         "v10": "abl/v10.json",
         "v11": "abl/v11.json",
+        "v12": "abl/v12.json",
     }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
@@ -497,7 +511,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v11"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v12"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [
