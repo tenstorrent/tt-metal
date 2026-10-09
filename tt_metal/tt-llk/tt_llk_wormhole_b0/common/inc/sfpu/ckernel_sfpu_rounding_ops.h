@@ -175,11 +175,24 @@ void _calculate_round_(const int decimals)
     const sfpi::vFloat coeff   = exp10i(decimals);
     const sfpi::vFloat inverse = exp10i(-decimals);
 
+    // v * coeff overflows to +/-inf for |v| > FLT_MAX / 10**decimals, and inverse * inf is inf,
+    // so large finite inputs come back infinite. Every |v| >= 2**23 is already an integer, so for
+    // decimals >= 0 the answer is v itself and the rescale can be skipped. Negative decimals do
+    // change such values (round to tens, hundreds, ...) and coeff < 1 cannot overflow there, so
+    // the shortcut is disabled by making its threshold +inf, which then only selects v = +/-inf --
+    // where returning v is also correct.
+    const sfpi::vFloat integral_threshold = decimals >= 0 ? 0x1.0p23F : 1.0F / 0.0F;
+
     for (int d = 0; d < ITERATIONS; ++d)
     {
         sfpi::vFloat v      = sfpi::dst_reg[0];
         sfpi::vFloat result = inverse * _round_even_(v * coeff);
-        sfpi::dst_reg[0]    = result;
+        v_if (sfpi::setsgn(v, 0) >= integral_threshold)
+        {
+            result = v;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
