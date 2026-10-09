@@ -316,6 +316,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._colpage = _parse_binary_env("TT_LAGUNA_COLPAGE", True)
         # batch-1 decode MoE generic_ops
         self._moe1_kernels = self._colpage and _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)
+        # batch-1 decode shared expert through the same kernels, as one always-active expert over column-sharded
+        # copies of its weights (TT_LAGUNA_SH1=0: the matmul / slice / multiply / matmul chain)
+        self._sh1 = self._moe1_kernels and _parse_binary_env("TT_LAGUNA_SH1", True)
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
@@ -893,6 +896,21 @@ class MultichipDecoder(OptimizedDecoder):
                     ttnn.deallocate(w[k])
                     w[k] = cp
             pack_dram_pair("sh_gate", "sh_up", "sh_gate_up", self.cfg.shared_intermediate)
+            if self._sh1:
+                # batch-1 decode shared expert (moe_decode1 kernels, which read whole weight columns): column-sharded
+                # [1, 1, K, N] copies of the packed gate|up and down weights, and a routing row that marks the one
+                # expert active with weight 1
+                for k in ("sh_gate_up", "sh_down"):
+                    K, N = w[k].padded_shape[-2], w[k].padded_shape[-1]
+                    w[k + "_cp"] = ttnn.to_memory_config(
+                        ttnn.reshape(w[k], (1, 1, K, N)), colpage.column_pages_memory_config(self.device, K)
+                    )
+                row = torch.zeros([1, 1, 1, 32], dtype=torch.float32)
+                row[..., 0] = 1.0
+                w["sh_active"] = ttnn.from_torch(
+                    row, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
         else:
             pack_dram_pair("mlp_gate", "mlp_up", "mlp_gate_up", self.cfg.intermediate)
 
@@ -1418,6 +1436,12 @@ class MultichipDecoder(OptimizedDecoder):
         x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
         glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
         routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
+        if self._sh1:
+            # shared expert as one always-active expert through the same kernels: 2 programs that read whole weight
+            # columns instead of a DRAM-sharded matmul, 2 slices, SwiGLU, a reshard and a second matmul (~27 us)
+            sh_glu = moe_decode1.gate_up_swiglu(x1, self.w["sh_gate_up_cp"], self.w["sh_active"])
+            shared_local = moe_decode1.down_sum(sh_glu, self.w["sh_down_cp"], self.w["sh_active"])
+            return self._reduce(ttnn.add(routed_local, shared_local, memory_config=ttnn.L1_MEMORY_CONFIG))
         keep = sharded and self._glu_out_sharded
         shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
         if keep:
