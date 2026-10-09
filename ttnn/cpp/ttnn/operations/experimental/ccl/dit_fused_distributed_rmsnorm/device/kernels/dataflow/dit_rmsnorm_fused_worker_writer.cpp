@@ -78,6 +78,24 @@ constexpr uint32_t w_reduce_factor = get_compile_time_arg_val(SCB + 4);
 constexpr uint32_t w_eps_bits = get_compile_time_arg_val(SCB + 5);
 constexpr uint32_t w_fuse_rope = get_compile_time_arg_val(SCB + 6);
 constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
+// Column split / multi-packet / staged-gather / drain args (after the trans_mat accessor).
+// split_k workers share a tile-row; their partial sticks sit contiguously from slot_base.
+// A forwarder round carries num_packets packets of sticks_per_pk sticks each.
+constexpr uint32_t XCB = w_transmat_args.next_compile_time_args_offset();
+constexpr uint32_t split_k = get_compile_time_arg_val(XCB + 0);
+constexpr uint32_t num_packets = get_compile_time_arg_val(XCB + 1);
+constexpr uint32_t sticks_per_pk = get_compile_time_arg_val(XCB + 2);
+// 1: the forwarder copies its group's gathered pages into its own L1 (stage_cb, grid-uniform)
+// and workers read their sticks from there instead of DRAM.
+constexpr uint32_t stage_stats = get_compile_time_arg_val(XCB + 3);
+// 0: per-block flush + pop. 1: pop right after issuing (output_cb never wraps on the
+// one-row-per-worker layout), single barrier at the end. 2: as 1 but only the even
+// output blocks; the reader drains the odd ones from output2_cb on the other NoC.
+constexpr uint32_t drain_mode = get_compile_time_arg_val(XCB + 4);
+constexpr uint32_t stage_cb = get_compile_time_arg_val(XCB + 5);
+constexpr uint32_t unit_packet_bytes = get_compile_time_arg_val(XCB + 6);
+// Output tile stride between this worker's columns (k for an interleaved column split, else 1).
+constexpr uint32_t col_step = get_compile_time_arg_val(XCB + 7);
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -92,6 +110,8 @@ void kernel_main() {
     const uint32_t fwd_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_forwarder_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slot_base = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc;
 
@@ -134,7 +154,9 @@ void kernel_main() {
             DeviceZoneScopedN("W_PUSH");
             cb_stats_local.wait_front(num_stats);
             const uint32_t src0 = cb_stats_local.get_read_ptr();
-            const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
+            const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes +
+                                 (my_slot / sticks_per_pk) * unit_packet_bytes +
+                                 (my_slot % sticks_per_pk) * stick_bytes;
             // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
             UnicastEndpoint fwd_core;
             for (uint32_t s = 0; s < num_stats; s++) {
@@ -172,29 +194,45 @@ void kernel_main() {
         // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
         // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
-        cb_stats_gathered.reserve_back(num_stats * ring_size);
+        // Gathered tile (d*split_k + j)*num_stats + s holds device d's partial from column
+        // part j; compute sums all of them.
+        cb_stats_gathered.reserve_back(num_stats * ring_size * split_k);
         const uint32_t gbase = cb_stats_gathered.get_write_ptr();
+        const uint32_t pkt = slot_base / sticks_per_pk;
+        const uint32_t slot_in_pkt = slot_base % sticks_per_pk;
         for (uint32_t d = 0; d < ring_size; d++) {
-            const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
-            for (uint32_t s = 0; s < num_stats; s++) {
-                const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
-                const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
-                noc.async_read(  // -> face_00 row0
-                    stats_dram,
-                    CoreLocalMem<uint32_t>(tile_dst),
-                    kFaceRowBytes,
-                    {.page_id = page_idx, .offset_bytes = src_off},
-                    {});
-                noc.async_read(  // -> face_01 row0
-                    stats_dram,
-                    CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
-                    kFaceRowBytes,
-                    {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
-                    {});
+            const uint32_t page_idx =
+                d * num_chunks_per_device + (my_forwarder_index * max_rounds + round) * num_packets + pkt;
+            for (uint32_t j = 0; j < split_k; j++) {
+                for (uint32_t s = 0; s < num_stats; s++) {
+                    const uint32_t tile_dst = gbase + ((d * split_k + j) * num_stats + s) * gathered_tile_bytes;
+                    const uint32_t src_off = (slot_in_pkt + j) * stick_bytes + s * kStatBytes;
+                    if constexpr (stage_stats) {
+                        CircularBuffer cb_stage(stage_cb);
+                        const uint32_t src =
+                            cb_stage.get_write_ptr() + (d * num_packets + pkt) * unit_packet_bytes + src_off;
+                        noc_async_read(get_noc_addr(fwd_x, fwd_y, src), tile_dst, kFaceRowBytes);
+                        noc_async_read(
+                            get_noc_addr(fwd_x, fwd_y, src + kFaceRowBytes), tile_dst + kFace01Off, kFaceRowBytes);
+                    } else {
+                        noc.async_read(  // -> face_00 row0
+                            stats_dram,
+                            CoreLocalMem<uint32_t>(tile_dst),
+                            kFaceRowBytes,
+                            {.page_id = page_idx, .offset_bytes = src_off},
+                            {});
+                        noc.async_read(  // -> face_01 row0
+                            stats_dram,
+                            CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
+                            kFaceRowBytes,
+                            {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+                            {});
+                    }
+                }
             }
         }
         noc.async_read_barrier();
-        cb_stats_gathered.push_back(num_stats * ring_size);
+        cb_stats_gathered.push_back(num_stats * ring_size * split_k);
 
         // ---- 4. drain this row's output_cb tiles ----
         // Per-block wait + pop (NOT a cumulative wait with a single end-of-row pop):
@@ -205,7 +243,36 @@ void kernel_main() {
         // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
         // pushes block_size-padded slots per col-block; wait/pop the full block, but
         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
-        {
+        if constexpr (drain_mode == 1) {
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_output.wait_front(block_size);
+                uint32_t rd = cb_output.get_read_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t out_idx = tile_row * head_dim_tiles + col_start + (col_tile + i) * col_step;
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                    rd += output_tile_bytes;
+                }
+                cb_output.pop_front(block_size);
+            }
+        } else if constexpr (drain_mode == 2) {
+            // Even blocks only; compute routes the odd blocks to the reader (split drain).
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += 2 * block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_output.wait_front(block_size);
+                uint32_t rd = cb_output.get_read_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t out_idx = tile_row * head_dim_tiles + col_start + (col_tile + i) * col_step;
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                    rd += output_tile_bytes;
+                }
+                cb_output.pop_front(block_size);
+            }
+        } else {
             DeviceZoneScopedN("W_DRAIN");
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
@@ -213,7 +280,7 @@ void kernel_main() {
                 cb_output.wait_front(block_size);
                 uint32_t rd = cb_output.get_read_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t c = col_tile + i;
+                    const uint32_t c = col_start + (col_tile + i) * col_step;
                     const uint32_t h = c / head_dim_tiles;
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t out_idx =

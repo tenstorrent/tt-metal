@@ -41,8 +41,14 @@
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "dit_rmsnorm_fast_post.hpp"
 
 void kernel_main() {
+    // CT 43 post_mode: non-zero selects the fast-POST path (broadcast-weight RMS all-gather only).
+    if constexpr (get_compile_time_arg_val(43) != 0) {
+        dit_rmsnorm_fast_post_main<get_compile_time_arg_val(43)>();
+        return;
+    }
     // === Compile-time args ===
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t stats_local_cb = get_compile_time_arg_val(1);

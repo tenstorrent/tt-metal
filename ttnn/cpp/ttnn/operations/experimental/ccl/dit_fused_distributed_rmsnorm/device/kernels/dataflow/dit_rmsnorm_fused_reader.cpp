@@ -102,6 +102,16 @@ void kernel_main() {
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
+    // Full per-rank row width in tiles; differs from num_tile_cols when the row is column-split.
+    constexpr uint32_t row_stride_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
+    // Tile stride between this worker's columns (k for an interleaved column split, else 1).
+    constexpr uint32_t col_step = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
+    // Split drain: compute packs odd output blocks into output2_cb and this (otherwise idle
+    // during POST) reader writes them out on its own NoC while the writer drains the even ones.
+    constexpr uint32_t split_drain = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t output2_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t out_row_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 4);
+    constexpr auto output_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 5>();
 
     uint32_t arg_idx = 0;
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
@@ -111,6 +121,7 @@ void kernel_main() {
     const uint32_t rope_sin_addr = get_common_arg_val<uint32_t>(4);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
 
     Noc noc;
@@ -194,7 +205,7 @@ void kernel_main() {
                     input_accessor,
                     CoreLocalMem<uint32_t>(input_wr_ptr),
                     input_page_bytes,
-                    {.page_id = input_tile_idx + col_tile + i},
+                    {.page_id = input_tile_idx + (col_tile + i) * col_step},
                     {});
                 input_wr_ptr += input_tile_bytes;
             }
@@ -215,7 +226,7 @@ void kernel_main() {
         // sum-of-squares starts as soon as input lands; cos/sin are issued AFTER (see
         // below) so their DRAM read latency overlaps PRE — they aren't consumed until
         // the POST RoPE phase.
-        const uint32_t input_tile_idx = tile_row * num_tile_cols;
+        const uint32_t input_tile_idx = tile_row * row_stride_tiles + col_start;
         // Input read placement is schedule-driven (see input_schedule above):
         //   INPUT_FIRST: read everything HERE so PRE starts ASAP — streaming = both
         //     passes (PRE + POST re-read), resident = the whole row once.
@@ -357,7 +368,7 @@ void kernel_main() {
                     uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
-                        const uint32_t w_page = col_tile + i;
+                        const uint32_t w_page = col_start + (col_tile + i) * col_step;
                         noc.async_read(
                             weight_accessor,
                             CoreLocalMem<uint32_t>(weight_wr_ptr),
@@ -502,5 +513,28 @@ void kernel_main() {
             DeviceZoneScopedN("R_INPUT");
             read_input_pass(input_tile_idx);  // POST re-read pass
         }
+    }
+
+    if constexpr (split_drain) {
+        const auto output_accessor = TensorAccessor(output_args, get_common_arg_val<uint32_t>(6));
+        CircularBuffer cb_output2(output2_cb);
+        const uint32_t output_tile_bytes = cb_output2.get_tile_size();
+        const uint32_t output_page_bytes = output_accessor.get_aligned_page_size();
+        for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+            for (uint32_t col_tile = block_size; col_tile < num_tile_cols; col_tile += 2 * block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_output2.wait_front(block_size);
+                uint32_t rd = cb_output2.get_read_ptr();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    const uint32_t out_idx = tile_row * out_row_tiles + col_start + (col_tile + i) * col_step;
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                    rd += output_tile_bytes;
+                }
+                cb_output2.pop_front(block_size);
+            }
+        }
+        noc.async_write_barrier();
     }
 }
