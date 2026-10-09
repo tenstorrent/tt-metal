@@ -14,7 +14,10 @@
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_init(
-    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    const std::uint32_t input_operand,
+    const std::uint32_t pack_output,
+    const std::uint32_t unit_dim,
+    const std::uint32_t full_dim) {
     SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -22,8 +25,17 @@ inline void llk_pack_fast_tilize_init(
         pack_src_format[output_id] == (uint)DataFormat::Float32 || pack_src_format[output_id] == (uint)DataFormat::Tf32;
     // pack_dst_format holds every CB's L1 format, the input's included
     const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id], input_32b);
+    // A row of two tiles with a 16-bit output is one paced chunk, so it takes the init with the WRCFG replay.
+    const bool two_tile_row =
+        !is_fp32_dest_acc_en && !input_32b && full_dim == 2 && datum_size_in_bytes(pack_dst_format[output_id]) == 2;
+    LLK_ASSERT_BLOCK(pack_fast_tilize_two_tile_row = two_tile_row);
+    if (two_tile_row) {
+        _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id]);
+    } else {
+        _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id], input_32b);
+    }
 }
 
 template <bool is_fp32_dest_acc_en>

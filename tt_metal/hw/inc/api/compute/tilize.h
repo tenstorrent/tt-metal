@@ -256,7 +256,7 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
     } else {
         MATH((llk_math_fast_tilize_init_skip_remap<is_fp32_dest_acc_en>(icb)));
     }
-    PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+    PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk, full_dim)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
