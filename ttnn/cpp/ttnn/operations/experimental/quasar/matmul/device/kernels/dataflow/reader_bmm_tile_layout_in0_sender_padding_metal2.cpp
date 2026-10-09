@@ -185,7 +185,20 @@ void kernel_main() {
 
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
-    for (uint32_t b = 0; b < in0_B; ++b) {
+    // Broadcast-A reuse (in0_B == 1, in1_B > 1): the in0 buffer holds one per-core copy of A
+    // (per_core_M * K tiles, i.e. num_blocks_h_dim * num_blocks_inner_dim blocks), but compute consumes
+    // num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim blocks per batch. Batch 0 leaves the
+    // buffer in exactly the order compute re-reads it only when one outer block count is 1: with
+    // h == 1 each W block is the same K pass again, and with w == 1 the buffer is the whole M x K image
+    // filled once. Then the extra batches just replay pointer credits. With both > 1 later W blocks
+    // overwrite earlier M blocks, so the extra batches re-read A from DRAM instead.
+    // See https://github.com/tenstorrent/tt-metal/issues/57183.
+    constexpr bool in0_replay_in_buffer = in0_reuse_in_CB && (num_blocks_h_dim == 1 || num_blocks_w_dim == 1);
+    constexpr bool in0_reread_per_batch = in0_reuse_in_CB && !in0_replay_in_buffer;
+    constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
+
+    for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
+        [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
 #ifdef SPARSITY
         if constexpr (batchB > 0) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
@@ -464,13 +477,17 @@ void kernel_main() {
         }
 
         // in0 reuse-in-CB optimization for [1,1,M,K] x [1,H,K,N]
-        if (in0_reuse_in_CB) {
+        if constexpr (in0_replay_in_buffer) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
-                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                for (uint32_t blk = 0; blk < num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim; ++blk) {
                     cb_in0.reserve_back(in0_block_num_tiles);
                     cb_in0.push_back(in0_block_num_tiles);
                 }
             }
+        }
+        if constexpr (in0_reread_per_batch) {
+            // Every weight batch reads the same A slice.
+            in0_tensor_start_tile_id = in0_batch_start_tile_id;
         }
     }
     noc.async_write_barrier();
