@@ -33,7 +33,10 @@ DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
     return buffer.address();
 }
 
-DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet& cores) {
+DeviceAddr get_shard_base_address(const Buffer& buffer, const CoreRangeSet& cores) {
+    if (!is_per_core_allocation(buffer)) {
+        return buffer.address();
+    }
     std::optional<DeviceAddr> address;
     CoreCoord address_core;
     for (const CoreRange& core_range : cores.ranges()) {
@@ -41,7 +44,7 @@ DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet
             const auto it = buffer.impl().per_core_addresses_.find(core);
             TT_FATAL(
                 it != buffer.impl().per_core_addresses_.end(),
-                "Per-core-allocated buffer has no shard on core {}, so it cannot back an address on cores {}; "
+                "Per-core-allocated buffer has no shard on core {}, so it has no address on cores {}; "
                 "limit the cores to the buffer's shard grid",
                 core.str(),
                 cores.str());
@@ -53,8 +56,8 @@ DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet
             }
             TT_FATAL(
                 core_address == *address,
-                "Per-core-allocated buffer sits at {:#x} on core {} but {:#x} on core {}; one address on cores {} "
-                "cannot serve both (a circular buffer has one address, so split it into one per address)",
+                "Per-core-allocated buffer sits at {:#x} on core {} but {:#x} on core {}, so cores {} do not share "
+                "one address; split them into groups that do",
                 *address,
                 address_core.str(),
                 core_address,
@@ -62,7 +65,7 @@ DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet
                 cores.str());
         }
     }
-    TT_FATAL(address.has_value(), "get_uniform_per_core_address: no cores given");
+    TT_FATAL(address.has_value(), "get_shard_base_address: no cores given for a per-core-allocated buffer");
     return *address;
 }
 

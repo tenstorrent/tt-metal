@@ -8,7 +8,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <optional>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::per_core_allocation {
@@ -18,7 +17,7 @@ DeviceAddr get_per_core_address(
     const distributed::MeshCoordinate& device_coord,
     const CoreCoord& core) {
     TT_FATAL(
-        mesh_buffer.has_device_buffer(device_coord),
+        mesh_buffer.device()->impl().is_local(device_coord),
         "get_per_core_address: device coordinate ({}, {}) is not local or has no allocated buffer. "
         "create_on_single_device only allocates on one device within the mesh.",
         device_coord[0],
@@ -26,44 +25,6 @@ DeviceAddr get_per_core_address(
     auto* buffer = mesh_buffer.get_device_buffer(device_coord);
     TT_FATAL(is_per_core_allocation(*buffer), "Buffer does not use per-core allocation");
     return get_per_core_address(*buffer, core);
-}
-
-DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreRangeSet& cores) {
-    std::optional<DeviceAddr> address;
-    std::optional<distributed::MeshCoordinate> address_coord;
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer.device()->shape())) {
-        if (!mesh_buffer.has_device_buffer(coord)) {
-            continue;
-        }
-        const DeviceAddr device_address = get_uniform_per_core_address(*mesh_buffer.get_device_buffer(coord), cores);
-        if (!address.has_value()) {
-            address = device_address;
-            address_coord = coord;
-            continue;
-        }
-        TT_FATAL(
-            device_address == *address,
-            "Per-core-allocated buffer sits at {:#x} on cores {} of device {} but {:#x} on device {}; one address "
-            "cannot serve both devices",
-            *address,
-            cores.str(),
-            *address_coord,
-            device_address,
-            coord);
-    }
-    TT_FATAL(address.has_value(), "Per-core buffer has no local device buffer");
-    return *address;
-}
-
-DeviceAddr get_cb_base_address(
-    const Buffer& buffer, const distributed::MeshBuffer* mesh_buffer, const CoreRangeSet& cores) {
-    if (!is_per_core_allocation(buffer)) {
-        return buffer.address();
-    }
-    TT_FATAL(
-        !cores.empty(), "A circular buffer backed by a per-core-allocated buffer needs cores to resolve its address");
-    return mesh_buffer != nullptr ? get_uniform_per_core_address(*mesh_buffer, cores)
-                                  : get_uniform_per_core_address(buffer, cores);
 }
 
 bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer) {

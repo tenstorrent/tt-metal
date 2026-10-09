@@ -82,7 +82,7 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  * Returns the backing buffer's address + address_offset, or just address_offset when no buffer is set
  * (manually placed CB). A per-core-allocated buffer sits at a different address on each core, so its
  * address is the one on the CB's cores, not Buffer::address() (the first core's); those cores must share
- * one address, and for a tensor-backed descriptor so must every local device, or this TT_FATALs.
+ * one address, or this TT_FATALs.
  */
 uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
 

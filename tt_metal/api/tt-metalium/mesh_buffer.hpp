@@ -127,8 +127,6 @@ public:
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
-    // False for a remote device, or a local one the buffer was not allocated on (create_on_single_device).
-    bool has_device_buffer(const MeshCoordinate& device_coord) const;
 
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
     // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a

@@ -287,11 +287,11 @@ def test_cb_spanning_cores_at_different_addresses_is_rejected(per_core_mesh_devi
     )
     spanning.format_descriptors = [ttnn.CBFormatDescriptor(CB_INDEX, ttnn.uint8, PAGE)]
 
-    with expect_error(RuntimeError, "a circular buffer has one address"):
+    with expect_error(RuntimeError, "do not share one address"):
         ttnn.get_cb_address(spanning)
 
     out = _sharded_tensor(per_core_mesh_device, [FIRST, SECOND], 16, per_core=False)
     program = _probe_program(tensor, out, 0)
     program.cbs = [spanning]
-    with expect_error(RuntimeError, "a circular buffer has one address"):
+    with expect_error(RuntimeError, "do not share one address"):
         _run(per_core_mesh_device, [tensor, out], program)

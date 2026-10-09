@@ -10,8 +10,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-// Experimental and subject to change: this header carries no API-stability guarantee.
-
 namespace tt::tt_metal::experimental::per_core_allocation {
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
@@ -21,18 +19,7 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 DeviceAddr get_per_core_address(
     const distributed::MeshBuffer& mesh_buffer, const distributed::MeshCoordinate& device_coord, const CoreCoord& core);
 
-// As the Buffer overload, but the address must also be the same on every local device holding the
-// buffer, as when one address (e.g. a circular buffer's) is used on all of them. TT_FATALs if the
-// cores or the devices disagree, rather than answering for the reference device only.
-DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreRangeSet& cores);
-
 bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer);
-
-// Base address a circular buffer over ``cores`` gets from its backing ``buffer``: Buffer::address() for a
-// lockstep buffer, else the one per-core address the cores share. Pass the MeshBuffer when the backing came
-// from a MeshTensor so the local devices are checked to agree too; nullptr checks ``buffer``'s device only.
-DeviceAddr get_cb_base_address(
-    const Buffer& buffer, const distributed::MeshBuffer* mesh_buffer, const CoreRangeSet& cores);
 
 // Creates a MeshBuffer that only allocates on a single device within the mesh.
 std::shared_ptr<distributed::MeshBuffer> create_on_single_device(

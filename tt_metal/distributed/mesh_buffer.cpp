@@ -451,10 +451,6 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     return buffers_.at(device_coord).value().get();
 }
 
-bool MeshBuffer::has_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).is_local();
-}
-
 Buffer* MeshBuffer::get_reference_buffer() const {
     for (const auto& buffer : buffers_.values()) {
         if (buffer.is_local()) {

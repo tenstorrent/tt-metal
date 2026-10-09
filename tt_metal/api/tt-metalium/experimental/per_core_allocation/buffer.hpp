@@ -28,9 +28,11 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src);
 // Buffer::address() for ordinary lockstep buffers, so callers need no mode check.
 DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core);
 
-// Address of per-core-allocated ``buffer`` that must be the same on every one of ``cores``, as when one
-// address (e.g. a circular buffer's) is used on all of them. TT_FATALs if the cores disagree.
-DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet& cores);
+// Base address of ``buffer``'s shards on ``cores``, when the caller needs a single address for all of
+// them. A per-core-allocated buffer can place each core's shard at a different address, so this
+// TT_FATALs if any two of ``cores`` disagree, or if one of them holds no shard of ``buffer``.
+// Falls back to Buffer::address() for ordinary lockstep buffers, like the single-core overload.
+DeviceAddr get_shard_base_address(const Buffer& buffer, const CoreRangeSet& cores);
 
 // BufferShardingArgs free functions.
 
