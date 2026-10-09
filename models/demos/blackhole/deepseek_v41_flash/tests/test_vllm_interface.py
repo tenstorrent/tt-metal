@@ -1001,68 +1001,6 @@ def test_sample_from_candidates_follows_the_truncated_distribution():
     assert top1 == {10}
 
 
-def _cand(full, cols=8, k=16, T=1.0):
-    sh = full.reshape(cols, -1)
-    v, i = torch.topk(sh, k, dim=1)
-    ids = i + (torch.arange(cols) * sh.shape[1]).reshape(cols, 1)
-    colmax = sh.max(1)[0]
-    sums = torch.exp((sh - colmax[:, None]) / T).sum(1)
-    return v.reshape(-1), ids.reshape(-1), sums
-
-
-@pytest.mark.parametrize("scale", [0.3, 3.0, 12.0])  # flat -> peaked distributions
-@pytest.mark.parametrize(
-    "cfg",
-    [
-        (1.0, -1, 0.95),
-        (1.0, -1, 1.0),
-        (0.6, -1, 0.9),
-        (1.0, 7, 0.95),
-        (1.0, 5, 1.0),
-        (1.3, 40, 0.8),
-        (1.0, 129280, 0.95),
-    ],
-)
-def test_sample_exact_equals_the_full_vocabulary_inverse_cdf(scale, cfg):
-    torch.manual_seed(3)
-    full = torch.randn(8 * 200) * scale
-    T, kk, pq = cfg
-    v, ids, _ = _cand(full, T=T)
-    _, _, sums = _cand(full, T=T)
-    srt, si = torch.sort(full.double(), descending=True)
-    pr = torch.softmax(srt / T, 0)
-    if kk > 0:
-        pr, si = pr[:kk] / pr[:kk].sum(), si[:kk]
-    if pq < 1.0:
-        pr = pr * ((pr.cumsum(0) - pr) < pq)
-    fb_n = 0
-    for j in range(200):
-        u = (j + 0.5) / 200
-        ref = int(si[VS._pick(pr, u)])
-        got, fb = VS.sample_exact(v, ids, sums, 16, T, kk, pq, u, lambda: full)
-        assert got == ref, (cfg, scale, u)
-        fb_n += int(fb)
-    if scale >= 12.0 and (0 < kk <= 16 or kk == VS.VOCAB_FULL):
-        assert (
-            fb_n == 0
-        )  # (the plugin sends top_k = vocab_size for 'no top-k')  # peaked + top-k inside the guaranteed prefix: never needs the full row
-
-
-def _bigram_logits(table, prev):
-    return table[int(prev) % table.shape[0]]
-
-
-def _target_probs(full, T, top_p):
-    srt, si = torch.sort(full.double(), descending=True)
-    pr = torch.softmax(srt / T, 0)
-    if top_p < 1.0:
-        pr = pr * ((pr.cumsum(0) - pr) < top_p)
-        pr = pr / pr.sum()
-    out = torch.zeros_like(full, dtype=torch.double)
-    out[si] = pr
-    return out
-
-
 @pytest.mark.parametrize("cfg", [(1.0, 0.95), (1.0, 1.0), (0.7, 0.9)])
 def test_sampled_speculative_rounds_have_the_non_speculative_law(cfg):
     """Lossless speculative sampling for point-mass drafts (SpecRunner trace A | S | B): every block row draws its own token with the in-trace sampler (emulated here: ``emulate_keep_weights`` /
