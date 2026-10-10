@@ -16,12 +16,19 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 SKIP = 255
 TILE_DIMS = [TILE_DIM, TILE_DIM]
+# Inputs and accumulators are integers in [-MAX_ABS_VALUE, MAX_ABS_VALUE]: 32 accumulations stay
+# below 2^8, so every partial sum is exact in bf16.
+MAX_ABS_VALUE = 4
 
 
 def _index_patterns():
     generator = torch.Generator().manual_seed(7)
     random_permutation = torch.randperm(TILE_DIM, generator=generator).tolist()
     mixed = [SKIP if r % 5 == 0 else (r * 7) % 11 for r in range(TILE_DIM)]
+    # 31, 32, 33 and 47 first, then in-range rows between indices 34 to 47, which skip their rows like 255.
+    out_of_range = [31, 32, 33, 47] + [
+        32 + r // 2 if r % 2 else r for r in range(4, TILE_DIM)
+    ]
     return {
         "identity": list(range(TILE_DIM)),
         "reversed": list(range(TILE_DIM - 1, -1, -1)),
@@ -30,6 +37,7 @@ def _index_patterns():
         "all_rows_skipped": [SKIP] * TILE_DIM,
         "all_rows_into_row_5": [5] * TILE_DIM,
         "mixed_skipped_and_shared": mixed,
+        "out_of_range_indices": out_of_range,
     }
 
 
@@ -60,13 +68,13 @@ def _golden(input_rows, output_rows, indices):
 def _run(formats, dest_acc, indices):
     generator = torch.Generator().manual_seed(3)
     torch_format = format_dict[formats.input_format]
-    # Integers in [-4, 4]: 32 accumulations stay below 2^8, so every partial sum is exact in bf16.
-    input_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(
-        torch.float32
-    )
-    output_rows = torch.randint(-4, 5, (TILE_DIM, TILE_DIM), generator=generator).to(
-        torch.float32
-    )
+    shape = (TILE_DIM, TILE_DIM)
+    input_rows = torch.randint(
+        -MAX_ABS_VALUE, MAX_ABS_VALUE + 1, shape, generator=generator
+    ).to(torch.float32)
+    output_rows = torch.randint(
+        -MAX_ABS_VALUE, MAX_ABS_VALUE + 1, shape, generator=generator
+    ).to(torch.float32)
     golden_rows = _golden(input_rows, output_rows, indices)
 
     src_A = tilize_block(
