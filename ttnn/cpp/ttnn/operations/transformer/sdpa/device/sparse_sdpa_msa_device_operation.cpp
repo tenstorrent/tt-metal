@@ -3,15 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/indexer_score/device/kernels/indexer_score_causal_geometry.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <bit>
 
@@ -231,6 +235,117 @@ SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_out
     return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
 }
 
+SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::derive_kernel_geometry(
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    Geometry g;
+    const uint32_t H_total = t.q.logical_shape()[1];
+    g.n_kv = t.k.logical_shape()[1];
+    g.H_logical = g.n_kv ? H_total / g.n_kv : 0;  // query heads per KV group (validation rejects n_kv == 0)
+    // Compute always sees whole 32-head tiles; the reader zero-fills the padded heads.
+    g.H = ((g.H_logical + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    g.S = t.q.logical_shape()[2];
+    g.topk = t.indices.logical_shape()[3];
+    g.d = t.q.logical_shape()[3];
+    g.v_dim = t.v.logical_shape()[3];
+    g.DHt = g.d / tt::constants::TILE_WIDTH;
+    g.vDHt = g.v_dim / tt::constants::TILE_WIDTH;
+    g.Skt = attrs.block_size / tt::constants::TILE_WIDTH;  // a chunk is exactly one block
+    g.Sqt = g.H / tt::constants::TILE_HEIGHT;
+    g.k_tiles_per_block = g.Skt * g.DHt;
+    g.v_tiles_per_block = g.Skt * g.vDHt;
+    g.k_df = tt::tt_metal::datatype_to_dataformat_converter(t.k.dtype());
+    g.v_df = tt::tt_metal::datatype_to_dataformat_converter(t.v.dtype());
+    g.k_tile_bytes = tt::tile_size(g.k_df);
+    g.v_tile_bytes = tt::tile_size(g.v_df);
+    // Q is read row-major and tiled on chip; fp8 Q tilizes into bfp8_b. The output matches Q's dtype.
+    g.q_rm_df = tt::tt_metal::datatype_to_dataformat_converter(t.q.dtype());
+    g.q_is_fp8 = (t.q.dtype() == DataType::FP8_E4M3);
+    g.q_in_df = g.q_is_fp8 ? tt::DataFormat::Bfp8_b : g.q_rm_df;
+    g.out_df = g.q_rm_df;
+    g.q_row_bytes = g.d * t.q.element_size();
+    g.idx_row_bytes = g.topk * t.indices.element_size();
+    return g;
+}
+
+std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
+    const Geometry& g, bool causal, bool block_cache_serves_kv) {
+    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
+    constexpr uint32_t tile_bytes = tt::tile_size(bf);  // intermediates are bf16
+    std::vector<CbSpec> cbs = {
+        {cb_q_rm, g.q_row_bytes, g.H, g.q_rm_df},
+        {cb_q_in, tt::tile_size(g.q_in_df), g.Sqt * g.DHt, g.q_in_df},
+        {cb_scale, tile_bytes, 1, bf},
+        {cb_qk_im, tile_bytes, g.Sqt * g.Skt, bf},
+        {cb_max_a, tile_bytes, g.Sqt, bf},
+        {cb_max_b, tile_bytes, g.Sqt, bf},
+        {cb_sum_a, tile_bytes, g.Sqt, bf},
+        {cb_sum_b, tile_bytes, g.Sqt, bf},
+        {cb_out_a, tile_bytes, g.Sqt * g.vDHt, bf},
+        {cb_out_b, tile_bytes, g.Sqt * g.vDHt, bf},
+        {cb_corr, tile_bytes, g.Sqt, bf},
+        {cb_out_im, tile_bytes, g.Sqt * g.vDHt, bf},  // bf16 accumulator, full precision
+        {cb_out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df},
+        {cb_idx, g.idx_row_bytes, 1, bf},
+        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf},  // active block count + causal control
+        {cb_col_identity, tile_bytes, 1, bf},
+        {cb_recip_scratch, tile_bytes, 1, bf},
+        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf},
+        {cb_kack, message_page_bytes(1), 2, bf},
+    };
+    // Streamed K/V: one block, single-buffered -- the reader reserves it and the writer fills its half into the
+    // same L1. Absent when the block cache serves K/V (compute then reads the cache CBs in place).
+    if (!block_cache_serves_kv) {
+        cbs.push_back({cb_k_in, g.k_tile_bytes, g.k_tiles_per_block, g.k_df});
+        cbs.push_back({cb_v_in, g.v_tile_bytes, g.v_tiles_per_block, g.v_df});
+    }
+    // The mask tiles are touched only under CAUSAL_MASK_ENABLED, so causal-off skips their L1.
+    if (causal) {
+        cbs.push_back({cb_neginf, tile_bytes, 1, bf});
+        cbs.push_back({cb_vmask, tile_bytes, 2, bf});
+    }
+    return cbs;
+}
+
+uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
+    const uint32_t quantum =
+        std::max<uint32_t>(tt::tt_metal::hal::get_l1_alignment(), CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
+    return tt::align(words * static_cast<uint32_t>(sizeof(uint32_t)), quantum);
+}
+
+uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    if (!attrs.enable_kv_block_cache) {  // off: zero slots, no geometry derived on the host path
+        return 0;
+    }
+    const Geometry g = derive_kernel_geometry(attrs, t);
+    const uint64_t block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
+    // The hash runs before validation, so a not-yet-rejected block_size or d below a tile can give block_bytes == 0.
+    if (block_bytes == 0) {
+        return 0;
+    }
+    // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slot queue, each rounded up
+    // to the CB placement alignment as the program allocator does; the cache CBs are whole tiles, already aligned.
+    // L1 buffers fill the interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans
+    // L1_SMALL) is the bound when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's
+    // per-device buffers, trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
+    // Fewer than KV_CACHE_SLOTS_MIN fitting selects the streamed kernels; they need the L1 of one slot, so that
+    // program fails at launch only where the cache-off op would.
+    auto* device = t.q.device();
+    const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
+    uint64_t base_bytes =
+        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
+    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
+        base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
+    }
+    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t l1_end = l1_base + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const uint64_t l1_top = std::min<uint64_t>(device->lowest_occupied_compute_l1_address().value_or(l1_end), l1_end);
+    const uint64_t free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
+    const uint32_t n_fit =
+        static_cast<uint32_t>(std::min<uint64_t>(free_l1 / block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
+    return n_fit < sparse_sdpa_msa::KV_CACHE_SLOTS_MIN ? 0 : n_fit;
+}
+
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
@@ -255,6 +370,9 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        // The RESOLVED slot count: the CB layout and kernels bake it in, and auto depends on free L1 at this call.
+        // A request that resolves to no slots aliases the cache-off program (same layout, same kernels).
+        attrs.kv_cache_slots,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -445,24 +563,23 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    bool enable_kv_block_cache) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .scale = scale,
-            .block_size = block_size,
-            .compute_kernel_config = compute_kernel_config,
-            .cache_batch_idx = cache_batch_idx,
-            .block_cyclic = block_cyclic,
-            .chunk_start_idx = chunk_start_idx,
-            .cluster_axis = cluster_axis,
-        },
-        OperationType::tensor_args_t{
-            .q = q,
-            .k = k,
-            .v = v,
-            .indices = indices,
-        });
+    OperationType::operation_attributes_t attrs{
+        .scale = scale,
+        .block_size = block_size,
+        .compute_kernel_config = compute_kernel_config,
+        .cache_batch_idx = cache_batch_idx,
+        .block_cyclic = block_cyclic,
+        .chunk_start_idx = chunk_start_idx,
+        .cluster_axis = cluster_axis,
+        .enable_kv_block_cache = enable_kv_block_cache,
+    };
+    const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
+    // One resolution per call, against the L1 free now; the hash and the factory read this count.
+    attrs.kv_cache_slots = OperationType::resolve_kv_cache_slots(attrs, tensors);
+    return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 
 }  // namespace ttnn::prim

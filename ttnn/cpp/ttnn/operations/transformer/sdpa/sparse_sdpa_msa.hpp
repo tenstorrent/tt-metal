@@ -34,6 +34,9 @@ namespace ttnn::transformer {
 // SP (chunked prefill, post-AllGather); the gather kernels remap logical block ids to physical in-kernel instead
 // of the caller reordering to natural order. sp is read from the mesh on that axis; chunk_local is the per-shard
 // chunk length (= chunk_size_global / sp), which must equal q_isl or tp*q_isl.
+// `enable_kv_block_cache`: per-core L1 cache for re-selected K/V blocks, sized from the free L1 at call time (the
+// streamed kernels run when fewer than two slots fit). Output is identical either way; full contract on
+// SparseSDPAMsaParams::enable_kv_block_cache.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -46,6 +49,7 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool enable_kv_block_cache = false);
 
 }  // namespace ttnn::transformer
