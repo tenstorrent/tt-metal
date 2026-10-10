@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
@@ -652,12 +653,41 @@ Tensor scale_mask_softmax_in_place(
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
+    // Only the sharded factory has a ROW_MAJOR-mask reader. The default (interleaved, attention-optimized)
+    // factory reads every mask page as a tile, so the documented unsharded ROW_MAJOR form [B, 1, W/32, 32]
+    // was misread (and for W < 1024 its height made mask_Ht zero, a host divide-by-zero). Tilize it here, as the
+    // non-in-place scale_mask_softmax tilizes ROW_MAJOR masks: row-major [B, 1, W/32, 32] has the element order of
+    // [B, 1, 1, W].
+    // Only the documented shape is converted; anything else keeps reaching the ROW_MAJOR shape check in validation.
+    const bool tilize_rm_mask = [&] {
+        if (!mask.has_value() || mask->layout() != Layout::ROW_MAJOR || mask->is_sharded() || is_causal_mask ||
+            !std::holds_alternative<SoftmaxDefaultProgramConfig>(program_config)) {
+            return false;
+        }
+        const auto& tile = input_tensor.tensor_spec().tile();
+        const ttnn::Shape documented_shape(
+            {mask->padded_shape()[0], 1, input_tensor.padded_shape()[-1] / tile.get_width(), tile.get_height()});
+        return mask->padded_shape() == documented_shape;
+    }();
+    const std::optional<const Tensor> formatted_mask = [&]() -> std::optional<const Tensor> {
+        if (!tilize_rm_mask) {
+            return mask;
+        }
+        const auto& mask_shape = mask->padded_shape();
+        const ttnn::Shape flat_shape({mask_shape[0], 1, 1, mask_shape[-2] * mask_shape[-1]});
+        return ttnn::tilize_with_val_padding(
+            ttnn::reshape(*mask, flat_shape),
+            ttnn::operations::data_movement::pad_to_tile_shape(flat_shape),
+            -std::numeric_limits<float>::infinity(),
+            mask->memory_config());
+    }();
+
     // Operation
     return ttnn::prim::softmax(
         SoftmaxOperationType::ScaleMaskSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
         /*dim=*/dim,
-        /*mask=*/mask,
+        /*mask=*/formatted_mask,
         /*scale=*/scale,
         /*inplace=*/true,
         /*output_mem_config=*/input_tensor.memory_config(),

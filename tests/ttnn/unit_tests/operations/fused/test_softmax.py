@@ -974,3 +974,49 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+# The documented unsharded ROW_MAJOR mask form [B, 1, W/32, 32] must give the same result as the same mask as a
+# TILE [B, 1, 1, W] tensor. The in-place path used to hand it to the interleaved factory, which reads every mask
+# page as a tile (wrong result); for W < 1024 the mask height also made mask_Ht zero, a host divide-by-zero that
+# killed the process.
+@pytest.mark.parametrize("W", [384, 1024, 2048])
+@pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
+def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
+    torch.manual_seed(0)
+    B, C, H = 2, 4, 64
+    head_size = 64
+    scale = 1 / head_size**0.5
+    torch_input = torch.randn((B, C, H, W), dtype=torch.bfloat16)
+    mask = torch.where(torch.rand((B, 1, 1, W)) > 0.5, 0.0, -10000.0)
+    torch_output = F.softmax(torch_input.float() * scale + mask, dim=-1)
+
+    def run(ttnn_mask):
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        if api == "scale_mask_softmax_in_place":
+            ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask)
+        else:
+            ttnn_output = ttnn.transformer.attention_softmax_(ttnn_input, head_size=head_size, attention_mask=ttnn_mask)
+        return ttnn.to_torch(ttnn_output).float()
+
+    row_major_mask = ttnn.from_torch(
+        mask.reshape(B, 1, W // 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tile_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = run(row_major_mask)
+
+    assert torch.equal(output, run(tile_mask)), "ROW_MAJOR mask result differs from the same mask as TILE"
+    pcc = torch.corrcoef(torch.stack([output.flatten(), torch_output.flatten()]))[0, 1].item()
+    assert pcc > 0.998, f"pcc {pcc} against torch"
+
+
+# A ROW_MAJOR mask that is not in the documented [B, 1, W/32, 32] form must still be rejected.
+def test_scale_mask_softmax_in_place_row_major_mask_wrong_shape_rejected(device, expect_error):
+    B, C, H, W = 2, 4, 64, 2048
+    ttnn_input = ttnn.from_torch(torch.randn((B, C, H, W)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(
+        torch.zeros((B, 1, 32, W)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "Non-sharded mask shape must match expected shape"):
+        ttnn.scale_mask_softmax_in_place(ttnn_input, 0.125, ttnn_mask)
