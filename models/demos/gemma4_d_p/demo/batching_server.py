@@ -302,13 +302,13 @@ def _handler(scheduler):
     return Handler
 
 
-@torch.no_grad()
-@pytest.mark.timeout(0)
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-def test_batching_server(mesh_device, reset_seeds, monkeypatch):
-    num_slots = int(os.environ.get("DEMO_SLOTS", "4"))
-    capacity = int(os.environ.get("DEMO_CAPACITY", "65536"))
-    port = int(os.environ.get("DEMO_PORT", "8765"))
+def _zero_lanes(layout):
+    return [(slot, 0, torch.zeros(w, dtype=torch.int32)) for slot, w in enumerate(layout)]
+
+
+def start_scheduler(mesh_device, monkeypatch, num_slots, capacity):
+    """Build the batched model, compile and capture every step layout, and return (scheduler, runner). The caller runs
+    scheduler.run() on this thread (it owns the device) and releases the runner's traces afterwards."""
     # Batched steps keep HiFi2 projections, as an unbatched 2k chunk does (see BATCHING_POC.md).
     monkeypatch.setattr(attention_operations, "PROJECTION_FIDELITY_OVERRIDE", ttnn.MathFidelity.HiFi2)
 
@@ -319,9 +319,21 @@ def test_batching_server(mesh_device, reset_seeds, monkeypatch):
     runner.always_lanes = True
     layouts = step_layouts(num_slots)
     logger.info(f"[demo] compiling and capturing {len(layouts)} step traces")
-    runner.capture_all([[(slot, 0, torch.zeros(w, dtype=torch.int32)) for slot, w in enumerate(l)] for l in layouts])
+    runner.capture_all([_zero_lanes(layout) for layout in layouts])
+    # One untimed replay of every trace, so no request pays a trace's first replay.
+    for layout in layouts:
+        runner.step(_zero_lanes(layout))
+    return Scheduler(runner, num_slots, capacity, _text_token_stream(_hf_model_id())[0]), runner
 
-    scheduler = Scheduler(runner, num_slots, capacity, _text_token_stream(_hf_model_id())[0])
+
+@torch.no_grad()
+@pytest.mark.timeout(0)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+def test_batching_server(mesh_device, reset_seeds, monkeypatch):
+    num_slots = int(os.environ.get("DEMO_SLOTS", "4"))
+    capacity = int(os.environ.get("DEMO_CAPACITY", "65536"))
+    port = int(os.environ.get("DEMO_PORT", "8765"))
+    scheduler, runner = start_scheduler(mesh_device, monkeypatch, num_slots, capacity)
     # The default listen backlog (5) makes a burst of clients wait out a TCP SYN retry (~0.5-1 s).
     ThreadingHTTPServer.request_queue_size = 128
     server = ThreadingHTTPServer(("0.0.0.0", port), _handler(scheduler))
