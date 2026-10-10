@@ -123,6 +123,15 @@ callback); protocol 1 on the same; the D2H record ring and the `LayerAckService`
 binary opens the devices at startup) and the Python unit tests. The review and cleanup record is
 `LAYER_COMPLETION_REVIEW_PLAN.md`.
 
+### Hardware legs (2026-10-10, bh-glx-110-a10u02)
+
+DeepSeek-R1 1-rank, D2H, lcv2 worker: I1 eager and traced PASS; N3 (SIGSTOP 8 s stock, 25 s with `ETCD_LEASE_TTL=120`)
+PASS; N2 SIGINT PASS; N2 SIGKILL is not survivable end to end (torn H2D request, runner assert — the request path, not
+this protocol) and exposed two tt-d-gen gaps fixed in its lcv2 tree (stray completions dropped and counted; a dead
+engine thread fails liveness). N1 both ways PASS; a protocol-2 worker on a published protocol-1 counter segment now
+fails in 2 s instead of the connect budget (`LayerCompletionQueue::connect` grace, db87d721778). The 2-rank GLM-5.3 and
+Kimi K2.7 legs were blocked when the a10u14 allocation ended mid-run. Full results: LAYER_COMPLETION_REVIEW_PLAN.md §7.
+
 ## 6. Scheduler segment names
 
 `InterProcessCounterChannel::connect` validates nothing about the segment it attaches to, so the
