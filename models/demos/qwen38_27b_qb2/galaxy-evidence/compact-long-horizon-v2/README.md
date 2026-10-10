@@ -3,6 +3,11 @@
 October 10, 2026 UTC. The physical run is queued, not passed. The current
 full-model measurement/qualification source is unchanged.
 
+Queue update: the waiting v2 controller was superseded by v3 when the
+[projection sweep added compact-layout coverage](../projection-compact-layout-v1/README.md).
+The long-horizon source and test protocol are unchanged; the original launch
+receipt below is historical. No long-horizon hardware ran before the requeue.
+
 The compact GDN block has passed 64 changing-input updates. This separate test
 extends that comparison to 4096 updates at both B16 and B32 on four physical
 ranks, using layer-0 BFP8 weights and four changing BF16 input tensors. Each

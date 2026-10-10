@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-prefill-attention-v3-20261010.service",
+  "predecessor_invocation": "d7501d6753824d31846a13ecef289c32",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791658344.8439648,
+  "updated_at": "2026-10-10T18:52:44Z",
+  "predecessor": {
+    "MainPID": "268168",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "d7501d6753824d31846a13ecef289c32"
+  }
+}

@@ -14,7 +14,7 @@ from pathlib import Path
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import predecessor_ready
-from models.demos.qwen38_27b_qb2.tests.projection_sweep import BATCHES, ROLES, candidates, compare
+from models.demos.qwen38_27b_qb2.tests.projection_sweep import BATCHES, BOUNDARIES, candidates, compare, input_contract
 
 
 def validate_report(report):
@@ -26,20 +26,28 @@ def validate_report(report):
         raise ValueError("Projection sweep lacks complete clean evidence")
     rows = report["cases"]
     expected = [
-        (batch, role, config)
+        (batch, role, layout, config)
         for batch in BATCHES
-        for role in ROLES
+        for role, layout in BOUNDARIES
         for config in (*candidates(role), candidates(role)[0])
     ]
-    if [(r["batch"], r["role"], r["config"]) for r in rows] != expected:
+    if [(r["batch"], r["role"], r.get("input_layout"), r["config"]) for r in rows] != expected:
         raise ValueError("Projection sweep coverage differs from the frozen plan")
+    if any(r.get("input_contract") != input_contract(r["batch"], r["role"], r["input_layout"]) for r in rows):
+        raise ValueError("Projection sweep input geometry differs from the producer boundary")
     comparisons = []
     for batch in BATCHES:
-        for role in ROLES:
-            group = [r for r in rows if r["batch"] == batch and r["role"] == role]
+        for role, layout in BOUNDARIES:
+            group = [r for r in rows if r["batch"] == batch and r["role"] == role and r["input_layout"] == layout]
             for r in group[1:-1]:
                 comparisons.append(
-                    dict(batch=batch, role=role, config=r["config"], **compare(group[0], r, group[-1], role=role))
+                    dict(
+                        batch=batch,
+                        role=role,
+                        input_layout=layout,
+                        config=r["config"],
+                        **compare(group[0], r, group[-1], role=role),
+                    )
                 )
     if comparisons != report["comparisons"]:
         raise ValueError("Projection comparisons disagree with raw measurements")

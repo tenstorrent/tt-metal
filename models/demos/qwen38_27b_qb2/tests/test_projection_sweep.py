@@ -15,7 +15,15 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import save
-from models.demos.qwen38_27b_qb2.tests.projection_sweep import BATCHES, ROLES, candidates, compare, geometry
+from models.demos.qwen38_27b_qb2.tests.projection_sweep import (
+    BATCHES,
+    BOUNDARIES,
+    ROLES,
+    candidates,
+    compare,
+    geometry,
+    input_contract,
+)
 from models.demos.qwen38_27b_qb2.tests.test_gdn_epilogue import digest, download
 from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import capture
 from models.demos.qwen38_27b_qb2.tt.decoder import Qwen38Decoder
@@ -35,17 +43,22 @@ def metrics(actual, expected):
     return dict(relative_rms=rms, pcc=pcc, equal=torch.equal(actual, expected))
 
 
-def upload(mesh, values, *, public):
+def upload(mesh, values, *, role, input_layout):
     # Different rank/user inputs catch accidental replication and all-reduce omissions.
-    shape = (values.shape[0], 1, values.shape[-1]) if public else (1, 1, values.shape[0], values.shape[-1])
-    return ttnn.from_torch(
+    contract = input_contract(values.shape[0], role, input_layout)
+    shape = [*contract["shape"][:-1], values.shape[-1]]
+    memory = ttnn.L1_MEMORY_CONFIG if contract["memory"] == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    result = ttnn.from_torch(
         values.reshape(shape),
         device=mesh,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if public else ttnn.L1_MEMORY_CONFIG,
+        memory_config=memory,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
     )
+    assert list(result.shape) == contract["shape"] and list(result.padded_shape) == contract["padded_shape"]
+    assert result.memory_config() == memory
+    return result
 
 
 def weight_for(layer, role, config, canonical):
@@ -78,17 +91,20 @@ def weight_for(layer, role, config, canonical):
     return result
 
 
-def measure(layer, role, config, weight, inputs, golds, baseline, *, label):
+def measure(layer, role, config, weight, inputs, golds, baseline, *, label, input_layout):
     spec = ROLES[role]
     candidate = copy.copy(layer)
     candidate.policy = dict(layer.policy, **{role + "_" + key: value for key, value in config.items()})
     candidate.dram_weights = dict(layer.dram_weights, **{spec["name"] + ".weight": weight})
-    keep_sharded = role == "down"
+    contract = input_contract(
+        inputs[0].shape[-2] if input_layout == "compact_l1" else inputs[0].shape[0], role, input_layout
+    )
+    keep_sharded = contract["keep_sharded"]
 
     def invoke(x):
         return candidate._linear(x, spec["name"], keep_sharded=keep_sharded)
 
-    # Include precisely the public GDN or compact MLP projection boundary,
+    # Include the declared compact/public GDN or compact MLP projection boundary,
     # including native TP all-reduce. Setup, weight repacking and readbacks are excluded.
     warmup = invoke(inputs[0])
     ttnn.synchronize_device(layer.device)
@@ -137,6 +153,8 @@ def measure(layer, role, config, weight, inputs, golds, baseline, *, label):
         assert hashes == [digest(v.reshape(-1, spec["n"])) for v in download(output)]
         row = dict(
             label=label,
+            input_layout=input_layout,
+            input_contract=contract,
             config=config,
             geometry=geometry(role, config),
             samples_us=samples,
@@ -172,7 +190,7 @@ def test_projection_sweep():
         source_sha256=model_source_hashes(source),
         checkpoint=str(checkpoint),
         precision=precision,
-        scope="Actual layer-0 BFP8 weights, synthetic rank-distinct inputs; TP4 projection+layout+CCL, not full-model performance",
+        scope="Actual layer-0 BFP8 weights, rank-distinct inputs; separate compact-L1/public-DRAM projection+layout+CCL boundaries, not full-model performance",
         promoted_to_serving=False,
     )
     save(path, report)
@@ -191,17 +209,19 @@ def test_projection_sweep():
             policy={**decoder_policy(precision, 0), "ring": False, "compact_decode_residual": True},
         )
         for batch in BATCHES:
-            for role, spec in ROLES.items():
-                report.update(state="running", active_batch=batch, active_role=role)
+            for role, input_layout in BOUNDARIES:
+                spec = ROLES[role]
+                contract = input_contract(batch, role, input_layout)
+                report.update(state="running", active_batch=batch, active_role=role, active_input_layout=input_layout)
                 canonical = download(layer.weights[spec["name"] + ".weight"])
                 assert len(canonical) == 4
                 rng = torch.Generator().manual_seed(92700 + batch + spec["k"])
                 hosts = [torch.randn(batch, spec["k"] * 4, generator=rng).bfloat16() for _ in range(2)]
-                inputs = [upload(mesh, h, public=role == "output") for h in (*hosts, hosts[0])]
+                inputs = [upload(mesh, h, role=role, input_layout=input_layout) for h in (*hosts, hosts[0])]
                 golds = [[a.float() @ w.float() for a, w in zip(h.chunk(4, dim=-1), canonical)] for h in hosts]
                 baseline = []
                 for index in (0, 1):
-                    value = layer._linear(inputs[index], spec["name"], keep_sharded=role == "down")
+                    value = layer._linear(inputs[index], spec["name"], keep_sharded=contract["keep_sharded"])
                     baseline.append([v.reshape(batch, spec["n"]) for v in download(value)])
                     del value
                 weights = {2: layer.dram_weights[spec["name"] + ".weight"]}
@@ -213,7 +233,17 @@ def test_projection_sweep():
                     save(path, report)
                     if config["readers"] not in weights:
                         weights[config["readers"]] = weight_for(layer, role, config, canonical)
-                    row = measure(layer, role, config, weights[config["readers"]], inputs, golds, baseline, label=label)
+                    row = measure(
+                        layer,
+                        role,
+                        config,
+                        weights[config["readers"]],
+                        inputs,
+                        golds,
+                        baseline,
+                        label=label,
+                        input_layout=input_layout,
+                    )
                     row.update(batch=batch, role=role)
                     group.append(row)
                     report["cases"].append(row)
@@ -222,7 +252,9 @@ def test_projection_sweep():
                 assert group[0]["accuracy_passed"] and group[-1]["accuracy_passed"], "Baseline reference failed"
                 for row in group[1:-1]:
                     result = compare(group[0], row, group[-1], role=role)
-                    report["comparisons"].append(dict(batch=batch, role=role, config=row["config"], **result))
+                    report["comparisons"].append(
+                        dict(batch=batch, role=role, input_layout=input_layout, config=row["config"], **result)
+                    )
                 del weights, inputs, baseline, canonical
                 gc.collect()
                 save(path, report)

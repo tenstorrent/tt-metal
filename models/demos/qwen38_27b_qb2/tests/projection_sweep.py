@@ -10,6 +10,21 @@ ROLES = {
     "down": dict(name="mlp.down_proj", k=4352, n=5120, layers=64, block=17),
 }
 BATCHES = (16, 32)
+BOUNDARIES = (("output", "compact_l1"), ("down", "compact_l1"), ("output", "public_dram"))
+
+
+def input_contract(batch, role, layout):
+    """Record the producer layout; expanded and compact rows have different costs."""
+    if batch not in BATCHES or (role, layout) not in BOUNDARIES:
+        raise ValueError("Unsupported projection input boundary")
+    width = ROLES[role]["k"]
+    compact = layout == "compact_l1"
+    return dict(
+        shape=[1, 1, batch, width] if compact else [batch, 1, width],
+        padded_shape=[1, 1, 32, width] if compact else [batch, 32, width],
+        memory="l1" if compact else "dram",
+        keep_sharded=compact,
+    )
 
 
 def candidates(role):
@@ -46,6 +61,8 @@ def geometry(role, config, *, banks=8):
 
 def compare(before, candidate, after, *, role):
     """Projection plus layout/collective time; never label this model throughput."""
+    if any(row.get("input_layout") != before.get("input_layout") for row in (candidate, after)):
+        raise ValueError("Projection input layout changed within the timing bracket")
     timings = [r["samples_us"] for r in (before, candidate, after)]
     if any(len(v) != 5 for v in timings) or any(not math.isfinite(t) or t <= 0 for v in timings for t in v):
         raise ValueError("Require five finite positive timing samples in each bracket")

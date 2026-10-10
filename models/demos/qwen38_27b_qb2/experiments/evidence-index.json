@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:47:59.793104+00:00",
+  "generated_at": "2026-10-10T18:55:26.918965+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -179,8 +179,8 @@
     },
     {
       "path": "demo/run_projection_sweep.py",
-      "bytes": 6612,
-      "sha256": "96e8f00e598124fc80e77da072c0cbb90175c4c7b6ccd5a778d1d5b146d7e74c"
+      "bytes": 7092,
+      "sha256": "e4f61540eb762dd2c73a2db45d14709c6b1d57a6291a0a921facbf55fb19a3d9"
     },
     {
       "path": "experiments/ACCURACY-ABLATIONS.md",
@@ -194,13 +194,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 169715,
-      "sha256": "69a84ae53dcf623fbc34ccd2c85433891fc164dbf10725a69a6d434510a4d026"
+      "bytes": 171836,
+      "sha256": "adedf8dad25f916e13c1dfc89a284d1559889f2902d931ec01ba80258b6fd25b"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 23894,
-      "sha256": "448cbdb11548fed39ad27098b00593d735dc9edb677d0d72dbc5484229bb1fc5"
+      "bytes": 24043,
+      "sha256": "70d9bfd4938e57b6a0f70436f7cbe6cae0ee03013e1bb8fca7f8af13b5dbe0f5"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -2148,8 +2148,8 @@
     },
     {
       "path": "galaxy-evidence/compact-long-horizon-v2/README.md",
-      "bytes": 3434,
-      "sha256": "7e649ac55dbc9451c096d5bcf9f0390ef6604366bcc91708b24b927e8a302fac"
+      "bytes": 3753,
+      "sha256": "637d8975c2fa29655d8fb2ea650ded827f8b55f3f84046b9cde4b68718625366"
     },
     {
       "path": "galaxy-evidence/compact-long-horizon-v2/frozen-gdn-reader.cpp.gz",
@@ -9681,6 +9681,91 @@
       "scope": "Do not publish stage timings from this incomplete capture"
     },
     {
+      "path": "galaxy-evidence/projection-compact-layout-v1/README.md",
+      "bytes": 3503,
+      "sha256": "17f7b66432e77eb254d05bc410dd314b8e4951b375a414cacee1cf37130a42f5"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/compact-gdn-v3/before/sweep.json",
+      "bytes": 24046,
+      "sha256": "7617f2562903b334852965b04c102c82ea17d199f4d77f62703ca1dc6d7e1b33"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/compact-gdn-v3/queue.json",
+      "bytes": 3869,
+      "sha256": "1fdd2bae33c6509d0807c79874720316784f955b06a186e4ac0b950f54a96681"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/compact-long-horizon-control-v3/launch-unit.json",
+      "bytes": 155,
+      "sha256": "2c719cc7db604de44288727dc17805579cadd0eb8b3381e9ce8b4e10dd83b02e"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/compact-long-horizon-control-v3/launch.json",
+      "bytes": 2760,
+      "sha256": "13abe928f9dce6f0cf387f305af1c486a2d543f891b6c4677eb1b4f4d141bc40"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/compact-long-horizon-v3/queue.json",
+      "bytes": 617,
+      "sha256": "c0879321c0a93ec6a8e5bc950e771116c959be8225781d37c9fc14bc736c58d9"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/prefill-attention-control-v3/launch-unit.json",
+      "bytes": 155,
+      "sha256": "47b5fd9478a06e499d339cebd0ade7e3077ea60dd0cdf070fe784cb11adccd0f"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/prefill-attention-control-v3/launch.json",
+      "bytes": 2755,
+      "sha256": "19470ebe0d97f037a470480d31755cfd96ed649dd3ba35c74d9c464cddbc7685"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/prefill-attention-v3/queue.json",
+      "bytes": 616,
+      "sha256": "2cd40640ce1c0b512d543c896aa061a8ebd1f93a6ed89bd73d4dad85ebb89cc8"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/launch-unit.json",
+      "bytes": 155,
+      "sha256": "c6f6abbb9205b129f0c249abb51815f4774fda3363b5975d5f3ffb986b5ea062"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/launch.json",
+      "bytes": 2425,
+      "sha256": "88c5115ce9416bc8655262b75470745259acd3faa141e040d12fe58f724fa37e"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/preflight.log.gz",
+      "bytes": 381,
+      "sha256": "70113031fbe149692302573587dd52cdcf1e63743691ec84f2b94607af6bd283"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/requeue-audit.json",
+      "bytes": 6569,
+      "sha256": "9ddefcad8d24647ef5880c692d1ac5ceaefd8df1e0769faa6466e28be42e8070"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/source-manifest.json",
+      "bytes": 27850,
+      "sha256": "89e197d429c5718817c32b75e475fedce9017482a449f336ac107065531c111b"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-control-v6/unit.xml.gz",
+      "bytes": 10787,
+      "sha256": "fa2f78b8b8a0983b608a75db00be2c1359ec892be2619dd9b2660b9756b2b1b4"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/receipts/projection-sweep-v6/queue.json",
+      "bytes": 616,
+      "sha256": "d455bbf0418c926bf6def300d1cfadc9c211cdcbc6210029a91aa902764b5355"
+    },
+    {
+      "path": "galaxy-evidence/projection-compact-layout-v1/stage-projection.py.gz",
+      "bytes": 2961,
+      "sha256": "0dd7f74e1d80c6f0357c4a83b152739799f6811c7f7f33e7e6096a0506e536ca"
+    },
+    {
       "path": "galaxy-evidence/projection-sweep-launch-v1/README.md",
       "bytes": 2310,
       "sha256": "4e7d8d6459c1926146be80ba6739c0b9cc48de5d7282d538107ad04bb21217a3"
@@ -11207,8 +11292,8 @@
     },
     {
       "path": "tests/projection_sweep.py",
-      "bytes": 3214,
-      "sha256": "df11e23523bc0f650b563528bb7a49689defee356faf180a1145628fe8b94255"
+      "bytes": 4056,
+      "sha256": "f3c703848f01b18218c681e83ca380f3651dab5efa16881d8c9f9df124585b73"
     },
     {
       "path": "tests/reference_comparison.py",
@@ -11292,8 +11377,8 @@
     },
     {
       "path": "tests/test_projection_sweep.py",
-      "bytes": 11991,
-      "sha256": "493ccf7c5ea6a57211f948bc5991ba4c137ead08fa1defece0aa44db614210f3"
+      "bytes": 13074,
+      "sha256": "e367683fb7761be0c2049006f182ca39f030e1e68d4d087206e29fc09b000734"
     },
     {
       "path": "tests/unit/test_accuracy_followup.py",
@@ -11402,8 +11487,8 @@
     },
     {
       "path": "tests/unit/test_projection_sweep.py",
-      "bytes": 3091,
-      "sha256": "e6817c43fd97ab56a2862b74e80480c85ffe2794efca031bc92c9f8a853f018b"
+      "bytes": 6066,
+      "sha256": "9fd51d9ca696be8b6de2b72f7298c9b578828ce4f1796d1ec7044542ed9af8a7"
     },
     {
       "path": "tests/unit/test_reference_comparison.py",

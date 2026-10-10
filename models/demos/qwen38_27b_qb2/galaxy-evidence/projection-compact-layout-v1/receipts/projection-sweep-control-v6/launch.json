@@ -1,0 +1,58 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-projection-sweep-v6-20261010",
+    "--property=RuntimeMaxSec=28h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_projection_sweep",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6/source-manifest.json",
+    "--after-unit",
+    "qwen38-compact-followup-v3-20261010.service",
+    "--after-invocation",
+    "28c688b7780445999483523a9cbc75fc",
+    "--after-receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/queue.json"
+  ],
+  "created_at": 1791658344.7152567,
+  "frozen_source_unchanged": false,
+  "reason": "Measure compact-L1 output projection as well as expanded-DRAM output and compact MLP down, each with matched controls",
+  "source_parent": "0b651abce7e",
+  "changed_files": [
+    "models/demos/qwen38_27b_qb2/tests/projection_sweep.py",
+    "models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_projection_sweep.py",
+    "models/demos/qwen38_27b_qb2/demo/run_projection_sweep.py"
+  ],
+  "source_manifest_sha256": "89e197d429c5718817c32b75e475fedce9017482a449f336ac107065531c111b",
+  "model_matches_compact_v3": true,
+  "physical_cases": 66,
+  "expected_physical_minutes": [
+    15,
+    45
+  ],
+  "expected_incremental_model_saving_ms": [
+    1.5,
+    3.5
+  ],
+  "expected_gain_is_estimate": true
+}

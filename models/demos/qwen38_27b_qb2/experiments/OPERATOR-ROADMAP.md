@@ -266,10 +266,12 @@ Existing baseline family timings alone do not prove another 27 ms recoverable.
 If the remaining target budget is not met, report that gap instead of presenting
 small tuning gains or a speculative multiplier as completion.
 
-The [original projection design](../galaxy-evidence/projection-sweep-launch-v1/README.md)
-is now running as a waiting v5 follower after compact-v3 and its conditional
-qualification/profile-v3. See the
-[current recovery receipts](../galaxy-evidence/compact-pool-recovery-v1/README.md)
-for exact unit identities; historical launch files are not live status. The larger
+The [updated projection design](../galaxy-evidence/projection-compact-layout-v1/README.md)
+is now a waiting v6 follower after compact-v3 and its conditional
+qualification/profile-v3. It adds the actual compact-L1 GDN output boundary
+to the older public-DRAM output and compact MLP tests: 66 measurements with
+separate matched controls. Prefill-v3 and 4K-validation-v3 follow it using their
+unchanged sources. See the linked receipts for exact unit identities;
+historical launch files are not live status. The larger
 compact-pipeline work remains the primary native opportunity;
 projection tuning is a bounded supporting experiment, not a promised path to 30.
