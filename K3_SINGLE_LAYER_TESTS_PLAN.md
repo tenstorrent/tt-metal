@@ -451,6 +451,16 @@ Deleting a command without lowering its entry's timeout frees nothing.
 | 3 Scenarios (3–4 d) | S1–S9 for P0 cases on LB, then GH; P1 cases | all P0 green on both boxes; thresholds from measurements with margin; negative controls fail as expected; runtime per case recorded |
 | 4 CI (1–2 d) | budget approval; LB + GH entries; non-skip guards; retire old LB test after S8; GH `two_iters` switch | dispatched runs green: `blackhole-e2e-tests.yaml` (`model=kimi_k3`, LoudBox) and `blaze-models-prefill-tests.yaml` (`k3_single_layer`) |
 
+### 7.1 Status (2026-10-10, LB 2x4 `bh-lb-19`)
+
+| Phase | State | Evidence / notes |
+|---|---|---|
+| 0a | done on the dev LB host | §5.5 table. Still owed: the same bench on an LB and a GH CI runner. |
+| 0 | MoE option **(c) chosen and built**; rest partly measured | `PooledRoutedExperts`: 16 pools replicated, each (chip, slot) expert made distinct on device by row-sign flips of `down^T`, exact under bf4 (all 112 slots x 8 chips checked; only signed zeros differ). Build: 112 slots/chip in **7.5 s** on LB. Per-case S1 wall on LB (warm JIT, incl. weight gen + build + reference): **23-100 s**, all 11 cases 4 min. Not yet measured: GH, trace region, peak DRAM/L1. |
+| 1 | **done** (commit `cfdee245060`) | 93-layer split walk bitwise-equal to a settled undivided walk at every tested split on LB; tests/attn_res 813 pass. Owed: GH-only `test_transformer_pipeline_split.py`. Found and fixed an op bug on the way: `attn_res_weighted_reduce_nc` overran its CBs for R = 7, 11, ..., 31 (commit `1bbcb98ef8a`). |
+| 2 | S1 green for **all 11 cases** on LB | Synthetic MLA weights recalibrated so the attention branch is visible (default 0.02 std hid it under the FFN); every comparison asserts PCC and relative L2; branch-visibility and AttnRes-entropy guards. Device MLA alone measures PCC ~0.998 vs the reference, so MLA cases carry a looser layer bar. Deferred to Phase 3: device-routed MoE reference + top-k flip rate (needs an eager routing export), rotation-aware KV unrotate for rotated starts. |
+| 3, 4 | not started | |
+
 **Commit gate (every phase, every commit).** No code is committed until it has been reviewed by
 **both** of these:
 - a **separate Claude Code instance** (fresh session, not the one that wrote the code; e.g.

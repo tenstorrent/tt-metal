@@ -418,8 +418,8 @@ def make_small_kda_test_config(
     )
 
 
-def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
-    generator = torch.Generator().manual_seed(20260723)
+def random_weights(config: KDAConfig, seed: int = 20260723) -> dict[str, torch.Tensor]:
+    generator = torch.Generator().manual_seed(seed)
 
     def normal(*shape: int, scale: float = 0.05) -> torch.Tensor:
         return scale * torch.randn(*shape, generator=generator)

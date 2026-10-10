@@ -533,7 +533,27 @@ class TtRoutedExpert(LightweightModule):
         self.up_projs_pc = None
         self.down_projs_pc = None
 
-        if torch_weights is not None:
+        if hasattr(torch_weights, "build_device_weights"):
+            # A weight provider builds the per-slot device tensors itself, in the placement this
+            # module would have used. Used by tests whose experts are synthetic and derived on
+            # device (the single-layer suite's pooled experts), where converting every expert on
+            # host would dominate the run. Nothing can be cached -- there is no host weight to key
+            # on -- so a cache path is refused: the layer would be marked complete without these
+            # tensorbins and a later cached build would load placeholders (#54841).
+            if weight_cache_path is not None:
+                raise ValueError("a routed-expert weight provider cannot be combined with a weight cache path")
+            assert (
+                len(torch_weights) == total_experts
+            ), f"weight provider describes {len(torch_weights)} experts, the mesh holds {total_experts}"
+            result = torch_weights.build_device_weights(
+                self.mesh_device,
+                experts_per_chip,
+                self.weights_dtype,
+                lambda n_dim: routed_expert_weight_memory_config(
+                    self.mesh_device, n_dim, dram_nd_sharded=self.weights_dram_nd_sharded
+                ),
+            )
+        elif torch_weights is not None:
             assert len(torch_weights) == total_experts, (
                 f"Expected {total_experts} expert weights (num_devices={self.num_devices} * "
                 f"experts_per_chip={experts_per_chip}), got {len(torch_weights)}"
