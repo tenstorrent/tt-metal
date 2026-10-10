@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <optional>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
@@ -22,10 +23,196 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
+namespace {
+
+// Tilizes a row-major interleaved input into a tile interleaved output with 4 reader threads and 2
+// single-thread writer kernels, all with implicit sync. A sub-block is tile_height row segments of
+// sub_block_tiles tiles, one DFB entry each; the readers take sub-blocks in turn through an
+// ALL-pattern DFB (Quasar unpack ignores the stride of a STRIDED one), and compute sends even and odd
+// sub-blocks to separate tile DFBs, one per writer kernel. Rows past the input are read from a scratch
+// row of pad values. Width padding is not supported, and height padding must sit in the last tile
+// row. Returns std::nullopt when the tensors do not fit this path.
+std::optional<ttnn::device_operation::ProgramArtifacts> create_tilize_split_program(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& a, const Tensor& output) {
+    constexpr uint32_t num_reader_threads = 4;
+    const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
+                              output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+    if (a.is_sharded() || output.is_sharded() || operation_attributes.sub_core_grids.has_value() || fp32_llk_acc ||
+        a.element_size() != 2) {
+        return std::nullopt;
+    }
+    const uint32_t tile_width = output.tensor_spec().tile().get_width();
+    const uint32_t tile_height = output.tensor_spec().tile().get_height();
+    const uint32_t width = output.padded_shape()[-1];
+    const uint32_t row_bytes = width * a.element_size();
+    if (a.logical_shape()[-1] != width || a.buffer()->page_size() != row_bytes) {
+        return std::nullopt;
+    }
+    const uint32_t num_blocks = output.physical_volume() / width / tile_height;
+    const uint32_t tiles_per_row = width / tile_width;
+    // Padded row r is input row r: padding rows exist only past the last input row, which needs
+    // either no padding or a single leading-dim slice.
+    const uint32_t num_input_rows = a.logical_volume() / width;
+    const uint32_t num_slices = output.physical_volume() / (output.padded_shape()[-2] * width);
+    if (num_input_rows != num_blocks * tile_height &&
+        !(num_slices == 1 && num_input_rows + tile_height > num_blocks * tile_height)) {
+        return std::nullopt;
+    }
+
+    MeshDevice* device = a.device();
+    auto [ncores, all_cores, full_core_range, cliff_core_range, nblocks_per_core, nblocks_per_core_cliff] =
+        ttnn::split_blocks_for_tilize(device->compute_with_storage_grid_size(), num_blocks);
+    const bool has_cliff = !cliff_core_range.ranges().empty();
+    const uint32_t min_blocks_per_core =
+        has_cliff ? std::min(nblocks_per_core, nblocks_per_core_cliff) : nblocks_per_core;
+    // The widest sub-block (up to 8 tiles) that still gives every reader thread at least one, since
+    // the DFB's final-credit barrier waits for all of a kernel's threads.
+    uint32_t sub_block_tiles = 0;
+    for (uint32_t w = std::min(8u, tiles_per_row); w > 0; --w) {
+        if (tiles_per_row % w == 0 && min_blocks_per_core * (tiles_per_row / w) >= num_reader_threads) {
+            sub_block_tiles = w;
+            break;
+        }
+    }
+    if (sub_block_tiles == 0) {
+        return std::nullopt;
+    }
+    const uint32_t sub_blocks_per_row = tiles_per_row / sub_block_tiles;
+    const uint32_t row_seg_bytes = sub_block_tiles * tile_width * a.element_size();
+
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+
+    const DFBSpecName IN{"in"};
+    const DFBSpecName OUT{"out"};
+    const DFBSpecName OUT_ODD{"out_odd"};
+    const ScratchpadSpecName PAD{"pad_row"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName WRITER_ODD{"writer_odd"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    // Two sub-blocks per reader thread in, two sub-blocks per writer out.
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN,
+        .entry_size = row_seg_bytes,
+        .num_entries = 2 * num_reader_threads * tile_height,
+        .data_format_metadata = input_cb_data_format,
+    };
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = tt::tile_size(output_cb_data_format),
+        .num_entries = 2 * sub_block_tiles,
+        .data_format_metadata = output_cb_data_format,
+    };
+    DataflowBufferSpec out_odd_dfb = out_dfb;
+    out_odd_dfb.unique_id = OUT_ODD;
+
+    const std::filesystem::path kdir(
+        "ttnn/cpp/ttnn/operations/experimental/quasar/tilize_with_val_padding/device/kernels/");
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kdir / "dataflow/reader_unary_pad_rows_staged.cpp",
+        .num_threads = num_reader_threads,
+        .dfb_bindings = {ProducerOf(IN, "in")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args =
+            {{"tile_height", tile_height},
+             {"sub_blocks_per_row", sub_blocks_per_row},
+             {"row_seg_bytes", row_seg_bytes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sub_blocks", "start_row", "num_input_rows", "pad_value"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PAD, .accessor_name = "pad"}};
+    auto make_writer = [&](const KernelSpecName& id, const DFBSpecName& dfb) {
+        return KernelSpec{
+            .unique_id = id,
+            .source = kdir / "dataflow/writer_unary_staged_tiles_metal2.cpp",
+            .dfb_bindings = {ConsumerOf(dfb, "out")},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+            .compile_time_args =
+                {{"sub_block_tiles", sub_block_tiles},
+                 {"sub_blocks_per_row", sub_blocks_per_row},
+                 {"tiles_per_row", tiles_per_row}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_sub_blocks", "first_sub_block", "start_tile"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
+    };
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kdir / "compute/tilize_split_output_metal2.cpp",
+        .dfb_bindings = {AllConsumerOf(IN, "in"), ProducerOf(OUT, "out"), ProducerOf(OUT_ODD, "out_odd")},
+        .compile_time_args = {{"sub_block_tiles", sub_block_tiles}, {"block_rows", tile_height}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sub_blocks"}},
+        .hw_config = ttnn::to_compute_hardware_config(
+            ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
+    };
+
+    const uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
+    KernelRunArgs::RuntimeArgValues reader_args;
+    KernelRunArgs::RuntimeArgValues writer_args;
+    KernelRunArgs::RuntimeArgValues writer_odd_args;
+    KernelRunArgs::RuntimeArgValues compute_args;
+    uint32_t first_block = 0;
+    auto add_core = [&](const CoreCoord& core, uint32_t num_blocks_on_core) {
+        const uint32_t num_sub_blocks = num_blocks_on_core * sub_blocks_per_row;
+        AddRuntimeArgsForNode(
+            reader_args,
+            core,
+            {{"num_sub_blocks", num_sub_blocks},
+             {"start_row", first_block * tile_height},
+             {"num_input_rows", num_input_rows},
+             {"pad_value", packed_pad_value}});
+        for (auto* args : {&writer_args, &writer_odd_args}) {
+            AddRuntimeArgsForNode(
+                *args,
+                core,
+                {{"num_sub_blocks", num_sub_blocks},
+                 {"first_sub_block", args == &writer_args ? 0u : 1u},
+                 {"start_tile", first_block * tiles_per_row}});
+        }
+        compute_args["num_sub_blocks"][core] = num_sub_blocks;
+        first_block += num_blocks_on_core;
+    };
+    for (const auto& core : corerange_to_cores(full_core_range, std::nullopt, true)) {
+        add_core(core, nblocks_per_core);
+    }
+    for (const auto& core : corerange_to_cores(cliff_core_range, std::nullopt, true)) {
+        add_core(core, nblocks_per_core_cliff);
+    }
+
+    ProgramSpec spec{
+        .name = "tilize_with_val_padding_split",
+        .kernels = {reader, make_writer(WRITER, OUT), make_writer(WRITER_ODD, OUT_ODD), compute},
+        .dataflow_buffers = {in_dfb, out_dfb, out_odd_dfb},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "tilize_split", .kernels = {READER, WRITER, WRITER_ODD, COMPUTE}, .target_nodes = all_cores}},
+    };
+    spec.scratchpads = {ScratchpadSpec{.unique_id = PAD, .size_per_node = num_reader_threads * row_seg_bytes}};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+        KernelRunArgs{.kernel = WRITER_ODD, .runtime_arg_values = std::move(writer_odd_args)},
+        KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)}};
+    run_args.tensor_args = {{INPUT, a.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFactory::create_program_artifacts(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, Tensor& tensor_return_value) {
     const Tensor& a = input_tensor;
     const Tensor& output = tensor_return_value;
+    if (auto split = create_tilize_split_program(operation_attributes, a, output)) {
+        return std::move(*split);
+    }
     const auto& input_mesh_tensor = a.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
