@@ -37,6 +37,9 @@ uint32_t pack_four_float8_e4m3_into_uint32(float8_e4m3 a, float8_e4m3 b, float8_
 // Unpacks a packed uint32 vector (4 fp8 bytes per word) into float8_e4m3 values.
 std::vector<float8_e4m3> unpack_uint32_vec_into_float8_e4m3_vec(const std::vector<uint32_t>& data);
 
-// Generates num_bytes fp8_e4m3 values from a uniform distribution U(0, rand_max_float) + offset, packed 4 per uint32.
+// Compatibility shim; use tests/tt_metal/test_utils/float8_utils.hpp instead.
+[[deprecated(
+    "Use tt::test_utils::create_random_packed_float8_e4m3 from tests/tt_metal/test_utils/float8_utils.hpp instead. "
+    "This API will be removed after 2026-11-01.")]]
 std::vector<uint32_t> create_random_vector_of_float8_e4m3(
     size_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);

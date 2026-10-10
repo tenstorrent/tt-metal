@@ -28,7 +28,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/int8.hpp>
-#include <tt-metalium/uint8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -44,8 +43,10 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/test_utils/uint8_utils.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -809,8 +810,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_float8_e4m3(
-                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles_total, /*rand_max_float=*/20, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_packed_float8_e4m3(
+                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles_total, /*rand_max=*/20.0f, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
@@ -857,8 +858,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data =
-                create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_packed_uint8(
+                tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -1119,7 +1120,7 @@ static void run_quasar_tilize_untilize_test(
     if (input_data_format == tt::DataFormat::Int8) {
         src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::UInt8) {
-        src_vec = create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
+        src_vec = tt::test_utils::create_random_packed_uint8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::Int16) {
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
@@ -1564,8 +1565,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_float8_e4m3(
-                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_t, /*rand_max_float=*/20, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_packed_float8_e4m3(
+                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_t, /*rand_max=*/20.0f, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
@@ -1611,7 +1612,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
+            auto src_data =
+                tt::test_utils::create_random_packed_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
