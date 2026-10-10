@@ -138,8 +138,8 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_activated_scores(cb_activated_scores_id);
 #if defined(ARCH_BLACKHOLE)
-    // Nothing in the sigmoid loop changes these, so they are set up once a row; the softplus and sqrt inits alternate.
-    constexpr bool setup_once = score_func != SCORE_FUNC_SQRTSOFTPLUS;
+    // Nothing in the loop changes these, so they are set up once a row.
+    constexpr bool setup_once = true;
 #else
     constexpr bool setup_once = false;
 #endif
@@ -147,7 +147,12 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
         reconfig_data_format_srca(cb_in_scores_id);
         copy_init(cb_in_scores_id);
-        sigmoid_tile_init();
+        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+            softplus_tile_init();
+            sqrt_tile_init();
+        } else {
+            sigmoid_tile_init();
+        }
         pack_reconfig_data_format(cb_activated_scores_id);
     }
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
@@ -164,9 +169,13 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
             constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
             constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
-            softplus_tile_init();
+            if constexpr (!setup_once) {
+                softplus_tile_init();
+            }
             softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
-            sqrt_tile_init();
+            if constexpr (!setup_once) {
+                sqrt_tile_init();
+            }
             sqrt_tile(0);
         } else {
             if constexpr (!setup_once) {
