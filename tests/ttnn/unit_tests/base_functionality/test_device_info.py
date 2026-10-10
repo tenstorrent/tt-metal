@@ -73,12 +73,12 @@ def test_per_device_has_one_entry_per_local_device(mesh_device):
 
 
 @pytest.mark.parametrize("tag_name", ["l1_alignment", "architecture_name"])
-def test_out_of_bounds_coordinate_names_the_property(mesh_device, tag_name):
+def test_out_of_bounds_coordinate_names_the_property(mesh_device, tag_name, expect_error):
     outside = ttnn.MeshCoordinate(list(mesh_device.shape)[0], 0)
-    with pytest.raises(RuntimeError, match=f"Cannot query {tag_name} at"):
+    with expect_error(RuntimeError, f"Cannot query {tag_name} at"):
         mesh_device.get_info(getattr(info, tag_name), outside)
 
 
-def test_a_string_is_not_a_tag(mesh_device):
-    with pytest.raises(TypeError):
+def test_a_string_is_not_a_tag(mesh_device, expect_error):
+    with expect_error(TypeError, "incompatible function arguments"):
         mesh_device.get_info("l1_alignment")
