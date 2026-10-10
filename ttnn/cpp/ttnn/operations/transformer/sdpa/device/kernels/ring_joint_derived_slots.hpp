@@ -24,6 +24,14 @@ constexpr uint32_t kDerivedLogicalLt = 7;
 constexpr uint32_t kDerivedJointLPartialCol = 8;
 constexpr uint32_t kDerivedSlotCount = 9;
 
+// Lanes: up to kMaxLanes requests in one call (see RingJointSDPAInputs::num_lanes).
+// Lane b's derived values sit at kDerivedLaneBase + b * kDerivedLaneStride + {logical_nt, Q pre-wrap start, pre-wrap
+// count, post-wrap start, valid count}; the derived CB page grows to kDerivedLanePageBytes in lanes mode.
+constexpr uint32_t kMaxLanes = 8;
+constexpr uint32_t kDerivedLaneBase = 16;
+constexpr uint32_t kDerivedLaneStride = 5;
+constexpr uint32_t kDerivedLanePageBytes = (kDerivedLaneBase + kMaxLanes * kDerivedLaneStride) * 4;
+
 // Common-runtime-arg layout: the metadata block (when present) precedes the logical-length pair.
 constexpr uint32_t kReaderMetadataCommonArgCount = 4;  // slot_id addr, num_layers, layer_idx, kv_actual_isl addr
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr

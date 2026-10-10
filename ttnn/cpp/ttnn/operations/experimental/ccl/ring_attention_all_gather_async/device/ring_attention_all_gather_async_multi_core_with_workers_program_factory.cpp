@@ -310,6 +310,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     for (const auto& input : input_tensors) {
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
     }
+    // Lanes: requests per exchange (1 = the single-request op).
+    TT_FATAL(halo.num_lanes == 1 || halo.derives_start_on_device(), "Halo lanes need the metadata path");
+    reader_kernel.named_compile_time_args = {{"num_lanes", halo.num_lanes}};
     // Metadata accessors follow the input accessors.
     reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
@@ -342,6 +345,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     for (const auto& output : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_kernel.compile_time_args);
     }
+    writer_kernel.named_compile_time_args = {{"num_lanes", halo.num_lanes}};
     writer_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
         tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(writer_kernel.compile_time_args);

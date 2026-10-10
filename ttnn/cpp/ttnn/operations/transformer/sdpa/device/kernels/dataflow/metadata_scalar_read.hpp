@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "api/debug/assert.h"
@@ -39,6 +41,26 @@ inline uint32_t read_metadata_scalar_u32(
     noc.async_read_barrier();
     invalidate_l1_cache();
     return CoreLocalMem<volatile uint32_t>(dst_l1_addr)[0];
+}
+
+// Lanes: the first `count` elements of a per-lane metadata tensor (one uint32 per lane in page 0), in one DMA,
+// copied into out[]. Same cache discipline as read_metadata_scalar_u32; dst_l1_addr must hold count words.
+template <typename NocT, typename AccessorArgsT, size_t N>
+inline void read_metadata_vector_u32(
+    NocT& noc,
+    const AccessorArgsT& accessor_args,
+    uint32_t tensor_addr,
+    uint32_t dst_l1_addr,
+    std::array<uint32_t, N>& out,
+    uint32_t count = N) {
+    ASSERT(count <= N);
+    const auto accessor = TensorAccessor(accessor_args, tensor_addr);
+    noc.async_read(accessor, CoreLocalMem<uint8_t>(dst_l1_addr), count * sizeof(uint32_t), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    for (uint32_t i = 0; i < count; ++i) {
+        out[i] = CoreLocalMem<volatile uint32_t>(dst_l1_addr)[i];
+    }
 }
 
 inline uint32_t bounded_cache_batch_idx(

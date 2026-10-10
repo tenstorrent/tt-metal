@@ -113,6 +113,9 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t q_local_tile_rows = 0;
     uint32_t halo_tile_rows = 0;
     uint32_t source_device = 0;
+    // Lanes: the exchange ships num_lanes requests' tails, lane b from cache slot
+    // slot_id[b] with prefix kv_actual_isl[b], into batch b of the halo buffer; one arrival per exchange.
+    uint32_t num_lanes = 1;
 
     bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
     bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
