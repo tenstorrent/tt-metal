@@ -34,6 +34,13 @@ CHUNK = int(os.environ.get("V41_TEST_CHUNK", "512"))
 CACHE = os.environ.get("V41_WEIGHT_CACHE")
 MIN_PCC = float(os.environ.get("V41_TEST_PCC", "0.97"))
 MESH = tuple(int(v) for v in os.environ.get("V41_TEST_MESH", "8,4").split(","))
+# V41_TEST_USERS=2 (multi-user): slot 0 prefills the prompt, then slot 1 prefills it too, then slot 1 a NEW request of the
+# first PREFIX tokens. Slot 0 must still match model.py (slot 1's requests, its export zeroing included, leave it alone);
+# slot 1's entries / keys are model.py's first rows (causal), and its rows past the prefix read zero (zero_slot)
+USERS = int(os.environ.get("V41_TEST_USERS", "1"))
+PREFIX = int(os.environ.get("V41_TEST_PREFIX", "1024"))
+# the export / state capacity (the runner's PREFILL_MAX_SEQ_LEN); per-chunk cost vs capacity is a prefill-speed question
+MAXSEQ = int(os.environ.get("V41_TEST_MAXSEQ", "0"))
 
 _MESH_CONFIGS = [
     pytest.param(
@@ -76,11 +83,22 @@ def test_v41_kv_export_through_the_table(mesh_device, device_params, tmp_path):
     ids = [int(v) for v in open(meta["prompt_ids_file"]).read().replace("\n", ",").split(",") if v.strip()][:S]
     assert S % CHUNK == 0, (S, CHUNK)
     rt = V41PrefillRuntime(
-        mesh_device, cfg, checkpoint(), chunk_size=CHUNK, max_seq_len=max(S, 2048), weight_cache_path=CACHE
+        mesh_device,
+        cfg,
+        checkpoint(),
+        chunk_size=CHUNK,
+        max_seq_len=MAXSEQ or max(S, 2048),
+        weight_cache_path=CACHE,
+        num_users=USERS,
     )
     exp = rt.allocate_kv_cache()
-    for start in range(0, S, CHUNK):
-        rt.prefill_chunk(ids[start : start + CHUNK], exp, slot_id=0, actual_start=start, actual_end=start + CHUNK)
+    requests = [(0, S)] + ([(1, S), (1, PREFIX)] if USERS > 1 else [])
+    for slot, n in requests:
+        assert n % CHUNK == 0, (n, CHUNK)
+        for start in range(0, n, CHUNK):
+            rt.prefill_chunk(
+                ids[start : start + CHUNK], exp, slot_id=slot, actual_start=start, actual_end=start + CHUNK
+            )
     ttnn.synchronize_device(mesh_device)
 
     table_path = rt.build_kv_chunk_table(exp, str(tmp_path / "kv_table.pb"))
@@ -91,13 +109,17 @@ def test_v41_kv_export_through_the_table(mesh_device, device_params, tmp_path):
     assert table.num_configs() == len(GROUPS), table.num_configs()
 
     widths = {"swa_window": 512, "csa_unified": 512, "index_k": 128}
-    via: dict = {}
-    for g, L, pos, _t, _b, _row in table_rows(exp, cfg, slot=0, prompt_tokens=S):
-        loc = table.lookup(L, pos, 0, GROUPS.index(g))
-        uid = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-        raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
-        via.setdefault((g, L), []).append(_decode_kv_chunk(bytes(raw), widths[g]).float())
-    via = {k: torch.cat(v, 0) for k, v in via.items()}
+
+    def read_slot(slot, n_tokens):
+        out: dict = {}
+        for g, L, pos, _t, _b, _row in table_rows(exp, cfg, slot=slot, prompt_tokens=n_tokens):
+            loc = table.lookup(L, pos, slot, GROUPS.index(g))
+            uid = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+            raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
+            out.setdefault((g, L), []).append(_decode_kv_chunk(bytes(raw), widths[g]).float())
+        return {k: torch.cat(v, 0) for k, v in out.items()}
+
+    via = read_slot(0, S)
 
     gold = torch.load(os.path.join(TRACE, "cache.pt"))["layers"]
     want = _expected(gold, cfg, S)
@@ -117,3 +139,26 @@ def test_v41_kv_export_through_the_table(mesh_device, device_params, tmp_path):
         )
         worst = min(worst, p)
     assert worst >= MIN_PCC, f"worst export PCC {worst:.6f} < {MIN_PCC}"
+    if USERS < 2:
+        return
+    # slot 1 re-requested with the first PREFIX tokens, read through the table over the FULL prompt's extent
+    via1, worst1, stray1 = read_slot(1, S), 1.0, 0.0
+    for (g, L), ref in sorted(want.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        if g == "swa_window":
+            continue
+        r = cfg.role(L)
+        n, full = PREFIX // r.compress_ratio, S // r.compress_ratio
+        off = RING if g == "csa_unified" else 0
+        got1 = via1[(g, L)]
+        _, p1 = comp_pcc(ref[off : off + n], got1[off : off + n])
+        tail = float(got1[off + n : off + full].abs().max()) if full > n else 0.0
+        worst1, stray1 = min(worst1, p1), max(stray1, tail)
+        if L in (2, 8, 14, 20, 21, 24):
+            logger.info(
+                f"[v41 kv export] slot 1 {g:12s} layer {L:2d}: {n} rows PCC {p1:.6f}, max |row| past them {tail:.3g}"
+            )
+    logger.info(
+        f"[v41 kv export] slot 1 (prefix {PREFIX}): worst PCC {worst1:.6f}, max stale |row| {stray1:.3g}; slot 0 worst {worst:.6f}"
+    )
+    assert worst1 >= MIN_PCC, f"slot 1 worst PCC {worst1:.6f} < {MIN_PCC}"
+    assert stray1 == 0.0, f"slot 1 kept {stray1:.3g} from its previous request past the new prompt"

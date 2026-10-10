@@ -83,6 +83,42 @@ class V41KvExport:
     def ent_batch(self, slot, src):
         return (slot * 3 + self.sources2.index(src)) if src in self.sources2 else slot
 
+    def zero_slot(self, slot: int) -> None:
+        """Zero ONE user's export rows before its new request (DS4F-0271), leaving the other slots' hand-offs intact. The
+        per-user batches are contiguous (slot-major, ``init_kvpe_cache``); each batch gets a zero block written on device.
+        Single user: the whole-tensor ``zero_all``."""
+        if self.num_users == 1:
+            return self.zero_all()
+        for name, t in self.tensors().items():
+            if name == "zero":
+                continue
+            per = int(t.shape[0]) // self.num_users
+            rows, width = int(t.shape[2]), int(t.shape[3])
+            dev = t.device()
+            # zero blocks: TILE up to 8192 rows (fill_cache_for_user_ at update_idx), RM the largest of 128 / 64 / 32 rows
+            # dividing the slab (update_padded_kv_cache lands on local row r with kv_actual_global = r * sp)
+            tiled = t.layout == ttnn.TILE_LAYOUT
+            piece = min(rows, 8192) if tiled else next(p for p in (128, 64, TILE) if rows % p == 0)
+            while rows % piece:
+                piece //= 2
+            z = ttnn.from_torch(
+                torch.zeros(1, 1, piece, width),
+                dtype=t.dtype if tiled else ttnn.bfloat16,
+                layout=t.layout,
+                device=dev,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            )
+            sp = int(dev.shape[0])
+            for b in range(slot * per, (slot + 1) * per):
+                for r in range(0, rows, piece):
+                    if tiled:
+                        ttnn.kv_cache.fill_cache_for_user_(t, z, b, update_idx=r)
+                    else:
+                        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                            t, z, slot_idx=b, layer_idx=0, num_layers=1, kv_actual_global=r * sp, cluster_axis=0
+                        )
+            ttnn.deallocate(z)
+
     def zero_all(self) -> None:
         """DS4F-0271: no row of a previous request survives into the next one (the migrate's row range is one range for
         every layer, so a ratio-2 layer's rows past its real entries are copied too)."""

@@ -7,8 +7,8 @@ KV chunk table (``tt/v41/kv_export.py``). tt-blaze DS41F-0037 M2.
 Per chunk: token ids to the host (the embedding and the Engram hash / gather are host work), ``V41Prefill`` runs the
 chunk eagerly, its new rows go into the export caches on device, then one ack per layer (21) -- the export is complete at
 every chunk boundary. The first token is NOT produced here: the ring replays the prompt's tail (R >= 2541) itself, which
-yields it (``disagg_prefill_plan.md``). A request's first chunk (actual_start 0) resets the states and zeroes the exports.
-Single user (slot 0) for now.
+yields it (``disagg_prefill_plan.md``). A request's first chunk (actual_start 0) resets that slot's states and zeroes its export rows.
+``num_users`` slots: one attention-state set per slot (``V41Prefill.use_slot``), the weights shared.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ class V41PrefillRuntime:
         weight_cache_path=None,
         model_dir: str | None = None,
     ):
-        assert num_users == 1, "the V4.1 prefill runtime is single-slot (one V41Prefill state set)"
         self.mesh_device, self.cfg = mesh_device, cfg
         # what the generic runner reads (prefill_runner.py: is_first_rank / is_last_rank / use_trace): one untraced rank
         self.config = SimpleNamespace(
@@ -66,6 +65,7 @@ class V41PrefillRuntime:
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
             kv_only=True,
+            num_users=num_users,
         )
         from blaze.models.deepseek_v4_1_flash.engram_host import EngramHost  # tt-blaze's ttnn-free host half
 
@@ -138,13 +138,14 @@ class V41PrefillRuntime:
         record_dev=None,
         warmup: bool = False,
     ):
-        assert slot_id == 0, slot_id
+        assert 0 <= slot_id < self.num_users, (slot_id, self.num_users)
+        self.pf.use_slot(int(slot_id))
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
         real = int(actual_end) - int(actual_start)
         assert 0 < real <= self.chunk_size and len(ids) >= real
         if int(actual_start) == 0:
             self.pf.reset()
-            kv_caches.zero_all()
+            kv_caches.zero_slot(int(slot_id))
         assert self.pf.kv_actual == int(actual_start), (self.pf.kv_actual, actual_start)
         self._request_id = int(request_id)
         t0 = time.time()

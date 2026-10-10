@@ -168,32 +168,46 @@ class V41PrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             load_routed_from_cache=load_routed_from_cache,
         )
-        self.state = None
+        self.state = None  # the CURRENT slot's attention state (use_slot)
+        self.states: dict = {}
 
-    def alloc_state(self, max_seq_len: int, chunk_tokens: int):
-        self.state = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
-        return self.state
+    def alloc_state(self, max_seq_len: int, chunk_tokens: int, slot: int = 0):
+        self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
+        if self.state is None:
+            self.state = self.states[slot]
+        return self.states[slot]
 
-    def forward(self, streams: list, pre_row, *, real_len: int, on_hidden: Optional[callable] = None):
-        """-> (streams, ffn_pre_row). ``on_hidden(name, tensor)`` (debug) sees the attention / MoE outputs."""
+    def use_slot(self, slot: int) -> None:
+        self.state = self.states[slot]
+
+    def forward(self, streams: list, pre_row, *, real_len: int, on_hidden: Optional[callable] = None, prof=None):
+        """-> (streams, ffn_pre_row). ``on_hidden(name, tensor)`` (debug) sees the attention / MoE outputs. ``prof(name)``
+        (V41_PREFILL_PROFILE, ``prefill.PhaseProfile``) closes a timed phase."""
         assert len(streams) == HC
+        mark = prof if prof is not None else (lambda name: None)
         S_l, D_l = streams[0].shape[2], streams[0].shape[3]
         attn_pre, attn_post, attn_comb = self.attn_hc.mixes(streams)
         h = self.attn_norm(self.attn_hc.collapse(streams, pre_row))
+        mark("hc.attn")
         y = self.attn(h, seq_len_actual=real_len, state=self.state)
         ttnn.deallocate(h)
+        mark(f"attn.{type(self.attn).__name__}")
         if on_hidden is not None:
             on_hidden(f"{self.layer}:attn.y", y)
         streams = self.attn_hc.mix(streams, y, attn_post, attn_comb)
         ttnn.deallocate(y)
+        mark("hc.mix")
 
         ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams)
         h = self.ffn_norm(self.ffn_hc.collapse(streams, attn_pre))
         h3 = ttnn.reshape(h, [1, S_l, D_l])
+        mark("hc.ffn")
         moe_out, _ = self.moe(h3, actual_isl=real_len, actual_start=0)
         moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
+        mark("moe")
         if on_hidden is not None:
             on_hidden(f"{self.layer}:moe.out", moe_out)
         streams = self.ffn_hc.mix(streams, moe_out, ffn_post, ffn_comb)
         ttnn.deallocate(moe_out)
+        mark("hc.mix")
         return streams, ffn_pre

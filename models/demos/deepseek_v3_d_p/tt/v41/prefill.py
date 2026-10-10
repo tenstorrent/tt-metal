@@ -40,6 +40,40 @@ def _first_device(t) -> torch.Tensor:
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
 
 
+PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
+
+
+class PhaseProfile:
+    """V41_PREFILL_PROFILE=1: per phase name (summed over the layers), the HOST time to issue its ops and the DEVICE
+    drain after it (a synchronize closes every phase). A phase whose drain is ~0 is host-issue bound: the device waited
+    on Python. The syncs serialise host and device, so the total is an upper bound of the unprofiled chunk."""
+
+    def __init__(self, mesh):
+        self.mesh, self.acc = mesh, {}
+        ttnn.synchronize_device(mesh)
+        self.t = time.perf_counter()
+
+    def __call__(self, name: str) -> None:
+        t1 = time.perf_counter()
+        ttnn.synchronize_device(self.mesh)
+        t2 = time.perf_counter()
+        a = self.acc.setdefault(name, [0.0, 0.0, 0])
+        a[0], a[1], a[2] = a[0] + t1 - self.t, a[1] + t2 - t1, a[2] + 1
+        self.t = t2
+
+    def report(self, what: str) -> dict:
+        tot_i = sum(v[0] for v in self.acc.values())
+        tot_w = sum(v[1] for v in self.acc.values())
+        rows = ", ".join(
+            f"{k} {v[0] * 1e3:.0f}+{v[1] * 1e3:.0f} ms/{v[2]}"
+            for k, v in sorted(self.acc.items(), key=lambda kv: -(kv[1][0] + kv[1][1]))
+        )
+        logger.info(
+            f"[v41 prefill][profile] {what}: issue {tot_i:.2f} s + device drain {tot_w:.2f} s | phase issue+drain/calls: {rows}"
+        )
+        return dict(self.acc)
+
+
 class V41Prefill:
     CHUNK_ALIGN = (
         64  # tokens per chip: a multiple of the MoE routing's 64-core masked_bincount grid (and of TILE / ratio)
@@ -61,8 +95,11 @@ class V41Prefill:
         num_links: int = 2,
         weight_cache_path=None,
         load_routed_from_cache: bool = False,
+        num_users: int = 1,
     ):
         self.mesh, self.cfg, self.ck = mesh_device, cfg, ck
+        self.num_users, self.slot = int(num_users), 0
+        self.last_profile = None  # V41_PREFILL_PROFILE: the last chunk's PhaseProfile
         weight_cache_path = Path(weight_cache_path) if weight_cache_path else None  # the modules join it with `/`
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp, self.tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
@@ -98,7 +135,8 @@ class V41Prefill:
                 load_routed_from_cache=load_routed_from_cache,
                 **mk,
             )
-            blk.alloc_state(self.max_seq_len, self.chunk)
+            for slot in range(self.num_users):  # one attention state per user (the weights are shared)
+                blk.alloc_state(self.max_seq_len, self.chunk, slot=slot)
             self.blocks.append(blk)
             logger.info(f"[v41 prefill] layer {L} ({cfg.role(L).mode}) built, {time.time() - t0:.0f} s")
         self.kv_attn = self.kv_hc = self.kv_norm = None
@@ -131,12 +169,33 @@ class V41Prefill:
             self.kv_attn = V41CSA.from_weights(
                 mesh_device, cfg, L, w, self.rotary_emb, weight_cache_path=weight_cache_path, **mk
             )
-            self.kv_state = self.kv_attn.alloc_state(self.max_seq_len, chunk_tokens=self.chunk)
+            self.kv_states = {
+                s: self.kv_attn.alloc_state(self.max_seq_len, chunk_tokens=self.chunk) for s in range(self.num_users)
+            }
         self._embed = None
-        self.kv_actual = 0
+        self.kv_actuals = {s: 0 for s in range(self.num_users)}
+
+    # the CURRENT slot's layer-20 state and token count (use_slot): the chunk / export / snapshot code reads these
+    @property
+    def kv_state(self):
+        return self.kv_states[self.slot]
+
+    @property
+    def kv_actual(self) -> int:
+        return self.kv_actuals[self.slot]
+
+    @kv_actual.setter
+    def kv_actual(self, v: int) -> None:
+        self.kv_actuals[self.slot] = int(v)
+
+    def use_slot(self, slot: int) -> None:
+        assert 0 <= slot < self.num_users, (slot, self.num_users)
+        self.slot = int(slot)
+        for b in self.blocks:
+            b.use_slot(self.slot)
 
     def reset(self) -> None:
-        """A new prompt (one slot): every attention state's counters back to 0. Path B's masks are built from the counters
+        """A new prompt in the CURRENT slot: its attention states' counters back to 0. Path B's masks are built from the counters
         (entries / window rows past them read -inf, chunk 0's carry columns are masked), so no device contents need to
         be cleared; V4.1's non-overlap compressor carries no state between chunks."""
         states = [b.state for b in self.blocks] + ([self.kv_state] if self.kv_attn is not None else [])
@@ -172,9 +231,13 @@ class V41Prefill:
 
     def _chunk(self, part: list[int], start: int, engram_host, on_hidden):
         real_len = len(part)
+        prof = PhaseProfile(self.mesh) if PROFILE else None
+        mark = prof if prof is not None else (lambda name: None)
         streams = self._streams(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
-        rows = engram_host.rows_for(0, part, start) if (self.engrams and engram_host is not None) else {}
+        mark("embed")
+        rows = engram_host.rows_for(self.slot, part, start) if (self.engrams and engram_host is not None) else {}
+        mark("engram.host")
         for blk in self.blocks:
             L = blk.layer
             if L in self.engrams:
@@ -182,14 +245,18 @@ class V41Prefill:
                 rd = self.engrams[L].upload_rows(rows[L], self.chunk)
                 streams = self.engrams[L](streams, rd)
                 ttnn.deallocate(rd)
-            streams, pre = blk(streams, pre, real_len=real_len, on_hidden=on_hidden)
+                mark("engram.dev")
+            streams, pre = blk(streams, pre, real_len=real_len, on_hidden=on_hidden, prof=prof)
             if on_hidden is not None:
                 on_hidden(f"{L}:out", streams, pre)
         if self.kv_attn is not None:
             h = self.kv_norm(self.kv_hc.collapse(streams, pre))
             self.kv_attn.kv_only(h, seq_len_actual=real_len, state=self.kv_state)
             ttnn.deallocate(h)
+            mark("kv_only")
         self.kv_actual += real_len
+        if prof is not None:
+            self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot}")
 
     # ---- export ---------------------------------------------------------------------------------------------------
     def _window(self, state) -> torch.Tensor:
