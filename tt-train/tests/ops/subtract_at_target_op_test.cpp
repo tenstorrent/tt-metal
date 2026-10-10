@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <random>
 
@@ -12,6 +13,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 
 class SubtractAtTargetTest : public ::testing::Test {
 public:
@@ -157,6 +159,132 @@ TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {
 
     ASSERT_EQ(result_xt.shape(), expected_xt.shape());
     EXPECT_TRUE(xt::allclose(result_xt, expected_xt, /*rtol=*/3e-2F, /*atol=*/1e-2F));
+}
+
+TEST_F(SubtractAtTargetTest, ValidatesStorageGeometryAndShardWindowOnColdAndWarmRuns) {
+    using namespace ttml;
+    using OperationType = metal::ops::subtract_at_target::device::SubtractAtTargetDeviceOperation;
+
+    constexpr uint32_t N = 2U;
+    constexpr uint32_t S = 3U;
+    constexpr uint32_t V = 33U;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    std::mt19937 gen(11);
+    auto input_t = make_random_4d(N, S, V, -1.F, 1.F, gen);
+    xt::xarray<uint32_t> target_t = {{0U, 16U, 32U}, {32U, 1U, 17U}};
+
+    auto input_dev = core::from_xtensor(input_t, device);
+    auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(target_t, device, ttnn::Layout::ROW_MAJOR);
+
+    auto preallocated = ttnn::create_device_tensor(input_dev.tensor_spec(), input_dev.device());
+
+    const auto l1_input_spec = tt::tt_metal::TensorSpec(
+        input_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, ttnn::L1_MEMORY_CONFIG));
+    const auto overpadded_input_spec = tt::tt_metal::TensorSpec(
+        input_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({64U, 64U})));
+    const auto l1_target_spec = tt::tt_metal::TensorSpec(
+        target_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR, ttnn::L1_MEMORY_CONFIG));
+    const auto wide_page_target_spec = tt::tt_metal::TensorSpec(
+        target_dev.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::UINT32,
+            ttnn::Layout::ROW_MAJOR,
+            ttnn::DRAM_MEMORY_CONFIG,
+            tt::tt_metal::Alignment({1U, 64U})));
+
+    auto l1_input = ttnn::create_device_tensor(l1_input_spec, input_dev.device());
+    auto overpadded_input = ttnn::create_device_tensor(overpadded_input_spec, input_dev.device());
+    auto l1_target = ttnn::create_device_tensor(l1_target_spec, target_dev.device());
+    auto wide_page_target = ttnn::create_device_tensor(wide_page_target_spec, target_dev.device());
+    auto l1_output = ttnn::create_device_tensor(l1_input_spec, input_dev.device());
+
+    const OperationType::operation_attributes_t attributes{
+        .first_v = 0U, .local_V = V, .cluster_axis = std::nullopt, .subtract_value = 1.0F};
+    const auto canonical_hash = OperationType::compute_program_hash(
+        attributes,
+        OperationType::tensor_args_t{.input = input_dev, .target = target_dev, .preallocated_output = preallocated});
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.input = l1_input, .target = target_dev, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{
+                .input = overpadded_input, .target = target_dev, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.input = input_dev, .target = l1_target, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{
+                .input = input_dev, .target = wide_page_target, .preallocated_output = preallocated}),
+        canonical_hash);
+    EXPECT_NE(
+        OperationType::compute_program_hash(
+            attributes,
+            OperationType::tensor_args_t{.input = input_dev, .target = target_dev, .preallocated_output = l1_output}),
+        canonical_hash);
+
+    const auto expect_rejected_without_cache_entry = [&](const auto& call) {
+        const auto entries_before = device->num_program_cache_entries();
+        EXPECT_ANY_THROW(call());
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before);
+    };
+    const auto entries_before_canonical = device->num_program_cache_entries();
+
+    // Exercise miss validation before a canonical program exists.
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(l1_input, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(input_dev, l1_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(overpadded_input, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(input_dev, wide_page_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, l1_output); });
+
+    ASSERT_EQ(device->num_program_cache_entries(), entries_before_canonical);
+    auto result = ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, preallocated);
+    EXPECT_EQ(result.buffer()->address(), preallocated.buffer()->address());
+    ASSERT_GT(device->num_program_cache_entries(), entries_before_canonical);
+
+    // Repeat every invalid contract after the canonical program is warm. Validation must run
+    // before dispatch and the incompatible TensorSpecs must never alias its cache entry.
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(l1_input, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(input_dev, l1_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(overpadded_input, target_dev, V); });
+    expect_rejected_without_cache_entry([&]() { ttnn::prim::ttml_subtract_at_target(input_dev, wide_page_target, V); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, l1_output); });
+
+    // Runtime-only attributes and an incompatible output must also be rejected on a warm cache.
+    const auto undersized_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, S, V}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, input_dev.memory_config()));
+    auto undersized = ttnn::create_device_tensor(undersized_spec, input_dev.device());
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V, std::nullopt, 0U, undersized); });
+    expect_rejected_without_cache_entry(
+        [&]() { ttnn::prim::ttml_subtract_at_target(input_dev, target_dev, V - 1U, std::nullopt, 0U); });
+    expect_rejected_without_cache_entry([&]() {
+        ttnn::prim::ttml_subtract_at_target(
+            input_dev, target_dev, V, std::nullopt, std::numeric_limits<uint32_t>::max() - V + 1U);
+    });
 }
 
 TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
