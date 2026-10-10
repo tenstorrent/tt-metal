@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat
@@ -110,3 +112,77 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
             if phase == 0
             else "Contiguous matmul after stride restore mismatch"
         )
+
+
+@skip_for_quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    kt_dim=[3, 20],
+)
+def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim):
+    """Strided then contiguous in1 columns with one constant per tile, checked tile by tile, for 16-bit and 8-bit inputs."""
+    ct_dim = 4
+    a_shape, b_shape = (32, kt_dim * 32), (kt_dim * 32, ct_dim * 32)
+    tile_values = [
+        [[((k + 3 * c) % 7 + 1) / 8 for c in range(ct_dim)] for k in range(kt_dim)],
+        [[((2 * k + c) % 5 + 1) / 8 for c in range(ct_dim)] for k in range(kt_dim)],
+    ]
+    a = torch.full(a_shape, 0.125, dtype=torch.bfloat16)
+    b_strided, b_contiguous = (
+        torch.tensor(v, dtype=torch.bfloat16)
+        .repeat_interleave(32, dim=0)
+        .repeat_interleave(32, dim=1)
+        for v in tile_values
+    )
+
+    def tiled(tensor, shape):
+        return tilize_block(
+            tensor, dimensions=shape, stimuli_format=formats.input_format
+        ).flatten()
+
+    strided_tiles = (
+        tiled(b_strided, b_shape)
+        .reshape(kt_dim, ct_dim, 1024)
+        .permute(1, 0, 2)
+        .contiguous()
+        .flatten()
+    )
+    contiguous_tiles = tiled(b_contiguous, b_shape)
+    in1 = torch.cat(
+        [strided_tiles, contiguous_tiles, torch.zeros_like(contiguous_tiles)]
+    )
+    configuration = TestConfig(
+        "sources/matmul_in1_column_stride_test.cpp",
+        formats,
+        templates=[MATH_FIDELITY(MathFidelity.LoFi), THROTTLE_LEVEL(0)],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(2 * ct_dim),
+            CRK_TILE_DIMM(ct_dim, 1, kt_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            tiled(a, a_shape),
+            formats.input_format,
+            in1,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=kt_dim,
+            tile_count_B=3 * kt_dim * ct_dim,
+            tile_count_res=2 * ct_dim,
+        ),
+        dest_acc=dest_acc,
+    )
+    result = torch.tensor(configuration.run().result, dtype=torch.bfloat16)
+    assert result.numel() == 2 * ct_dim * 1024
+    mantissa_bits = 7 if formats.output_format == DataFormat.Bfp8_b else 8
+    for phase in range(2):
+        for c in range(ct_dim):
+            # each output datum sums 32 * kt_dim products of 0.125 and its column's tile constants
+            expected = 4 * sum(tile_values[phase][k][c] for k in range(kt_dim))
+            step = 2.0 ** (math.floor(math.log2(expected)) - mantissa_bits + 1)
+            tile = result[(phase * ct_dim + c) * 1024 : (phase * ct_dim + c + 1) * 1024]
+            error = (tile.float() - expected).abs().max().item()
+            assert (
+                error <= step
+            ), f"phase {phase} column {c}: expected {expected}, max error {error}"

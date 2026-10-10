@@ -3,12 +3,15 @@
 
 from typing import List
 
+import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     PerfRunType,
     Transpose,
@@ -27,6 +30,8 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
+    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -90,6 +95,9 @@ def test_matmul(
     math_fidelity,
     format_dest_acc_and_dims,
     boot_mode=BootMode.DEFAULT,
+    row_mop=False,
+    transpose=False,
+    unpack_ttsync=False,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -111,10 +119,20 @@ def test_matmul(
     # Calculate all matmul dimensions using helper function
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
+    # with transpose the unpacker transposes every in1 tile (faces and within faces); the golden multiplies by that
+    golden_B = src_B
+    if transpose:
+        k_dim, n_dim = input_B_dimensions
+        golden_B = (
+            src_B.reshape(k_dim // 32, 32, n_dim // 32, 32)
+            .permute(0, 3, 2, 1)
+            .reshape(-1)
+        )
+
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
         src_A,
-        src_B,
+        golden_B,
         formats.output_format,
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
@@ -145,6 +163,186 @@ def test_matmul(
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(),
             THROTTLE_LEVEL(),
+            *([MATMUL_ROW_MOP()] if row_mop else []),
+            *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
+        ],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            LOOP_FACTOR(1),
+            UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=matmul_dims.output_tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
+
+
+# The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
+# The row MOP, Auto TTSync and transpose sweeps run nightly; the LLK smoke splits its tests in two groups by count.
+ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
+    input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
+    ),
+    DEST_ACC_MODES,
+)
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+)
+def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
+
+
+# The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape.
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+)
+def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, unpack_ttsync=True)
+
+
+# in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.
+TRANSPOSE_DIMS_16 = [
+    ([32, 32], [32, 32]),  # 1x1, k 1
+    ([32, 64], [64, 256]),  # 1x8, k 2
+    ([64, 128], [128, 128]),  # 2x4, k 4
+    ([256, 64], [64, 32]),  # 8x1, k 2 (in0 streamed)
+    ([64, 32], [32, 64]),  # 2x2, k 1
+]
+TRANSPOSE_DIMS_32 = [
+    ([32, 32], [32, 32]),
+    ([32, 64], [64, 128]),  # 1x4, k 2
+    ([64, 128], [128, 64]),  # 2x2, k 4
+    ([128, 64], [64, 32]),  # 4x1, k 2
+]
+TRANSPOSE_COMBINATIONS = [
+    (fmt, acc, dims)
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    )
+    for acc in DEST_ACC_MODES
+    if not (fmt.input_format == DataFormat.Float32 and acc == DestAccumulation.No)
+    for dims in (
+        TRANSPOSE_DIMS_32 if acc == DestAccumulation.Yes else TRANSPOSE_DIMS_16
+    )
+]
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
+    row_mop=[False, True],
+)
+def test_matmul_transpose(math_fidelity, format_dest_acc_and_dims, row_mop):
+    test_matmul(
+        math_fidelity, format_dest_acc_and_dims, row_mop=row_mop, transpose=True
+    )
+
+
+# Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack
+# MOP's zmask must cover the whole row.
+FULL_SYNC_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
+FULL_SYNC_BLOCKS = [
+    ((rt * 32, kt * 32), (kt * 32, ct * 32))
+    for rt, ct, kt in [(1, 16, 2), (16, 1, 2), (2, 8, 2), (8, 2, 2), (4, 4, 2)]
+]
+
+
+# Wormhole's unpack AB matmul MOP zmask covers 8 tiles in config context 1, short of the 16-tile rows here.
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    formats=FULL_SYNC_FORMATS,
+    dims=FULL_SYNC_BLOCKS,
+)
+def test_matmul_full_sync(math_fidelity, formats, dims):
+    torch_format = format_dict[formats.output_format]
+    input_A_dimensions = list(dims[0])
+    input_B_dimensions = list(dims[1])
+
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_A_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_B_dimensions,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
+    )
+
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
+
+    generate_golden = get_golden_generator(MatmulGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        src_B,
+        formats.output_format,
+        math_fidelity,
+        input_A_dimensions=input_A_dimensions,
+        input_B_dimensions=input_B_dimensions,
+        tilize=True,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    )
+
+    if formats.input_format != DataFormat.Bfp8_b:
+        tilized_A = tilize_block(
+            src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
+        )
+        tilized_B = tilize_block(
+            src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
+        )
+    else:
+        tilized_A = src_A
+        tilized_B = src_B
+
+    configuration = TestConfig(
+        "sources/matmul_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            DEST_SYNC(DestSync.Full),
+            THROTTLE_LEVEL(),
         ],
         runtimes=[
             NUM_FACES(),
@@ -163,8 +361,7 @@ def test_matmul(
             tile_count_B=tile_cnt_B,
             tile_count_res=matmul_dims.output_tile_cnt,
         ),
-        dest_acc=dest_acc,
-        boot_mode=boot_mode,
+        dest_acc=DestAccumulation.No,
     )
 
     res_from_L1 = configuration.run().result

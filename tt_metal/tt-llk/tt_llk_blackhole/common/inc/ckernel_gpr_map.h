@@ -49,6 +49,8 @@ struct p_gpr_unpack
     constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_1 = 46; // num tiles for input operands 2-3
     constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_2 = 47; // num tiles for input operands 4-5
     constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_3 = 48; // num tiles for input operands 6-7
+    constexpr static std::uint32_t MATMUL_ROW_ADDR_B       = 50; // ttsync matmul unpack: the row's in1 base address (SEC0)
+    constexpr static std::uint32_t MATMUL_ROW_ADDR_A       = 51; // ttsync matmul unpack: the row's in0 base address (SEC1)
     // Slot 52 was the legacy UNPACK_STRIDE GPR used to snapshot/restore the channel-1 Z-stride
     // around unpack-to-dest. Removed in favor of canonical_unpA_z_stride() in the bracket pair
     // (set_dst_write_addr / unpack_to_dest_tile_done), which recomputes the baseline instead of

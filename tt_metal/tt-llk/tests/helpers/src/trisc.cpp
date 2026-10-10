@@ -106,6 +106,10 @@ int main(void)
 
     llk_perf::read_last_zone();
 
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_UNPACK_TTSYNC)
+    _llk_unpack_AB_matmul_ttsync_restore_();
+#endif
+
     *mailbox = ckernel::KERNEL_COMPLETE;
 }
 

@@ -16,6 +16,8 @@
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+// The init core's stream_narrow is _llk_unpack_AB_matmul_stream_narrow_ of the operands' L1 formats and DST_ACCUM_MODE.
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -26,8 +28,9 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpA_num_faces,
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
-    const bool partial_face_b) {
-    _llk_unpack_AB_matmul_init_(
+    const bool partial_face_b,
+    const bool stream_narrow = false) {
+    _llk_unpack_AB_matmul_init_<0, 0, ttsync>(
         transpose,
         ct_dim,
         rt_dim,
@@ -37,9 +40,11 @@ inline void llk_unpack_AB_matmul_init_impl(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        stream_narrow);
 }
 
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -53,7 +58,7 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_(
+    _llk_unpack_AB_matmul_<0, 0, ttsync>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -76,6 +81,7 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
     _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
 }
 
+template <bool ttsync = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -124,7 +130,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    llk_unpack_AB_matmul_init_impl(
+    llk_unpack_AB_matmul_init_impl<ttsync>(
         transpose,
         ct_dim,
         rt_dim,
@@ -134,9 +140,12 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], DST_ACCUM_MODE));
 }
 
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -188,7 +197,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl(
+    llk_unpack_AB_matmul_impl<ttsync>(
         base_address_a,
         base_address_b,
         tile_index_a,
