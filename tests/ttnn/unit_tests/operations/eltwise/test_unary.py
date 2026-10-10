@@ -333,6 +333,47 @@ def test_gelu_golden_skips_only_device_specific_fast_variants(operation_kwargs, 
     assert (output is None) == should_skip
 
 
+_U = ttnn.UnaryOpType
+_W = ttnn.UnaryWithParam
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the chain's init-once forms and op-major blocks are Blackhole only")
+@pytest.mark.parametrize("sharded", [False, True], ids=["interleaved", "height_sharded"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    "ops, golden",
+    [
+        ([_W(_U.SQUARE), _W(_U.ADD_UNARY_SFPU, 1.0), _W(_U.RECIP)], lambda x: 1.0 / (x * x + 1.0)),
+        ([_W(_U.ABS), _W(_U.ADD_UNARY_SFPU, 1.0), _W(_U.SQUARE), _W(_U.RECIP)], lambda x: 1.0 / (x.abs() + 1.0) ** 2),
+        ([_W(_U.SQUARE), _W(_U.RECIP)], lambda x: 1.0 / (x * x)),
+        ([_W(_U.NEG), _W(_U.EXP, 1.0), _W(_U.ADD_UNARY_SFPU, 1.0), _W(_U.RECIP)], torch.sigmoid),
+    ],
+    ids=["atan_bw", "softsign_bw", "hypot_bw", "sigmoid_fast_exp"],
+)
+def test_unary_chain_several_tiles_per_core(device, ops, golden, dtype, sharded):
+    g = torch.Generator().manual_seed(7)
+    x = torch.empty(1, 1, 1024, 1024, dtype=torch.float32).uniform_(-10.0, 10.0, generator=g)
+    x = torch.where(x.abs() < 0.01, torch.full_like(x, 0.5), x)
+    if dtype == ttnn.bfloat16:
+        x = x.to(torch.bfloat16)
+    mem = ttnn.DRAM_MEMORY_CONFIG
+    if sharded:
+        # 64 tiles per core: the bf16 chains run in op-major blocks
+        mem = ttnn.create_sharded_memory_config(
+            shape=[64, 1024],
+            core_grid=ttnn.CoreGrid(y=2, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    out = ttnn.to_torch(ttnn.unary_chain(tt_x, ops))
+    expected = golden(x.double()).to(out.dtype)
+    if dtype == ttnn.float32 and golden is not torch.sigmoid:
+        assert_with_ulp(expected_result=expected, actual_result=out, ulp_threshold=8)
+    else:
+        assert_with_pcc(expected, out, 0.999)
+
+
 def test_relu_reglu_uint32_edge_cases(device):
     values = [0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]
     torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)

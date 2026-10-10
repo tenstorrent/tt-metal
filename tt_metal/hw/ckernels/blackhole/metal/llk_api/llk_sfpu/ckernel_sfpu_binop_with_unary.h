@@ -28,6 +28,7 @@ template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;

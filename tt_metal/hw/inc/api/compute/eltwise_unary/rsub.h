@@ -32,6 +32,16 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, RSUB_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        scalar));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -40,6 +50,7 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
         idst,
         VectorMode::RC,
         scalar));
+#endif
 }
 
 /**
@@ -63,6 +74,16 @@ ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  */
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsub_scalar_int32,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        scalar));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -71,6 +92,7 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
         idst,
         VectorMode::RC,
         scalar));
+#endif
 }
 
 /**

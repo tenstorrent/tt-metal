@@ -181,6 +181,39 @@ sfpi_inline void piecewise_rational_eval_parity_numer_denom(
     out_denom = denom;
 }
 
+// The same evaluation with the two leading coefficients of each polynomial passed in, so the caller can hold them in
+// registers (a denominator one step longer than the numerator).
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, typename NT, typename NN, typename DT, typename DN>
+sfpi_inline void piecewise_rational_eval_parity_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat x2,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom,
+    NT num_top,
+    NN num_next,
+    DT den_top,
+    DN den_next) {
+    constexpr int NUM_TOP = (NUM_DEGREE % 2 == 1) ? NUM_DEGREE : NUM_DEGREE - 1;
+    constexpr int DEN_TOP = (DEN_DEGREE % 2 == 0) ? DEN_DEGREE : DEN_DEGREE - 1;
+    constexpr int NUM_STEPS = (NUM_TOP - 1) / 2;
+    static_assert(DEN_TOP / 2 == NUM_STEPS + 1);
+
+    sfpi::vFloat denom = den_top * x2 + den_next;
+    sfpi::vFloat numer = num_top * x2 + num_next;
+    denom = denom * x2 + den_coeffs[DEN_TOP - 4];
+
+#pragma GCC unroll 64
+    for (int k = 2; k <= NUM_STEPS; k++) {
+        numer = numer * x2 + num_coeffs[NUM_TOP - 2 * k];
+        denom = denom * x2 + den_coeffs[DEN_TOP - 2 - 2 * k];
+    }
+
+    out_numer = numer * x;
+    out_denom = denom;
+}
+
 // ============================================================================
 // Unified numer/denom dispatcher: selects parity or interleaved automatically
 // ============================================================================

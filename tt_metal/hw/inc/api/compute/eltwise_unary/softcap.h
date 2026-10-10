@@ -44,6 +44,17 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softcap,
+        (APPROX, DST_ACCUM_MODE, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        beta,
+        beta_recip));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -53,6 +64,7 @@ ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
         VectorMode::RC,
         beta,
         beta_recip));
+#endif
 }
 
 /**

@@ -66,14 +66,15 @@ static const float FRAC_2_PI = 0.6366197466850281f;
 template <bool is_fp32_dest_acc_en>
 static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i);
 
-template <>
-sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
+// The 32-bit DEST tan; c0, c1 and c2 are the polynomial's three leading coefficients, held by the caller.
+sfpi_inline sfpi::vFloat sfpu_tan_fp32(
+    sfpi::vFloat a, sfpi::vInt i, sfpi::vFloat c0, sfpi::vFloat c1, sfpi::vFloat c2) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
-    sfpi::vFloat t = 0x1.fa9f82p-9f;
-    t = t * s + 0x1.2b404p-10f;
-    t = t * s + 0x1.4787dp-7f;
+    sfpi::vFloat t = c0;
+    t = t * s + c1;
+    t = t * s + c2;
     t = t * s + 0x1.620abcp-6f;
     t = t * s + 0x1.ba5716p-5f;
     t = t * s + 0x1.111072p-3f;
@@ -135,6 +136,7 @@ inline void calculate_tangent() {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
+    const sfpi::vFloat c0 = 0x1.fa9f82p-9f, c1 = 0x1.2b404p-10f, c2 = 0x1.4787dp-7f;
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -165,7 +167,11 @@ inline void calculate_tangent() {
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
 
-        a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
+        if constexpr (is_fp32_dest_acc_en) {
+            a = sfpu_tan_fp32(a, i, c0, c1, c2);
+        } else {
+            a = sfpu_tan<false>(a, i);
+        }
 
         if constexpr (!is_fp32_dest_acc_en) {
             a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);
@@ -643,9 +649,9 @@ inline void calculate_acos() {
     }
 }
 
-// computes exp(abs(x))/4 without overflow
+// computes exp(abs(x))/4 without overflow; the 32-bit arm takes ln(2)_lo and two coefficients from the caller
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x, sfpi::vFloat ln2_lo, sfpi::vFloat p1, sfpi::vFloat p2) {
     // j = x * log2(e); i = round(abs(j)); j = (float)i;
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
     sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -667,11 +673,11 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
+        f = j * ln2_lo + f;                  // f = f - j * ln(2)_lo
 
         r = 1.37805939e-3f;
-        r = r * f + 8.37312452e-3f;
-        r = r * f + 4.16695364e-2f;
+        r = r * f + p1;
+        r = r * f + p2;
         r = r * f + 1.66664720e-1f;
         r = r * f + sfpi::vConstFloatPrgm2;
         i += 125;
@@ -692,32 +698,47 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
-// t = exp(a); cosh(a) = 0.5 * (t + 1/t)
+// t = exp(a); cosh(a) = 0.5 * (t + 1/t), one row of DEST
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _calculate_cosh_row_(sfpi::vFloat ln2_lo, sfpi::vFloat p1, sfpi::vFloat p2) {
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a, ln2_lo, p1, p2);
+    sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
+    sfpi::vFloat y = q + q;
+    r *= 0.125f;
+    sfpi::vInt q_exp = sfpi::exexp(q);
+    v_if(q_exp < 24) { y += r; }
+    v_endif;
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    }
+
+    sfpi::dst_reg[0] = y;
+    sfpi::dst_reg++;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
-        sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
-        sfpi::vFloat y = q + q;
-        r *= 0.125f;
-        sfpi::vInt q_exp = sfpi::exexp(q);
-        v_if(q_exp < 24) { y += r; }
-        v_endif;
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    // Held in registers across the loop; only the 32-bit arm reads them.
+    const sfpi::vFloat ln2_lo = -1.42860677e-6f, p1 = 8.37312452e-3f, p2 = 4.16695364e-2f;
+    if constexpr (is_fp32_dest_acc_en) {
+        // The 32-bit DEST row does not fit the replay buffer, so its loop stays rolled.
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_cosh_row_<is_fp32_dest_acc_en>(ln2_lo, p1, p2);
         }
-
-        sfpi::dst_reg[0] = y;
-        sfpi::dst_reg++;
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_cosh_row_<is_fp32_dest_acc_en>(ln2_lo, p1, p2);
+        }
     }
 }
 
-// computes expm1(abs(x))/4 without overflow
+// computes expm1(abs(x))/4 without overflow; the 32-bit arm takes ln(2)_lo from the caller
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x, sfpi::vFloat ln2_lo) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
     sfpi::vFloat a = sfpi::setsgn(x, 0);
     // Rounds the absolute value of j, clamped to [0, 255].
@@ -739,7 +760,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
+        f = j * ln2_lo + f;                  // f = f - j * ln(2)_lo
 
         r = 1.974105835e-04f;
         r = r * f + 1.393107930e-3f;
@@ -768,8 +789,8 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
 // a = abs(x); t = expm1(a); sinh(a) = 0.5 * (t + t / (t + 1))
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
-    sfpi::vFloat q = _sfpu_quarter_expm1_abs_<is_fp32_dest_acc_en>(x);
+sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x, sfpi::vFloat ln2_lo) {
+    sfpi::vFloat q = _sfpu_quarter_expm1_abs_<is_fp32_dest_acc_en>(x, ln2_lo);
     sfpi::vFloat e = 4.0f * q + 1.0f;
 
     sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(e);
@@ -792,8 +813,10 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
+    // Held in a register across the loop; only the 32-bit arm reads it.
+    const sfpi::vFloat ln2_lo = -1.42860677e-6f;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat y = _sfpu_sinh_<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        sfpi::vFloat y = _sfpu_sinh_<is_fp32_dest_acc_en>(sfpi::dst_reg[0], ln2_lo);
 
         if constexpr (!is_fp32_dest_acc_en) {
             y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
