@@ -9,6 +9,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import struct
 import tempfile
 import time
@@ -220,9 +221,34 @@ class AddressMap:
         if (shifts[:, 0] != 0).any():
             raise ValueError("the first instruction moves")
         moved = np.flatnonzero((np.diff(shifts, axis=1) != 0).any(axis=0)) + 1
+        # The models of a gap are the candidates that predict every observation: after more probe links, a gap of the
+        # last fit keeps those of its models that also predict the new observations (in the same order); a new gap, or
+        # one without a model left, is fitted from all observations
+        last = getattr(self, "_last_fit", None)
+        if last is not None and any(
+            self.obs.get(k) is not v for k, v in last[0].items()
+        ):
+            last = None
+        if last is not None:
+            new = [k for k in keys if k not in last[0]]
+            npz = np.array(new, np.int64).reshape(-1, 2)
+            nsh = np.array([self.obs[k] for k in new], np.int64).reshape(
+                len(new), len(self.addr)
+            )
+        fitted = {}
         self.gaps = []
         self.mod_gaps = set()
         for i in moved:
+            prior = last[1].get(int(i)) if last is not None else None
+            if prior is not None:
+                ok = _predicts(prior[0], nsh[:, i - 1], nsh[:, i], npz, prior[1])
+                kept = [m for m, k in zip(prior[0], ok) if k]
+                if kept:
+                    if prior[1]:
+                        self.mod_gaps.add(int(i))
+                    fitted[int(i)] = (kept, prior[1])
+                    self.gaps.append((int(i), kept))
+                    continue
             s_in, s_out = shifts[:, i - 1], shifts[:, i]
             g0 = int(self.addr[i] - self.addr[i - 1] - 4)
             after_park = int(self.words[i - 1]) == EBREAK
@@ -268,6 +294,7 @@ class AddressMap:
                 self.mod_gaps.add(int(i))
             if not models:
                 raise ValueError(f"no model for the shift change at {self.addr[i]:#x}")
+            fitted[int(i)] = (models, modulo if modulo else None)
             # simplest first: plain insertions, then alignments whose fill is the harness's own (a park aligns after
             # PARK_FIXED NOPs, a section alignment fills the whole gap), then the rest; models[0] is the one used
             structural = lambda m: m[3] == (g0 - PARK_FIXED if after_park else g0)
@@ -282,6 +309,7 @@ class AddressMap:
                 )
             )
             self.gaps.append((int(i), models))
+        self._last_fit = (dict(self.obs), fitted)
 
     def bounds(self):
         return np.array([self.addr[i] for i, _ in self.gaps], np.int64)
@@ -299,16 +327,31 @@ class AddressMap:
         """a candidate (P, Z) on which the fitted models of a gap disagree, or None: the one that splits the models of
         the first such gap most evenly, so each link halves them"""
         s = np.zeros_like(P)
+        # a gap's answer depends on its models, the models used before it and the candidates: kept across the calls of
+        # one fit's probe loop, where most gaps keep their models
+        memo = getattr(self, "_agree_memo", None)
+        grid = hashlib.sha1(P.tobytes() + Z.tobytes()).digest()
+        if memo is None or memo[0] != grid:
+            memo = self._agree_memo = (grid, {})
+        prefix = ()
         for i, models in self.gaps:
             if len(models) > 1:
-                same = self._agreement(models, s, P, Z, i in self.mod_gaps) / len(
-                    models
-                )
-                split = np.flatnonzero(same < 1)
-                if len(split):
-                    k = split[np.argmin(np.abs(same[split] - 0.5))]
+                key = (i, tuple(models), i in self.mod_gaps, prefix)
+                if key not in memo[1]:
+                    same = self._agreement(models, s, P, Z, i in self.mod_gaps) / len(
+                        models
+                    )
+                    split = np.flatnonzero(same < 1)
+                    memo[1][key] = (
+                        None
+                        if not len(split)
+                        else int(split[np.argmin(np.abs(same[split] - 0.5))])
+                    )
+                k = memo[1][key]
+                if k is not None:
                     return int(P[k]), int(Z[k])
             s = _apply(models[0], s, P, Z)
+            prefix += (models[0],)
         return None
 
     def _agreement(self, models, s, P, Z, modulo):
@@ -367,6 +410,24 @@ class AddressMap:
         self.mod_gaps = {int(i) for i in mod_gaps}
         if loop_park is not None and loop_park < len(self.parks):
             self.loop_park, self.restart = loop_park, self.parks[loop_park]
+
+
+def _predicts(models, s_in, s_out, pz, modulo):
+    """per gap model, does it predict s_out from s_in for every probe pz (modulo the period for modulo models); the
+    arithmetic of _apply, for all models at once"""
+    m = np.array(models, np.int64).reshape(-1, 5)
+    cp, cz, A, f, mode = (m[:, j][None, :] for j in range(5))
+    s_in, s_out = s_in[:, None], s_out[:, None]
+    ins = cp * pz[:, 0:1] + cz * pz[:, 1:2]
+    a = np.where(A == 0, 1, A)
+    x = np.where(mode == 1, s_in + ins, s_in)
+    aligned = np.where(
+        mode == 2,
+        s_in + np.mod(f - ins, a) - f,
+        x + np.mod(f - x, a) - f + np.where(mode == 0, ins, 0),
+    )
+    d = np.where(A == 0, s_in + ins, aligned) - s_out
+    return ((d % modulo == 0) if modulo else (d == 0)).all(axis=0)
 
 
 def _whole_moves(d):
@@ -1019,21 +1080,98 @@ def code_key(assembly):
     ).hexdigest()[:24]
 
 
+_NUM = r"[-+]?(?:0[xX][0-9a-fA-F]+|[0-9]+)"
+_LOCAL_LABEL = re.compile(r"\.L[A-Za-z_]*[0-9]+\b")
+_IMMEDIATE = re.compile(_NUM)
+_MEMORY_OPERAND = re.compile(r"(" + _NUM + r")(\([A-Za-z0-9_]+\))")
+# data and instruction directives whose size does not depend on their values
+_FIXED_SIZE_DATA = {".word", ".half", ".hword", ".short", ".2byte", ".long", ".int", ".4byte", ".byte", ".ttinsn"}
+
+
+def _li_words(imm):
+    """the RV32 expansion of li: addi (12 bit), lui alone (low 12 bits zero), or lui + addi"""
+    v = int(imm, 0) & M32
+    if -2048 <= _s32(v) <= 2047:
+        return "li1"
+    return "li2" if v & 0xFFF else "lui"
+
+
+def _normalised_operands(operands):
+    """an instruction's operands with each numeric immediate (a whole operand, or the offset of imm(reg)) as '#'; every
+    operand that names a symbol (sym+N, %hi(sym), %lo(sym)(reg)...) stays verbatim: the linker relaxes by its address"""
+    out = []
+    for o in operands.split(","):
+        t = o.strip()
+        if _IMMEDIATE.fullmatch(t):
+            t = "#"
+        elif m := _MEMORY_OPERAND.fullmatch(t):
+            t = "#" + m.group(2)
+        out.append(t)
+    return ",".join(out)
+
+
+def structure_key(assembly):
+    """Identifies what places a thread's code: its assembly as the probe links assemble it (no debug sections) with only
+    the values that cannot move an address normalised: the numeric immediates of instructions (li keeps its expansion,
+    1 or 2 words), the values of fixed-size data, and the names of local labels (renamed by first appearance).
+    Directives, macros, section names, symbols, registers and every operand that names a symbol stay verbatim, so two assemblies
+    with the same key assemble and link to the same address of every instruction and data byte for any pads: they share
+    one address map (Maps), whatever their immediates.
+    """
+    end = assembly.find("\t.section\t.debug_info")
+    if end >= 0:
+        ident = assembly.find("\t.ident", end)
+        assembly = assembly[:end] + (assembly[ident:] if ident >= 0 else "")
+    macros = set(re.findall(r"^\s*\.macro\s+(\w+)", assembly, re.M))
+    labels = {}
+    out, in_macro = [], False
+    for line in assembly.splitlines():
+        s = _LOCAL_LABEL.sub(
+            lambda m: labels.setdefault(m.group(0), f".L#{len(labels)}"), line.strip()
+        )
+        if not s:
+            continue
+        if s.startswith(".macro"):
+            in_macro = True
+        if in_macro or s.startswith("#") or (s.endswith(":") and " " not in s):
+            in_macro = in_macro and not s.startswith(".endm")
+            out.append(s)
+            continue
+        op, operands = (s.split(None, 1) + [""])[:2]
+        if op in _FIXED_SIZE_DATA:
+            operands = _normalised_operands(operands)
+        elif op.startswith(".") or op in macros:
+            pass
+        elif op == "li":
+            reg, _, imm = operands.partition(",")
+            if _IMMEDIATE.fullmatch(imm.strip()):
+                operands = f"{reg},{_li_words(imm.strip())}"
+        else:
+            operands = _normalised_operands(operands)
+        out.append(f"{op} {operands}")
+    return hashlib.sha256("\n".join(out).encode()).hexdigest()[:24]
+
+
 def choose(elf_path, thread, runtime_bytes, cache_dir, relink, log=None, shared=None):
     """(P, Z) in bytes for one thread's unpadded ELF and runtime configuration, (0, 0) when it has no measured loop;
-    relink(P, Z, out_dir) links the thread with pads, shared = (directory, code_key) shares the work between variants.
+    relink(P, Z, out_dir) links the thread with pads, shared = (directory, code_key[, structure_key]) shares the work
+    between variants: the choices between variants with the same code, the address map between variants with the same
+    structure.
     """
+    map_dir = None
     if shared:
         cache_dir = Path(shared[0]) / f"{thread}-{shared[1]}"
-    return tuple(_choose(elf_path, thread, runtime_bytes, cache_dir, relink, log))
+        if len(shared) > 2 and shared[2]:
+            map_dir = Path(shared[0]) / f"{thread}-s{shared[2]}"
+    return tuple(_choose(elf_path, thread, runtime_bytes, cache_dir, relink, log, map_dir))
 
 
-def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
+def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log, map_dir=None):
     t_start = time.perf_counter()
     kernel = _kernel(str(elf_path))
     if not kernel.starts:
         return 0, 0
-    maps = Maps(elf_path, thread, relink, cache_dir)
+    maps = Maps(elf_path, thread, relink, map_dir or cache_dir)
     amap = maps.get()
     restarts = {
         int(amap.addr[i])
@@ -1050,12 +1188,27 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
     records, start, warm, lo, hi, complete = tr
     if hi - lo < MIN_WINDOW_INSTR or not records:
         return 0, 0
-    cached = Path(cache_dir) / f"{thread}-{flow_key(records, lo)}.json"
+    flow = flow_key(records, lo)
+    cached = Path(cache_dir) / f"{thread}-{flow}.json"
     try:
         return tuple(json.loads(cached.read_text())["pads"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
     win = Window(kernel, amap, records, start, warm, lo)
+    # the choice depends on the code only through the address map, the modelled path and the words executed on it, so
+    # variants with the same structure (one map) share it when they run the same words along the same path
+    shared_choice = None
+    if map_dir is not None:
+        window_key = hashlib.sha1(
+            repr((start, warm - lo, flow, sorted(win.words.items()))).encode()
+        ).hexdigest()[:16]
+        shared_choice = Path(map_dir) / f"{thread}-w{window_key}.json"
+        try:
+            got = json.loads(shared_choice.read_text())
+            write_json(cached, got)
+            return tuple(got["pads"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     nsets = 16 if thread == "math" else 64
     PP, ZZ = maps.grid()
     # the cost depends on the pads only through the shifts of the segments the window runs in, modulo the predictor
@@ -1063,20 +1216,45 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
     period = 512 if thread == "math" else 1024
     touched = np.unique(win.seg)
     shifts = amap.segment_shifts(PP, ZZ)[touched] % period
-    _, cls = np.unique(shifts, axis=1, return_inverse=True)
+    # up to 6 segments, one int64 per candidate ordered as its column: the classes np.unique(axis=1) numbers, faster
+    if len(touched) <= 6:
+        key = np.zeros(shifts.shape[1], np.int64)
+        for row in shifts:
+            key = key * period + row
+        _, cls = np.unique(key, return_inverse=True)
+    else:
+        _, cls = np.unique(shifts, axis=1, return_inverse=True)
     cls = cls.ravel()
-    index = {(int(p), int(z)): i for i, (p, z) in enumerate(zip(PP, ZZ))}
-    by_cls = {}
+    # candidate pads -> their index in PP, ZZ
+    nz = len(maps.Z)
+    pos = np.full(len(maps.P) * nz, -1, np.int64)
+    pos[(PP // PAD_STEP) * nz + ZZ // PAD_STEP] = np.arange(len(PP))
+
+    def at(c):
+        p, z = c
+        if (
+            p % PAD_STEP
+            or z % PAD_STEP
+            or not 0 <= p < len(maps.P) * PAD_STEP
+            or not 0 <= z < nz * PAD_STEP
+        ):
+            return None
+        i = int(pos[p // PAD_STEP * nz + z // PAD_STEP])
+        return i if i >= 0 else None
+
     # the smallest pads of each class (Z first) stand for it
-    for i in np.lexsort((PP, ZZ)):
-        by_cls.setdefault(int(cls[i]), int(i))
+    order = np.lexsort((PP, ZZ))
+    first_cls, first = np.unique(cls[order], return_index=True)
+    by_cls = dict(zip(first_cls.tolist(), order[first].tolist()))
     costs = np.full(int(cls.max()) + 1, np.nan)
 
     def evaluate(cands):
-        ids = sorted(
-            {int(cls[index[c]]) for c in cands if c in index}
-            - set(np.flatnonzero(~np.isnan(costs)).tolist())
-        )
+        if cands is None:  # every candidate
+            have = set(range(costs.size))
+        else:
+            idx = [i for i in map(at, cands) if i is not None]
+            have = set(cls[idx].tolist())
+        ids = sorted(have - set(np.flatnonzero(~np.isnan(costs)).tolist()))
         for k in range(0, len(ids), EVAL_CHUNK):
             part = ids[k : k + EVAL_CHUNK]
             rep = [by_cls[c] for c in part]
@@ -1089,7 +1267,7 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
         return [(int(PP[i]), int(ZZ[i])) for i in reps]
 
     if costs.size * win.n <= EXHAUSTIVE:
-        evaluate(list(index))
+        evaluate(None)
     else:  # P, then Z from the best few P, then P from the best few Z, then Z again
         evaluate([(p, 0) for p in maps.P.tolist()] + [(0, 0)])
         tops = list(dict.fromkeys(p for p, _ in ranked()))[:STARTS]
@@ -1100,7 +1278,7 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
         evaluate([(p1, z) for z in maps.Z.tolist()])
     # the chosen pads are checked on their real link; where the fitted map is wrong, their cost is taken from the real
     # addresses and the search goes on down the ranking
-    exact = {(0, 0): float(costs[cls[index[(0, 0)]]])} if (0, 0) in index else {}
+    exact = {(0, 0): float(costs[cls[at((0, 0))]])} if at((0, 0)) is not None else {}
     pads = None
     for cand in ranked()[:MAX_VERIFY]:
         if cand in exact:
@@ -1108,7 +1286,7 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
             break
         ok, actual = maps.verify(cand)
         if ok:
-            exact[cand] = float(costs[cls[index[cand]]])
+            exact[cand] = float(costs[cls[at(cand)]])
             pads = cand
             break
         if actual is not None:
@@ -1118,7 +1296,7 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
     if pads is None or (exact and exact.get(pads, np.inf) > min(exact.values())):
         pads = min(exact, key=lambda c: (exact[c], c[1], c[0])) if exact else (0, 0)
     cost_of = lambda pz: exact.get(
-        pz, float(costs[cls[index[pz]]]) if pz in index else None
+        pz, float(costs[cls[at(pz)]]) if at(pz) is not None else None
     )
     result = {
         "pads": list(pads),
@@ -1133,6 +1311,8 @@ def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
         "t_trace": round(t_trace, 4),
     }
     write_json(cached, result)
+    if shared_choice is not None:
+        write_json(shared_choice, result)
     if log:
         try:
             with open(log, "a") as f:
