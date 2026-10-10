@@ -196,8 +196,12 @@ ttnn::Tensor slice(
         return tensor;
     });
 
-    // No-op check
-    if (no_step && starts_zero && ends_max) {
+    // A full-range slice into another buffer still needs to honor the worker
+    // grid. The copy shortcut below does not accept sub_core_grids.
+    const bool needs_scoped_copy = optional_output_tensor.has_value() && sub_core_grids.has_value() &&
+                                   input_tensor.storage_type() == StorageType::DEVICE &&
+                                   input_tensor.buffer() != optional_output_tensor->buffer();
+    if (no_step && starts_zero && ends_max && !needs_scoped_copy) {
         return finalize_into_preallocated(ret_adjustment(input_tensor));
     }
 
@@ -414,8 +418,16 @@ ttnn::Tensor slice(
         return ((actual_shape[i] != final_padded_shape[i]) && (input_shape[i] != actual_shape[i]));
     };
 
-    if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
+    const bool needs_padding = pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2));
+    if (needs_padding) {
         res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
+    }
+
+    // The primitive already wrote the caller's storage. Its logical-shape view
+    // has a different Buffer object; do not mistake that view for a new buffer
+    // and copy again without the requested worker grid.
+    if (prim_output.has_value() && input.layout() == input_layout && !needs_padding) {
+        return res;
     }
 
     // ret_adjustment may re-allocate (rm_only-from-TILE); finalize guarantees the caller's buffer.

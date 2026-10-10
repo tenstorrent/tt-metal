@@ -195,6 +195,26 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
+    return create_impl(mesh_buffer_config, device_local_config, mesh_device, address, false);
+}
+
+std::shared_ptr<MeshBuffer> MeshBuffer::allocate_at_address(
+    const MeshBufferConfig& mesh_buffer_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice* mesh_device,
+    DeviceAddr address) {
+    TT_FATAL(
+        device_local_config.buffer_type == BufferType::L1 || device_local_config.buffer_type == BufferType::L1_SMALL,
+        "Fixed-address allocation requires an L1 buffer");
+    return create_impl(mesh_buffer_config, device_local_config, mesh_device, address, true);
+}
+
+std::shared_ptr<MeshBuffer> MeshBuffer::create_impl(
+    const MeshBufferConfig& mesh_buffer_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice* mesh_device,
+    std::optional<DeviceAddr> address,
+    bool allocate_at_address) {
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
     const DeviceAddr device_local_size = std::visit(
@@ -205,6 +225,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},
         mesh_buffer_config);
+
+    TT_FATAL(!allocate_at_address || device_local_size > 0, "Fixed-address allocation requires a nonempty buffer");
 
     if (mesh_device->get_view().get_devices().empty()) {
         auto mesh_buffer =
@@ -238,7 +260,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 device_local_config.sub_device_id);
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
         }
-    } else if (!address.has_value()) {
+    } else if (!address.has_value() || allocate_at_address) {
         // In HYBRID mode, set device-level allocators on the mesh allocator so it
         // can query their per-bank ranges and avoid regions occupied on any device.
         auto* mesh_allocator = mesh_device->allocator_impl().get();
@@ -277,7 +299,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.buffer_type,
             device_local_config.sharding_args,
             device_local_config.bottom_up,
-            device_local_config.sub_device_id);
+            device_local_config.sub_device_id,
+            address);
 
         hybrid_scope.reset();  // ends the span exactly where the placement does
 

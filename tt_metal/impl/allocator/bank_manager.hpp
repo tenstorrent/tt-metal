@@ -105,7 +105,8 @@ public:
         // When set, only these dependent allocators are subtracted, instead of every one this
         // allocator depends on. Range lockstep uses it to keep the scan to the buffer's own cores
         // on the path that does not go through a mesh allocator.
-        const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
+        const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt,
+        std::optional<DeviceAddr> requested_address = std::nullopt);
 
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
