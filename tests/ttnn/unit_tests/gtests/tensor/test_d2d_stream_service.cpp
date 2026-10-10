@@ -31,10 +31,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -45,6 +47,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -293,6 +296,328 @@ void verify_transfer(
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     EXPECT_TRUE(all_match) << "receiver backing tensor did not match sender iota within timeout";
+}
+
+// ---------------------------------------------------------------------------
+// Stage gate (D2DStreamConfig::stage_gate). Host-driven like verify_transfer: the
+// host stages each transfer's metadata in the sender service core's L1 and bumps
+// data_ready_counter (no producer op), and stands in for the receiver workers by
+// reading data_ready_sem and writing consumed_counter (no consumer op). The
+// metadata is the legacy prefill record plus the gate_flags word.
+// ---------------------------------------------------------------------------
+constexpr uint32_t kGateNumGates = 4;
+constexpr uint32_t kGateSlotOffsetBytes = 0;                      // w0 slot_id
+constexpr uint32_t kGateFlagsOffsetBytes = 4 * sizeof(uint32_t);  // w4 gate_flags
+constexpr uint32_t kGateMetadataBytes = 5 * sizeof(uint32_t);     // slot, start, end, levels, flags
+constexpr auto kGateHeldWindow = std::chrono::milliseconds(300);  // "still held" observation window
+constexpr auto kGateReleaseTimeout = std::chrono::milliseconds(2000);
+
+D2DStreamConfig make_stage_gate_config(const std::shared_ptr<MeshDevice>& sender_mesh) {
+    auto cfg = make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512}));
+    cfg.metadata_size_bytes = kGateMetadataBytes;
+    cfg.stage_gate = ttnn::D2DStageGateConfig{
+        .num_gates = kGateNumGates,
+        .slot_id_offset_bytes = kGateSlotOffsetBytes,
+        .gate_flags_offset_bytes = kGateFlagsOffsetBytes};
+    return cfg;
+}
+
+class StageGateHarness {
+public:
+    StageGateHarness(
+        D2DStreamServiceSender* sender,
+        D2DStreamServiceReceiver* receiver,
+        std::shared_ptr<MeshDevice> sender_mesh,
+        std::shared_ptr<MeshDevice> receiver_mesh) :
+        sender_(sender),
+        receiver_(receiver),
+        sender_mesh_(std::move(sender_mesh)),
+        receiver_mesh_(std::move(receiver_mesh)),
+        coords_(sender->get_backing_tensor().tensor_topology().mesh_coords()),
+        num_workers_(core_range_volume(sender->get_worker_cores())) {}
+
+    const std::vector<MeshCoordinate>& coords() const { return coords_; }
+
+    // Stage {slot, 0, 0, 0, flags} on every sender service core, then trigger one transfer.
+    void send(uint32_t slot, uint32_t flags) { send_record({slot, 0u, 0u, 0u, flags}); }
+
+    // Stage a full kGateMetadataBytes record on every sender service core, then trigger one transfer.
+    void send_record(std::vector<uint32_t> md) {
+        ++num_sent_;
+        std::vector<uint32_t> trigger{num_sent_ * num_workers_};
+        for (const auto& coord : coords_) {
+            auto* d = sender_mesh_->get_device(coord);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                d, sender_->get_service_core(coord), static_cast<uint32_t>(sender_->get_metadata_addr(coord)), md);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                d,
+                sender_->get_service_core(coord),
+                static_cast<uint32_t>(sender_->get_data_ready_counter_addr(coord)),
+                trigger);
+        }
+    }
+
+    // Transfers the receiver has released to its workers (its data_ready_sem count) on `coord`.
+    uint32_t released(const MeshCoordinate& coord) const {
+        std::vector<uint32_t> v;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            receiver_mesh_->get_device(coord),
+            receiver_->get_worker_cores().start_coord,
+            static_cast<uint32_t>(receiver_->get_data_ready_sem_addr()),
+            sizeof(uint32_t),
+            v);
+        return v.at(0);
+    }
+
+    // True once every coord has released exactly `n` transfers (polls up to `timeout`).
+    bool wait_released(uint32_t n, std::chrono::milliseconds timeout) const {
+        return wait_until(timeout, [&] {
+            return std::all_of(coords_.begin(), coords_.end(), [&](const auto& c) { return released(c) == n; });
+        });
+    }
+
+    // Same, for one coord only.
+    bool wait_released_at(const MeshCoordinate& coord, uint32_t n, std::chrono::milliseconds timeout) const {
+        return wait_until(timeout, [&] { return released(coord) == n; });
+    }
+
+    // Stand in for the receiver workers: ack the released transfer so the receiver
+    // returns the credit upstream and accepts the next one.
+    void consume() {
+        ++num_consumed_;
+        std::vector<uint32_t> value{num_consumed_ * num_workers_};
+        for (const auto& coord : coords_) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                receiver_mesh_->get_device(coord),
+                receiver_->get_service_core(coord),
+                static_cast<uint32_t>(receiver_->get_consumed_counter_addr(coord)),
+                value);
+        }
+    }
+
+    void set_gate(uint32_t gate, bool open) {
+        for (const auto& coord : coords_) {
+            receiver_->set_stage_gate(coord, gate, open);
+        }
+    }
+
+    bool gate_open_everywhere(uint32_t gate) const {
+        return std::all_of(
+            coords_.begin(), coords_.end(), [&](const auto& c) { return receiver_->is_stage_gate_open(c, gate); });
+    }
+    bool gate_closed_everywhere(uint32_t gate) const {
+        return std::none_of(
+            coords_.begin(), coords_.end(), [&](const auto& c) { return receiver_->is_stage_gate_open(c, gate); });
+    }
+
+private:
+    static bool wait_until(std::chrono::milliseconds timeout, const std::function<bool()>& done) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (done()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+
+    D2DStreamServiceSender* sender_;
+    D2DStreamServiceReceiver* receiver_;
+    std::shared_ptr<MeshDevice> sender_mesh_;
+    std::shared_ptr<MeshDevice> receiver_mesh_;
+    std::vector<MeshCoordinate> coords_;
+    uint32_t num_workers_;
+    uint32_t num_sent_ = 0;
+    uint32_t num_consumed_ = 0;
+};
+
+// Every gate starts CLOSED and the descriptor names this coord's receiver service core.
+void verify_stage_gate_descriptor(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    ASSERT_EQ(receiver->get_num_stage_gates(), kGateNumGates);
+    for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
+        const auto desc = receiver->get_stage_gate_descriptor(coord);
+        EXPECT_EQ(desc.num_gates, kGateNumGates);
+        EXPECT_EQ(desc.gate_stride_bytes, sizeof(uint32_t));
+        EXPECT_NE(desc.gate_base_addr, 0u);
+        EXPECT_EQ(desc.service_core_logical, receiver->get_service_core(coord));
+        EXPECT_EQ(
+            desc.service_core_noc,
+            receiver_mesh->get_device(coord)->worker_core_from_logical_core(desc.service_core_logical));
+        const auto node = receiver_mesh->get_fabric_node_id(coord);
+        EXPECT_EQ(desc.mesh_id, *node.mesh_id);
+        EXPECT_EQ(desc.chip_id, node.chip_id);
+        for (uint32_t g = 0; g < kGateNumGates; ++g) {
+            EXPECT_FALSE(receiver->is_stage_gate_open(coord, g)) << "gate " << g << " not CLOSED at " << coord;
+        }
+    }
+}
+
+// Walks every gate transition the receiver implements.
+void verify_stage_gate_semantics(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    using ttnn::kStageGateFlagBypass;
+    using ttnn::kStageGateFlagCloseOnTransit;
+
+    // 1. A transfer for a CLOSED gate lands but is held: the workers never see it.
+    h.send(/*slot=*/2, kStageGateFlagCloseOnTransit);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(h.released(coord), 0u) << "transfer for a closed gate was released at " << coord;
+    }
+
+    // 2. Opening the gate releases it, and CloseOnTransit shuts the gate behind it.
+    h.set_gate(2, /*open=*/true);
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout)) << "opening gate 2 did not release the held transfer";
+    EXPECT_TRUE(h.gate_closed_everywhere(2)) << "CloseOnTransit did not close gate 2";
+    h.consume();
+
+    // 3. An already-open gate admits a whole multi-transfer burst: transfers without
+    //    CloseOnTransit leave it open; the one carrying it closes it.
+    h.set_gate(1, /*open=*/true);
+    h.send(/*slot=*/1, /*flags=*/0);
+    ASSERT_TRUE(h.wait_released(2, kGateReleaseTimeout));
+    EXPECT_TRUE(h.gate_open_everywhere(1)) << "a transfer without CloseOnTransit closed gate 1";
+    h.consume();
+    h.send(/*slot=*/1, kStageGateFlagCloseOnTransit);
+    ASSERT_TRUE(h.wait_released(3, kGateReleaseTimeout));
+    EXPECT_TRUE(h.gate_closed_everywhere(1)) << "the burst's last transfer did not close gate 1";
+    h.consume();
+
+    // 4. A slot id outside [0, num_gates) (the shutdown / warm-up sentinels) passes ungated.
+    h.send(/*slot=*/0xFFFFFFFFu, /*flags=*/0);
+    ASSERT_TRUE(h.wait_released(4, kGateReleaseTimeout)) << "sentinel slot id was gated";
+    h.consume();
+
+    // 5. Bypass passes a closed gate and leaves it closed (CloseOnTransit is ignored).
+    h.send(/*slot=*/3, kStageGateFlagBypass | kStageGateFlagCloseOnTransit);
+    ASSERT_TRUE(h.wait_released(5, kGateReleaseTimeout)) << "Bypass transfer was gated";
+    EXPECT_TRUE(h.gate_closed_everywhere(3));
+    h.consume();
+
+    // 6. Leave a transfer held at a closed gate: tearing the pair down below must still
+    //    terminate the receiver (the gate wait polls the termination word).
+    h.send(/*slot=*/0, kStageGateFlagCloseOnTransit);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(h.released(coord), 5u) << "transfer for closed gate 0 was released at " << coord;
+    }
+}
+
+// Gates are per coord: opening one coord's gate releases only that coord's transfer, and
+// CloseOnTransit closes only that coord's gate. Needs a multi-coord receiver.
+void verify_stage_gate_per_coord_independence(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    const auto& coords = h.coords();
+    ASSERT_GE(coords.size(), 2u);
+    const MeshCoordinate& first = coords.front();
+    const MeshCoordinate& opened = coords.back();
+
+    h.send(/*slot=*/2, ttnn::kStageGateFlagCloseOnTransit);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : coords) {
+        EXPECT_EQ(h.released(coord), 0u) << "transfer for a closed gate was released at " << coord;
+    }
+
+    // Open gate 2 on the last coord only.
+    receiver->set_stage_gate(opened, 2, /*open=*/true);
+    ASSERT_TRUE(h.wait_released_at(opened, 1, kGateReleaseTimeout)) << "opening gate 2 did not release " << opened;
+    EXPECT_FALSE(receiver->is_stage_gate_open(opened, 2)) << "CloseOnTransit did not close gate 2 at " << opened;
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : coords) {
+        if (coord != opened) {
+            EXPECT_EQ(h.released(coord), 0u) << "opening gate 2 at " << opened << " released " << coord;
+            EXPECT_FALSE(receiver->is_stage_gate_open(coord, 2)) << "gate 2 at " << coord << " changed";
+        }
+    }
+
+    // The rest follow once their own gates open.
+    for (const auto& coord : coords) {
+        if (coord != opened) {
+            receiver->set_stage_gate(coord, 2, /*open=*/true);
+        }
+    }
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout)) << "gate 2 at " << first << " did not release";
+    EXPECT_TRUE(h.gate_closed_everywhere(2));
+    h.consume();
+}
+
+// One-shot program on `opener_mesh` (1x1) that opens `gate` on the receiver's `coord` over
+// fabric, built only from the receiver's published descriptor. mode 0 = inline write of
+// OPEN, mode 1 = flushed atomic +1 (see stage_gate_remote_opener.cpp).
+MeshWorkload make_remote_gate_opener_workload(
+    const std::shared_ptr<MeshDevice>& opener_mesh,
+    const ttnn::D2DStageGateDescriptor& desc,
+    uint32_t gate,
+    uint32_t mode) {
+    const CoreCoord opener_core{0, 0};
+    const MeshCoordinate opener_coord(0, 0);
+    const auto src_node = opener_mesh->get_fabric_node_id(opener_coord);
+    const tt::tt_fabric::FabricNodeId dst_node(tt::tt_fabric::MeshId{desc.mesh_id}, desc.chip_id);
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
+    TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
+
+    auto program = CreateProgram();
+    auto kernel = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/tensor/kernels/stage_gate_remote_opener.cpp",
+        CoreRange{opener_core, opener_core},
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    std::vector<uint32_t> rt = {
+        mode,
+        static_cast<uint32_t>(desc.service_core_noc.x),
+        static_cast<uint32_t>(desc.service_core_noc.y),
+        static_cast<uint32_t>(desc.gate_base_addr + gate * desc.gate_stride_bytes),
+        desc.chip_id,
+        desc.mesh_id,
+    };
+    tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
+    SetRuntimeArgs(program, kernel, opener_core, rt);
+
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(opener_coord), std::move(program));
+    return workload;
+}
+
+// A kernel on a third chip (no host access to the receiver) opens the gate over fabric
+// using only the descriptor, once per opener flavour.
+void verify_stage_gate_remote_opener(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const std::shared_ptr<MeshDevice>& opener_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    const MeshCoordinate coord(0, 0);
+    const auto desc = receiver->get_stage_gate_descriptor(coord);
+
+    uint32_t expected = 0;
+    for (const auto& [gate, mode, name] :
+         {std::tuple{1u, 0u, "inline write"}, std::tuple{2u, 1u, "flushed atomic inc"}}) {
+        h.send(gate, ttnn::kStageGateFlagCloseOnTransit);
+        std::this_thread::sleep_for(kGateHeldWindow);
+        ASSERT_EQ(h.released(coord), expected) << "transfer for closed gate " << gate << " was released";
+
+        auto workload = make_remote_gate_opener_workload(opener_mesh, desc, gate, mode);
+        EnqueueMeshWorkload(opener_mesh->mesh_command_queue(), workload, /*blocking=*/false);
+        Finish(opener_mesh->mesh_command_queue());
+
+        ++expected;
+        ASSERT_TRUE(h.wait_released(expected, kGateReleaseTimeout))
+            << "remote " << name << " did not open gate " << gate;
+        EXPECT_TRUE(h.gate_closed_everywhere(gate))
+            << "CloseOnTransit did not close gate " << gate << " after " << name;
+        h.consume();
+    }
 }
 
 // Build a sender-side placeholder worker workload: one program per coord
@@ -672,6 +997,108 @@ ttsl::Span<const std::byte> as_metadata_bytes(const std::vector<uint32_t>& metad
 // STEP 3 driver: full end-to-end metadata. Real sender + receiver workers drive
 // one transfer; the designated sender worker's {-1,0,fill_base} blob must land on
 // the sender service core AND every receiver worker core.
+// The gate holds the record too: the receiver multicasts the metadata to its workers only
+// after the gate passes, and the full record (gate_flags included) arrives unchanged.
+void verify_stage_gate_record_reaches_workers(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+
+    const std::vector<uint32_t> first = {0u, 128u, 256u, 7u, 0u};
+    h.set_gate(0, /*open=*/true);
+    h.send_record(first);
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout));
+    expect_metadata_on_receiver_workers(receiver.get(), receiver_mesh, first);
+    h.consume();
+
+    // Held at a closed gate: the workers still hold the previous record.
+    const std::vector<uint32_t> second = {3u, 256u, 512u, 9u, ttnn::kStageGateFlagCloseOnTransit};
+    h.send_record(second);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(h.released(coord), 1u) << "transfer for closed gate 3 was released at " << coord;
+    }
+    expect_metadata_on_receiver_workers(receiver.get(), receiver_mesh, first);
+
+    h.set_gate(3, /*open=*/true);
+    ASSERT_TRUE(h.wait_released(2, kGateReleaseTimeout));
+    expect_metadata_on_receiver_workers(receiver.get(), receiver_mesh, second);
+    EXPECT_TRUE(h.gate_closed_everywhere(3));
+    h.consume();
+}
+
+// Abort path (I3): the host can force an open gate closed, and the next transfer for that
+// slot is held until the gate is opened again.
+void verify_stage_gate_host_force_close(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+
+    h.set_gate(1, /*open=*/true);
+    ASSERT_TRUE(h.gate_open_everywhere(1));
+    h.set_gate(1, /*open=*/false);  // the request that owned slot 1 was aborted
+    ASSERT_TRUE(h.gate_closed_everywhere(1));
+
+    h.send(/*slot=*/1, ttnn::kStageGateFlagCloseOnTransit);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(h.released(coord), 0u) << "transfer passed a force-closed gate at " << coord;
+    }
+    h.set_gate(1, /*open=*/true);
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout));
+    EXPECT_TRUE(h.gate_closed_everywhere(1));
+    h.consume();
+}
+
+// LEASE mode (the production path): the receiver takes the link grant before data lands, so it
+// keeps it while a transfer is held at a closed gate. Its wait_for_fabric_links() spin kernel,
+// and everything behind it on the receiver's CQ, stays blocked until the gate opens and the
+// transfer is consumed. Round 2 checks a gate opened before the transfer arrives.
+void verify_stage_gate_lease_mode(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto cfg = make_stage_gate_config(sender_mesh);
+    cfg.share_fabric_links = true;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    auto& receiver_cq = receiver_mesh->mesh_command_queue();
+    auto& sender_cq = sender_mesh->mesh_command_queue();
+
+    // Round 1: the gate is closed when the transfer lands.
+    receiver->release_fabric_links();
+    sender->release_fabric_links();
+    h.send(/*slot=*/2, ttnn::kStageGateFlagCloseOnTransit);
+    receiver->wait_for_fabric_links();
+    sender->wait_for_fabric_links();
+    auto receiver_done = std::async(std::launch::async, [&] { Finish(receiver_cq); });
+    EXPECT_EQ(receiver_done.wait_for(kGateHeldWindow), std::future_status::timeout)
+        << "receiver handed its link back while its transfer was held at a closed gate";
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(h.released(coord), 0u) << "transfer for a closed gate was released at " << coord;
+    }
+    h.set_gate(2, /*open=*/true);
+    ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout)) << "opening gate 2 did not release the held transfer";
+    h.consume();
+    ASSERT_EQ(receiver_done.wait_for(kGateReleaseTimeout), std::future_status::ready)
+        << "receiver did not hand its link back after the gated transfer was consumed";
+    Finish(sender_cq);
+    EXPECT_TRUE(h.gate_closed_everywhere(2));
+
+    // Round 2: the gate is opened before the transfer arrives, so it passes without waiting.
+    h.set_gate(1, /*open=*/true);
+    receiver->release_fabric_links();
+    sender->release_fabric_links();
+    h.send(/*slot=*/1, ttnn::kStageGateFlagCloseOnTransit);
+    ASSERT_TRUE(h.wait_released(2, kGateReleaseTimeout)) << "transfer for a pre-opened gate was held";
+    h.consume();
+    receiver->wait_for_fabric_links();
+    sender->wait_for_fabric_links();
+    Finish(receiver_cq);
+    Finish(sender_cq);
+    EXPECT_TRUE(h.gate_closed_everywhere(1));
+}
+
 void verify_metadata_end_to_end(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -1676,6 +2103,146 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
 TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     D2D_THREE_STAGE_GUARD();
     verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// ---------------------------------------------------------------------------
+// Stage gate
+// ---------------------------------------------------------------------------
+#define D2D_SINGLE_CHIP_PAIR_GUARD()                                                                   \
+    if (!service_cores_supported()) {                                                                  \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";             \
+    }                                                                                                  \
+    const auto shape = this->mesh_device_->shape();                                                    \
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {                                  \
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape; \
+    }                                                                                                  \
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));      \
+    auto receiver_mesh = this->mesh_device_->create_submesh(                                           \
+        MeshShape(1, 1), (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0))
+
+// Row 0 (1x2) sends to row 1 (1x2): two coords per side.
+#define D2D_ROW_PAIR_GUARD()                                                                      \
+    if (!service_cores_supported()) {                                                             \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";        \
+    }                                                                                             \
+    const auto shape = this->mesh_device_->shape();                                               \
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {                                      \
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;       \
+    }                                                                                             \
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0)); \
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0))
+
+// Disabled by default: no gates, and the gate API refuses to run.
+TEST_F(D2DStreamServiceTest, StageGateDisabledByDefault) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512})));
+    EXPECT_EQ(receiver->get_num_stage_gates(), 0u);
+    EXPECT_ANY_THROW((void)receiver->get_stage_gate_descriptor(MeshCoordinate(0, 0)));
+    EXPECT_ANY_THROW(receiver->set_stage_gate(MeshCoordinate(0, 0), 0, true));
+}
+
+// The gate selects on the metadata, so it needs metadata enabled.
+TEST_F(D2DStreamServiceTest, StageGateRequiresMetadata) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto cfg = make_stage_gate_config(sender_mesh);
+    cfg.metadata_size_bytes = 0;
+    EXPECT_ANY_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)));
+}
+
+TEST_F(D2DStreamServiceTest, StageGateDescriptorSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_stage_gate_descriptor(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, StageGateSemanticsSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_stage_gate_semantics(sender_mesh, receiver_mesh);
+}
+
+// Same walk across a 1x2 row pair: each coord's gates are independent words on its own
+// receiver service core, and the host opens them on every coord.
+TEST_F(D2DStreamServiceTest, StageGateSemanticsRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_stage_gate_semantics(sender_mesh, receiver_mesh);
+}
+
+// Row pair: opening gate 2 on one coord releases only that coord.
+TEST_F(D2DStreamServiceTest, StageGatePerCoordIndependenceRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_stage_gate_per_coord_independence(sender_mesh, receiver_mesh);
+}
+
+// Sender (0,0) -> receiver (0,1); a kernel on (1,1) opens the receiver's gates over fabric.
+TEST_F(D2DStreamServiceTest, StageGateRemoteFabricOpener) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh for sender, receiver and a separate opener chip; got " << shape;
+    }
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1));
+    auto opener_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1));
+    verify_stage_gate_remote_opener(sender_mesh, receiver_mesh, opener_mesh);
+}
+
+// Offsets must be distinct, 4-byte-aligned words inside the metadata record.
+TEST_F(D2DStreamServiceTest, StageGateRejectsBadOffsets) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto expect_rejected = [&](uint32_t slot_offset, uint32_t flags_offset) {
+        auto cfg = make_stage_gate_config(sender_mesh);
+        cfg.stage_gate.slot_id_offset_bytes = slot_offset;
+        cfg.stage_gate.gate_flags_offset_bytes = flags_offset;
+        EXPECT_ANY_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)))
+            << "slot offset " << slot_offset << ", flags offset " << flags_offset;
+    };
+    expect_rejected(/*slot=*/2, kGateFlagsOffsetBytes);                       // misaligned
+    expect_rejected(kGateSlotOffsetBytes, /*flags=*/kGateMetadataBytes);      // past the record
+    expect_rejected(/*slot=*/kGateMetadataBytes - 2, kGateFlagsOffsetBytes);  // straddles the end
+    expect_rejected(/*slot=*/4, /*flags=*/4);                                 // same word
+    // The service still comes up with a valid layout afterwards.
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    EXPECT_EQ(receiver->get_num_stage_gates(), kGateNumGates);
+}
+
+// The gate API refuses gate indices and coords it does not own, and a refused call
+// leaves the gates untouched.
+TEST_F(D2DStreamServiceTest, StageGateApiRejectsOutOfRange) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    const MeshCoordinate coord(0, 0);
+    const MeshCoordinate outside(0, 1);  // receiver is 1x1
+    EXPECT_ANY_THROW(receiver->set_stage_gate(coord, kGateNumGates, true));
+    EXPECT_ANY_THROW((void)receiver->is_stage_gate_open(coord, kGateNumGates));
+    EXPECT_ANY_THROW(receiver->set_stage_gate(outside, 0, true));
+    EXPECT_ANY_THROW((void)receiver->get_stage_gate_descriptor(outside));
+    for (uint32_t g = 0; g < kGateNumGates; ++g) {
+        EXPECT_FALSE(receiver->is_stage_gate_open(coord, g)) << "gate " << g << " changed by a refused call";
+    }
+}
+
+TEST_F(D2DStreamServiceTest, StageGateRecordReachesWorkersSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_stage_gate_record_reaches_workers(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, StageGateHostForceCloseSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_stage_gate_host_force_close(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, StageGateLeaseModeSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_stage_gate_lease_mode(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, StageGateLeaseModeRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_stage_gate_lease_mode(sender_mesh, receiver_mesh);
 }
 
 }  // namespace
