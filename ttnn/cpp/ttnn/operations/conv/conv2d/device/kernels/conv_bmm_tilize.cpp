@@ -248,13 +248,13 @@ void kernel_main() {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 #ifdef ARCH_BLACKHOLE
-    // The block run is kept where it measured faster at the models' inputs: block-sharded 2 x 4 subblocks with L1
-    // accumulate, and without it height-sharded 1 x 4 (over several row blocks) and 4 x 1 ones over 12 or more.
+    // The block run is kept only where it measured faster at the models' inputs, all without relu: block-sharded 2 x 4
+    // with L1 accumulate, and without it height-sharded 1 x 4 (over several row blocks) and 4 x 1 over 12 or more.
     constexpr bool block_pack_subblocks =
-        (!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
-        (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
-         ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1) ||
-          (out_subblock_h == 4 && out_subblock_w == 1)));
+        !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
+                       (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
+                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1) ||
+                         (out_subblock_h == 4 && out_subblock_w == 1))));
 #endif
 
     uint32_t bias_block_offset = 0;
