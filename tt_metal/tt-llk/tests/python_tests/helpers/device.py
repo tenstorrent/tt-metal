@@ -26,6 +26,7 @@ from ttexalens.tt_exalens_lib import (
 from .device_io import read_from_device, write_words_to_device
 from .llk_params import BriscCmd
 from .logger import logger
+from .target_config import TestTargetConfig
 
 
 class _UninitializedMailboxes:
@@ -256,6 +257,36 @@ def commit_tensix_soft_reset(
 
 common_counter = 0
 
+# The test firmware mirrors the completion flags and the BRISC counter into registers outside L1 (host_signal in boot.h),
+# so waiting on a kernel never reads its L1. Simulator targets keep the L1 path, except the Quasar RTL emulator.
+HOST_SIGNAL_BRISC_COUNTER_SLOT = 3
+HOST_SIGNAL_MASK = 0xFFFFFF
+_HOST_SIGNAL_SCRATCH_INDEX = {
+    ChipArchitecture.WORMHOLE: 248,
+    ChipArchitecture.BLACKHOLE: 36,
+}
+_QUASAR_HOST_SIGNAL_BASE = 0x030000B0  # TT_CLUSTER_CTRL_SCRATCH_28
+
+
+def host_signal_address(slot: int) -> int | None:
+    """Address of host signal slot, or None when this target signals through L1 only."""
+    arch = get_chip_architecture()
+    target = TestTargetConfig._instance
+    if arch == ChipArchitecture.QUASAR:
+        # The emulator models the cluster control registers; ttsim (a shared library) does not
+        sim = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        if target is not None and target.run_simulator and sim.endswith(".so"):
+            return None
+        return _QUASAR_HOST_SIGNAL_BASE + slot * 4
+    index = _HOST_SIGNAL_SCRATCH_INDEX.get(arch)
+    if index is None or (target is not None and target.run_simulator):
+        return None
+    return 0xFFB40000 + slot * 0x1000 + index * 4
+
 
 def commit_brisc_command(
     location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
@@ -268,11 +299,19 @@ def commit_brisc_command(
         write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
 
     common_counter += 1
+    counter_addr = host_signal_address(HOST_SIGNAL_BRISC_COUNTER_SLOT)
+    mask = HOST_SIGNAL_MASK if counter_addr is not None else 0xFFFFFFFF
+    if counter_addr is None:
+        counter_addr = Mailboxes.BriscCounter.value
     end_time = time.time() + timeout
-    while time.time() < end_time:
-        temp_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-        if temp_value == common_counter:
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
+        temp_value = read_word_from_device(location, counter_addr, 0)
+        if temp_value == common_counter & mask:
             return
+        if expired:
+            break
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
@@ -295,12 +334,16 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
     first command.
     """
     end_time = time.time() + timeout
-    while time.time() < end_time:
+    while True:
+        # The clock is read before the poll, so a host stall past the deadline still gets one last poll
+        expired = time.time() >= end_time
         if (
             read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
             == BRISC_BOOT_READY_SENTINEL
         ):
             return
+        if expired:
+            break
 
     last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
     soft_reset = get_register_store(location, 0).read_register(
@@ -423,12 +466,24 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
         )
+        for slot in range(4):
+            addr = host_signal_address(slot)
+            if addr is not None:
+                write_words_to_device(
+                    location=location, addr=addr, data=[0xA3], safe_mode=False
+                )
     else:
         write_words_to_device(
             location=location,
             addr=MAILBOX_START_BLOCK,
             data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
         )
+        for slot in range(3):
+            addr = host_signal_address(slot)
+            if addr is not None:
+                write_words_to_device(
+                    location=location, addr=addr, data=[0xA3], safe_mode=False
+                )
 
 
 def pull_coverage_stream_from_tensix(

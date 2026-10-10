@@ -121,12 +121,241 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 }
 } // namespace detail
 
+// Park kinds (Wormhole perf builds): 1 KiB in run_kernel, aligned TILE_LOOP restart, unfilled in main.
+constexpr int PARK_SIZED = 0;
+constexpr int PARK_LOOP  = 1;
+constexpr int PARK_PLAIN = 2;
+// INIT entry park of the INIT measurement build (LLK_PERF_INIT_ONLY): reads INIT's start time right after the release.
+constexpr int PARK_INIT_TS = 4;
+
+// The other parks of the INIT measurement build end before any INIT starts or after all have ended: no fill needed.
+constexpr int park_mode(int mode)
+{
+#if defined(LLK_PERF_INIT_ONLY)
+    return mode == PARK_INIT_TS ? mode : PARK_PLAIN;
+#else
+    return mode;
+#endif
+}
+#if defined(LLK_PERF_INIT_ONLY)
+inline std::uint32_t init_start_ts[2] = {0, 0};
+#define LLK_INIT_TS_SYM_ (&llk_barrier::init_start_ts[0])
+#else
+#define LLK_INIT_TS_SYM_ 0
+#endif
+
+#if defined(LLK_DBG_BARRIER) // Wormhole perf builds: BRISC restarts every thread from a flushed pipeline
+namespace detail
+{
+#if defined(LLK_PERF_OOL)
+// LLK_PERF_OOL threads (test_config.py) run INIT out of line (perf.h); their parks restart 512 B aligned, the TILE_LOOP
+// one after llk_loop_pad bytes (perf/layout.py).
+template <int MODE = PARK_SIZED>
+__attribute__((always_inline)) inline void park()
+{
+    volatile std::uint32_t* reset_pc = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE) + TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID;
+    std::uint32_t scratch;
+#if defined(LLK_PERF_INIT_ONLY)
+    if constexpr (MODE == PARK_INIT_TS)
+    {
+        std::uint32_t lo, hi;
+        asm volatile(
+            "la    %[s], 1f\n\t"
+            "sw    %[s], 0(%[rpc])\n\t"
+            "lw    %[s], 0(%[rpc])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            ".word 0x00100073\n\t"
+            ".rept 16\n\t"
+            ".word 0x00000013\n\t"
+            ".endr\n"
+            ".balign 512\n"
+            "1:\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lui   %[s], 0xffb12\n\t" // wall clock (RISCV_DEBUG_REG_WALL_CLOCK_L / _H)
+            "lw    %[lo], 0x1f0(%[s])\n\t"
+            "lw    %[hi], 0x1f8(%[s])\n\t"
+            "lui   %[s], %%hi(%[ts])\n\t"
+            "sw    %[lo], %%lo(%[ts])(%[s])\n\t"
+            "sw    %[hi], %%lo(%[ts] + 4)(%[s])\n\t"
+            : [s] "=&r"(scratch), [lo] "=&r"(lo), [hi] "=&r"(hi)
+            : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [ts] "i"(LLK_INIT_TS_SYM_)
+            : "memory");
+        return;
+    }
+    if constexpr (park_mode(MODE) == PARK_PLAIN)
+    {
+        asm volatile(
+            "la    %[s], 1f\n\t"
+            "sw    %[s], 0(%[rpc])\n\t"
+            "lw    %[s], 0(%[rpc])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            ".word 0x00100073\n\t"
+            ".rept 16\n\t"
+            ".word 0x00000013\n\t"
+            ".endr\n"
+            "1:\n\t"
+            "lw    %[s], 0(%[pcb])\n\t"
+            "andi  %[s], %[s], 0\n\t"
+            : [s] "=&r"(scratch)
+            : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base)
+            : "memory");
+        return;
+    }
+#endif
+    asm volatile(
+        "la    %[s], 1f\n\t"
+        "sw    %[s], 0(%[rpc])\n\t"
+        "lw    %[s], 0(%[rpc])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        "lw    %[s], 0(%[pcb])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        ".word 0x00100073\n\t"
+        ".rept 16\n\t"
+        ".word 0x00000013\n\t"
+        ".endr\n"
+        ".balign 512\n" // the code after 1f keeps its address mod 512 B (branch predictor hash, icache sets) as code before it moves
+        ".ifndef llk_loop_pad\n\t"
+        ".set llk_loop_pad, 0\n"
+        ".endif\n"
+        ".rept (llk_loop_pad / 4) * %[on]\n\t"
+        "nop\n\t"
+        ".endr\n"
+        "1:\n\t"
+        "lw    %[s], 0(%[pcb])\n\t"
+        "andi  %[s], %[s], 0\n\t"
+        : [s] "=&r"(scratch)
+        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [on] "i"(MODE == PARK_LOOP ? 1 : 0)
+        : "memory");
+}
+#else
+// The park body is an assembler macro, so the compiler sees a one line asm: its size estimate for the branches around
+// the park stays as without the barrier (it decides short or long branches from those estimates).
+asm(R"ASM(
+.macro llk_park mode, pcb, rpc, size, ts
+.option push
+.option norelax
+2:
+    addi  sp, sp, -16
+    sw    t0, 0(sp)
+    sw    t1, 4(sp)
+    li    t1, \pcb
+    sw    zero, 4(t1)
+    lw    t0, 4(t1)
+    andi  t0, t0, 0
+    li    t1, \rpc
+    la    t0, 1f
+    sw    t0, 0(t1)
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    li    t1, \pcb
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    .word 0x00100073
+    .rept 16
+    .word 0x00000013
+    .endr
+.if \mode == 1
+.option pop
+    .balign 1024
+    .ifndef llk_loop_pad
+    .set llk_loop_pad, 0
+    .endif
+    .rept llk_loop_pad / 4
+    nop
+    .endr
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.else
+.if \mode == 4
+.option pop
+    .balign \size
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    sw    t2, 8(sp)
+    lui   t2, 0xffb12
+    lw    t0, 0x1f0(t2)
+    lw    t1, 0x1f8(t2)
+    lui   t2, %hi(\ts)
+    sw    t0, %lo(\ts)(t2)
+    sw    t1, %lo(\ts + 4)(t2)
+    lw    t2, 8(sp)
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.else
+.if \mode == 0
+    .rept (\size - 20 - (. - 2b)) / 4
+    nop
+    .endr
+.endif
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.option pop
+.endif
+.endif
+.endm
+)ASM");
+
+// Park at the BRISC barrier server (brisc.cpp); with no register operands it compiles like a plain memory barrier.
+// The TILE_LOOP park restarts 1 KiB aligned plus llk_loop_pad (perf/layout.py); the other parks span `size` bytes.
+template <int MODE = PARK_SIZED>
+__attribute__((always_inline)) inline void park()
+{
+    asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size], %[ts]"
+                 :
+                 : [mode] "i"(park_mode(MODE)),
+                   [ts] "i"(LLK_INIT_TS_SYM_),
+                   [size] "i"(THREAD_ID == 1 ? 512 : 1024), // math: BP hash and its 256 B icache repeat every 512 B
+                   [pcb] "i"(PC_BUF_BASE),
+                   [rpc] "i"(TENSIX_CFG_BASE + 4 * (TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID))
+                 : "memory");
+}
+#endif
+} // namespace detail
+#endif
+
 // The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
 // shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
-template <typename Action>
+template <int LOOP_PAD = PARK_SIZED, typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
     ckernel::fence_compiler();
+
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
+    ckernel::tensix_sync();
+    if (is_action_thread)
+    {
+        while (ckernel::semaphore_read(ARRIVE_SEM) < NUM_THREADS - 1)
+        {
+        }
+        while (ckernel::semaphore_read(ARRIVE_SEM) != 0)
+        {
+            ckernel::semaphore_get(ARRIVE_SEM);
+        }
+        action();
+        detail::flip(RELEASE_SEM); // peers on the inline-INIT path wait for the release level
+        ckernel::tensix_sync();
+    }
+    else
+    {
+        ckernel::semaphore_post(ARRIVE_SEM);
+    }
+    detail::park<LOOP_PAD>();
+#else
 
     if (is_action_thread)
     {
@@ -157,6 +386,10 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
         {
         }
     }
+#if defined(LLK_DBG_BARRIER)
+    detail::park<LOOP_PAD>();
+#endif
+#endif
 
     ckernel::fence_compiler();
 }

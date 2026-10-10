@@ -787,6 +787,13 @@ def _expand_run_types(text):
     return names
 
 
+_ISOLATE_RUN_TYPES = (
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+)
+
+
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
@@ -834,6 +841,16 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # L1_TO_L1 keeps the state the kernel before it left, so a run without isolate kernels also warms up the
+        # first isolate kernel of the test, which sets that state; otherwise the previous test still shows through.
+        self.warmup_configs = list(self.run_configs)
+        if not any(rt in _ISOLATE_RUN_TYPES for _, _, rt in self.run_configs):
+            extra = next((rt for rt in _ISOLATE_RUN_TYPES if rt in run_types), None)
+            if extra is not None and self.run_configs:
+                self.warmup_configs.insert(
+                    0,
+                    (templates.copy() + [PERF_RUN_TYPE(extra)], runtimes.copy(), extra),
+                )
 
         super().__init__(
             test_name,
@@ -979,6 +996,19 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _select_run_type(self, templates, runtimes, run_type):
+        self.current_run_type = run_type
+        # We need to manually assign different modified templates here if the speed of light is set,
+        # because we run TestConfig constructor only once
+        if TestConfig.SPEED_OF_LIGHT:
+            self.templates = templates + runtimes
+            self.runtimes = []
+            self.compile_time_formats = True
+        else:
+            self.templates = templates
+            self.runtimes = runtimes
+        self.generate_variant_hash()
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
@@ -988,18 +1018,8 @@ class PerfConfig(TestConfig):
         code_sizes = {}
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
-                self.current_run_type = run_type
-                # We need to manually assign different modified templates here if the speed of light is set,
-                # because we run TestConfig constructor only once
-                if TestConfig.SPEED_OF_LIGHT:
-                    self.templates = templates + runtimes
-                    self.runtimes = []
-                    self.compile_time_formats = True
-                else:
-                    self.templates = templates
-                    self.runtimes = runtimes
-                self.generate_variant_hash()
+            for templates, runtimes, run_type in self.warmup_configs:
+                self._select_run_type(templates, runtimes, run_type)
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
@@ -1007,18 +1027,18 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # A kernel inherits state from the kernel before it: run each kernel once
+        # unrecorded, so no measured kernel follows a kernel of another test.
+        if not TestConfig.TEST_TARGET.run_simulator:
+            for templates, runtimes, run_type in self.warmup_configs:
+                self._select_run_type(templates, runtimes, run_type)
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+
+        stats_by_run_type = {}  # INIT rows are replaced from the INIT launch below
         for templates, runtimes, run_type in self.run_configs:
-            self.current_run_type = run_type
-            # We need to manually assign different modified templates here if the speed of light is set,
-            # because we run TestConfig constructor only once
-            if TestConfig.SPEED_OF_LIGHT:
-                self.templates = templates + runtimes
-                self.runtimes = []
-                self.compile_time_formats = True
-            else:
-                self.templates = templates
-                self.runtimes = runtimes
-            self.generate_variant_hash()
+            self._select_run_type(templates, runtimes, run_type)
 
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -1072,6 +1092,7 @@ class PerfConfig(TestConfig):
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
+                stats_by_run_type[run_type] = stats_df
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1104,6 +1125,69 @@ class PerfConfig(TestConfig):
                     )
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
+
+        # Wormhole perf: INIT comes from the INIT measurement build (test_config.py init_elf), launched after the measured
+        # kernels so they keep their predecessors, after one unrecorded pass so each recorded INIT kernel follows another.
+        if (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and not TestConfig.TEST_TARGET.run_simulator
+        ):
+            self.init_launch = True
+            try:
+                for templates, runtimes, run_type in self.warmup_configs:
+                    self._select_run_type(templates, runtimes, run_type)
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                for templates, runtimes, run_type in self.run_configs:
+                    self._select_run_type(templates, runtimes, run_type)
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    init_data = Profiler.get_data(
+                        self.test_name,
+                        f"{self.variant_id}_init",
+                        TestConfig.TENSIX_LOCATION,
+                    )
+                    init_data.df["run_index"] = 0
+                    init_stats = Profiler.STATS_FUNCTION[run_type](
+                        ProfilerData.concat([init_data])
+                    )
+                    target = stats_by_run_type.get(run_type)
+                    row = (
+                        init_stats[init_stats[MARKER] == "INIT"]
+                        if not init_stats.empty
+                        else init_stats
+                    )
+                    if target is None or row.empty:
+                        continue
+                    row = row.copy()
+                    if run_type == PerfRunType.L1_TO_L1:
+                        # BRISC releases the three INITs one after another (brisc.cpp, the INIT park), so the span from
+                        # unpack's start to pack's end holds the release gaps: report the longest of the three INITs
+                        raw = init_data.zones().raw()
+                        raw = raw[raw[MARKER] == "INIT"]
+                        lengths = []
+                        for thread in ("unpack", "math", "pack"):
+                            t = raw[raw["thread"] == thread]
+                            starts = t[t["type"] == "ZONE_START"][
+                                "timestamp"
+                            ].to_numpy()
+                            ends = t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()
+                            if len(starts) and len(starts) == len(ends):
+                                lengths.append(float((ends - starts).max()))
+                        if lengths:
+                            for column in row.columns:
+                                if column.startswith("mean("):
+                                    row[column] = max(lengths)
+                    for column in target.columns:
+                        if column != MARKER and column in row.columns:
+                            target.loc[target[MARKER] == "INIT", column] = row[
+                                column
+                            ].values[0]
+            finally:
+                self.init_launch = False
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

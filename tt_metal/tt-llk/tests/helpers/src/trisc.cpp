@@ -68,6 +68,15 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
+    for (std::uint32_t slot = 0; slot < 4; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
+#else
+    for (std::uint32_t slot = 0; slot < 3; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
@@ -101,12 +110,28 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PROFILER) && defined(LLK_PERF_RUN_TYPE_PACK_ISOLATE) && defined(LLK_TRISC_PACK)
+        llk_barrier::detail::flip(llk_barrier::RELEASE_SEM); // release the peers held at their TILE_LOOP end (profiler.h)
+#endif
         ckernel::tensix_sync();
+#if defined(LLK_DBG_BARRIER) // a thread that finishes first waits halted, so no code outside run_kernel runs in another zone
+        llk_barrier::detail::park<llk_barrier::PARK_PLAIN>();
+#endif
     }
 
     llk_perf::read_last_zone();
 
     *mailbox = ckernel::KERNEL_COMPLETE;
+#if defined(ARCH_QUASAR)
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
+#endif
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(LLK_DBG_BARRIER) // the flag has landed before the last arrival, which ends BRISC's serving
+    (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
+        host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
+        host_signal::STREAM_SCRATCH_REG_INDEX * 4));
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
+#endif
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
