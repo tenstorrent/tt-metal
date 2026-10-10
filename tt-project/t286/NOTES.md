@@ -116,3 +116,23 @@ Wait on g14blx03:/var/tmp/fasth3/runner/done/t286-t5-r2.done, then steps 3-4 abo
 1. `--collect-only` the test (no device) in ~/fasth3/t286 to fix the selector for t10/t5.
 2. Split fill: the cold cache fill must fit 600 s (e.g. fill per stage, or fewer blocks per job).
 3. Then rerun t10, t5; cleanup per steps 3-4 above.
+
+## 2026-10-10 ~03:20 UTC (#314, run 1250)
+- Correction: t10-r2 (800) and t5-r2 (803) exit 5 was run286.sh's own root-disk guard ("[t286] / at 88%",
+  5 s runtime), not pytest. Selector was fine; tightened anyway to "<d>s and 4x8 and not 15s and not
+  4x32 and not WH"; --collect-only on blx03 selects exactly test_turbo_end_to_end[NOTSET-4x8-5s] / [...-10s].
+- Freed space: deleted /var/tmp/fasth3/cache/dit-ltx25/gemma4-12b-with-proj-ltx-2.5-bf16 (~50G, LTX 2.5
+  text-encoder weight cache, project-created 09-30/10-01; LTX 2.5 work closed). blx03 / 88% -> 82% (164G free).
+- fill1-r2 (794) left a complete dit cache (dit-h3hf 115G: transformer 63G, text_encoder 47G, vae 4.6G,
+  audio 0.5G); it timed out in the construction warmup at VAE canvas 42/93 (~2.3 s per canvas, mostly readback).
+  That warmup runs in every process, so a separate fill job would not help. t286_skipvaewarm.py
+  (-p plugin, T286_SKIP_VAE_WARM=1) decodes only this test's canvases + the full-wave canvas at warmup.
+  Measured call unchanged (the test's untimed priming call at the same shape runs first).
+- blx03 log shows AICLK clamped at 900 MHz (expected 1350) on all chips during job 794 (same clamp as
+  blx01 in #305). Timings taken under it are relative, not headline.
+- Queued on blx03 runner: t286-t5-r3 then t286-t10-r3 (TIMEOUT 600, unmeasured).
+## Next step
+Wait on g14blx03:/var/tmp/fasth3/runner/done/t286-t10-r3.done (probe.sh t286-t10-r3). Then read both
+markers, grep the log_pipeline_perf table from /var/tmp/fasth3/t286/out_{t5,t10}/run.log, check AICLK
+lines, ffmpeg a still, copy stills+logs to tt-project/baselines/fasth3/. If t5 timed out: read where
+the time went in out_t5/run.log and restructure.

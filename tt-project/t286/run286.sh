@@ -28,9 +28,11 @@ export TT_METAL_CACHE=$F/cache/tt-metal-cache-h3hf TT_DIT_CACHE_DIR=$F/cache/dit
 mkdir -p $TT_METAL_CACHE $TT_DIT_CACHE_DIR
 cd $W || exit 3
 source ${T286_VENV:-$F/t48/python_env}/bin/activate
-export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools
-if [ "$DUR" = 5 ]; then K="5s and not 15s and not 4x32 and not WH"; else K="${DUR}s and not 4x32 and not WH"; fi
-CMD="python -u -m pytest -sv -p no:cacheprovider models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '$K'"
+export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools:$T
+# T286_SKIP_VAE_WARM=1: warm only the canvases this test reaches (t286_skipvaewarm.py).
+P=""; [ "${T286_SKIP_VAE_WARM:-0}" = 1 ] && P="-p t286_skipvaewarm"
+K="${DUR}s and 4x8 and not 15s and not 4x32 and not WH"; [ "$DUR" = 15 ] && K="15s and 4x8 and not 4x32 and not WH"
+CMD="python -u -m pytest -sv -p no:cacheprovider $P models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py -k '$K'"
 echo "[t286] host=$(hostname) commit=$(git -C $W rev-parse HEAD) tag=$TAG dur=$DUR job=${TTP_RUNNER_JOB:-} $(date -u '+%F %T') UTC" | tee $OUT/run.log
 echo "[t286] cmd: $CMD" | tee -a $OUT/run.log
 env | grep -E '^(MINIMAX|TT_)' | sort >> $OUT/run.log
