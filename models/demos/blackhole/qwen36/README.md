@@ -206,8 +206,10 @@ recomputed from 0 (correct, slower).
 
 Snapshot points (all multiples of 128, because the SDPA chunk offset uses q_chunk=128, and always `<= L-3` so every
 segment keeps >= 3 tokens for the conv new-state selection): the vLLM-hit position when we have no snapshot there
-("learn"), the end of long prompts (`((L-3)//128)*128`, prompts >= `QWEN36_PREFIX_SNAPSHOT_MIN_LEN`), and every
-`QWEN36_PREFIX_SNAPSHOT_STRIDE` tokens after the resume point. With the cache off, or no hit and no snapshot to take,
+("learn"), the end of long prompts (`((L-3)//128)*128`, prompts >= `QWEN36_PREFIX_SNAPSHOT_MIN_LEN`, which splits the prefill
+there), for shorter prompts with no other save point the last full 2048-token chunk boundary `p = s + num_full*2048`
+when `p > s` and `p <= L-3` (saved between two chunk-trace replays, no split, about 3 ms), and every
+`QWEN36_PREFIX_SNAPSHOT_STRIDE` tokens after the resume point. A prompt longer than 2048 tokens whose last chunk would leave a 1-2 token remainder gets an extra split 128 tokens before the last full-chunk boundary so the final segment runs on the short trace (not eagerly). With the cache off, or no hit and no snapshot to take,
 the prefill is the unchanged path. Only the batched slot path (`max_num_seqs > 1`, text) uses snapshots; the B=1 TP and
 single-device paths ignore `start_pos` and recompute from 0.
 
@@ -215,7 +217,7 @@ single-device paths ignore `start_pos` and recompute from 0.
 |---|---|---|
 | `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
 | `QWEN36_PREFIX_CACHE_SLOTS` | `64` | snapshot slots (about 19 MB of DRAM per device per slot, allocated before trace capture) |
-| `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `2048` | minimum prompt length for the end-of-prompt snapshot |
+| `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
 

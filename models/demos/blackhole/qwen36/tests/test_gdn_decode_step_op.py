@@ -170,3 +170,86 @@ def test_gdn_decode_step_op_vs_existing(mesh_device, B, reset_seeds, ensure_gc, 
         assert torch.isfinite(out_o).all()
         assert torch.equal(_cat0(mesh, go.rec_state).reshape(nd, Bmax, Nv, Dk, Dv)[:, B:], rec_idle), "idle rows moved"
         compare(f"step {step} (B={B})", out_o, out_r)
+
+
+def _packed_host(g):
+    return ttnn.to_torch(ttnn.get_device_tensors(g._conv_hist_packed)[0]).bfloat16().clone()
+
+
+def _set_packed(mesh, g, host):
+    ttnn.copy(replicate_to_device(mesh, host), g._conv_hist_packed)
+
+
+def _random_packed_state(mesh, g, Bmax, C):
+    """Random RM history -> packed (so only valid rows are non-zero, like the op leaves it), format 'packed'."""
+    g.reset_state()
+    hist = torch.randn(Bmax, 3, C, dtype=torch.bfloat16)
+    ttnn.copy(replicate_to_device(mesh, hist, layout=ttnn.ROW_MAJOR_LAYOUT), g._ensure_conv_hist())
+    g._pack_conv_hist()
+    g._conv_fmt = "packed"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_packed_write_slot_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """write_slot under the 'packed' format writes the slot's tiles directly and stays 'packed'; the whole packed
+    tensor is bit-identical to the old unpack -> RM slot write -> re-pack path (even and odd slots)."""
+    mesh, Bmax = mesh_device, 32
+    args, go, _ = _build(mesh, Bmax, monkeypatch)
+    Nv, Dk, Dv, C = go.Nv, go.Dk, go.Dv, go.qkv_dim_tp
+    _random_packed_state(mesh, go, Bmax, C)
+    base = _packed_host(go)
+    for slot in (0, 1, 6, 13, 30, 31):
+        convs = [replicate_to_device(mesh, torch.randn(1, 1, C, dtype=torch.bfloat16)) for _ in range(4)]
+        rec = ttnn.from_torch(
+            0.1 * torch.randn(1, Nv, Dk, Dv),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        # new path
+        _set_packed(mesh, go, base)
+        go._conv_fmt = "packed"
+        go.write_slot(slot, rec, convs, consume=False)
+        assert go._conv_fmt == "packed"
+        new = _packed_host(go)
+        # old path: unpack -> RM slot write -> re-pack
+        _set_packed(mesh, go, base)
+        go._unpack_conv_hist()
+        go._conv_fmt = "hist"
+        go._write_conv_hist_slot(slot, convs)
+        go._pack_conv_hist()
+        old = _packed_host(go)
+        assert torch.equal(new, old), f"slot {slot}: packed write differs from unpack/write/repack"
+        assert not torch.equal(new, base)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_packed_remap_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """remap_slots under 'packed' (one parity-aware gather) is bit-identical to unpack -> RM gather -> re-pack:
+    odd<->even swaps, identity entries, shifts (condense) and duplicated sources."""
+    mesh, Bmax = mesh_device, 32
+    args, go, _ = _build(mesh, Bmax, monkeypatch)
+    C = go.qkv_dim_tp
+    _random_packed_state(mesh, go, Bmax, C)
+    base = _packed_host(go)
+    swap = list(range(Bmax))
+    swap[0], swap[1], swap[2], swap[3] = 1, 0, 3, 2
+    cond = [i + 1 if i < 31 else 31 for i in range(Bmax)]  # shift down by one (odd->even, even->odd)
+    cond2 = [(i + 2) % Bmax if i < 20 else i for i in range(Bmax)]  # even->even with identity tail
+    rev = list(reversed(range(Bmax)))
+    perm = torch.randperm(Bmax).tolist()
+    for name, remap in (("swap", swap), ("condense", cond), ("shift2", cond2), ("reverse", rev), ("random", perm)):
+        _set_packed(mesh, go, base)
+        go._conv_fmt = "packed"
+        go.remap_slots(remap)
+        assert go._conv_fmt == "packed"
+        new = _packed_host(go)
+        _set_packed(mesh, go, base)
+        go._unpack_conv_hist()
+        go._gather_indices(go._conv_hist_rm, remap, dim=0)
+        go._pack_conv_hist()
+        old = _packed_host(go)
+        assert torch.equal(new, old), f"remap {name}: packed gather differs from unpack/gather/repack"

@@ -145,13 +145,52 @@ def _corpus(tokenizer):
     return ids
 
 
+import json
+import random
+import statistics
+
+LENS = [int(x) for x in os.environ.get("PO_LENS", "128,1024,2048,2049,4096,8192").split(",")]
+REPS = 3
+BREAKDOWN = os.environ.get("PO_BREAKDOWN", "0") == "1"
+OUT = os.environ.get("PO_OUT", "/tmp/po.jsonl")
+ACC = {}
+COUNTS = {}
+DEV = [None]
+
+
+def _wrap(obj, name, key):
+    orig = getattr(obj, name)
+
+    def w(*a, **k):
+        ttnn.synchronize_device(DEV[0])
+        t0 = time.perf_counter()
+        r = orig(*a, **k)
+        ttnn.synchronize_device(DEV[0])
+        ACC[key] = ACC.get(key, 0.0) + (time.perf_counter() - t0) * 1000
+        ACC[key + "#"] = ACC.get(key + "#", 0) + 1
+        return r
+
+    setattr(obj, name, w)
+
+
+def _count(mod, name):
+    orig = getattr(mod, name)
+
+    def w(*a, **k):
+        COUNTS[name] = COUNTS.get(name, 0) + 1
+        return orig(*a, **k)
+
+    setattr(mod, name, w)
+
+
 @run_for_blackhole()
 @pytest.mark.timeout(3500)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_prefix_cache_serving(mesh_device, reset_seeds, ensure_gc):
+def test_prefill_overhead(mesh_device, reset_seeds, ensure_gc):
     from transformers import AutoConfig, AutoTokenizer
 
+    DEV[0] = mesh_device
     hf = os.environ["HF_MODEL"]
     tok = AutoTokenizer.from_pretrained(hf)
     hf_config = AutoConfig.from_pretrained(hf)
@@ -159,110 +198,126 @@ def test_prefix_cache_serving(mesh_device, reset_seeds, ensure_gc):
     model = gen.model[0]
     kv_shape = (NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK, model.args.head_dim)
     kv = gen.allocate_kv_cache(kv_shape, ttnn.bfloat16, len(model.layers))
-    # plugin order: eager warmup, reset flag, traced prefill + decode warmup
     dkw = dict(kv_cache=kv, max_batch_size=WIDTH, num_blocks=BPU, can_sample_on_device=True)
     gen.warmup_model_prefill(kv_cache=kv, enable_trace=False)
     gen.warmup_model_decode(enable_trace=False, **dkw)
     gen.already_warmed_up_prefill = False
     gen.warmup_model_prefill(kv_cache=kv, enable_trace=True)
     gen.warmup_model_decode(enable_trace=True, **dkw)
-    assert model._prefix_cache is not None, "GdnPrefixStateCache was not built by warmup_model_prefill"
     cache = model._prefix_cache
+    logger.info(
+        f"PO config PC={os.environ.get('QWEN36_PREFIX_CACHE')} OP={os.environ.get('QWEN36_GDN_DECODE_STEP_OP')} "
+        f"cache={cache is not None}"
+    )
 
     h = Harness(gen, kv, _corpus(tok))
-    failures = []
+    rng = random.Random(1234)
 
-    def check(p, t1, tag, pmin=PCC_MIN):
-        if not (p >= pmin and t1):
-            failures.append(f"{tag}: pcc={p:.6f} top1_equal={t1}")
+    if BREAKDOWN:
+        _wrap(model, "prefill_paged_slots", "prefill_paged_slots")
+        _wrap(model, "_prefill_with_prefix_cache", "_prefill_with_prefix_cache")
+        _wrap(model, "prefill_traced_chunked", "legacy_prefill_traced_chunked")
+        _wrap(model, "_prepare_short_trace_gdn_init", "_prepare_short_trace_gdn_init")
+        _wrap(model, "_write_gdn_slot_from_scratch", "_write_gdn_slot_from_scratch")
+        _wrap(model, "_prefill_range", "_prefill_range")
+        _wrap(model, "prepare_gdn_decode_width", "prepare_gdn_decode_width")
+        if cache is not None:
+            _wrap(cache, "save", "cache.save")
+            _wrap(cache, "restore", "cache.restore")
+    for n in ("copy", "embedding", "to_torch", "from_torch", "execute_trace"):
+        _count(ttnn, n)
 
-    # ---- S4 baseline: short prompt BEFORE any prefix-cache activity
-    t300 = h.text(300)
-    b = h.blocks_for(300)
-    base_logits, _ = h.prefill(t300, b, 0, 2)
-    assert cache.stats["saves"] == 0
+    sp = SamplingParams(temperature=[0.0] * WIDTH, top_k=[1] * WIDTH, top_p=[1.0] * WIDTH, seed=[None] * WIDTH)
 
-    # ---- S1 long shared prefix
-    shared = h.text(5000)
-    sA, sB, sC = h.text(700), h.text(900), h.text(500)
-    A = shared + sA
-    a_blocks = h.blocks_for(len(A))
-    lA, tA = h.prefill(A, a_blocks, 0, 2)
-    logger.info(f"S1 A prefill {tA:.3f}s, snapshots after A: {sorted(cache._positions)}")
-    nshare = 5000 // BLOCK  # 78
-    B = shared + sB
-    # B in slot 0 (cached), reference of B in slot 1 -> both decode afterwards
-    b_blocks = h.blocks_for(len(B), a_blocks[:nshare])
-    assert b_blocks[:nshare] == a_blocks[:nshare]
-    lB, tB = h.prefill(B, b_blocks, nshare * BLOCK, 0)
-    snaps_after_B = sorted(cache._positions)
-    rb_blocks = h.blocks_for(len(B))
-    lBr, tBr = h.prefill(B, rb_blocks, 0, 1)
-    p, t1 = h.compare("S1", "B", f"L={len(B)} start={nshare*BLOCK} snaps_after_B={snaps_after_B}", lB, tB, lBr, tBr)
-    check(p, t1, "S1 B")
-    # decode B (slot 0) and its reference (slot 1) side by side
-    firstB, firstBr = int(lB.argmax()), int(lBr.argmax())
-    try:
-        outs = h.greedy_decode([(b_blocks, len(B), firstB), (rb_blocks, len(B), firstBr)], 8)
-        logger.info(f"S1 decode cached={outs[0]} ref={outs[1]}")
-        RESULTS.append(("S1", "decode8", f"cached={outs[0]} ref={outs[1]}", float("nan"), outs[0] == outs[1], 0, 0, 0))
-        if outs[0] != outs[1]:
-            failures.append(f"S1 decode tokens differ: cached={outs[0]} ref={outs[1]}")
-    except Exception as e:  # decode is secondary; report it
-        logger.exception("S1 decode failed")
-        failures.append(f"S1 decode raised {type(e).__name__}: {e}")
-    C = shared + sC
-    _, _, _, _, p, t1 = h.cached_vs_ref("S1", "C", C, a_blocks[:nshare], nshare * BLOCK)
-    check(p, t1, "S1 C")
+    def decode_once(blocks, pos, tokval):
+        tokens = torch.zeros(WIDTH, 1, dtype=torch.int32)
+        tokens[0, 0] = tokval
+        start = torch.full((WIDTH,), -1, dtype=torch.int32)
+        start[0] = pos
+        pt = torch.zeros(WIDTH, BPU, dtype=torch.int32)
+        pt[0, : len(blocks)] = torch.tensor(blocks, dtype=torch.int32)
+        t0 = time.perf_counter()
+        out = gen.decode_forward(
+            tokens=tokens,
+            start_pos=start,
+            page_table=pt,
+            kv_cache=kv,
+            sampling_params=sp,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=True,
+            reset_sampling_state=True,
+            enable_trace=True,
+            read_from_device=True,
+        )
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.perf_counter() - t0) * 1000
+        toks = torch.as_tensor(out[0] if isinstance(out, tuple) else out).reshape(-1)
+        return int(toks[0]), dt
 
-    # ---- S2 short shared prefix (<2048)
-    sh2 = h.text(1000)
-    D = sh2 + h.text(200)
-    d_blocks = h.blocks_for(len(D))
-    h.prefill(D, d_blocks, 0, 2)
-    n2 = 1000 // BLOCK  # 15
-    E = sh2 + h.text(300)
-    _, _, _, _, p, t1 = h.cached_vs_ref("S2", "E", E, d_blocks[:n2], n2 * BLOCK)
-    check(p, t1, "S2 E")
-    F = sh2 + h.text(250)
-    _, _, _, _, p, t1 = h.cached_vs_ref("S2", "F", F, d_blocks[:n2], n2 * BLOCK)
-    check(p, t1, "S2 F")
-
-    # ---- S3 exact repeat
-    G = h.text(3000)
-    g_blocks = h.blocks_for(len(G))
-    lG1, tG1 = h.prefill(G, g_blocks, 0, 2)
-    st = ((3000 - 1) // BLOCK) * BLOCK  # 2944
-    lG2, tG2 = h.prefill(G, g_blocks, st, 2)  # same blocks: vLLM re-uses the cached prefix blocks, new tail blocks
-    p, t1 = h.compare("S3", "G repeat", f"L=3000 start={st}", lG2, tG2, lG1, tG1)
-    check(p, t1, "S3 G")
-
-    # ---- S4 regression: same 300-token prompt after prefix-cache activity
-    b2 = h.blocks_for(300)
-    l4, t4 = h.prefill(t300, b2, 0, 2)
-    p4 = pcc(l4, base_logits)
-    same = torch.equal(l4, base_logits)
-    RESULTS.append(("S4", "300tok", f"bitwise={same}", p4, int(l4.argmax()) == int(base_logits.argmax()), 0, t4, 0))
-    check(p4, int(l4.argmax()) == int(base_logits.argmax()), "S4", PCC_S4_MIN)
-
-    # ---- S5 routing: fresh prefill through the segmented path (tail split / chunk save point) vs the legacy
-    # prefill_traced_chunked path (prefix cache detached, so _plan_prefix_prefill returns None)
-    for L5 in (2049, 2050, 3000, 4098):
-        T5 = h.text(L5)
-        saves0 = cache.stats["saves"]
-        ln, tn = h.prefill(T5, h.blocks_for(L5), 0, 2)
-        assert cache.stats["saves"] > saves0, f"S5 L={L5}: expected the segmented path to snapshot"
-        model._prefix_cache = None
-        try:
-            ll, tl = h.prefill(T5, h.blocks_for(L5), 0, 2)
-        finally:
-            model._prefix_cache = cache
-        p, t1 = h.compare("S5", f"seg-vs-legacy L={L5}", f"L={L5}", ln, tn, ll, tl)
-        check(p, t1, f"S5 L={L5}")
-
-    logger.info(f"cache stats: {cache.stats}")
-    print("\n==== prefix-cache summary ====")
-    for r in RESULTS:
-        print(r)
-    print("stats", cache.stats)
-    assert not failures, "; ".join(failures)
+    for L in LENS:
+        res = []
+        for rep in range(REPS + 1):  # rep 0 = discarded extra warm
+            off = rng.randrange(0, len(h.corpus) - L - 1)
+            toks = h.corpus[off : off + L]
+            h.next_block = 1
+            blocks = h.blocks_for(L)
+            ACC.clear()
+            COUNTS.clear()
+            ttnn.synchronize_device(mesh_device)
+            pt = torch.zeros(1, BPU, dtype=torch.int32)
+            pt[0, : len(blocks)] = torch.tensor(blocks, dtype=torch.int32)
+            t = torch.tensor(toks, dtype=torch.int32).reshape(1, L)
+            t0 = time.perf_counter()
+            logits, _ = gen.prefill_forward(t, pt, kv, [L], start_pos=[0], empty_slots=[0], enable_trace=True)
+            ttnn.synchronize_device(mesh_device)
+            dt = (time.perf_counter() - t0) * 1000
+            pacc, pcnt = dict(ACC), dict(COUNTS)
+            nxt = int(logits.reshape(-1)[: h.vocab].float().argmax())
+            ACC.clear()
+            times = []
+            dfirst = {}
+            for s in range(6):
+                nxt, d = decode_once(blocks, L + s, nxt)
+                times.append(d)
+                if s == 0:
+                    dfirst = dict(ACC)
+            if rep > 0:
+                res.append(
+                    dict(
+                        L=L,
+                        rep=rep,
+                        prefill_ms=dt,
+                        acc=pacc,
+                        counts=pcnt,
+                        dec_first=times[0],
+                        dec_steady=statistics.median(times[2:]),
+                        dec_acc_first=dfirst,
+                    )
+                )
+            logger.info(
+                f"PO L={L} rep={rep} prefill={dt:.1f}ms dec_first={times[0]:.1f} "
+                f"steady={statistics.median(times[2:]):.1f} acc={ {k: round(v, 1) for k, v in pacc.items()} } "
+                f"counts={pcnt} dec_acc_first={dfirst}"
+            )
+        keys = set().union(*[r["acc"] for r in res])
+        with open(OUT, "a") as f:
+            f.write(
+                json.dumps(
+                    dict(
+                        L=L,
+                        med_prefill=statistics.median(r["prefill_ms"] for r in res),
+                        med_dec_first=statistics.median(r["dec_first"] for r in res),
+                        med_dec_steady=statistics.median(r["dec_steady"] for r in res),
+                        med_acc={k: statistics.median(r["acc"].get(k, 0) for r in res) for k in keys},
+                        counts=res[-1]["counts"],
+                        runs=res,
+                        cfg=dict(
+                            PC=os.environ.get("QWEN36_PREFIX_CACHE"),
+                            OP=os.environ.get("QWEN36_GDN_DECODE_STEP_OP"),
+                            BD=BREAKDOWN,
+                        ),
+                    )
+                )
+                + "\n"
+            )

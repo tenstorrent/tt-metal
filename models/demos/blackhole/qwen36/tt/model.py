@@ -3879,21 +3879,36 @@ class Qwen36Model:
         points = set()
         if h128 > s:  # vLLM has the KV up to h128 but we hold no GDN state there: learn it for the next request
             points.add(h128)
-        min_len = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "2048"))
+        min_len = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192"))
         b_end = ((L - 3) // A) * A  # end-of-prompt snapshot: covers the whole-prompt-shared prefix of a later request
+        chunk_pts = set()
         if L >= min_len and b_end > max(s, h128):
-            points.add(b_end)
+            points.add(b_end)  # long prompts: split the prefill here (the end-of-prompt snapshot)
+        elif not points:
+            # Shorter prompts: no split. Save at the last full-chunk boundary through the per-chunk save_cb (a ~3 ms
+            # snapshot between two chunk-trace replays) when one exists and leaves >= 3 tokens after it.
+            chunk = self._chunked_chunk_size or 2048
+            p = s + ((L - s) // chunk) * chunk
+            if p > s and p <= L - 3:
+                chunk_pts.add(p)
+        # A 1-2 token remainder after the last full chunk would run eagerly (a < 3-token resumed tail has no short
+        # trace): split 128 tokens earlier so the last segment (128 + tail tokens) replays the short trace.
+        chunk = self._chunked_chunk_size or 2048
+        last = max(points, default=s)
+        n_last = L - last
+        if n_last > chunk and 0 < n_last % chunk < 3:
+            points.add(last + (n_last // chunk) * chunk - A)
         stride = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_STRIDE", "8192"))
-        if s == 0 and not points and L - 3 < stride:  # no hit, no split, no stride point can fire: legacy path
+        if s == 0 and not points and not chunk_pts and L - 3 < stride:  # nothing to save: legacy path
             return None
-        return s, slot, sorted(points), stride, start
+        return s, slot, sorted(points), stride, start, chunk_pts
 
     def _prefill_with_prefix_cache(self, toks, pt_row, L, plan):
         """Resumable text prefill of one request on the BOUND B=1 GDN scratch: restore the snapshot at s (or zero),
         run [s, p1), [p1, p2), ..., [pk, L) with _prefill_range (GDN state carries between segments), snapshot after the
         segments ending at the save points and after every `stride`-th chunk; returns host logits [1,1,vocab]."""
         cache = self._prefix_cache
-        s, slot, points, stride, vllm_start = plan
+        s, slot, points, stride, vllm_start, chunk_pts = plan
         tokens = toks[:1, :L].to(torch.int32)
         # Text-only: clears per-request rope (rope_delta = 0); resumed segments slice 1D RoPE by absolute position.
         self._build_request_rope(tokens, None)
@@ -3906,7 +3921,7 @@ class Qwen36Model:
             saved.append(p)
 
         def _stride_cb(p):  # after each full chunk ending at p
-            if p <= L - 3 and (p - s) % stride == 0:
+            if p <= L - 3 and ((p - s) % stride == 0 or p in chunk_pts):
                 _save(p)
 
         host = None
@@ -3938,6 +3953,7 @@ class Qwen36Model:
         chunk = self._chunked_chunk_size or 2048
         n = end - start
         assert n >= 1 and start % self._PREFIX_ALIGN == 0 and (start == 0 or not reset_gdn)
+        assert n >= 3 or (start == 0 and reset_gdn), f"segment [{start},{end}) < 3 tokens must start fresh at 0"
         num_full, tail = n // chunk, n % chunk
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         if num_full > 0:

@@ -935,7 +935,19 @@ class TPGatedDeltaNet:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
+            # Per-parity single-slot gather tables: packed rows (h, s, r) of ONE slot <- rows of a [(K-1)*cpr + 1, 32]
+            # RM view of that user's [1, K-1, C] history (+ the appended zero row). Same entries as to_packed[b].
+            slot_tabs = []
+            for par in (0, 1):
+                t = torch.full((Nv, 4, 32), (K - 1) * cpr, dtype=torch.int64)
+                for h in range(Nv):
+                    for sl in range(1, 4):
+                        for c in range(nck):
+                            t[h, sl, 2 * c + par] = (sl - 1) * cpr + rm_chunk(h, c)
+                slot_tabs.append(dev(t.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT))
+
             return {
+                "slot_to_packed": slot_tabs,
                 "to_packed": dev(to_packed.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
                 "to_rm": dev(to_rm.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
                 "zero_row": dev(torch.zeros(1, 32, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
@@ -968,6 +980,68 @@ class TPGatedDeltaNet:
         out = ttnn.embedding(tab["to_rm"], w, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, Bm*(K-1)*C/32, 32]
         out = ttnn.reshape(out, (Bm, K - 1, C))
         ttnn.copy(out, hist)
+        ttnn.deallocate(out)
+        ttnn.deallocate(rm)
+
+    def _write_conv_hist_slot_packed(self, slot, convs):
+        """write_slot under the "packed" format: write ONLY slot `slot`'s [1, Nv, 4, 32, 32] tiles of the packed history
+        straight from the user's conv taps (convs[1..K-1], [1, 1, C] TILE), bit-identical to what _pack_conv_hist
+        produces for that slot (rows 2c + (slot & 1) of tiles s = 1..3; zeros elsewhere). One embedding gather with
+        the per-parity table + one in-place slice_write; the other slots' tiles are untouched. Eager only."""
+        tab = self._pack_tables()
+        packed = self._ensure_conv_hist_packed()
+        rows = self._rows_to_rm([convs[m] for m in range(1, self.K)])  # [1, K-1, C] RM bf16
+        w = ttnn.reshape(rows, ((self.K - 1) * tab["cpr"], 32))
+        w = ttnn.concat([w, tab["zero_row"]], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.embedding(tab["slot_to_packed"][slot & 1], w, layout=ttnn.TILE_LAYOUT)  # [1, Nv*4*32, 32]
+        ttnn.deallocate(w)
+        out = ttnn.reshape(out, (1, self.Nv, 4, 32, 32))
+        ttnn.experimental.slice_write(out, packed, [slot, 0, 0, 0, 0], [slot + 1, self.Nv, 4, 32, 32], [1, 1, 1, 1, 1])
+        ttnn.deallocate(out)
+
+    def _remap_packed(self, idx):
+        """remap_slots under "packed": ONE gather per layer over the packed tensor viewed as [Bm*Nv*4*32, 32] RM rows.
+        Dest row (bd, h, s, r) <- src row (idx[bd], h, s, r') with r' = r - (bd & 1) + (idx[bd] & 1) for the valid
+        history rows (s = 1..3, r & 1 == bd & 1, r < 2 * n_chunks), zero for everything else: exactly what
+        unpack -> RM gather -> repack yields. Eager only (host index upload once per remap, shared by all layers)."""
+        tab = self._pack_tables()
+        Bm, Nv = self._decode_B, self.Nv
+        key = tuple(idx)
+        holder = self.tt_ccl if self.tt_ccl is not None else self
+        cache = holder.__dict__.setdefault("_qwen36_gdn_remap_cache", {})
+        if key not in cache:
+            cache.clear()  # only the current remap's table is live (every layer reuses it)
+            nck = 2 * (self.Dk // 32) + self.Dv // 32
+            zero = Bm * Nv * 4 * 32
+            r = torch.arange(32)
+            bd = torch.arange(Bm)
+            bs = torch.tensor(idx, dtype=torch.int64)
+            par_d, par_s = bd & 1, bs & 1
+            ok = (r[None, :] < 2 * nck) & ((r[None, :] & 1) == par_d[:, None])  # [Bm, 32]
+            src_r = r[None, :] - par_d[:, None] + par_s[:, None]  # [Bm, 32]
+            h = torch.arange(Nv)
+            sl = torch.arange(4)
+            src = ((bs[:, None, None, None] * Nv + h[None, :, None, None]) * 4 + sl[None, None, :, None]) * 32 + src_r[
+                :, None, None, :
+            ]
+            m = ok[:, None, None, :] & (sl[None, None, :, None] >= 1)
+            tbl = torch.where(m, src, torch.full_like(src, zero))
+            cache[key] = ttnn.from_torch(
+                tbl.reshape(1, -1).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        packed = self._ensure_conv_hist_packed()
+        rm = ttnn.to_layout(packed, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.reshape(rm, (Bm * Nv * 4 * 32, 32))
+        w = ttnn.concat([w, tab["zero_row"]], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.embedding(cache[key], w, layout=ttnn.TILE_LAYOUT)
+        ttnn.deallocate(w)
+        out = ttnn.reshape(out, (Bm, Nv, 4, 32, 32))
+        ttnn.copy(out, packed)
         ttnn.deallocate(out)
         ttnn.deallocate(rm)
 
@@ -1967,15 +2041,38 @@ class TPGatedDeltaNet:
         if self._hist_hook_active() and self._decode_B > 1:
             # Fused batched decode reads its conv history from the RM buffer: write ONLY row `slot` (the K-1 newest
             # taps, convs[1..K-1], oldest first) BEFORE the loop below consumes convs. Live rows are untouched.
-            self._ensure_rm_hist_valid()  # packed -> RM first (decode_op); the next prepare_decode_width re-packs
-            self._write_conv_hist_slot(slot, convs)
+            if self._conv_fmt == "packed":
+                # Direct packed write: the format stays "packed" (RM history / conv_states are stale; every RM reader
+                # converts packed -> RM first), so no unpack here and no re-pack at the next decode.
+                self._write_conv_hist_slot_packed(slot, convs)
+            elif self._conv_fmt in ("both", "hist"):
+                self._write_conv_hist_slot(slot, convs)
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
         if rec_src is not rec and consume:
             ttnn.deallocate(rec)
-        self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
+        if self.rec_state.shape[0] > 1:
+            # In-place row write (no slice + concat + copy of the whole [B, Nv, Dk, Dv] state; bit-identical).
+            ttnn.experimental.slice_write(
+                rec_src,
+                self.rec_state,
+                [slot, 0, 0, 0],
+                [slot + 1] + list(self.rec_state.shape)[1:],
+                [1, 1, 1, 1],
+            )
+            if consume or rec_src is not rec:
+                ttnn.deallocate(rec_src)
+        else:
+            self._write_index(self.rec_state, rec_src, slot, dim=0, consume_src=consume or rec_src is not rec)
+        # conv_states are stale (and fully rewritten by the hist -> states sync) while the fused history is the
+        # authoritative format ("hist" / "packed"): skip the K slice+concat+copy writes then.
+        write_states = not (self._hist_hook_active() and self._decode_B > 1 and self._conv_fmt in ("hist", "packed"))
         for m in range(self.K):
             c = convs[m]
+            if not write_states:
+                if consume:
+                    ttnn.deallocate(c)
+                continue
             c_src = c if c.dtype == self.conv_states[m].dtype else ttnn.typecast(c, self.conv_states[m].dtype)
             if c_src is not c and consume:
                 ttnn.deallocate(c)
@@ -2002,12 +2099,11 @@ class TPGatedDeltaNet:
             return
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         self._gather_indices(self.rec_state, idx, dim=0)
-        repack = self._conv_fmt == "packed"
-        if repack:
-            # Slot-position-aware: go through the RM history (never gather the packed tensor: the packed row parity
-            # is b & 1, so a moved slot may need the other parity), then re-pack so the format stays "packed".
-            self._unpack_conv_hist()
-            self._conv_fmt = "hist"
+        if self._conv_fmt == "packed" and self._hist_hook_active() and self._decode_B > 1:
+            # Parity-aware single gather over the packed rows; RM history / conv_states are stale and stay so.
+            self._remap_packed(idx)
+            self._conv_win_stale = True
+            return
         hist_used = self._hist_hook_active() and self._decode_B > 1 and self._conv_hist_rm is not None
         if not hist_used:
             for m in range(self.K):
@@ -2021,9 +2117,6 @@ class TPGatedDeltaNet:
             for m in range(self.K):
                 self._gather_indices(self.conv_states[m], idx, dim=1)
             self._gather_indices(self._conv_hist_rm, idx, dim=0)
-        if repack:
-            self._pack_conv_hist()
-            self._conv_fmt = "packed"
         self._conv_win_stale = True
 
     def _gather_indices(self, buf, idx, dim):
