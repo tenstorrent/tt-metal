@@ -169,9 +169,17 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
 // `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
 //
-// Nothing zeroes them between launches — they outlive the cached workload — so the kernels reset all three at
-// end of stream. Skipping that leaves the next launch reading this one's totals, and a stale `freed`
-// underflows the reader's free-slot arithmetic into a silent buffer overwrite rather than a clean failure.
+// `final_arrived` is the receive count for the tokens the upstream chip writes straight into this chip's
+// output. Nothing else on this chip sees those land, so without it this chip's program can finish -- and the
+// next op on it read the output -- while a neighbour is still delivering. The reader waits for the count it
+// expects before exiting.
+//
+// Nothing zeroes them between launches — they outlive the cached workload — so the kernels undo each launch's
+// count at end of stream. `filled` and `freed` are zeroed, which is safe because only the reader and sender
+// on the same core bump them. `fwd_arrived` and `final_arrived` are bumped by the upstream chip, which may
+// already be in the next launch, so the reader subtracts what this launch accounted for instead. Skipping that
+// leaves the next launch reading this one's totals, and a stale `freed` underflows the reader's free-slot
+// arithmetic into a silent buffer overwrite rather than a clean failure.
 // The untilizer handshake needs the same treatment for the same reason. `untilized[j]` lives on a reader's
 // core and is bumped by its group's j-th untilizer; `unt_freed[c]` lives on an untilizer's core and is
 // bumped by the reader on link c. One semaphore per INDEX serves the whole mesh, because a core only ever
@@ -184,11 +192,13 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    tt::tt_metal::GlobalSemaphore final_arrived;
     std::vector<tt::tt_metal::GlobalSemaphore> untilized;
     std::vector<tt::tt_metal::GlobalSemaphore> unt_freed;
 
     uint32_t lowest_address() const {
-        uint32_t lowest = static_cast<uint32_t>(std::min({filled.address(), freed.address(), fwd_arrived.address()}));
+        uint32_t lowest = static_cast<uint32_t>(
+            std::min({filled.address(), freed.address(), fwd_arrived.address(), final_arrived.address()}));
         for (const auto* group : {&untilized, &unt_freed}) {
             for (const auto& sem : *group) {
                 lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
@@ -207,7 +217,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
     auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    RingSemaphores sems{make(), make(), make(), {}, {}};
+    RingSemaphores sems{make(), make(), make(), make(), {}, {}};
     if (untilizers_per_group != 0) {
         for (uint32_t j = 0; j < untilizers_per_group; j++) {
             sems.untilized.push_back(make());
@@ -268,9 +278,10 @@ KernelPlan make_kernel_plan(
     uint32_t pages_per_stream) {
     KernelPlan plan;
     plan.pages_per_stream = pages_per_stream;
-    plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
-    plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
+    plan.ring_filled_slot = static_cast<uint32_t>(sems.filled.address());
+    plan.ring_freed_slot = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+    plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -363,6 +374,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
+        if (std::getenv("CMBF2D_WAIT_STATS")) {
+            snd.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
+        }
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -384,6 +398,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .to_ct_word_arr();
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
+        }
+        if (std::getenv("CMBF2D_WAIT_STATS")) {  // (perf probe: wait-time totals, DPRINT)
+            rdr.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
+        }
+        if (std::getenv("CMBF2D_NO_TRID")) {  // (debug: global read barriers)
+            rdr.defines.emplace_back("CMBF2D_NO_TRID", "1");
+        }
+        if (cmbf2d::pipelined_reads()) {  // two read batches in flight
+            rdr.defines.emplace_back("CMBF2D_PIPE", "1");
         }
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -418,7 +441,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_addr = static_cast<uint32_t>(sems.untilized.at(j).address());
+            plan.produced_slot = static_cast<uint32_t>(sems.untilized.at(j).address());
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);
@@ -481,7 +504,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
-        cmbf2d::NUM_L1_SLOTS,
+        cmbf2d::num_l1_slots(),
         token_size_bytes(tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address());
@@ -505,6 +528,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     workload_descriptor.semaphores.push_back(sems.filled);
     workload_descriptor.semaphores.push_back(sems.freed);
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
+    workload_descriptor.semaphores.push_back(sems.final_arrived);
     for (const auto* group : {&sems.untilized, &sems.unt_freed}) {
         for (const auto& sem : *group) {
             workload_descriptor.semaphores.push_back(sem);

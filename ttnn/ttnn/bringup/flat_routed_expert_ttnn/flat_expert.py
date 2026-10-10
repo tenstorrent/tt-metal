@@ -300,6 +300,31 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None):
     return host.to(device, mc)
 
 
+def _fake_bank_sharded(n_regions, region_tiles, banks, dtype, device, n_dev):
+    """An uninitialised device tensor with _bank_sharded's shape and memory config (perf runs: the bfp matmuls take
+    the same time whatever the bytes are, so the host packing and upload are skipped)."""
+    rows = -(-n_regions // banks) * region_tiles * 32
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, (rows, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    shape = [rows, banks * 32] if n_dev == 1 else [1, rows, banks * 32]
+    return ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, mc)
+
+
+def flat_weight_shapes(H, I, E, lay):
+    """(regions, tiles per region) of each laid-out weight tensor, from flat_weight_regions on shape-only (meta)
+    tensors: no data is made."""
+    meta = lambda r, c: torch.empty(r, c, device="meta")  # noqa: E731
+    regions, dregs, rregs = flat_weight_regions([(meta(H, I), meta(H, I), meta(I, H))] * E, lay)
+    out = {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
+    if rregs is not None:
+        out["w_rd"] = (len(rregs), rregs[0].shape[0])
+    return out
+
+
 # plan fields that decide where every weight tile is packed (flat_weight_regions, _bank_sharded)
 WEIGHT_LAYOUT_KEYS = (
     "banks", "kblk", "rg", "np", "n_rd", "n_rd_sg", "nk_gu", "nd", "pcds", "col0s",
@@ -386,7 +411,7 @@ def flat_weight_regions(W_l, lay):
 
     dregs = [dreg(d) for d in range(lay["nd"])]
     n_max = max(r_.shape[0] for r_ in dregs)
-    dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype)]) for r_ in dregs]
+    dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs]
     rregs = None
     if lay["rdown"]:
         kd_r, n_rdn, pcd_r, rem = lay["kd_r"], lay["n_rdn"], lay["pcd_r"], lay["rem_cols"]
@@ -1793,8 +1818,10 @@ class FlatRoutedExpert:
         h_bf16=False,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
-        (only called when the weight cache misses). ``cache_prefix``: path stem of the laid-out weight cache; the
-        file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale layout."""
+        (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
+        (perf only: no host packing / upload; outputs are garbage). ``cache_prefix``: path stem of the laid-out weight
+        cache; the file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale
+        layout."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
@@ -1813,7 +1840,12 @@ class FlatRoutedExpert:
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)
-        cached = {n: _load_cached(files[n], device) for n in names}
+        if isinstance(weights, str):
+            assert weights == "fake", weights
+            shapes = flat_weight_shapes(H, I, E, lay)
+            cached = {n: _fake_bank_sharded(*shapes[n], banks, w_dtype, device, n_dev) for n in names}
+        else:
+            cached = {n: _load_cached(files[n], device) for n in names}
         if any(t is None for t in cached.values()):
             weights = weights() if callable(weights) else weights
             assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)

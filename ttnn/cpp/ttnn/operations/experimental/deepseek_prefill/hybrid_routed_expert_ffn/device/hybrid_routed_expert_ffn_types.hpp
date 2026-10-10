@@ -20,6 +20,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -117,6 +118,9 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t grid_x = kGridX;
     uint32_t grid_y = kGridY;
     uint32_t origin_y = 0;
+    // Overlapped with combine: append to the counts table the chunk each expert's combine walks open on,
+    // so the chunk loop can start there. Implied by the hybrid op's own overlap flag, which is hashed.
+    bool far_chunk_table = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
@@ -221,6 +225,9 @@ struct OperationArguments {
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
+    // L1 per core the blocking may plan for: the arena its buffers are laid over. Zero means everything
+    // above the allocator base.
+    uint32_t l1_budget_bytes = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "experts_per_chip",
@@ -235,7 +242,8 @@ struct OperationArguments {
         "fuse_bias",
         "output_dtype",
         "output_memory_config",
-        "compute_kernel_config");
+        "compute_kernel_config",
+        "l1_budget_bytes");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -251,7 +259,8 @@ struct OperationArguments {
             fuse_bias,
             output_dtype,
             output_memory_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            l1_budget_bytes);
     }
 };
 
@@ -303,6 +312,28 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
+    // Overlapped with combine in the same program: combine runs on rows 0-1 and takes each expert as soon
+    // as this op has written it, and the op returns combine's output. The fields below are combine's and
+    // are read only in this mode.
+    bool overlap_combine = false;
+    uint32_t combine_axis = 0;
+    uint32_t combine_num_links = 2;
+    uint32_t num_experts_per_tok = 0;
+    uint32_t seq_len_per_chip = 0;
+
+    // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
+    // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
+    // -- so the caller owns them and passes the same three every call.
+    std::optional<GlobalSemaphore> fwd_arrived;
+    std::optional<GlobalSemaphore> final_arrived;
+    std::optional<GlobalSemaphore> expert_go;
+    // Every address combine bakes into its compile-time arguments: the three semaphores and the per-call L1
+    // arena its layout is placed in. Hashed, so a cached program is only ever reused over the same layout.
+    uint32_t fwd_arrived_addr = 0;
+    uint32_t final_arrived_addr = 0;
+    uint32_t expert_go_addr = 0;
+    uint32_t l1_arena_addr = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -310,7 +341,16 @@ struct HybridRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "compute_kernel_config",
-        "hybrid_token_threshold");
+        "hybrid_token_threshold",
+        "overlap_combine",
+        "combine_axis",
+        "combine_num_links",
+        "num_experts_per_tok",
+        "seq_len_per_chip",
+        "fwd_arrived_addr",
+        "final_arrived_addr",
+        "expert_go_addr",
+        "l1_arena_addr");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -320,7 +360,16 @@ struct HybridRoutedExpertFfnParams {
             activation,
             fuse_bias,
             compute_kernel_config,
-            hybrid_token_threshold);
+            hybrid_token_threshold,
+            overlap_combine,
+            combine_axis,
+            combine_num_links,
+            num_experts_per_tok,
+            seq_len_per_chip,
+            fwd_arrived_addr,
+            final_arrived_addr,
+            expert_go_addr,
+            l1_arena_addr);
     }
 };
 
@@ -340,12 +389,20 @@ struct HybridRoutedExpertFfnInputs {
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
 
-    // Per-core L1 scratch both halves' circular buffers are laid over. Required whenever pass A
-    // runs: the two halves' buffers sum to more L1 than a core has, and overlaying them -- safe
+    // Per-core L1 scratch both halves' circular buffers are laid over. Required whenever the fused
+    // pass runs: the two halves' buffers sum to more L1 than a core has, and overlaying them -- safe
     // because the passes are ordered, never concurrent -- is what lets both keep the whole grid.
     // Owned by the caller because the program keeps a raw pointer to it that must stay valid
-    // across program-cache hits.
+    // across program-cache hits. Overlapped with combine, hybrid_routed_expert_moe allocates it per
+    // call over every worker core, since combine lays its own L1 over it too.
     std::optional<Tensor> l1_arena;
+
+    // Combine's own inputs, present exactly when overlap_combine is set. `output` above is then the
+    // routed expert's output and combine's dispatched buffer. The index table is the full one, replicated
+    // on every device, where `global_expert_idx_table` is this device's slice.
+    std::optional<Tensor> dispatched_metadata;
+    std::optional<Tensor> expert_offsets;
+    std::optional<Tensor> replicated_global_expert_idx_table;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

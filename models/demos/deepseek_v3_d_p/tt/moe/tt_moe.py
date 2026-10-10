@@ -23,8 +23,13 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    combine_overlap_payload_size,
+    get_ep_mesh_mapper,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
@@ -230,6 +235,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        overlap_routed_expert_with_combine: Optional[bool] = None,
     ):
         """
         Initialize TtMoe module.
@@ -313,6 +319,16 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
+                (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
+                written. Blackhole only. None means on wherever it is supported AND the mesh's fabric payload
+                fits a whole bf16 token plus combine_fabric2d's routing tail -- open the mesh with
+                init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
+                the routed expert then combine. Also needs a threshold that leaves the unified half
+                some experts. Even when enabled, a forward only overlaps while a trace controller is
+                attached (set_trace_controller): eager it runs the routed expert then combine, since the
+                overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
+                places in L1 is freed when the op returns.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -519,6 +535,56 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
+        # Overlapping is the default wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
+        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is one fabric packet so the payload
+        # must fit it. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that does not wrap,
+        # runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for the overlap.
+        overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
+        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
+        ring_axis_wraps = ttnn.get_fabric_config() in (
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        )
+        overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
+        if overlap_routed_expert_with_combine is None:
+            overlap_routed_expert_with_combine = overlap_fits
+        elif overlap_routed_expert_with_combine and not overlap_fits:
+            raise ValueError(
+                f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
+                f"{'a ring' if ring_axis_wraps else 'no ring'}), and a fabric payload of at least {overlap_payload} B "
+                f"for a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh with "
+                f"moe_fabric_payload_size on a torus"
+            )
+        logger.info(
+            f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
+            f"never eager (axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, "
+            f"overlap needs {overlap_payload} B)"
+        )
+        # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
+        # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
+        # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
+        self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
+        # Fetched here, not in forward: the first call creates them and synchronizes, which a trace cannot capture.
+        self.combine_overlap_semaphores = (
+            self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
+        )
+        self.replicated_global_expert_idx_tt = None
+        if overlap_routed_expert_with_combine:
+            assert (
+                tuple(mesh_device.shape)[1] == num_dispatch_groups
+            ), f"{num_dispatch_groups} dispatch groups on a {tuple(mesh_device.shape)} mesh: expected one per column"
+            self.replicated_global_expert_idx_tt = ttnn.from_torch(
+                ExpertMapping.create_global_expert_idx_table(
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                ),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+            )
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
@@ -608,6 +674,7 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = None
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+    _overlap_forward_logged = False  # the first overlapped forward logs once per process
 
     def _dump_routing(
         self,
@@ -686,6 +753,30 @@ class TtMoe(LightweightModule):
             )
         except Exception as exc:  # diagnostics must never fail a run
             logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
+    def _routed_expert_and_combine(
+        self, dispatched_buffer, metadata, all_expert_offsets, expert_token_counts, expert_region_offsets
+    ):
+        """Steps 3 and 4 as one program: the routed expert, and combine_fabric2d taking each expert as soon
+        as it is written. Returns combine's output, the same (1, 1, seq_len_per_chip, topk, emb) the separate
+        combine produces.
+
+        `all_expert_offsets` is every origin chip's row of the dispatch offsets, (dispatch_group_size,
+        num_routed_experts) replicated along the dispatch axis: combine walks every origin chip's runs, not
+        just its own. offset_cumsum already builds it from the histograms it gathers, so no all-gather here."""
+        return self.routed_expert.forward_with_combine(
+            dispatched_buffer,
+            expert_token_counts,
+            expert_region_offsets,
+            metadata,
+            all_expert_offsets,
+            self.replicated_global_expert_idx_tt,
+            combine_axis=0,
+            combine_num_links=self.row_num_links,
+            num_experts_per_tok=self.num_experts_per_tok,
+            seq_len_per_chip=self.seq_len_per_chip,
+            combine_semaphores=self.combine_overlap_semaphores,
+        )
 
     def forward(
         self,
@@ -802,7 +893,13 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
+        (
+            tt_expert_offsets,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            _,
+            tt_all_expert_offsets,
+        ) = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
@@ -950,31 +1047,47 @@ class TtMoe(LightweightModule):
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        # Overlapped only when this forward is traced. Eager, the overlapped program costs ~2 ms of host time per
+        # call -- it is 32 per-chip programs, each carrying the routed expert's ~11k buffer bindings -- which makes
+        # an untraced prefill host-bound; a trace replays it for free. A traced model attaches its controller
+        # before the warm-up forward, so the warm-up compiles the same programs the capture records.
+        overlap_combine = self.overlap_routed_expert_with_combine and self._trace_controller is not None
+        if overlap_combine and not TtMoe._overlap_forward_logged:
+            TtMoe._overlap_forward_logged = True
+            logger.info("TtMoe: traced forward runs the routed expert overlapped with combine_fabric2d")
+        if overlap_combine:
+            combined_output = self._routed_expert_and_combine(
+                squeezed_dispatch, metadata, tt_all_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets
+            )
+            # The routed expert's output is internal to the overlapped program.
+            expert_outputs = None
+        else:
+            expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        if DEBUG_LOGGING_ENABLED:
+        if DEBUG_LOGGING_ENABLED and expert_outputs is not None:
             logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
-        # Add back the batch dimensions for combine
-        # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        if DEBUG_LOGGING_ENABLED:
-            logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        if not overlap_combine:
+            # Add back the batch dimensions for combine
+            # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
-            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
+                logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
-        # ========================================
-        # Step 4: Combine (enabled)
-        # ========================================
-        # Combine expects TILE_LAYOUT input
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
+            # ========================================
+            # Step 4: Combine (enabled)
+            # ========================================
+            # Combine expects TILE_LAYOUT input
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 

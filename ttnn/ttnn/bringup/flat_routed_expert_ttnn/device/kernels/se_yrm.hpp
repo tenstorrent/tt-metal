@@ -35,6 +35,7 @@ struct SeYRmWriter {
     // issue cursor (entry, sub-block, row tile) and the in-order retire cursor
     uint32_t ia = 0, is = 0, ir = 0, issued = 0;
     uint32_t da = 0, ds = 0, dr = 0, retired = 0;
+    uint32_t done_a = 0;  // the entry of the virtual expert the last retire() completed
 
     SeYRmWriter(uint32_t y_addr, uint32_t col0) :
         yg{.bank_base_address = y_addr, .page_size = ht * 64}, col_off(col0 * 64), base(get_read_ptr(out_cb)) {}
@@ -85,6 +86,7 @@ struct SeYRmWriter {
         ++retired;
         if (++dr == rows_v(dyn, da, ds)) {
             dr = 0;
+            done_a = da;
             if (++ds == dyn.subs[da]) {
                 ds = 0;
                 ++da;

@@ -162,4 +162,27 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t 
     return (need < per_core_M_max) ? need : per_core_M_max;
 }
 
+// The chunk processed i-th when the order starts at `first` and fans out from it: first, first + 1,
+// first - 1, first + 2, ... Overlapped with combine, `first` is the chunk combine's walks open on, and fanning
+// out serves its downward walk and its upward walk alike. All three kernels call this with the same arguments,
+// so their row mappings stay in lockstep; with first = 0 it is the identity.
+inline uint32_t chunk_at(uint32_t i, uint32_t n, uint32_t first) {
+    if (first >= n) {
+        first = n - 1;
+    }
+    if (i == 0) {
+        return first;
+    }
+    uint32_t seen = 0;
+    for (uint32_t d = 1; d < n; d++) {
+        if (first + d < n && ++seen == i) {
+            return first + d;
+        }
+        if (first >= d && ++seen == i) {
+            return first - d;
+        }
+    }
+    return i;
+}
+
 }  // namespace adaptive_chunk

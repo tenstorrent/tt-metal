@@ -21,12 +21,30 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
+#ifdef CMBF2D_WAIT_STATS
+// (perf probe) wall-clock cycles spent in each wait, printed once at the end (DPRINT)
+#include "api/debug/dprint.h"
+inline uint32_t st_clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+#define ST_BEGIN(v) const uint32_t st_t0_##v = st_clk();
+#define ST_END(v) v += st_clk() - st_t0_##v;
+#else
+#define ST_BEGIN(v)
+#define ST_END(v)
+#endif
+uint32_t st_fill = 0, st_edm = 0, st_flush = 0, st_sent = 0;
 #include "combine_fabric2d_sender_ct_args.hpp"
+
+// Guard genuinely different BEHAVIOUR with CMBF2D_OVERLAPPED; anything that differs only in where a value
+// lives belongs behind an accessor on the compile-time arguments instead.
 
 // Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
-constexpr cmbf2d::SenderCtArgs ct{};
+// Final writes between bumps of the downstream reader's receive count. Nothing waits on that count until
+// the end of the stream, so this only bounds how many header-only packets it costs; the tail is bumped when
+// the stream ends.
+constexpr uint32_t FINAL_BUMP_EVERY = 32;
+constexpr ::cmbf2d::SenderCtArgs ct{};
 
 // One prebuilt header per ring slot. Every send is a single hop, so the route is constant for the whole
 // run; only the write address varies per token, and a slot's header is untouched until the ring wraps.
@@ -34,8 +52,8 @@ volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot) {
     return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
 }
 
-volatile tt_l1_ptr cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
-    return reinterpret_cast<volatile tt_l1_ptr cmbf2d::FwdMetadata*>(
+volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
+    return reinterpret_cast<volatile tt_l1_ptr ::cmbf2d::FwdMetadata*>(
         ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes);
 }
 
@@ -53,7 +71,7 @@ void prebuild_routes() {
 
 // Blocks until the reader has announced at least one slot beyond `sent`, then reports how many.
 uint32_t wait_for_filled(uint32_t sent) {
-    volatile tt_l1_ptr uint32_t* filled = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr);
+    volatile tt_l1_ptr uint32_t* filled = ct.filled_ptr();
     while (true) {
         invalidate_l1_cache();
         const uint32_t avail = *filled - sent;
@@ -63,35 +81,61 @@ uint32_t wait_for_filled(uint32_t sent) {
     }
 }
 
-// Tell the downstream reader how far its region is filled. A chunk's last page always forces a bump: that
-// reader consumes a whole chunk before moving on, so leaving the tail uncounted would strand it.
+// Add `count` to a semaphore on the downstream reader's core: `fwd_arrived` for pages of its forwarding
+// region, `final_arrived` for tokens written straight into its chip's output. A chunk's last page always
+// forces a `fwd_arrived` bump: that reader consumes a whole chunk before moving on, so leaving the tail
+// uncounted would strand it. The flush makes the far router drain the writes ahead of the bump first.
 template <typename FabricSender>
-void bump_downstream(FabricSender& fabric, uint32_t count) {
+void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     // Header-only atomic inc, NOT the fused write+inc: that is documented to hang Blackhole when the payload
     // destination is DRAM, and the forwarding buffer is DRAM.
     hdr_bump->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.fwd_sem_addr), /*val=*/count, /*flush=*/true});
+        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, sem_addr), /*val=*/count, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_bump, sizeof(PACKET_HEADER_TYPE));
 }
 
 // Put one slot's token on the cable. Returns its command word so the caller can spot the end of the stream.
 template <typename FabricSender>
-uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump) {
-    volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
+uint64_t send_slot(
+    FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump, uint32_t& final_since_bump) {
+    volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
     const uint64_t cmd = metadata->cmd;
-    if (cmd == cmbf2d::CMD_END) {
+    if (cmd == ::cmbf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == cmbf2d::CMD_FORWARD || cmd == cmbf2d::CMD_FORWARD_END);
-    const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
+    const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD || cmd == ::cmbf2d::CMD_FORWARD_END);
+    const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+#ifdef CMBF2D_NO_DRAM_WRITE
+    // (perf probe) the payload lands in an L1 scratch on the downstream reader core instead of DRAM; a forwarded page's
+    // metadata tail, which the downstream reader routes by, still goes to its DRAM page as a separate 64 B packet
+    if (forwarding) {
+        volatile PACKET_HEADER_TYPE* hdr_meta = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+        hdr_meta->to_noc_unicast_write(
+            tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr + ct.token_size_bytes},
+            ::cmbf2d::FORWARDING_METADATA_SIZE);
+        fabric.wait_for_empty_write_slot();
+        fabric.send_payload_without_header_non_blocking_from_address(
+            ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes, ::cmbf2d::FORWARDING_METADATA_SIZE);
+        fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_meta, sizeof(PACKET_HEADER_TYPE));
+    }
+    hdr->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, CMBF2D_PROBE_SINK)},
+        payload_bytes);
+#else
     // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
     // reversing the two costs ~8% of the bandwidth.
-    hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
+    // a final write goes to final_addr (filled by the reader, or by the read that brought a forwarded token)
+    hdr->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{cmd == ::cmbf2d::CMD_FINAL_WRITE ? metadata->final_addr : metadata->this_addr},
+        payload_bytes);
+#endif
+    ST_BEGIN(st_edm)
     fabric.wait_for_empty_write_slot();
+    ST_END(st_edm)
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
     // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
@@ -101,9 +145,15 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
 
     if (forwarding) {
         fwd_since_bump++;
-        if (cmd == cmbf2d::CMD_FORWARD_END || fwd_since_bump >= FWD_BUMP_EVERY) {
-            bump_downstream(fabric, fwd_since_bump);
+        if (cmd == ::cmbf2d::CMD_FORWARD_END || fwd_since_bump >= FWD_BUMP_EVERY) {
+            bump_downstream(fabric, ct.fwd_sem_addr, fwd_since_bump);
             fwd_since_bump = 0;
+        }
+    } else {
+        final_since_bump++;
+        if (final_since_bump >= FINAL_BUMP_EVERY) {
+            bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
+            final_since_bump = 0;
         }
     }
     return cmd;
@@ -112,29 +162,39 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
 // Drain the ring until the reader ends the stream. Returns the number of tokens actually sent.
 template <typename FabricSender>
 uint32_t pump_stream(FabricSender& fabric) {
-    const uint64_t my_freed_noc = get_noc_addr(ct.freed_addr);
+    const uint64_t my_freed_noc = get_noc_addr(reinterpret_cast<uint32_t>(ct.freed_ptr()));
     uint32_t sent = 0;
     // The stream's length is not known here: it is this sender's own tokens plus everything the reader
     // re-forwards for other chips, which depends on chunk sizes decided upstream. The reader terminates the
     // stream with a CMD_END slot instead, and we batch over whatever it has already published.
     bool end_of_stream = false;
     uint32_t fwd_since_bump = 0;
+    uint32_t final_since_bump = 0;
     while (!end_of_stream) {
+        ST_BEGIN(st_fill)
         const uint32_t avail = wait_for_filled(sent);
+        ST_END(st_fill)
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
         for (uint32_t i = 0; i < n; i++) {
             processed++;
-            if (send_slot(fabric, (sent + i) % ct.num_l1_slots, fwd_since_bump) == cmbf2d::CMD_END) {
+            if (send_slot(fabric, (sent + i) % ct.num_l1_slots, fwd_since_bump, final_since_bump) ==
+                ::cmbf2d::CMD_END) {
                 end_of_stream = true;
                 break;
             }
         }
         // The batch's payload reads have drained out of L1, so these slots are safe to refill.
+        ST_BEGIN(st_flush)
         noc_async_writes_flushed();
+        ST_END(st_flush)
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
+    }
+    // The receive count the downstream reader waits on before it exits; it needs every final write counted.
+    if (final_since_bump > 0) {
+        bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
     }
     return sent - 1;  // the CMD_END slot carried no payload
 }
@@ -168,6 +228,10 @@ void drain_fabric(FabricSender& fabric) {
 }
 
 void kernel_main() {
+#ifdef CMBF2D_IDLE
+    // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
+    return;
+#endif
     std::size_t rt_args_idx = 0;
     uint32_t num_connections = get_arg_val<uint32_t>(rt_args_idx++);
     auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
@@ -176,7 +240,14 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
+#ifdef CMBF2D_WAIT_STATS
+    const uint32_t st_start = st_clk();
+#endif
     const uint32_t sent = pump_stream(fabric);
+#ifdef CMBF2D_WAIT_STATS
+    DPRINT(
+        "CMBST SND total {} fill {} edm {} flush {} sent {}\n", st_clk() - st_start, st_fill, st_edm, st_flush, sent);
+#endif
     if (sent > 0) {
         drain_fabric(fabric);
     }
@@ -184,14 +255,9 @@ void kernel_main() {
     noc_async_writes_flushed();
     fabric_connections.close();
 
-    // Both ring counters back to zero for the next launch, which starts its own counts at zero. Safe here
-    // and only here: the reader's last act was publishing the CMD_END slot this kernel has just drained, so
-    // nothing is still reading or bumping either of them.
-    //
-    // `freed` is bumped by a NoC atomic, which completes on the atomic response and so is not covered by
-    // noc_async_writes_flushed above. Without this the reset can be overtaken and the launch end with
-    // freed == processed, leaving the next launch to evaluate claimed - freed as a negative wrap.
+    // The last `freed` bump is a NoC atomic, which completes on the atomic response and so is NOT covered
+    // by noc_async_writes_flushed above. It must land before the kernel exits.
     noc_async_atomic_barrier();
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr), 0);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr), 0);
+    // Whether the counters need zeroing depends on where they live, which is the owning op's choice.
+    ct.reset_ring_counters();
 }

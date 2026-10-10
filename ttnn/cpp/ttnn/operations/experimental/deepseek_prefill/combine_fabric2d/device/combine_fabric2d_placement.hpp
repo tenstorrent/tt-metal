@@ -6,22 +6,20 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "kernels/dataflow/combine_fabric2d_stream.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// A stream is one routing plane travelled in one direction along the ring axis. Every chip runs one
-// reader+sender pair per stream, and a stream keeps its identity across chips: the pair on the next chip
-// with the same id continues in the same direction on the same plane.
-using StreamId = uint32_t;
-
-constexpr StreamId make_stream_id(uint32_t link_idx, bool is_cw) { return link_idx * 2 + (is_cw ? 0u : 1u); }
-constexpr bool stream_is_cw(StreamId stream) { return stream % 2 == 0; }
-constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
+using cmbf2d::make_stream_id;
+using cmbf2d::stream_count;
+using cmbf2d::stream_is_cw;
+using cmbf2d::StreamId;
 
 struct StreamPlacement {
     tt::tt_metal::CoreCoord worker_logical;       // where this stream's kernels go
@@ -51,9 +49,19 @@ struct UntilizerPlacement {
 
 using UntilizerGroups = std::array<std::vector<UntilizerPlacement>, UNTILIZER_GROUPS>;
 
+// The core that folds the routed expert's per-writer reports into one `ready` count. Placed LAST, in any cell of
+// the two combine rows the senders and untilizers left free: decide_untilizers claims whole columns and
+// refuses a cell that is already taken, so reserving one for the collector first could break it.
+struct CollectorPlacement {
+    tt::tt_metal::CoreCoord logical;
+    tt::tt_metal::CoreCoord worker_virtual;  // what a routed-expert writer addresses
+};
+
 struct DevicePlacement {
     StreamPlacements streams;
     UntilizerGroups untilizers;  // indexed by untilizer_group_of(stream)
+    // Set only when the caller asked for a collector; the standalone op has nothing to collect.
+    std::optional<CollectorPlacement> collector;
 };
 
 using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;
@@ -61,7 +69,13 @@ using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;
 // Placement for every chip on the mesh. Decided for the whole mesh at once because a sender's arguments
 // name the worker serving the same stream on the downstream chip. `untilizers_per_group` of zero reserves no
 // untilizer cores at all, which is what a caller with nothing to untilize asks for.
+// `with_collector` reserves one more cell of the two combine rows for the core that folds the routed
+// expert's completion reports. Only the overlapped caller needs it, and it costs a worker core.
 MeshPlacement decide_placement(
-    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group);
+    ttnn::MeshDevice* mesh,
+    uint32_t axis,
+    uint32_t num_links,
+    uint32_t untilizers_per_group,
+    bool with_collector = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

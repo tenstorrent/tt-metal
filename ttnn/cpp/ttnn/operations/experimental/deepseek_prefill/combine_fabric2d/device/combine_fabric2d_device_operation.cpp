@@ -96,6 +96,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     // ---- Token data. Page = one token, so the last dim is the embedding and the rest is the flat slot
     // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
+    // The id table is what the overlapped fork needs and the standalone op never passes, and unlike the
+    // routed-expert fields it is already set by the time validation runs -- those are filled in later,
+    // by the program factory.
+    const bool overlapped = tensor_args.global_expert_idx_table.has_value();
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_interleaved(buf, "dispatched_buffer");
     TT_FATAL(
@@ -133,10 +137,13 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
-        buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. BFLOAT8_B needs a dequantise the "
-        "untilizer cores do not do.",
-        buf.dtype());
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            (overlapped && buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
+             buf.layout() == tt::tt_metal::Layout::TILE),
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16, or BFLOAT8_B TILE for the untilizers to "
+        "dequantise, which only the overlapped op asks for; got {} {}",
+        buf.dtype(),
+        buf.layout());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
 
@@ -190,6 +197,26 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
+    if (!overlapped) {
+        return;
+    }
+    const auto& table = *tensor_args.global_expert_idx_table;
+    validate_dram_row_major(table, "global_expert_idx_table");
+    TT_FATAL(
+        table.dtype() == tt::tt_metal::DataType::INT32 || table.dtype() == tt::tt_metal::DataType::UINT32,
+        "combine_fabric2d: global_expert_idx_table must be INT32 or UINT32, got {}",
+        table.dtype());
+    // One dispatch group's rows: a chip only relays tokens between the chips of its own ring, so it needs its
+    // ring's slice of the table and no other group's.
+    const auto& table_shape = table.logical_shape();
+    TT_FATAL(
+        table_shape.rank() == 3 && table_shape[0] == 1 && table_shape[1] == static_cast<int32_t>(extent) &&
+            table_shape[2] == static_cast<int32_t>(args.experts_per_chip),
+        "combine_fabric2d: global_expert_idx_table has shape {}, expected (1, {}, {}) -- this dispatch group's "
+        "rows, replicated across its ring, not the per-device slice the routed expert takes",
+        table_shape,
+        extent,
+        args.experts_per_chip);
 }
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(

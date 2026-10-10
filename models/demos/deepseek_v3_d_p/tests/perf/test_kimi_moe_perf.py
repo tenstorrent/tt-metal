@@ -41,7 +41,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -57,8 +57,9 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 # slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# Both generations carry FABRIC_PAYLOAD_SIZE = 7168, so one device_params axis serves both.
-_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE
+# Both generations carry FABRIC_PAYLOAD_SIZE = EMB_SIZE = 7168, so one device_params axis serves both. This test
+# drives TtMoe through run_model, so on Blackhole it opens room for the overlap instead; see moe_fabric_payload.
+_FABRIC_PAYLOAD_SIZE = moe_fabric_payload(KimiK27Config)
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
 # forward at 896 experts dispatches far more, and records arrive asynchronously from the receiver
@@ -103,12 +104,17 @@ class _MoEPerfCase:
 # 5,331,206 / 5,438,128 / 5,344,249 ns (jobs 108833542648, 108591989836, 108483307703), so this is a
 # 5.0% speedup against their median, not a short record window.
 #
+# Re-centred 2026-10-06 to 3,879,202 ns (Blaze run 37511163391 / job 112436803790), one sample,
+# 23.6% under the previous midpoint. Still 24 programs, and main reads the same: 3,805,970 ns in run
+# 37416411631 / job 112118127803, failing the old band too, so the drop landed on main. This test runs
+# TtMoe eagerly, so the routed-expert/combine overlap (traced only) is not part of it.
+#
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_077_713,
+    expected_ns=3_879_202,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
