@@ -130,48 +130,63 @@ volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
 // The global expert chip `dg_index` handles at walk step `step`. Any chip of the ring, not just ours, which
 // is what lets us size a chunk we neither produced nor receive.
 #if defined(CMBF2D_OVERLAPPED) && defined(CMBF2D_FLAT_ORDER)
-// Overlapped with the flat routed expert: step s of ring chip dg is the s-th expert that chip's flat schedule finishes
-// (se_dyn_completion_order), which is also the order its writers report in. Built once per launch for every chip of
-// the ring: a relay sizes the chunks it forwards from the origin chip's order.
-static_assert(ct.experts_per_chip <= SE_MAX_E, "combine_fabric2d: more local experts than the flat schedule holds");
-uint8_t flat_walk[ct.dispatch_group_size * ct.experts_per_chip];
-#ifdef CMBF2D_PROGRESSIVE
-// Progressive release (this chip only): a step whose expert the flat schedule splits into several entries (pinning)
-// is released entry by entry; own_chunk_start[s][c] is entry c's first row relative to the expert's region.
-constexpr uint32_t PROG_MAX_CHUNKS = 16;
-uint8_t own_nchunks[ct.experts_per_chip];
-uint32_t own_chunk_start[ct.experts_per_chip][PROG_MAX_CHUNKS];
-#endif
+// Overlapped with the flat routed expert: step s of ring chip dg is entry s of that chip's flat schedule (se_dyn.hpp:
+// one active expert, or one chunk of a pinned expert, as a row range of its region), the order the flat expert
+// computes them and its writers report them in; steps past the last entry are empty. Built once per launch for every
+// chip of the ring from the replicated counts: a relay sizes the chunks it forwards from the origin chip's entries.
+constexpr uint32_t WALK_STEPS = CMBF2D_WALK_STEPS;
+static_assert(ct.experts_per_chip <= SE_MAX_E && WALK_STEPS <= SE_MAX_V, "combine_fabric2d: walk larger than the schedule");
+constexpr uint8_t NO_ENTRY = 0xFF;
+uint8_t ent_slot[ct.dispatch_group_size * WALK_STEPS];  // local expert slot, NO_ENTRY: empty step
+uint16_t ent_r0[ct.dispatch_group_size * WALK_STEPS];   // the entry's rows [r0, r1) within the expert's region
+uint16_t ent_r1[ct.dispatch_group_size * WALK_STEPS];
+// Steps actually walked: the longest schedule on the ring. Past it every chip's step is empty, so every chip stops
+// there (each computes the same value from the same counts); the writers report those steps at once.
+uint32_t walk_len = WALK_STEPS;
 
 void build_flat_walk(const ::cmbf2d::ControlTables& ctl) {
+    walk_len = 0;
     for (uint32_t dg = 0; dg < ct.dispatch_group_size; dg++) {
         SeDyn d;
         se_dyn_from_counts(d, ct.experts_per_chip, SE_RPS, [&](uint32_t e) { return ctl.counts[ctl.expert_id(dg, e)]; });
-        uint8_t order[SE_MAX_E];
-        se_dyn_completion_order(d, ct.experts_per_chip, order);
-        for (uint32_t s = 0; s < ct.experts_per_chip; s++) {
-            flat_walk[dg * ct.experts_per_chip + s] = order[s];
-        }
-#ifdef CMBF2D_PROGRESSIVE
-        if (dg == ct.my_dg_index) {
-            for (uint32_t s = 0; s < ct.experts_per_chip; s++) {
-                uint32_t n = 0;
-                for (uint32_t a = 0; a < d.n_act; a++) {
-                    if (d.eid[a] == order[s] && n < PROG_MAX_CHUNKS) {
-                        own_chunk_start[s][n++] = d.off[a];  // built with region 0: rows within the expert
-                    }
-                }
-                own_nchunks[s] = static_cast<uint8_t>(n);
+        walk_len = d.n_act > walk_len ? d.n_act : walk_len;
+        for (uint32_t s = 0; s < WALK_STEPS; s++) {
+            const uint32_t i = dg * WALK_STEPS + s;
+            if (s < d.n_act) {
+                ent_slot[i] = d.eid[s];
+                ent_r0[i] = static_cast<uint16_t>(d.off[s]);  // built with region 0: rows within the expert
+                ent_r1[i] = static_cast<uint16_t>(d.off[s] + d.cnt[s]);
+            } else {
+                ent_slot[i] = NO_ENTRY;
+                ent_r0[i] = ent_r1[i] = 0;
             }
         }
-#endif
     }
 }
 
-uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
-    return ctl.expert_id(dg_index, flat_walk[dg_index * ct.experts_per_chip + step]);
+// Origin chip `dst_dg`'s run of the expert walked at `step` on ring chip `dg`, narrowed to that step's rows:
+// [begin, begin + n). Empty steps and runs outside the entry give n = 0.
+void step_run(
+    const ::cmbf2d::ControlTables& ctl, uint32_t dg, uint32_t step, uint32_t dst_dg, uint32_t& begin, uint32_t& n) {
+    const uint32_t i = dg * WALK_STEPS + step;
+    begin = 0;
+    n = 0;
+    if (ent_slot[i] == NO_ENTRY) {
+        return;
+    }
+    const uint32_t e = ctl.expert_id(dg, ent_slot[i]);
+    const uint32_t lo_run = ctl.run_begin(dst_dg, e), hi_run = ctl.run_end(dst_dg, e);
+    const uint32_t lo_ent = ctl.region[e] + ent_r0[i], hi_ent = ctl.region[e] + ent_r1[i];
+    const uint32_t lo = lo_run > lo_ent ? lo_run : lo_ent, hi = hi_run < hi_ent ? hi_run : hi_ent;
+    if (hi > lo) {
+        begin = lo;
+        n = hi - lo;
+    }
 }
-#elif defined(CMBF2D_OVERLAPPED)
+#else
+constexpr uint32_t WALK_STEPS = ct.experts_per_chip;
+constexpr uint32_t walk_len = WALK_STEPS;
+#ifdef CMBF2D_OVERLAPPED
 // Overlapped, steps are the routed expert's threshold-split order, so the id comes from the table.
 uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
     return ::cmbf2d::expert_at_step(ctl, dg_index, ct.experts_per_chip, ct.expert_threshold, step);
@@ -182,6 +197,14 @@ uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32
 constexpr uint32_t group_expert_base = ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip;
 uint32_t expert_of(const ::cmbf2d::ControlTables&, uint32_t dg_index, uint32_t step) {
     return group_expert_base + dg_index * ct.experts_per_chip + step;
+}
+#endif
+// Origin chip `dst_dg`'s whole run of the expert walked at `step` on ring chip `dg`.
+void step_run(
+    const ::cmbf2d::ControlTables& ctl, uint32_t dg, uint32_t step, uint32_t dst_dg, uint32_t& begin, uint32_t& n) {
+    const uint32_t e = expert_of(ctl, dg, step);
+    begin = ctl.run_begin(dst_dg, e);
+    n = ctl.run_end(dst_dg, e) - begin;
 }
 #endif
 
@@ -385,41 +408,6 @@ struct Reader {
         step_ready = false;
     }
     void gate(uint32_t page) {
-#ifdef CMBF2D_PROGRESSIVE
-        if (!step_ready && own_nchunks[step] >= 2) {
-            // Several entries: this page's entry may already be out while the expert is not.
-            DeviceZoneScopedN("CMB-GATE");
-            const uint32_t rel = page - ctl.region[expert_of(ctl, ct.my_dg_index, step)];
-            uint32_t c = 0;
-            while (c + 1 < own_nchunks[step] && rel >= own_chunk_start[step][c + 1]) {
-                c++;
-            }
-            volatile tt_l1_ptr uint32_t* ready =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_READY_SEM));
-            volatile tt_l1_ptr uint32_t* progress =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_PROGRESS_SEM));
-            invalidate_l1_cache();
-            bool retired = false;
-            while (true) {
-                if (*ready >= step + 1) {
-                    step_ready = true;
-                    return;
-                }
-                // the collector's progress word: (its step << 24) | (rows << 16) | done-chunk mask; it only moves
-                // to a later step once this one is out
-                const uint32_t pr = *progress;
-                if ((pr >> 24) > step || ((pr >> 24) == step && (pr & (1u << c)) != 0)) {
-                    return;
-                }
-                if (!retired) {  // about to spin: announce what is already read first
-                    retire_pending();
-                    flush_publish();
-                    retired = true;
-                }
-                invalidate_l1_cache();
-            }
-        }
-#endif
         (void)page;
         if (!step_ready) {
             DeviceZoneScopedN("CMB-GATE");
@@ -581,9 +569,8 @@ struct Reader {
     // the ring, which is what makes a chunk's length agree between the chip that writes it and the chip that
     // reads it without either telling the other.
     uint32_t chunk_tokens(const ::cmbf2d::ChunkDescriptor& desc, uint32_t local_expert) const {
-        const uint32_t e = expert_of(ctl, desc.origin_dg_index, local_expert);
-        const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
-        const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+        uint32_t begin, n;
+        step_run(ctl, desc.origin_dg_index, local_expert, desc.dst_dg_index, begin, n);
         return slice_begin(begin, n, desc.split_idx + 1, desc.split_count) -
                slice_begin(begin, n, desc.split_idx, desc.split_count);
     }
@@ -666,9 +653,8 @@ struct Reader {
             kernel_compile_time_args[w + 3]};
         // Sized before the first page is placed, because the last page has to be recognisable when it comes.
         out_chunk_end = out_page + (is_direct(dst_chip_id) ? 0 : chunk_tokens(desc, local_expert));
-        const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
-        const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
-        const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+        uint32_t begin, n;
+        step_run(ctl, ct.my_dg_index, local_expert, desc.dst_dg_index, begin, n);
         stage_run_slice(
             dst_chip_id,
             slice_begin(begin, n, desc.split_idx, desc.split_count),
@@ -795,9 +781,8 @@ struct Reader {
         // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
         // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
         const uint32_t slot_addr = slot_addr_of(claim_slot());
-        const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
-        const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
-        const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
+        uint32_t begin, n;
+        step_run(ctl, ct.my_dg_index, local_expert, ct.my_dg_index, begin, n);
         const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
         const uint32_t hi = slice_begin(begin, n, ct.my_stream + 1, ct.local_split_count);
         walk_pages(lo, hi, [&](uint32_t base, uint32_t window) {
@@ -830,7 +815,7 @@ struct Reader {
     uint32_t expected_final_writes() const {
         const uint32_t extent = ct.dispatch_group_size;
         uint32_t total = 0;
-        for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+        for (uint32_t local_expert = 0; local_expert < walk_len; local_expert++) {
             for (uint32_t hops = 1; hops <= extent / 2; hops++) {
                 const uint32_t origin =
                     ::cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, -static_cast<int32_t>(hops), extent);
@@ -904,7 +889,7 @@ void kernel_main() {
 
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
     // e + 1 is touched.
-    for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+    for (uint32_t local_expert = 0; local_expert < walk_len; local_expert++) {
 #if TILE
         reader.walk = ::cmbf2d::group_walk(
             reader.ctl,

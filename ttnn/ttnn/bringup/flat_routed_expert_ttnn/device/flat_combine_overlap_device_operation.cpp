@@ -36,18 +36,17 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     const FlatCombineOverlapInputs& t,
     Tensor& output) {
     using namespace tt::tt_metal;
-    // Row-major y: combine walks every chip's experts in the order the flat schedule finishes them (pinning finishes
-    // the largest expert last); its readers rebuild that schedule from the counts with the same defines
-    // (MIMO_FL_CMB_SLOT_ORDER=1, probe: slot order as before)
+    // Row-major y: combine walks every chip's schedule entries (an expert, or one chunk of a pinned one) in the order
+    // the flat expert computes them; its readers rebuild the schedules from the counts with the same defines
+    // (MIMO_FL_CMB_SLOT_ORDER=1, probe: whole experts in slot order)
     std::vector<std::string> schedule_defines;
     if (p.flat.y_row_major && !std::getenv("MIMO_FL_CMB_SLOT_ORDER")) {
         for (const auto& [k, v] : flat_schedule_defines(p.flat, make_flat_routed_expert_plan(t.x.device(), p.flat))) {
             schedule_defines.push_back(k + "=" + v);
         }
-        // a pinned expert's entries are released one by one (MIMO_FL_CMB_NOPROG=1, probe: whole experts only)
-        if (!std::getenv("MIMO_FL_CMB_NOPROG")) {
-            schedule_defines.push_back("CMBF2D_PROGRESSIVE=1");
-        }
+        // steps = the schedule's entries (a pinned expert chunk by chunk), padded to a fixed count on every chip
+        schedule_defines.push_back(
+            "CMBF2D_WALK_STEPS=" + std::to_string(flat_combine_overlap_walk_steps(p.flat.experts_per_chip)));
     }
     // combine as the hybrid's overlap builds it, one pass (threshold 0), its L1 in the arena
     const cmb::CombineFabric2dParams cp{

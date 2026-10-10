@@ -15,7 +15,12 @@ combine_fabric2d back to back (bit-exact: combine reads the same rows either way
 import os
 
 _YRM = os.environ.get("FLAT_CMB_YRM", "1") == "1"
-os.environ.setdefault("MIMO_FL_ROWS", "1,9" if _YRM else "2,9")
+# FLAT_CMB_GRID=12x9: dispatch on a row (fabric Tensix mux), a 12 x 9 compute grid: the trace-capable LoudBox proxy for
+# a Galaxy chip's 12-column grid (default 11 x 10, dispatch on a column)
+_GRID = os.environ.get("FLAT_CMB_GRID", "11x10")
+assert _GRID in ("11x10", "12x9"), _GRID
+_LAST_ROW = 8 if _GRID == "12x9" else 9
+os.environ.setdefault("MIMO_FL_ROWS", f"{1 if _YRM else 2},{_LAST_ROW}")
 
 import pytest
 import torch
@@ -46,6 +51,17 @@ _FABRIC = ttnn.FabricConfig.FABRIC_2D_TORUS_Y
 _PERF_ITERS = int(os.environ.get("FLAT_CMB_ITERS", "20"))
 
 
+def _device_params():
+    params = hyb._device_params(_FABRIC)
+    if _GRID == "12x9":
+        params = dict(params)
+        params["fabric_tensix_config"] = ttnn.FabricTensixConfig.MUX
+        params["dispatch_core_config"] = ttnn.DispatchCoreConfig(
+            ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW, fabric_tensix_config=ttnn.FabricTensixConfig.MUX
+        )
+    return params
+
+
 def _params():
     out = []
     for model_id in ("kimi-k27", "glm-53"):
@@ -53,7 +69,7 @@ def _params():
             out.append(
                 pytest.param(
                     _MESH,
-                    hyb._device_params(_FABRIC),
+                    _device_params(),
                     threshold_id,
                     model_id,
                     marks=pytest.mark.requires_mesh_topology(mesh_shape=_MESH, topology="ring"),

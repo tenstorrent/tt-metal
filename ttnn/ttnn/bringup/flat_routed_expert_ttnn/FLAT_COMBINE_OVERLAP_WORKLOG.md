@@ -508,6 +508,35 @@ combine, on the non-overlapped path too, so the baseline moves with them (flat o
 the earlier "overlap gains" were improvements to flat and combine themselves. From here on compare against the
 baseline measured on the same code.
 
+### 6.17 Streaming the hot expert: combine steps = flat's schedule entries
+- Step s of ring chip X = entry s of X's schedule (one active expert, or one chunk of a pinned expert, as a row range
+  [r0, r1) of its region); entries finish in schedule order, so a pinned hot expert is released chunk by chunk as it
+  is computed. Writers (`SeCmbDone`) count sub-blocks per entry and report entry prefixes; steps past the last
+  entry are empty. Readers rebuild every ring chip's entries from the counts (`build_flat_walk`) and size every
+  chunk with `step_run`: origin / destination run of the step's expert intersected with the entry's rows (own
+  assignments, forwarded-chunk sizing, local phase, expected final writes all through it, so the ring agrees).
+  Collector steps = `CMBF2D_WALK_STEPS` (2 E). Progressive release (6.10) removed: superseded.
+- Bit-identical on all four cases first try, both calls, no hang.
+
+| overlap us (vs baseline 1345 / 1685 / 949 / 1596) | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| expert steps + pin rule (6.16) | 1271 | 1705 | 890 | 1462 |
+| **entry steps (2 E steps)** | 1298 (-3.5%) | **1521 (-9.7%)** | 910 (-4.1%) | **1292 (-19.1%)** |
+| entry steps, ungated (`MIMO_FL_CMB_EARLY`) | 1239 | 1486 | 857 | 1234 |
+
+Worked for what it targets: hot -10.8 / -11.6% (combine hidden 32 -> 61% / 46 -> 78%); gated is now within 35-59 us
+of ungated, so release timing is mostly solved. Balanced +2%: nothing is pinned there (pin rule), so the walk is the
+same, but the step count is padded to 2 E and every empty step still costs the reader a schedule pass, a local-phase
+setup and a flush (~12 x 2 us). Fix: walk only up to the ring's longest schedule (every chip computes it from the
+same counts); steps past it are empty on every chip.
+
+| overlap us | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| **entry steps, walk trimmed to the longest schedule** | **1265 (-5.9%)** | **1515 (-10.1%)** | **891 (-6.1%)** | **1287 (-19.4%)** |
+
+Worked: balanced back to (slightly below) the expert-step numbers, hot gains kept; the first configuration that
+beats the same-code baseline in all four cases. Bit-identical.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.

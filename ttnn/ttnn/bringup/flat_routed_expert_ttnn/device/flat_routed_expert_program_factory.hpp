@@ -53,6 +53,9 @@ struct FlatRoutedExpertSharedVariables {
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p);
 
+// Steps of flat_combine_overlap's walk with row-major y: the schedule's entries, at most 2 E (padded with empty ones).
+uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip);
+
 struct FlatRoutedExpertProgramFactory {
     using shared_variables_t = FlatRoutedExpertSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

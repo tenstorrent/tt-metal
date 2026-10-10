@@ -59,6 +59,12 @@ tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::Da
 using namespace factory_detail;
 constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile, RM_CHUNKS = kRmChunks;
 
+uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip) {
+    const uint32_t se_max_e = experts_per_chip <= 16 ? 16 : (experts_per_chip <= 32 ? 32 : 64);
+    TT_FATAL(2 * experts_per_chip <= 2 * se_max_e, "flat_combine_overlap: more schedule entries than SE_MAX_V");
+    return 2 * experts_per_chip;  // a schedule has at most E + (pinned chunks - 1) <= 2 E entries (se_dyn_pin)
+}
+
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p) {
     TT_FATAL(p.nsg == 1, "flat_schedule_defines: one subgrid only (the overlapped plans)");
@@ -219,8 +225,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // row-major y, slot order with bfp8 tiles (combine's untilizers) or the MIMO_FL_CMB_SLOT_ORDER probe
     if (cfg.cmb_rt && (!cfg.y_row_major || std::getenv("MIMO_FL_CMB_SLOT_ORDER"))) {
         cmb_def["SE_CMB_SLOT_ORDER"] = "1";
-    } else if (cfg.cmb_rt && !std::getenv("MIMO_FL_CMB_NOPROG")) {  // (flat_combine_overlap passes the same switch)
-        cmb_def["SE_CMB_PROGRESSIVE"] = "1";
+    } else if (cfg.cmb_rt) {  // steps = schedule entries, at most 2 E (flat_combine_overlap_walk_steps)
+        cmb_def["SE_CMB_STEPS"] = std::to_string(flat_combine_overlap_walk_steps(E));
     }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);

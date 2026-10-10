@@ -510,9 +510,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             for (const auto& kv : args.routed_expert_schedule_defines) {
                 const auto eq = kv.find('=');
                 rdr.defines.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
-                if (kv.substr(0, eq) == "CMBF2D_PROGRESSIVE") {  // the collector's per-chunk progress word
-                    rdr.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
-                }
             }
         }
         if (!sems.has_untilizers()) {
@@ -648,6 +645,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
         TT_FATAL(!waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
         const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
+        // Walking a flat expert's schedule entries: as many steps as the walk (CMBF2D_WALK_STEPS), not experts.
+        uint32_t num_steps = passes * args.experts_per_chip;
+        for (const auto& kv : args.routed_expert_schedule_defines) {
+            if (kv.rfind("CMBF2D_WALK_STEPS=", 0) == 0) {
+                num_steps = static_cast<uint32_t>(std::stoul(kv.substr(kv.find('=') + 1)));
+            }
+        }
         auto* dev = args.device;
         const auto re_first = dev->worker_core_from_logical_core(
             CoreCoord{args.routed_expert_cores.start_coord.x, args.routed_expert_cores.start_coord.y});
@@ -663,7 +667,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         kernel.core_ranges = CoreRangeSet(CoreRange(collector.logical));
         kernel.compile_time_args = {
             args.routed_expert_writers,
-            passes * args.experts_per_chip,
+            num_steps,
             l1.collector_counts,
             sems.ready(),
             args.routed_expert_go_addr,
