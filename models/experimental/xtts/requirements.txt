@@ -11,4 +11,4 @@ tokenizers==0.22.2
 # PyPI torchaudio links libcudart and fails to load _torchaudio.abi3.so.
 # The +cpu wheel is only on the PyTorch CPU index (x86_64 CI / dev hosts).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torchaudio==2.11.0+cpu ; platform_machine == "x86_64"
+torchaudio==2.13.0+cpu ; platform_machine == "x86_64"
