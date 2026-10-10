@@ -69,16 +69,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t post_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
 
-#ifdef ARCH_WORMHOLE
+    // Tile_x_dim_cntx0 IS tilize's to restore.
     const std::uint32_t post_tile_x = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+    LLK_ASSERT(post_tile_x == canonical_unpA_tile_x_dim_cntx(face_r_dim), "tilize uninit must restore the canonical Tile_x_dim_cntx0");
 
+#ifdef ARCH_WORMHOLE
     // Tilize does not own the descriptor on WH: the word must be bit-identical.
     LLK_ASSERT(post_desc_word == pre_desc_word, "WH tilize uninit must leave the SrcA tile-descriptor Y/Z-dim word untouched");
-
-    // Tile_x_dim_cntx0 IS tilize's to restore. Only checked on WH: the BH test wrapper
-    // cannot thread face_r_dim into uninit (it hardcodes MAX_FACE_R_DIM), so a tiny-tile
-    // expectation would not be meaningful there.
-    LLK_ASSERT(post_tile_x == canonical_unpA_tile_x_dim_cntx(face_r_dim), "tilize uninit must restore the canonical Tile_x_dim_cntx0");
 #else
     const std::uint32_t post_z_dim = UPPER_HALFWORD(post_desc_word);
     const std::uint32_t post_y_dim = LOWER_HALFWORD(post_desc_word);
