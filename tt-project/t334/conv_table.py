@@ -32,6 +32,9 @@ CLS = [
     ("eltwise", r"binary|unary|silu|add|mul|sub|eltwise|where|ternary"),
 ]
 HIFI4_FLOP_PER_CYCLE_PER_CORE = 1024  # 4096 at LoFi; HiFi4 takes 4 math passes
+FID_PASSES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
+DRAM_GBPS = 512  # Blackhole: 8 GDDR6 channels
+DT_BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1088 / 1024, "BFLOAT4_B": 576 / 1024, "FLOAT32": 4}
 
 
 def cls(op):
@@ -98,12 +101,22 @@ for k, g in cv.groupby("k"):
     cin = dim(r["INPUT_0_X_PAD[LOGICAL]"])
     ti, hi, wi = (dim(r[f"INPUT_0_{x}_PAD[LOGICAL]"]) for x in "WZY")
     cout = int(attr(a, "output_channels"))
-    flop = 2 * 27 * cin * cout * T * H * W
+    # Upsampler convs write the depth-to-space result, so count FLOPs at the conv's own (input) grid.
+    flop = 2 * 27 * cin * cout * ti * hi * wi
     cores = int(r["AVAILABLE WORKER CORE COUNT"])
     clk = g["clk_ghz"].median()
     mx = g["ms"].max()
     peak = HIFI4_FLOP_PER_CYCLE_PER_CORE * cores * clk * 1e9
     hk = halo[halo["k"] == k]["ms"]
+    passes = next((v for f, v in FID_PASSES.items() if f.lower() in str(r["MATH FIDELITY"]).lower()), 4)
+    ib = DT_BYTES.get(str(r.get("INPUT_0_DATATYPE", "BFLOAT16")).upper(), 2)
+    ob = DT_BYTES.get(str(r.get("OUTPUT_0_DATATYPE", "BFLOAT16")).upper(), 2)
+    in_b, out_b, w_b = ti * hi * wi * cin * ib, ti * hi * wi * cout * ob, 27 * cin * cout * 2
+    # Lower bound: every byte once. Blocked estimate: the input is re-read once per C_out block and each
+    # spatial block reads a 3x3x3 halo around itself; weights counted once (they stay in L1 per core).
+    bt, bh, bw, bco = (int(attr(a, x) or 1) for x in ("T_out_block", "H_out_block", "W_out_block", "C_out_block"))
+    halo_f = (bt + 2) * (bh + 2) * (bw + 2) / (bt * bh * bw)
+    blk_b = in_b * -(-cout // bco) * halo_f + out_b + w_b
     rows.append(
         dict(
             k=k,
@@ -126,6 +139,12 @@ for k, g in cv.groupby("k"):
             ms_med=g["ms"].median(),
             ms_max=mx,
             pct_hifi4=100 * flop / (mx * 1e-3 * peak),
+            pct_fid=100 * flop * passes / 4 / (mx * 1e-3 * peak),
+            mb_min=(in_b + out_b + w_b) / 1e6,
+            mb_blk=blk_b / 1e6,
+            pct_dram_min=100 * (in_b + out_b + w_b) / (mx * 1e-3 * DRAM_GBPS * 1e9),
+            pct_dram_blk=100 * blk_b / (mx * 1e-3 * DRAM_GBPS * 1e9),
+            mem=str(r.get("INPUT_0_MEMORY", "")).replace("DEV_0_", "").replace("DEV_1_", ""),
             halo_ms_max=hk.max() if len(hk) else float("nan"),
         )
     )
@@ -133,12 +152,14 @@ t = pd.DataFrame(rows)
 t.to_csv(f"{out}_conv3d.csv", index=False)
 pd.set_option("display.width", 250)
 print(
-    f"\nconv3d per layer ({len(t)} ops; ms over chips; %HiFi4 = chip FLOP / (ms_max x 1024 FLOP/cyc/core x cores x clk))"
+    f"\nconv3d per layer ({len(t)} ops; ms over chips; %HiFi4 = chip FLOP / (ms_max x 1024 FLOP/cyc/core x cores x clk); "
+    f"pct_fid = same at the op's own fidelity; pct_dram_* = estimated bytes / (ms_max x {DRAM_GBPS} GB/s))"
 )
 print(t.drop(columns=["grid", "pad", "fp32_acc"]).round(2).to_string(index=False))
 print(
     f"\nconv3d sum of per-layer max {t['ms_max'].sum():.1f} ms, {t['gflop_chip'].sum() / 1e3:.2f} TFLOP/chip, "
-    f"weighted %HiFi4 {100 * t['gflop_chip'].sum() * 1e9 / (t['ms_max'].sum() * 1e-3 * peak):.1f}"
+    f"weighted %HiFi4 {100 * t['gflop_chip'].sum() * 1e9 / (t['ms_max'].sum() * 1e-3 * peak):.1f}, "
+    f"est DRAM GB/chip min {t['mb_min'].sum() / 1e3:.2f} blocked {t['mb_blk'].sum() / 1e3:.2f}"
 )
 hs = halo.groupby("DEVICE ID")["ms"].agg(["sum", "count"])
 print(

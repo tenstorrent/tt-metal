@@ -1,0 +1,10 @@
+2026-10-10 18:40:58.224 | INFO     | __main__:main:212 - Setting profiler artifacts folder to /var/tmp/fasth3/t349/prof
+2026-10-10 18:41:10.465 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /var/tmp/fasth3/t349/prof/.logs/tracy_ops_times.csv
+2026-10-10 18:41:10.993 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /var/tmp/fasth3/t349/prof/.logs/tracy_ops_data.csv
+2026-10-10 18:41:10.993 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:463 - Importing ops logs
+2026-10-10 18:41:12.983 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2107 - Getting device ops
+2026-10-10 18:41:12.989 | INFO     | tracy.process_ops_logs:append_device_data:1319 - Appending device data
+2026-10-10 18:41:15.261 | INFO     | tracy.process_ops_logs:generate_reports:1682 - OPs' perf analysis is finished! Generating reports ...
+2026-10-10 18:41:15.262 | INFO     | tracy.process_ops_logs:generate_reports:1702 - Copying runtime artifacts
+2026-10-10 18:41:16.603 | INFO     | tracy.process_ops_logs:generate_reports:1711 - Generating OPs CSV
+2026-10-10 18:41:24.684 | INFO     | tracy.process_ops_logs:generate_reports:2184 - OPs csv generated at: /var/tmp/fasth3/t349/prof/reports/2026_10_10_18_41_15/ops_perf_results_2026_10_10_18_41_15.csv
