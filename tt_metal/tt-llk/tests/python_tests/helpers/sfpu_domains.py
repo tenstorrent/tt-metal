@@ -2274,6 +2274,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # The SFPU returns +0 where torch's zero is -0, and the stock kernel's NaN class is its own: a
+        # cat-B probe asserts torch's class on cells the kernel's PR states instead.
+        MathOperation.SfpuSituGlu,
     }
 )
 
