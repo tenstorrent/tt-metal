@@ -185,3 +185,19 @@ warmup alone exceeds ~330 s.
 Wait on probe.sh t286-t10-rt. Then: grep "[t286]" lines, log_pipeline_perf table, AICLK clamp lines
 from both broker logs; ffmpeg still from out_{t5,t10}/*.mp4; copy stills+logs to
 tt-project/baselines/fasth3/. If a rung guard fires, set T286_RUNGS to the printed rung and requeue.
+
+## 2026-10-10 ~05:55 UTC (#314, run 1291): DONE, first FastH3 timings (AICLK clamped at 900 MHz)
+- t286-t5-rt = blx03 broker job 850 (05:38:52-05:44:55, rc 0, drops 0); t286-t10-rt = job 851
+  (05:44:55-05:49:18, rc 0, drops 0). Both PASSED. Code: ~/fasth3/t286 @ acebc7d39e2
+  (= pshah e24a2b93d79 + test import fix), 4-step Turbo adapter v1.2 768p, fl2va 1344x768.
+- Command: pytest -sv -p t286_skipvaewarm models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py
+  -k '<5s|10s> and 4x8 and not 15s and not 4x32 and not WH', T286_RUNGS per clip.
+- Rung guard held: timed generations compiled +0 programs (t5 rung 41984, t10 rung 76800).
+- 5 s (124 f): Total Pipeline 7.7421 s (denoise 5.87 s, 1.47 s/step, VAE dec 1.03 s).
+- 10 s (243 f): Total Pipeline 15.9844 s (denoise 12.77 s, 3.19 s/step, VAE dec 1.90 s).
+- AICLK 900 MHz (expected 1350) on every chip in both jobs: numbers are relative only.
+  Org reference (full clock): 5 s 4.57 s, 10 s 10.77 s.
+- Outputs: blx03 /var/tmp/fasth3/t286/out_{t5,t10}/*.mp4 + still_*.png; copies (jpg) of stills, run
+  logs and broker logs in tt-project/baselines/fasth3/. Stills: coherent fox scenes; white
+  swirl streaks in both (prompt or model artifact, unchecked).
+- Removed duplicate mp4s in /var/tmp/fasth3/home/h3_turbo_artifacts. Kept models, h3hf caches, build.
