@@ -143,6 +143,11 @@ class V41PrefillRuntime:
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
         real = int(actual_end) - int(actual_start)
         assert 0 < real <= self.chunk_size and len(ids) >= real
+        if not warmup and os.environ.get("V41_PREFILL_ISLANDS", "0") == "1" and not self.pf.islands:
+            # capture at the FIRST REQUEST, not at the warm-up: the runner builds its H2D input service AFTER the warm-up,
+            # and a buffer allocated after a capture can sit in the islands' intermediates -- the socket's next chunk then
+            # arrived as garbage ids (index 930504704 of 129280, 19:49). This chunk's ids were read above. ~6 s, once.
+            self.pf.enable_islands()
         if int(actual_start) == 0:
             self.pf.reset()
             kv_caches.zero_slot(int(slot_id))
@@ -163,8 +168,7 @@ class V41PrefillRuntime:
         if warmup and (islands or os.environ.get("V41_PREFILL_WARM_ALL", "0") == "1"):
             # islands need every width's programs and cached constants built BEFORE the capture: warm-all first
             self._warm_all(ids[:real], kv_caches, int(slot_id), int(actual_end))
-        if warmup and islands and not self.pf.islands:
-            self.pf.enable_islands()
+
         logger.info(
             f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
