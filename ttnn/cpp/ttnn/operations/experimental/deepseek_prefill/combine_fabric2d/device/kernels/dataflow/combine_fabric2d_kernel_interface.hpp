@@ -106,6 +106,9 @@ struct L1Layout {
     uint32_t unt_control = 0;
     // Overlapped only: the collector's per-step count array, at the base of a core that holds nothing else.
     uint32_t collector_counts = 0;  // its own copy of the control tables, past every circular buffer
+    // Perf probes only (CMBF2D_NO_DRAM_READ / CMBF2D_NO_DRAM_WRITE): one slot of scratch the probes read from or
+    // land packets in instead of DRAM. Zero when no probe is on.
+    uint32_t probe_sink = 0;
 };
 
 struct DramBuffers {

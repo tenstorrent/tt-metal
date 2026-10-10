@@ -231,11 +231,15 @@ Routing is only known on device, so a result counts only as one program per mode
 
 | Config | Kimi bal | Kimi hot | GLM bal | GLM hot |
 |---|---|---|---|---|
-| np 2, rows 1-9 (default) | 1222.4 (-16%) | 2182.3 (+19%) | 897.2 (-13%) | 1763.8 (+2%) |
-| 64 gu + 19 down | 1564.8 (+7%) | 1803.6 (-1%) | 894.8 (-13%) | 1549.0 (-11%) |
-| flat on 110 cores, then combine (baseline) | 1457.4 | 1829.9 | 1032.9 | 1735.0 |
+| np 2, rows 1-9 (default) | 1222.4 (-14%) | 2182.3 (+25%) | 897.2 (-10%) | 1763.8 (+8%) |
+| 64 gu + 19 down | 1564.8 (+10%) | 1803.6 (+3%) | 894.8 (-11%) | 1549.0 (-5%) |
+| baseline: flat on 110 cores (row-major y), then combine reading it directly | 1425.7 | 1747.6 | 1001.3 | 1635.7 |
+| (old baseline: bfp8 y, typecast, combine's untilizers) | 1457.4 | 1829.9 | 1032.9 | 1735.0 |
 
-Per model today: GLM 64 gu + 19 down (-13% / -11%); Kimi has no config that wins both (np 2 loses the hot case,
+The like-for-like baseline is the row-major one (flat untilizes on its down cores in both); percentages above are
+against it. Before 2026-10-10 evening this log compared against the old bfp8 baseline.
+
+Per model today: GLM 64 gu + 19 down (-11% / -5%); Kimi has no config that wins both (np 2 loses the hot case,
 the 19-down layout the balanced one). Earlier "best per case" tables mixed configs and are not achievable.
 
 ### 6.7 Where combine actually loses time (NoC model + discriminating probes)
@@ -294,6 +298,38 @@ flat's VCs 2/3, likely worse than today. Better options, in order:
 3. If a landing buffer is needed, put it where the fabric's NoC 1 write is short: the bottom row (2 hops from the
    eth row through the wrap), west of the eth core; row 0 reads it back in 3 hops on NoC 0 through the wrap.
 
+### 6.7b Read side or write side? (combine DRAM probes)
+Probes (perf only, garbage output; host env read at program build):
+- `CMBF2D_NO_DRAM_READ`: combine's reader takes token payloads from an L1 scratch on its own core instead of DRAM
+  (forwarded pages still read their 16 B metadata tail from DRAM: same read count, ~99% fewer bytes).
+- `CMBF2D_NO_DRAM_WRITE`: every packet keeps its full size on the cable but lands in an L1 scratch on the receiving
+  reader core; forwarded pages add a 64 B metadata packet to their DRAM page (blocking flush). Local-token copies
+  (~2 MB) still write DRAM.
+
+Overlap us, pin 1, rows 1-9 (excess over flat in brackets for the balanced cases):
+
+| Combine probe | mode | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|---|
+| none | gated | 1223 | 2185 | 896 | 1763 |
+| none | ungated | 1149 (181) | 1628 | 830 (141) | 1409 |
+| reads off | gated | 1126 | 2086 | 835 | 1678 |
+| reads off | ungated | 1054 (88) | 1605 | 766 (78) | 1391 |
+| writes off | gated | 1250 | 2315 | 946 | 1894 |
+| writes off | ungated | 1079 (113) | 1617 | 784 (95) | 1400 |
+| both off | gated | 1173 | 2241 | 914 | 1822 |
+| both off | ungated | 994 (27) | 1597 | 721 (32) | 1384 |
+| any | ungated, flat without weight / x reads | 870-882 | 1556-1570 | 674-678 | 1367-1370 |
+
+- **Both sides contribute, about additively:** reads ~55-60% of the interference, writes ~40-45%; with both removed
+  combine is 91-94% hidden ungated (as with flat's reads removed).
+- **It is contention, not combine's own DRAM cost:** beside a flat expert without DRAM reads, the probes change
+  nothing (870-882 / 674-678).
+- **Writes off gated is worse** (Kimi 1250 vs 1223): the probe's extra blocking 64 B packet per forwarded token
+  costs more than the writes it removes when gating, not bandwidth, sets the pace. So the write numbers understate
+  the write side.
+- Still not separated: DRAM banks vs the NoC links into / out of the DRAM ports (each probe removes both).
+- Hot cases: release timing dominates in every probe (gated 1678-2315 vs ungated 1384-1617).
+
 ### 6.8 Fabric multi-hop vs store-and-forward: evidence from code (nothing run)
 Prompted by: "store and forward is, for some reason, mostly just better". Collected from the tree and git history.
 
@@ -340,6 +376,25 @@ Prompted by: "store and forward is, for some reason, mostly just better". Collec
 5. **One layout per model that wins both regimes** (Kimi): third gate/up rectangle so np 1 keeps more down cores,
    reader down columns, better down-core rule; Galaxy 12 x 10 should ease it.
 6. More combine reads in flight; pipelined local copies (cheap probes).
+7. **No combine cores at all ("dumbest" version, not tried):** the flat expert's y writers send straight to the
+   fabric routers instead of writing y to DRAM for combine to read back. What it has to solve:
+   - **Segments, not tokens.** Flat's down projection is column split: every down core owns `pcd` tile columns of
+     every row (Kimi ~7 columns = 448 B of a 14 KB token row). A token leaves as ~30 segments from ~30 cores, so
+     packets would be ~450 B instead of 14 KB: the fabric would be packet-rate bound (header per segment), unless
+     segments are first gathered into whole rows somewhere.
+   - **Router connections.** An eth channel takes one worker connection (the EDM stores a single worker_xy per
+     channel), so ~30 senders per link need a fabric mux (as all_to_all_async_generic does: up to 3 workers per
+     egress through a mux), which costs cores and its own L1.
+   - **Routing per token.** Each segment needs its destination (chip, output page) from the dispatch metadata, so
+     every down core reads metadata it does not need today.
+   - **Store-and-forward still needs a relay** on intermediate chips (6.8: multi-hop is not faster), i.e. someone
+     still lands and re-sends forwarded tokens there: the current reader/sender pair or a router-side relay.
+   - **Flow control** against the fabric (credits per mux channel) moves into the down cores' event loop, beside
+     the h chain and the y writes: back-pressure would stall the down matmul pipeline.
+   Middle ground that keeps whole-token packets: the down cores write their segments into the sender's slot ring
+   on the row-0 core next to the eth core (NoC 1: north to row 0, then west along it, off flat's busy links), the
+   sender sends whole rows; no DRAM write of y, no DRAM read, no reader for own tokens. That is idea 3 ("y from L1")
+   with the reader removed for own tokens.
 
 ## 9. How to run (PR tree)
 ```

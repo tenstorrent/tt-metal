@@ -132,6 +132,10 @@ L1Layout compute_l1_layout(
         l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
         end = std::max(end, l.unt_control + control_bytes);
     }
+    if (std::getenv("CMBF2D_NO_DRAM_READ") || std::getenv("CMBF2D_NO_DRAM_WRITE")) {  // (perf probes)
+        l.probe_sink = align_l1(l.control + control_bytes);
+        end = std::max(end, l.probe_sink + token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
+    }
     TT_FATAL(
         end <= sem_floor,
         "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
@@ -459,6 +463,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
+        // perf probe (read at program build): CMBF2D_NO_DRAM_WRITE=1 - packets land in an L1 scratch on the receiving
+        // reader core instead of DRAM (forwarded pages also write their 64 B metadata tail to DRAM); garbage output
+        if (std::getenv("CMBF2D_NO_DRAM_WRITE")) {
+            snd.defines.emplace_back("CMBF2D_NO_DRAM_WRITE", "1");
+            snd.defines.emplace_back("CMBF2D_PROBE_SINK", std::to_string(l1.probe_sink));
+        }
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -479,6 +489,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // The readers' read requests and local writes on VC 0, off the default (1) the routed expert's weight read
         // requests share: flat_combine_overlap Kimi K2.7 / GLM 5.3 8x1 overlap -1..-6% (any of VC 0, 2, 3 alike).
         // Perf probes (read at program build): CMBF2D_RD_VC / CMBF2D_WR_VC pick them.
+        // perf probe (read at program build): CMBF2D_NO_DRAM_READ=1 - the reader takes token payloads from an L1 scratch
+        // instead of DRAM (forwarded pages still read their metadata tail from DRAM); garbage output
+        if (std::getenv("CMBF2D_NO_DRAM_READ")) {
+            rdr.defines.emplace_back("CMBF2D_NO_DRAM_READ", "1");
+            rdr.defines.emplace_back("CMBF2D_PROBE_SINK", std::to_string(l1.probe_sink));
+        }
         for (const char* knob : {"CMBF2D_RD_VC", "CMBF2D_WR_VC"}) {
             const char* v = std::getenv(knob);
             rdr.defines.emplace_back(knob, v != nullptr ? v : "0");

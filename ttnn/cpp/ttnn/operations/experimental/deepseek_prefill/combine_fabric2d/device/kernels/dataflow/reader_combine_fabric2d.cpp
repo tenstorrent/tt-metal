@@ -306,7 +306,12 @@ struct Reader {
 #ifdef CMBF2D_READY_SEM
         gate();
 #endif
+#ifdef CMBF2D_NO_DRAM_READ  // (perf probe: payload from local L1 scratch)
+        (void)p;
+        return get_noc_addr(CMBF2D_PROBE_SINK);
+#else
         return dram.in.get_noc_addr(p);
+#endif
 #endif
     }
 #if !TILE && defined(CMBF2D_READY_SEM)
@@ -553,7 +558,15 @@ struct Reader {
             const uint32_t slot = claim_slot();
             // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
             // metadata, because the page layout was chosen to match the slot layout exactly.
+#ifdef CMBF2D_NO_DRAM_READ  // (perf probe: payload from local L1 scratch, only the metadata tail from DRAM)
+            noc_async_read(get_noc_addr(CMBF2D_PROBE_SINK), slot_addr_of(slot), ct.token_size_bytes);
+            noc_async_read(
+                dram.fwd.get_noc_addr(fwd_page(consumed + j)) + ct.token_size_bytes,
+                slot_addr_of(slot) + ct.token_size_bytes,
+                fwd_read_bytes - ct.token_size_bytes);
+#else
             noc_async_read(dram.fwd.get_noc_addr(fwd_page(consumed + j)), slot_addr_of(slot), fwd_read_bytes);
+#endif
         }
         noc_async_read_barrier();
         return k;

@@ -98,9 +98,27 @@ uint64_t send_slot(
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+#ifdef CMBF2D_NO_DRAM_WRITE
+    // (perf probe) the payload lands in an L1 scratch on the downstream reader core instead of DRAM; a forwarded page's
+    // metadata tail, which the downstream reader routes by, still goes to its DRAM page as a separate 64 B packet
+    if (forwarding) {
+        volatile PACKET_HEADER_TYPE* hdr_meta = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+        hdr_meta->to_noc_unicast_write(
+            tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr + ct.token_size_bytes},
+            ::cmbf2d::FORWARDING_METADATA_SIZE);
+        fabric.wait_for_empty_write_slot();
+        fabric.send_payload_without_header_non_blocking_from_address(
+            ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes, ::cmbf2d::FORWARDING_METADATA_SIZE);
+        fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_meta, sizeof(PACKET_HEADER_TYPE));
+    }
+    hdr->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, CMBF2D_PROBE_SINK)},
+        payload_bytes);
+#else
     // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
     // reversing the two costs ~8% of the bandwidth.
     hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
+#endif
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
