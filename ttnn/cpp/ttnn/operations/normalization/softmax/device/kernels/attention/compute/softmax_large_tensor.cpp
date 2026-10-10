@@ -11,8 +11,12 @@
 #include "api/compute/reduce.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#ifndef ARCH_QUASAR
+// Unused by this kernel; their SFPU LLKs (int_sum, fill) have no Quasar port, so the headers do not
+// compile there. WH/BH keep the includes untouched.
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "api/compute/eltwise_unary/fill.h"
+#endif
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
@@ -75,8 +79,14 @@ ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     }
     DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb_id);  // TEN-4746: a real PACR must sit between reserve_back and push_back on Quasar
+#endif
     dfb.push_back(static_cast<uint16_t>(pad));
     dfb.wait_front(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_unpack(dfb_id);  // TEN-4746: a real UNPACR must sit between wait_front and pop_front on Quasar
+#endif
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
@@ -87,6 +97,9 @@ ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     }
     DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.wait_front(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_unpack(dfb_id);  // TEN-4746: a real UNPACR must sit between wait_front and pop_front on Quasar
+#endif
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
@@ -105,6 +118,12 @@ void apply_fused_scale_mask(
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
     reconfig_data_format(dfb_in, dfb_fused_scale_mask);
     pack_reconfig_data_format(dfb_out);
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+    // ring and this DFB is never written (all-zero output).
+    pack_init(dfb_out);
+#endif
     mul_bcast_scalar_init(dfb_in, dfb_fused_scale_mask);
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
@@ -133,6 +152,12 @@ void apply_fused_attn_mask(
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
     reconfig_data_format(dfb_in, dfb_fused_attn_mask);
     pack_reconfig_data_format(dfb_out);
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+    // ring and this DFB is never written (all-zero output).
+    pack_init(dfb_out);
+#endif
 #ifdef CAUSAL_MASK
     add_init(dfb_in, dfb_fused_attn_mask);
 #else
@@ -182,6 +207,12 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
     reconfig_data_format(dfb_in, dfb_mask_padded);
     pack_reconfig_data_format(dfb_out);
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+    // ring and this DFB is never written (all-zero output).
+    pack_init(dfb_out);
+#endif
     copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
@@ -219,6 +250,12 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
     reconfig_data_format_srca(dfb_in);
     pack_reconfig_data_format(dfb_out);
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+    // ring and this DFB is never written (all-zero output).
+    pack_init(dfb_out);
+#endif
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(dfb_max);
     sub_bcast_cols_init(dfb_in, dfb_max);
@@ -257,6 +294,11 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
 template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id>
 void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
+#ifdef ARCH_QUASAR
+    // Quasar: reduce_init programs only the reduce edge mask (llk_pack_reduce_mask_config ignores ocb), so
+    // the helper's pack_tile would land in the previous output ring. Retarget the packer to the reduce output.
+    pack_init(dfb_out_id);
+#endif
     compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW, dfb_in_id, dfb_scaler_id, dfb_out_id>(
         compute_kernel_lib::ReduceInputBlockShape::row(dfb_length_t),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -302,6 +344,12 @@ void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t df
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
     reconfig_data_format(dfb_in, dfb_recip);
     pack_reconfig_data_format(dfb_out);
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+    // ring and this DFB is never written (all-zero output).
+    pack_init(dfb_out);
+#endif
     dfb_recip_obj.wait_front(1);
     mul_bcast_cols_init(dfb_in, dfb_recip);
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
@@ -499,6 +547,12 @@ void kernel_main() {
 
         reconfig_data_format_srca(dfb_sum_final);
         pack_reconfig_data_format(dfb_sum_final, dfb_recip);
+#ifdef ARCH_QUASAR
+        // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+        // reprograms the format gasket. Retarget it, else pack_tile keeps writing into the previous output
+        // ring and this DFB is never written (all-zero output).
+        pack_init(dfb_recip);
+#endif
         tile_regs_acquire();
         copy_init(dfb_sum_final);
         copy_tile(dfb_sum_final, 0, dst0);
@@ -565,6 +619,9 @@ void kernel_main() {
         if (out0_pad > 0) {
             DataflowBuffer dfb_out0_obj(dfb_out0);
             dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
+#ifdef ARCH_QUASAR
+            dummy_pack(dfb_out0);  // TEN-4746: a real PACR must sit between reserve_back and push_back on Quasar
+#endif
             dfb_out0_obj.push_back(static_cast<uint16_t>(out0_pad));
         }
         dfb_recip_obj.pop_front(1);
