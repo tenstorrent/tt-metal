@@ -258,6 +258,14 @@ inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpac
     return FACE_C_DIM * FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
 }
 
+// Ch1 (register-side) Z-stride last committed to UNP0 (srcA) and UNP1 (srcB), in bytes; 0 until configure_unpack_AB
+// has run. configure_unpack_AB and the data-format reconfigs keep the records current. The per-op brackets that move
+// a stride (unpack-to-dest, bcastA_B, tilize) restore the canonical value for the current format, so they leave the
+// records valid. The reconfigs use them to skip the Z/Y stride RMWs when the register datum size does not change
+// (bf16 <-> bfp8_b <-> fp16 all unpack to a 2-byte datum), i.e. on most format changes.
+static std::uint32_t unpA_committed_ch1_z_stride = 0;
+static std::uint32_t unpB_committed_ch1_z_stride = 0;
+
 // Canonical srcA tile-descriptor X-dim programmed by configure_unpack_AB. 0 because
 // Tile_x_dim_cntx0 overrides it for srcA.
 constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
@@ -806,6 +814,10 @@ inline void configure_unpack_AB(
     // rather than snapshotting the previous register value into a GPR.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpA_dst_format));
+
+    // Record what is now committed so the data-format reconfigs can skip an unchanged stride.
+    unpA_committed_ch1_z_stride = unpA_ch1_z_stride;
+    unpB_committed_ch1_z_stride = unpB_ch1_z_stride;
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);

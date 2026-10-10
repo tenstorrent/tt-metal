@@ -762,6 +762,9 @@ inline void matmul_configure_mop_throttled(
  * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
+ * @note Programs both CLR_DVALID_SrcA/SrcB_Disable bits from scratch, so inits chained without
+ *       @ref _llk_math_matmul_uninit_ in between (e.g. a block init followed by a single-tile init) cannot
+ *       inherit the previous block's disable and stop releasing that operand's banks.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
@@ -781,20 +784,24 @@ inline void _llk_math_matmul_init_(
     matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
-    if (t_dim > 1)
+    // Program both DVALID-clear-disable bits (each needs its own dedicated SETC16): a block disables the clear of
+    // the operand it reuses and must enable the other one, a single tile enables both. Writing only the bit this
+    // init needs would let a previous block init's disable survive when inits are chained without
+    // _llk_math_matmul_uninit_, and that operand's banks would never be released.
+    if (t_dim > 1 && reuse_a)
     {
-        if (reuse_a)
-        {
-            TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK); // Disable srcB valid clear. Has to be done via dedicated instruction
-        }
-        else
-        {
-            TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK); // Disable srcA valid clear. Has to be done via dedicated instruction
-        }
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK); // Disable srcB valid clear
+    }
+    else if (t_dim > 1)
+    {
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK); // Disable srcA valid clear
+        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
     }
     else
     {
         TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+        TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
     }
 
     if constexpr (THROTTLE_LEVEL > 0)

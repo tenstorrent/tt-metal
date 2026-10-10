@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_rows.h"
 #include "sanitizer/api.h"
@@ -56,8 +57,8 @@ inline void llk_pack_rows(
 /**
  * @brief Uninitialize the pack rows operation.
  *
- * Restores packer addrmods and counters to a safe default state.
- * Should be called after the pack rows operation is complete.
+ * No-op on Wormhole: the addrmods, MOP and X counter the init programs are transient and re-established by the next
+ * op's init (tt-llk#1036). Kept so the pack-rows contract stays init/execute/uninit; call it after the last pack-rows.
  */
 inline void llk_pack_rows_uninit() {
     SAN_HOOK(unsupported());

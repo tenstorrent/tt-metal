@@ -244,14 +244,21 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 
-    // The ch1 (register-side) Z/Y strides are format-derived (datum size), so re-commit them on EVERY format
-    // change, independent of dim_stride_target. They drive partial-face unpack addressing (e.g. partial-face
-    // matmul, which reads them without setting them), so leaving them stale across a datum-size change (e.g.
-    // fp16 -> fp32) mislands faces (tt-llk#1161 follow-up). Per-op brackets (unpack-to-dest, bcastA_B) restore
-    // to this same canonical baseline, so re-committing it here is what keeps those restores correct.
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(canonical_unpA_z_stride(unpack_dst_format));
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
-        canonical_unpA_y_stride(unpack_dst_format));
+    // The ch1 (register-side) Z/Y strides are format-derived (datum size) and drive partial-face unpack
+    // addressing (e.g. partial-face matmul, which reads them without setting them), so a datum-size change
+    // (e.g. fp16 -> fp32) must re-commit them, independent of dim_stride_target, or faces misland (tt-llk#1161
+    // follow-up). Most format changes keep the datum size (bf16 <-> bfp8_b <-> fp16 all unpack to a 2-byte
+    // register datum), so compare against the committed value first and skip the two RMWs when nothing moves.
+    // The per-op brackets (unpack-to-dest, bcastA_B, tilize) restore the canonical baseline for the current
+    // format, which is what keeps the committed record valid between reconfigs.
+    const std::uint32_t z_stride = canonical_unpA_z_stride(unpack_dst_format);
+    if (z_stride != unpA_committed_ch1_z_stride)
+    {
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(z_stride);
+        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+            canonical_unpA_y_stride(unpack_dst_format));
+        unpA_committed_ch1_z_stride = z_stride;
+    }
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
@@ -316,8 +323,13 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
 
-    // Re-commit the format-derived srcB ch1 Z-stride on every format change (see the srcA impl for why).
-    cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(datum_size_in_bytes(unpack_dst_format) * FACE_C_DIM * FACE_R_DIM);
+    // Re-commit the format-derived srcB ch1 Z-stride when the register datum size changes (see the srcA impl for why).
+    const std::uint32_t z_stride = datum_size_in_bytes(unpack_dst_format) * FACE_C_DIM * FACE_R_DIM;
+    if (z_stride != unpB_committed_ch1_z_stride)
+    {
+        cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(z_stride);
+        unpB_committed_ch1_z_stride = z_stride;
+    }
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
