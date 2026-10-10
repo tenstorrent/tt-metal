@@ -308,6 +308,7 @@ class MultichipDecoder(OptimizedDecoder):
         # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
         # nlp_concat_heads (one core each: ~37 / ~30 -> ~3 us)
         self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
+        self._router_1d = _parse_binary_env("TT_LAGUNA_ROUTER_1D", True)  # see _router_scores
         # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
         # separate N = 18 g_proj matmul (one core, ~23 us per draft layer)
         self._dflash_fold_g = _parse_binary_env("TT_LAGUNA_DFLASH_FOLD_G", True)
@@ -1452,20 +1453,9 @@ class MultichipDecoder(OptimizedDecoder):
 
         cfg = self.cfg
         H, E, T = cfg.hidden, cfg.num_experts, ln_flat.shape[-2]
-        num_cores = _decode_shard_cores(H, E)
-        x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
-        scores = ttnn.linear(
-            x_sh,
-            self.w["gate_w_ds"],
-            program_config=_dram_matmul_pc(
-                TILE, H, E, num_cores, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
-            ),
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self._ck_router_precise,
-            dtype=ttnn.float32,
-        )
-        ttnn.deallocate(x_sh)
-        scores = ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
+        if ln_flat.is_sharded():
+            ln_flat = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG)
+        scores = self._router_scores(ln_flat)
         if T == TILE:
             bias = self.w["e_bias_f32_rows"]
         else:  # the bias repeated over T rows (sliced once, at the first eager call, before any trace capture)
@@ -1507,28 +1497,47 @@ class MultichipDecoder(OptimizedDecoder):
             combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
         return self._reduce(combined)
 
+    def _router_scores(self, x):
+        """Decode router scores sigmoid(x @ gate_w), fp32, L1 interleaved; x: [1, 1, T <= 32, H] L1 interleaved. The
+        1D matmul (activations multicast, one expert tile column per core, K blocks of 32 tiles) reads the
+        interleaved input directly: ~12 vs ~20 us for the reshard to 8 cores + DRAM-sharded matmul + unshard."""
+        cfg = self.cfg
+        H, E = cfg.hidden, cfg.num_experts
+        sig = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+        kt = H // TILE
+        # up to 8 rows (batch 1, the DFlash verify); batch-32 decode kept the DRAM-sharded matmul (25.0 -> 24.1 tok/s
+        # per user at 8K with this one)
+        if self._router_1d and E % TILE == 0 and E // TILE <= 8 and x.shape[-2] <= 8:
+            bw = next(b for b in (32, 24, 16, 12, 8, 4, 2, 1) if kt % b == 0)
+            pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(E // TILE, 1), in0_block_w=bw, out_subblock_h=1,
+                out_subblock_w=1, per_core_M=1, per_core_N=1, fuse_batch=True, fused_activation=sig, mcast_in0=True,
+            )  # fmt: skip
+            return ttnn.linear(x, self.w["gate_w"], program_config=pc, compute_kernel_config=self._ck_router_precise,
+                               dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        num_cores = _decode_shard_cores(H, E)
+        x_sh = ttnn.to_memory_config(x, _width_sharded_l1(TILE, H, num_cores))
+        # sigmoid fused into the logits matmul (fp32 out): the scores directly
+        scores = ttnn.linear(
+            x_sh,
+            self.w["gate_w_ds"],
+            program_config=_dram_matmul_pc(TILE, H, E, num_cores, fused_activation=sig),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._ck_router_precise,
+            dtype=ttnn.float32,
+        )
+        ttnn.deallocate(x_sh)
+        return ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
+
     def _moe1_local(self, ln_flat, sharded):
         """One decode token: router logits -> exact top-K kernel writing this chip's local routing row -> the
         batch-1 MoE kernels; then the shared expert and the all-reduce (see _moe)."""
         from .router32 import route1_local
 
         cfg = self.cfg
-        H, E = cfg.hidden, cfg.num_experts
-        num_cores = _decode_shard_cores(H, E)
-        x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
-        # sigmoid fused into the logits matmul (fp32 out): the scores directly
-        scores = ttnn.linear(
-            x_sh,
-            self.w["gate_w_ds"],
-            program_config=_dram_matmul_pc(
-                TILE, H, E, num_cores, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
-            ),
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self._ck_router_precise,
-            dtype=ttnn.float32,
-        )
-        ttnn.deallocate(x_sh)
-        scores = ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
+        if ln_flat.is_sharded():
+            ln_flat = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG)
+        scores = self._router_scores(ln_flat)
         sel = ttnn.add(scores, self.w["e_bias_f32"])
         sparsity = route1_local(
             sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
