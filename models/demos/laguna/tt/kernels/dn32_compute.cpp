@@ -14,6 +14,8 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t CPC = get_compile_time_arg_val(1);
     constexpr uint32_t Kt_sh = get_compile_time_arg_val(2);  // shared expert unit (on one group's cores), cb_w_sh
+    constexpr uint32_t KS = get_compile_time_arg_val(3);     // units per routed expert (Kt / KS K tiles each)
+    constexpr uint32_t Kq = Kt / KS;
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_meta = 2, cb_w_sh = 6, cb_out = 16;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     cb_wait_front(cb_meta, 1);
@@ -26,15 +28,15 @@ void kernel_main() {
     matmul_init(cb_x, cb_w);
     tile_regs_acquire();
     for (uint32_t a = 0; a < na; ++a) {
-        cb_wait_front(cb_x, Kt);
-        cb_wait_front(cb_w, CPC * Kt);
+        cb_wait_front(cb_x, Kq);
+        cb_wait_front(cb_w, CPC * Kq);
         for (uint32_t j = 0; j < CPC; ++j) {
-            for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_tiles(cb_x, cb_w, k, j * Kt + k, j);
+            for (uint32_t k = 0; k < Kq; ++k) {
+                matmul_tiles(cb_x, cb_w, k, j * Kq + k, j);
             }
         }
-        cb_pop_front(cb_x, Kt);
-        cb_pop_front(cb_w, CPC * Kt);
+        cb_pop_front(cb_x, Kq);
+        cb_pop_front(cb_w, CPC * Kq);
     }
     if constexpr (Kt_sh > 0) {
         if (sh) {

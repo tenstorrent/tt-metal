@@ -14,9 +14,10 @@ void kernel_main() {
     constexpr uint32_t CPC = get_compile_time_arg_val(4);
     constexpr uint32_t EG = get_compile_time_arg_val(5);
     constexpr uint32_t Nh = get_compile_time_arg_val(6);
-    constexpr uint32_t has_shared = get_compile_time_arg_val(7);  // shared unit on group (active count % EG)
+    constexpr uint32_t has_shared = get_compile_time_arg_val(7);  // shared unit on group (unit count % EG)
+    constexpr uint32_t KS = get_compile_time_arg_val(8);          // units per routed expert
     constexpr uint32_t cb_sp2 = 4, cb_zero = 5, cb_out = 16;
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr auto out_args = TensorAccessorArgs<9>();
     constexpr auto sp_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(1);
@@ -43,8 +44,10 @@ void kernel_main() {
     uint32_t seen = 0;
     for (uint32_t e = 0; e < E; ++e) {
         if (spv[e] != 0) {
-            any = any || (seen % EG == eg);
-            ++seen;
+            for (uint32_t q = 0; q < KS; ++q) {
+                any = any || (seen % EG == eg);
+                ++seen;
+            }
         }
     }
     any = any || (has_shared != 0 && seen % EG == eg);

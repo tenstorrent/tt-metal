@@ -442,6 +442,9 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     page, wt, sp_page = 2048, 576, max(E * 2, 64)
     sp_rows = int(sparsity.shape[-2])
     sh_glu, sh_cols = shared if shared is not None else (glu, d_cols)
+    # each expert as ks quarter-K units dealt over the expert groups (balance: 13 experts on 8 groups -> 2 vs 1.6)
+    ks = int(os.environ.get("TT_LAGUNA_DN32_KSPLIT", "4"))
+    assert Kt % ks == 0, (Kt, ks)
     kt_sh = sh_cols.Kt if shared is not None else 0
     w_sh = _tile_bytes(sh_cols.buf.dtype)
     T = int(glu.shape[-2])
@@ -461,7 +464,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh]
+        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh, ks]
         + _accessor_args(glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf),
         # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
         # are not used (the packed-rows all-reduce reads rows < T)
@@ -473,7 +476,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh, int(kt_sh > 0)]
+        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh, int(kt_sh > 0), ks]
         + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
@@ -486,7 +489,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, cols_per_core, kt_sh],
+        compile_time_args=[Kt, cols_per_core, kt_sh, ks],
         config=cfg,
     )
     io = [glu, d_cols.buf, sparsity, out] if shared is None else [glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf, out]

@@ -23,7 +23,11 @@ void kernel_main() {
     constexpr uint32_t Kt_sh = get_compile_time_arg_val(9);
     constexpr uint32_t w_sh_tile = get_compile_time_arg_val(10);
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_meta = 2, cb_sp = 3, cb_w_sh = 6;
-    constexpr auto x_args = TensorAccessorArgs<11>();
+    // KS > 1: each active expert is KS units of Kt / KS K tiles (partial sums add in the same DST tiles), dealt over
+    // the expert groups in order -- finer than whole experts, so the groups stay balanced
+    constexpr uint32_t KS = get_compile_time_arg_val(11);
+    constexpr uint32_t Kq = Kt / KS;
+    constexpr auto x_args = TensorAccessorArgs<12>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto xs_args = TensorAccessorArgs<sp_args.next_compile_time_args_offset()>();
@@ -51,11 +55,13 @@ void kernel_main() {
             spv[e] |= spv[r * (sp_page / 2) + e];
         }
     }
-    uint32_t na = 0, seen = 0;
+    uint32_t na = 0, seen = 0;  // seen counts units (active experts x KS)
     for (uint32_t e = 0; e < E; ++e) {
         if (spv[e] != 0) {
-            na += (seen % EG == eg) ? 1 : 0;
-            ++seen;
+            for (uint32_t q = 0; q < KS; ++q) {
+                na += (seen % EG == eg) ? 1 : 0;
+                ++seen;
+            }
         }
     }
     const bool has_sh = Kt_sh > 0 && seen % EG == eg;
@@ -68,32 +74,35 @@ void kernel_main() {
         if (spv[e] == 0) {
             continue;
         }
-        const bool mine = (seen % EG == eg);
-        ++seen;
-        if (!mine) {
-            continue;
-        }
-        cb_reserve_back(cb_w, CPC * Kt);
-        const uint32_t w_l1 = get_write_ptr(cb_w);
-        for (uint32_t j = 0; j < CPC; ++j) {
-            noc_async_read(w.get_noc_addr(e * Kt * Nh + c0 + j), w_l1 + j * Kt * w_tile, Kt * w_tile);
-        }
-        cb_reserve_back(cb_x, Kt);
-        const uint32_t x_l1 = get_write_ptr(cb_x);
-        for (uint32_t k = 0; k < Kt; ++k) {
-            if (x_rows < 16) {
-                // only rows 0..x_rows-1 are real: their 32-byte rows of face 0 and face 1 (other rows keep stale
-                // data; matmul rows are independent, so they only reach output rows the caller never reads)
-                const uint64_t src = x.get_noc_addr(e * Kt + k);
-                noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
-                noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
-            } else {
-                noc_async_read_tile(e * Kt + k, x, x_l1 + k * x_page);
+        for (uint32_t q = 0; q < KS; ++q) {
+            const bool mine = (seen % EG == eg);
+            ++seen;
+            if (!mine) {
+                continue;
             }
+            const uint32_t kb = q * Kq;  // this unit's first K tile
+            cb_reserve_back(cb_w, CPC * Kq);
+            const uint32_t w_l1 = get_write_ptr(cb_w);
+            for (uint32_t j = 0; j < CPC; ++j) {
+                noc_async_read(w.get_noc_addr(e * Kt * Nh + c0 + j) + kb * w_tile, w_l1 + j * Kq * w_tile, Kq * w_tile);
+            }
+            cb_reserve_back(cb_x, Kq);
+            const uint32_t x_l1 = get_write_ptr(cb_x);
+            for (uint32_t k = 0; k < Kq; ++k) {
+                if (x_rows < 16) {
+                    // only rows 0..x_rows-1 are real: their 32-byte rows of face 0 and face 1 (other rows keep stale
+                    // data; matmul rows are independent, so they only reach output rows the caller never reads)
+                    const uint64_t src = x.get_noc_addr(e * Kt + kb + k);
+                    noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
+                    noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
+                } else {
+                    noc_async_read_tile(e * Kt + kb + k, x, x_l1 + k * x_page);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x, Kq);
+            cb_push_back(cb_w, CPC * Kq);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_x, Kt);
-        cb_push_back(cb_w, CPC * Kt);
     }
     if constexpr (Kt_sh > 0) {
         if (has_sh) {
