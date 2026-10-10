@@ -1,0 +1,92 @@
+{
+  "state": "completed",
+  "physical_devices_accessed": false,
+  "cleanup_completed": true,
+  "original": "/dev/shm/qwen38-p0-priority-v1-20261010/profiled",
+  "baseline": "/dev/shm/qwen38-p0-priority-v1-20261010/unprofiled",
+  "started_at": 1791666695.250582,
+  "files": {
+    "tracy_profile_log_host.tracy": {
+      "bytes": 318561738,
+      "sha256": "620ab5cc08ff3cd5b66d01cb36a99708400b0e42c9839d76d078aaa1d7a49848"
+    },
+    "cpp_device_perf_report.csv": {
+      "bytes": 24083898,
+      "sha256": "62a68acc33d9de52d8240b7340e552eb446e0e6d5760790fbb4379b0ff5b08a8"
+    },
+    "zone_src_locations.log": {
+      "bytes": 4852,
+      "sha256": "a59fffe88794628fc633b20fc8df99e90c06f2ade8cd84b4bd5e885ef609e635"
+    },
+    "new_zone_src_locations.log": {
+      "bytes": 458791,
+      "sha256": "7c2f758a7e5e0df80c41be41042bc6bf2e9bd85b073fba80e86cc11157d76dd3"
+    },
+    "tracy_ops_times.csv": {
+      "bytes": 11827326,
+      "sha256": "97bbb69e7d8460b2c88c16bdec15d87d9ce316c7a476f8c848cc643a9932eb22"
+    },
+    "tracy_ops_data.csv": {
+      "bytes": 10659892,
+      "sha256": "40389a3a9559b5cff36b83b65a6b31f96116b8a09c3df3712450b05504983fe9"
+    }
+  },
+  "updated_at": "2026-10-10T21:13:24Z",
+  "comparisons": [
+    {
+      "replay": 0,
+      "host_step_ns": 72239661.12360358,
+      "longest_rank": 4,
+      "device_span_ns": 71948454.8148148,
+      "relative_unaccounted_time": 0.004031113992776299,
+      "within_five_percent": true
+    },
+    {
+      "replay": 1,
+      "host_step_ns": 72290435.89904904,
+      "longest_rank": 12,
+      "device_span_ns": 71957034.07407407,
+      "relative_unaccounted_time": 0.004611976962492694,
+      "within_five_percent": true
+    },
+    {
+      "replay": 2,
+      "host_step_ns": 72258616.33196473,
+      "longest_rank": 4,
+      "device_span_ns": 71945497.03703703,
+      "relative_unaccounted_time": 0.0043333142927785085,
+      "within_five_percent": true
+    }
+  ],
+  "full_trace_reconciliation_passed": true,
+  "outputs_and_inputs_match": true,
+  "baseline_replays": [
+    {
+      "index": 0,
+      "host_step_s": 0.06724002119153738
+    },
+    {
+      "index": 1,
+      "host_step_s": 0.06725273001939058
+    },
+    {
+      "index": 2,
+      "host_step_s": 0.06723964028060436
+    }
+  ],
+  "profiled_replays": [
+    {
+      "index": 0,
+      "host_step_s": 0.07223966112360358
+    },
+    {
+      "index": 1,
+      "host_step_s": 0.07229043589904904
+    },
+    {
+      "index": 2,
+      "host_step_s": 0.07225861633196473
+    }
+  ],
+  "finished_at": 1791666804.41597
+}

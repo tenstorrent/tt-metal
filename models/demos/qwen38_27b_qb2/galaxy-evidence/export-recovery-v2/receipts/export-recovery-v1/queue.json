@@ -1,0 +1,22 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "physical_devices_accessed": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791666631.3594286,
+  "replacements": [],
+  "updated_at": "2026-10-10T21:11:26Z",
+  "parent": {
+    "MainPID": "244905",
+    "Result": "success",
+    "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-compact-followup-v3-20261010.service",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "28c688b7780445999483523a9cbc75fc"
+  },
+  "error": "InterruptedError",
+  "detail": "Export recovery received signal 15",
+  "finished_at": 1791666686.147518
+}

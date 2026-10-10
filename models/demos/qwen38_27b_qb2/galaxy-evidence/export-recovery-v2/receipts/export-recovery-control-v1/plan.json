@@ -1,0 +1,74 @@
+{
+  "unit": "qwen38-compact-export-fallback-v1-20261010.service",
+  "parent_unit": "qwen38-compact-followup-v3-20261010.service",
+  "parent_invocation": "28c688b7780445999483523a9cbc75fc",
+  "parent_receipt": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/queue.json",
+  "qualification": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/queue.json",
+  "profiled": "/dev/shm/qwen38-compact-profile-v2-20261010/profiled",
+  "baseline": "/dev/shm/qwen38-compact-profile-v2-20261010/unprofiled",
+  "exporter": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/tools/profiler/bin/tracy-csvexport",
+  "python": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+  "validation_receipt": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-validation-v1/queue.json",
+  "followers": [
+    {
+      "old_unit": "qwen38-projection-sweep-v6-20261010.service",
+      "old_invocation": "960d702be457402a92d32d88b4a4a591",
+      "old_output": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6",
+      "old_log": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6/run.log",
+      "launch": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6/launch.json",
+      "launch_sha256": "88c5115ce9416bc8655262b75470745259acd3faa141e040d12fe58f724fa37e",
+      "manifest_sha256": "89e197d429c5718817c32b75e475fedce9017482a449f336ac107065531c111b",
+      "new_unit": "qwen38-projection-sweep-v6-export-recovery1-20261010.service",
+      "new_output": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1",
+      "new_control": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6-export-recovery1"
+    },
+    {
+      "old_unit": "qwen38-prefill-attention-v3-20261010.service",
+      "old_invocation": "d7501d6753824d31846a13ecef289c32",
+      "old_output": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v3",
+      "old_log": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-control-v3/run.log",
+      "launch": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-control-v3/launch.json",
+      "launch_sha256": "19470ebe0d97f037a470480d31755cfd96ed649dd3ba35c74d9c464cddbc7685",
+      "manifest_sha256": "fe137d035be02981ae31327d81771e256678f744fbdf127e526c92d7fe92712e",
+      "new_unit": "qwen38-prefill-attention-v3-export-recovery1-20261010.service",
+      "new_output": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v3-export-recovery1",
+      "new_control": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-control-v3-export-recovery1"
+    },
+    {
+      "old_unit": "qwen38-compact-long-horizon-v3-20261010.service",
+      "old_invocation": "6f0ee1599ae144d6a6843b49bf22455b",
+      "old_output": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v3",
+      "old_log": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v3/run.log",
+      "launch": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v3/launch.json",
+      "launch_sha256": "13abe928f9dce6f0cf387f305af1c486a2d543f891b6c4677eb1b4f4d141bc40",
+      "manifest_sha256": "42a56b73d1f752e5e49e5bfe9624d9dccae33ab5d3beba6c0f5c6d0424f69998",
+      "new_unit": "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+      "new_output": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v3-export-recovery1",
+      "new_control": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v3-export-recovery1"
+    },
+    {
+      "old_unit": "qwen38-gdn-resident-hardware-v1-20261010.service",
+      "old_invocation": "9a87b6620b6c4892b407a17f7c54f04e",
+      "old_output": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v1",
+      "old_log": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v1/run.log",
+      "launch": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v1/launch.json",
+      "launch_sha256": "df0a2be591cc21f3aa19f9f8d8609fa248e9cc166cfa06ab631a705fc1e631db",
+      "manifest_sha256": "5966a8e77186270e631556229a8eae5473e01e6dcc74ab7c1a1170fbfaf3a3f0",
+      "new_unit": "qwen38-gdn-resident-hardware-v1-export-recovery1-20261010.service",
+      "new_output": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v1-export-recovery1",
+      "new_control": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v1-export-recovery1"
+    },
+    {
+      "old_unit": "qwen38-gdn-compact-gates-v1-20261010.service",
+      "old_invocation": "37fb5d460eed4792841823a8ba71d855",
+      "old_output": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1",
+      "old_log": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/run.log",
+      "launch": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/launch.json",
+      "launch_sha256": "d5770ba99bc2e163f317f86342e55e14afa946f3f17136d92ec2a367ed95940b",
+      "manifest_sha256": "94cebbb2d36cdb8c6ab697aee08b9f1badcc8937270f842182030c25a65448f1",
+      "new_unit": "qwen38-gdn-compact-gates-v1-export-recovery1-20261010.service",
+      "new_output": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1-export-recovery1",
+      "new_control": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1-export-recovery1"
+    }
+  ]
+}

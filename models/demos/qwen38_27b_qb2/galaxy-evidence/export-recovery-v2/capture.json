@@ -1,0 +1,121 @@
+{
+  "captured_at": "2026-10-10T21:14:14.185021+00:00",
+  "scope": "CPU-only completed-capture export validation and persistent fallback launch; partial GPQA is not final",
+  "files": {
+    "receipts/export-recovery-control-v1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/launch.json",
+      "uncompressed_bytes": 3856,
+      "uncompressed_sha256": "f2968c09d15954b0a691fe1590e743de15825e40d49d35683d2f71b0942a906f"
+    },
+    "receipts/export-recovery-control-v1/launch-units.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/launch-units.json",
+      "uncompressed_bytes": 454,
+      "uncompressed_sha256": "80ad35a2776e76293df87e618b78669503549d1af54d5ab906e57f7a52ff49b4"
+    },
+    "receipts/export-recovery-control-v1/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/source-manifest.json",
+      "uncompressed_bytes": 548,
+      "uncompressed_sha256": "c5ed85e8a0ca9fceaa1a9fbf2d876d0a94e82fde3982b464c61ee57cd1871743"
+    },
+    "receipts/export-recovery-control-v1/plan.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/plan.json",
+      "uncompressed_bytes": 5384,
+      "uncompressed_sha256": "59f96aee007e9c765b181081f460115d0afba58159a14333aba694bca2b9caa3"
+    },
+    "receipts/export-recovery-control-v1/preflight.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/preflight.log",
+      "uncompressed_bytes": 1289,
+      "uncompressed_sha256": "5772078e1222fd3bfdbc602756bd2005e922128013182a95cf73ee17b8c4fd08"
+    },
+    "receipts/export-recovery-control-v1/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/unit.xml",
+      "uncompressed_bytes": 194362,
+      "uncompressed_sha256": "cda0d354cd9c9e2687ffbcb2c39f499ce3b508b5e15b6c8b15f09f3652e1d821"
+    },
+    "receipts/export-recovery-control-v1/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/run.log",
+      "uncompressed_bytes": 1081,
+      "uncompressed_sha256": "1aecf2ee97aae74951bf41ac9bbbebfec20fbe81955a9af1f94fd51ed6106b71"
+    },
+    "receipts/export-recovery-control-v1/validation.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v1/validation.log",
+      "uncompressed_bytes": 1116,
+      "uncompressed_sha256": "97db1e5e496eae4930c0e69b528391e5aad3b3a34d65301baae78fafa45454c7"
+    },
+    "receipts/export-recovery-control-v2/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/launch.json",
+      "uncompressed_bytes": 3856,
+      "uncompressed_sha256": "d747744bfc6a3290a91f5ebea6577d9f4b7a78c70ebab9119a85165ac3a877ab"
+    },
+    "receipts/export-recovery-control-v2/launch-units.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/launch-units.json",
+      "uncompressed_bytes": 454,
+      "uncompressed_sha256": "204ee49e3f737fbbfb6d907044b3e5c33a2eb9a585755a7470a1f5165227c2e6"
+    },
+    "receipts/export-recovery-control-v2/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/source-manifest.json",
+      "uncompressed_bytes": 548,
+      "uncompressed_sha256": "981b4c3a9224648c223b3f548e77650ce9e010acb91d02e5b6714a029bc9df68"
+    },
+    "receipts/export-recovery-control-v2/plan.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/plan.json",
+      "uncompressed_bytes": 5384,
+      "uncompressed_sha256": "ffaadb1e2db35879371d551c18bd8ff9334144c961c7a139b0caac30d3024a70"
+    },
+    "receipts/export-recovery-control-v2/preflight.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/preflight.log",
+      "uncompressed_bytes": 1289,
+      "uncompressed_sha256": "02f8cefec48465e079a2b0f12b2312e0878b4ecf0820cfca0488f7e640367fc6"
+    },
+    "receipts/export-recovery-control-v2/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/unit.xml",
+      "uncompressed_bytes": 194995,
+      "uncompressed_sha256": "408cbda4dbbcd17ebef2d206f4a5a58bd6b40af83c60ae0d1ec33504096c0897"
+    },
+    "receipts/export-recovery-control-v2/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/run.log",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "receipts/export-recovery-control-v2/validation.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/validation.log",
+      "uncompressed_bytes": 926,
+      "uncompressed_sha256": "e6430ee1f318455134b78820b5f65cab3e495ab6df2a762e1fc898c23de6429f"
+    },
+    "receipts/export-recovery-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v1/queue.json",
+      "uncompressed_bytes": 703,
+      "uncompressed_sha256": "b8b492f5f5e1ea60e71ea6aa0e34f4a7fde8352e772771fe4171041943939518"
+    },
+    "receipts/export-recovery-v2/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/queue.json",
+      "uncompressed_bytes": 587,
+      "uncompressed_sha256": "8494e5e35d18f5ad1e4db38e54434df391caff2c9ef8cb4c0bfaba95451f0849"
+    },
+    "receipts/export-recovery-validation-v2/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-validation-v2/queue.json",
+      "uncompressed_bytes": 2527,
+      "uncompressed_sha256": "58192a0d4eb49a749e4aa31b21d6d836d82fbb8e5ee2e874bdf76217b8d2f3b7"
+    },
+    "receipts/export-recovery-validation-v2/analysis.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-validation-v2/analysis.json",
+      "uncompressed_bytes": 146129,
+      "uncompressed_sha256": "0102e5949935e4d672d2934055a4ea61fb857012c6cfa939f0e627dbba92d24f"
+    },
+    "receipts/export-recovery-validation-v2/profile.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-validation-v2/profile.json",
+      "uncompressed_bytes": 33122,
+      "uncompressed_sha256": "7713b7682808401a6862b7d19e7da83cd6b725c4e373e87f98b9af3ef6f13e71"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json",
+      "uncompressed_bytes": 176,
+      "uncompressed_sha256": "c26de590ef57c1f2af33009f765782c5f878b1adb3371672433801bbc128b0df"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json",
+      "uncompressed_bytes": 1472,
+      "uncompressed_sha256": "92ce8366444b2fb4685ed2c00d0cd16ea174435f418bd249b0adab5c0b4f275b"
+    }
+  }
+}

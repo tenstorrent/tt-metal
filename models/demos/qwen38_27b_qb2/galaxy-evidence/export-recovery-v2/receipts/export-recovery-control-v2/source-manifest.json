@@ -1,0 +1,6 @@
+{
+  "models/demos/qwen38_27b_qb2/demo/recover_full_profile_export.py": "5c014ab2b1b4d04bf7ecf530ac92e891fa62f6ea340eb6dad39f66b8f6d89753",
+  "models/demos/qwen38_27b_qb2/demo/watch_profile_export.py": "53957df9ecd0f8a40842bf0ae4eb5b27b4dd8b5325570760e8bf771f8ca6d78d",
+  "models/demos/qwen38_27b_qb2/tests/profile_export_recovery.py": "628dad5eee498197f3b1d6cca6a603e49829413f92f5fcd0de3e9468403a3438",
+  "models/demos/qwen38_27b_qb2/tests/unit/test_profile_export_recovery.py": "ee43f434784537cd43c4f0ed113db554cc7d68d7410a5e7bd3441ed6201d748b"
+}

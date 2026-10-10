@@ -1,0 +1,16 @@
+{
+  "qwen38-compact-export-fallback-v2-20261010.service": {
+    "MainPID": "419892",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "e37b2f244e924e2f9b03f58af90d47ba"
+  },
+  "qwen38-export-recovery-validation-v2-20261010.service": {
+    "MainPID": "419890",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "6aa4933113574c59a5eb6bd200fe7d14"
+  }
+}
