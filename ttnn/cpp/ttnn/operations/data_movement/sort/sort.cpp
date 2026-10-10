@@ -382,6 +382,8 @@ std::vector<Tensor> sort(
     Tensor padded_input_tensor =
         dm::pre_sort_transform_tensor(transform_input, dim, is_dim_last_idx, is_rank_le_4d, descending);
     const MemoryConfig device_op_mem_cfg = sort_mem_cfg.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : sort_mem_cfg;
+    // Sort dim carries ±inf/sentinel padding; for TILE, padded_shape includes the implicit tile padding.
+    const bool is_padded = original_lshape[normalized_dim] != padded_input_tensor.padded_shape()[-1];
 
     // Canonicalize any preallocated output tensors.
     // Only pass them to the device op when their layout matches the padded input.
@@ -409,7 +411,7 @@ std::vector<Tensor> sort(
     // pre_sort_transform_tensor always moves the sort dimension to position -1,
     // so the device op always sorts along the last dimension.
     auto sorted_tensors = ttnn::prim::sort(
-        padded_input_tensor, static_cast<int8_t>(-1), descending, stable, device_op_mem_cfg, output_tensors);
+        padded_input_tensor, static_cast<int8_t>(-1), descending, stable, device_op_mem_cfg, output_tensors, is_padded);
 
     auto results = dm::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, device_op_mem_cfg);
