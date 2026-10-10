@@ -149,9 +149,7 @@ class V41DecodePool:
         }
         self._window = {l: self._window_rows(l) for l in self.layers}
         self._offsets = {src: self._user_offsets(src) for src in sources}
-        self._ccl = get_tt_ccl(mesh_device) if self.sp > 1 else None
-        self._num_links = fabric_num_links()
-        self._sp_topology = per_axis_topology()[SP_AXIS]
+        self._init_ccl(mesh_device)
         self.step = 0  # the global step: the ring slot every user's next window row goes to is step % RING
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
@@ -173,6 +171,12 @@ class V41DecodePool:
             layout=layout,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None)),
         )
+
+    def _init_ccl(self, mesh_device) -> None:
+        self.mesh_device, self.sp = mesh_device, tuple(mesh_device.shape)[0]
+        self._ccl = get_tt_ccl(mesh_device) if self.sp > 1 else None
+        self._num_links = fabric_num_links()
+        self._sp_topology = per_axis_topology()[SP_AXIS]
 
     def gather_sp(self, t, dim: int):
         """Concatenate ``t`` over the mesh rows along ``dim`` (rank order) on every chip."""

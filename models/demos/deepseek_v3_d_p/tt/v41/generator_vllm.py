@@ -69,9 +69,14 @@ def _layers(spec: str) -> list[int]:
 
 
 class DeepseekV41ForCausalLM:
+    # device sampling of the decode step (TT_V41_SAMPLE_ON_DEVICE, default on) with the plugin's
+    # sample_on_device_mode "decode_only": the step ends in ttnn.sampling over each row's top-128 candidates and
+    # returns token ids; prefill returns logits (host sampling once per request). The host sampler over 32 x
+    # 129,280 logits took ~100 ms a step.
+    SAMPLE_ON_DEVICE = os.environ.get("TT_V41_SAMPLE_ON_DEVICE", "1") == "1"
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_sample_on_device": False,
+        "supports_sample_on_device": SAMPLE_ON_DEVICE,
         "supports_async_decode": False,
     }
 
@@ -155,7 +160,9 @@ class DeepseekV41ForCausalLM:
         assert (
             max_batch_size % sp == 0
         ), f"max_num_seqs {max_batch_size}: the pool holds the same slots per mesh row ({sp})"
-        decoder = TtV41BatchDecoder(model, root, users_per_rank=max_batch_size // sp, trace=True)
+        decoder = TtV41BatchDecoder(
+            model, root, users_per_rank=max_batch_size // sp, trace=True, sample_on_device=cls.SAMPLE_ON_DEVICE
+        )
         prefill_slots = int(os.environ.get(PREFILL_SLOTS, 2))
         logger.info(
             f"DeepSeek-V4.1-Flash: {len(layers)} layers built in {time.time() - t0:.0f} s; max_seq_len {max_seq} "
@@ -265,12 +272,24 @@ class DeepseekV41ForCausalLM:
         return trace
 
     def decode_forward(self, **kwargs) -> torch.Tensor:
-        """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``; rows
-        whose block table starts with the null block are idle. One step of the pool for every active row."""
+        """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``, or with
+        ``sampling_params`` (device sampling: per-row ``temperature``, ``top_k``, ``top_p`` lists) the sampled token
+        ids ``[B]`` int32; rows whose block table starts with the null block are idle. One step of the pool for
+        every active row."""
         tokens, positions, page_table = kwargs["tokens"], kwargs["start_pos"], kwargs["page_table"]
-        assert kwargs.get("sampling_params") is None, "host sampling only"
-        out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
-        step, rows = {}, {}
+        params = kwargs.get("sampling_params")
+        assert (params is not None) == self.decoder.sample_on_device, (
+            f"the decode step samples {'on device' if self.decoder.sample_on_device else 'on the host'} "
+            f"(TT_V41_SAMPLE_ON_DEVICE); sampling_params {'given' if params is not None else 'missing'}"
+        )
+        if params is not None:
+            assert (
+                float(params.repetition_penalty if isinstance(params.repetition_penalty, (int, float)) else 1.0) == 1.0
+            )
+            out = torch.zeros(tokens.shape[0], dtype=torch.int32)
+        else:
+            out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
+        step, rows, sampling = {}, {}, {}
         for i in range(tokens.shape[0]):
             if int(page_table[i, 0]) == 0:
                 continue
@@ -281,12 +300,17 @@ class DeepseekV41ForCausalLM:
             ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
             step[slot] = int(tokens[i, 0])
             rows[slot] = i
+            if params is not None:
+                sampling[slot] = (int(params.top_k[i]), float(params.top_p[i]), float(params.temperature[i]))
         if not step:
             return out
         t0 = time.time()
-        logits = self.decoder.decode(step)
+        result = self.decoder.decode(step, sampling if params is not None else None)
         for slot, i in rows.items():
-            out[i, 0] = logits[slot]
+            if params is not None:
+                out[i] = result[slot]
+            else:
+                out[i, 0] = result[slot]
         last = self.decoder.last
         logger.debug(f"DeepSeek-V4.1-Flash: decode step of {len(step)} rows in {time.time() - t0:.3f} s {last}")
         return out
@@ -345,11 +369,12 @@ class DeepseekV41ForCausalLM:
             self._warmup_join()
         prompt = self._warmup_prompt()
         tokens = {slot: int(prompt[-1]) for slot in range(self.max_batch_size)}
+        sampling = {slot: (1, 0.0, 0.0) for slot in tokens} if self.decoder.sample_on_device else None
         replays = 0
         for step in range(WARMUP_DECODE_STEPS):
             t0 = time.time()
-            logits = self.decoder.decode(tokens)
-            tokens = {slot: int(logits[slot].argmax()) for slot in tokens}
+            out = self.decoder.decode(tokens, sampling)
+            tokens = {slot: (int(out[slot]) if sampling else int(out[slot].argmax())) for slot in tokens}
             mode = self.decoder.last.get("mode")
             replays += mode == "replay"
             logger.info(

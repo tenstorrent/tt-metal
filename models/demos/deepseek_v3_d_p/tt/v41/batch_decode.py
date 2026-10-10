@@ -58,6 +58,84 @@ class _User:
     engram_history: torch.Tensor | None = None
 
 
+class DeviceSampler:
+    """The step's sampling on device: each TP chip's top-32 of its vocabulary shard, gathered over TP into every
+    row's top-128 candidates, ``ttnn.sampling`` with per-row top-k (1..32), top-p and temperature, the sampled ids
+    gathered over SP. The cores' random generators are seeded once (``ttnn.manual_seed``); the captured sampling
+    (seed None) leaves them running, so replays draw fresh numbers."""
+
+    def __init__(self, mesh_device, config, ccl, gather_sp):
+        self.mesh_device, self.ccl, self.gather_sp = mesh_device, ccl, gather_sp
+        self.sp, self.tp = tuple(mesh_device.shape)
+        per_chip = config.VOCAB_SIZE // self.tp
+        offsets = torch.arange(self.tp, dtype=torch.int32).view(self.tp, 1, 1, 1).expand(self.tp, 1, ROWS, 32)
+        self.vocab_offsets = ttnn.from_torch(
+            (offsets * per_chip).contiguous(),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (self.sp, self.tp), dims=(None, 0)),
+        )
+        self.seeded = False
+        self.debug = None  # a dict: the last call keeps clones of its logits, candidates and ids (tests)
+
+    def host_inputs(self, k: torch.Tensor, p: torch.Tensor, temp: torch.Tensor) -> dict:
+        """Per-row (rank-major, ``sp * ROWS``) top-k (1..32), top-p and inverse temperature -> the host tensors
+        of ``__call__``'s buffers (``k``, ``p``, ``temp``: one ``[ROWS]`` row-major tensor per rank)."""
+        shard = ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None))
+        return {
+            name: ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard)
+            for name, host, dtype in (("k", k, ttnn.uint32), ("p", p, ttnn.bfloat16), ("temp", temp, ttnn.bfloat16))
+        }
+
+    def candidates(self, logits):
+        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> (values ``[1, 1, ROWS, 128]``
+        bf16 tiled, indices ``[1, 1, ROWS, 128]`` int32 row-major): every row's top-128 candidates, the same on the
+        TP chips of a rank."""
+        values, indices = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), 32, dim=-1, largest=True, sorted=True)
+        ttnn.deallocate(logits)
+        indices = ttnn.add(ttnn.typecast(indices, ttnn.int32), self.vocab_offsets)
+        values = self.ccl.tp_all_gather(values, dim=3)
+        indices = ttnn.to_layout(self.ccl.tp_all_gather(indices, dim=3), ttnn.ROW_MAJOR_LAYOUT)
+        return values, indices
+
+    def __call__(self, logits, buffers: dict):
+        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> the sampled ids of every rank's
+        rows on every chip (``to_host`` reads them)."""
+        if self.debug is not None:
+            self.debug["logits"] = ttnn.clone(logits)
+        values, indices = self.candidates(logits)
+        if self.debug is not None:
+            self.debug["values"], self.debug["indices"] = values, indices
+        if not self.seeded:
+            seeds = torch.randint(1, 2**31 - 1, (ROWS,), dtype=torch.int32)
+            mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ttnn.manual_seed(
+                seeds=ttnn.from_torch(seeds, device=self.mesh_device, dtype=ttnn.uint32, mesh_mapper=mapper),
+                user_ids=ttnn.from_torch(
+                    torch.arange(ROWS, dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    mesh_mapper=mapper,
+                ),
+            )
+            self.seeded = True
+        ids = ttnn.sampling(values, indices, buffers["k"], buffers["p"], buffers["temp"])
+        if self.debug is not None:
+            self.debug["ids"] = ids
+        # the ids as one tile per rank (the 128-byte row of ids gathered by all_gather_async arrived on the other
+        # ranks' chips as stale memory), gathered over SP: [1, 1, sp * 32, 32] uint32 tiled, rows [r * 32, (r + 1)
+        # * 32) rank r's ids, every row the same
+        tile = ttnn.to_layout(ttnn.concat([ids] * ROWS, dim=2), ttnn.TILE_LAYOUT)
+        return self.gather_sp(tile, dim=2)
+
+    @staticmethod
+    def to_host(gathered) -> torch.Tensor:
+        """``__call__``'s result -> ``[sp * ROWS]`` int64 ids, ``r * ROWS + u`` rank r's row u."""
+        t = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0])[0, 0].to(torch.int64)  # [sp * 32, 32]
+        return t.view(-1, ROWS, ROWS)[:, 0, :].reshape(-1)
+
+
 class TtV41BatchDecoder(TtV41Decoder):
     def __init__(
         self,
@@ -68,9 +146,13 @@ class TtV41BatchDecoder(TtV41Decoder):
         trace: bool = False,
         warmup: int = 2,
         max_seq_len: int | None = None,
+        sample_on_device: bool = False,
     ):
         """``users_per_rank`` slots per mesh row (``sp * users_per_rank`` users); ``max_seq_len`` of the pool
-        (default the model's). ``trace``: capture the step once after ``warmup`` eager steps and replay it."""
+        (default the model's). ``trace``: capture the step once after ``warmup`` eager steps and replay it.
+        ``sample_on_device``: the step ends in ``ttnn.sampling`` over each row's top-128 logits (the four TP chips'
+        top-32 each) with per-row top-k, top-p and temperature, and ``decode`` returns token ids instead of logits
+        (``sampling`` keyword: ``{slot: (k, p, temperature)}``; a temperature of 0 is argmax: k 1)."""
         super().__init__(model, weight_cache_path, routed_expert_weights_dtype, trace=trace, warmup=warmup)
         self.users = users_per_rank
         self.pool = V41DecodePool(
@@ -109,6 +191,12 @@ class TtV41BatchDecoder(TtV41Decoder):
             torch.full((1, 1, ROWS - self.users, self.config.INDEX_TOPK), -1, dtype=torch.int32),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.sample_on_device = sample_on_device
+        self.sampler = (
+            DeviceSampler(self.mesh_device, self.config, model.blocks[0].attn.ccl, self.pool.gather_sp)
+            if sample_on_device
+            else None
         )
         self.capture = None
         self.eager_count = 0
@@ -179,9 +267,10 @@ class TtV41BatchDecoder(TtV41Decoder):
         return self.slots[slot].position
 
     # --- host inputs ---------------------------------------------------------------------------------------------
-    def _host_inputs(self, tokens: dict[int, int]) -> dict:
+    def _host_inputs(self, tokens: dict[int, int], sampling: dict | None = None) -> dict:
         """The step's host tensors (per rank, device layouts), keyed as the device buffers: ``tokens`` slot ->
-        token of the slots that step (the others get zeros and write nothing)."""
+        token of the slots that step (the others get zeros and write nothing); ``sampling`` slot -> (k, p,
+        temperature) when sampling on device (other slots: argmax)."""
         cfg, sp, users = self.config, self.sp, self.users
         step = self.pool.step
         ids = torch.zeros(sp, 1, ROWS, dtype=torch.int32)
@@ -193,6 +282,17 @@ class TtV41BatchDecoder(TtV41Decoder):
             positions[r, u] = self.slots[slot].position
             active[r, u] = True
         inputs = {"token": self.pool.per_rank(ids, ttnn.uint32, device=False)}
+        if self.sample_on_device:
+            k = torch.ones(sp * ROWS, dtype=torch.int32)
+            p = torch.zeros(sp * ROWS, dtype=torch.float32)
+            temp = torch.ones(sp * ROWS, dtype=torch.float32)
+            for slot, (sk, sp_, st) in (sampling or {}).items():
+                r, u = divmod(slot, users)
+                i = r * ROWS + u
+                if st <= 0:
+                    continue  # argmax
+                k[i], p[i], temp[i] = max(1, min(int(sk), 32)) if sk > 0 else 32, float(sp_), 1.0 / float(st)
+            inputs.update(self.sampler.host_inputs(k, p, temp))
 
         def rope(compressed: bool, pos: torch.Tensor):
             out = []
@@ -236,14 +336,15 @@ class TtV41BatchDecoder(TtV41Decoder):
         return inputs
 
     # --- one step ----------------------------------------------------------------------------------------------
-    def decode(self, tokens: dict[int, int]) -> dict[int, torch.Tensor]:
+    def decode(self, tokens: dict[int, int], sampling: dict | None = None) -> dict:
         """Append ``tokens`` (slot -> token) at the slots' positions -> slot -> fp32 logits ``[vocab]`` of the next
-        position; the slots advance by one, the pool's step too."""
+        position (or, sampling on device, slot -> the sampled token id); the slots advance by one, the pool's step
+        too."""
         for slot in tokens:
             user = self.slots[slot]
             assert user.position < self.pool.max_seq_len, f"slot {slot} at {user.position}: the pool is full"
         t0 = time.time()
-        inputs = self._host_inputs(tokens)
+        inputs = self._host_inputs(tokens, sampling)
         t1 = time.time()
         self._stage(inputs)
         t2 = time.time()
@@ -274,7 +375,7 @@ class TtV41BatchDecoder(TtV41Decoder):
                 for layer, x in self.capture.blocks:
                     self.on_block(layer, x)
         t6 = time.time()
-        out = self._logits_to_host(logits, tokens)
+        out = self._tokens_to_host(logits, tokens) if self.sample_on_device else self._logits_to_host(logits, tokens)
         if mode == "eager":
             ttnn.deallocate(logits)
         self.last["read_s"] = round(time.time() - t6, 4)
@@ -289,6 +390,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             self.slots[slot].position += 1
         self.pool.step += 1
         return out
+
+    def _tokens_to_host(self, ids, tokens: dict[int, int]) -> dict[int, int]:
+        """The gathered sampled ids -> slot -> token id."""
+        row = DeviceSampler.to_host(ids)
+        return {slot: int(row[(slot // self.users) * ROWS + slot % self.users]) for slot in tokens}
 
     def _logits_to_host(self, logits, tokens: dict[int, int]) -> dict[int, torch.Tensor]:
         """The gathered ``[1, 1, slots, vocab]`` fp32 logits (the same on every chip) -> slot -> ``[vocab]``."""
@@ -360,6 +466,9 @@ class TtV41BatchDecoder(TtV41Decoder):
                 on_block(layer, x)
         final = ttnn.typecast(model.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
         logits, _ = model.head(final, 0)  # [1, 1, ROWS, vocab/tp] fp32 per chip, row u slot u of the chip's rank
+        ccl = model.blocks[0].attn.ccl
+        if self.sample_on_device:
+            return self.sampler(logits, self.buffers)  # the slots' sampled ids (DeviceSampler.to_host)
         # the slots' rows, gathered over TP (the vocabulary) and SP (the ranks): one [1, 1, slots, vocab] read
         rows = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(logits)
@@ -369,7 +478,7 @@ class TtV41BatchDecoder(TtV41Decoder):
             rows = part
         # the ranks first (pages of vocab/tp fp32; a full-vocabulary row is beyond L1 as an input page)
         rows = self.pool.gather_sp(rows, dim=2)
-        return model.blocks[0].attn.ccl.tp_all_gather(rows, dim=3)
+        return ccl.tp_all_gather(rows, dim=3)
 
     def _mask(self, ratio: int):
         """Additive ``[1, 1, ROWS, cap + 32]`` bf16: row u -inf at the columns at or past its visible count."""

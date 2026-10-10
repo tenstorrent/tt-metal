@@ -96,6 +96,7 @@ def test_v41_batch_decode(mesh_device, device_params):
     use_ref = os.environ.get("V41_BATCH_REF", "1") == "1"
     trace = os.environ.get("V41_BATCH_TRACE", "1") == "1"
     warmup = int(os.environ.get("V41_BATCH_WARMUP", 2))
+    sample = os.environ.get("V41_BATCH_SAMPLE", "0") == "1"  # argmax on device (DeviceSampler) instead of logits
     ref_slots = (
         [int(s) for s in os.environ.get("V41_BATCH_REF_SLOTS", DEFAULT_REF_SLOTS).split(",") if s] if use_ref else []
     )
@@ -127,6 +128,7 @@ def test_v41_batch_decode(mesh_device, device_params):
         "reference_slots": ref_slots,
         "trace": trace,
         "warmup": warmup,
+        "sample_on_device": sample,
         "mesh": list(mesh_device.shape),
         "fabric": str(device_params.get("fabric_config")),
     }
@@ -182,7 +184,8 @@ def test_v41_batch_decode(mesh_device, device_params):
         engram_hash=engram_hash,
         weight_cache_path=root,
     )
-    decoder = TtV41BatchDecoder(model, root, users_per_rank=users, trace=trace, warmup=warmup)
+    decoder = TtV41BatchDecoder(model, root, users_per_rank=users, trace=trace, warmup=warmup, sample_on_device=sample)
+    assert not (sample and reference), "device sampling returns ids: no logits to compare with the reference"
     result["build_s"] = round(time.time() - t0, 1)
     result["dram_after_build_bytes"] = _dram_bytes(mesh_device)
 
@@ -214,13 +217,37 @@ def test_v41_batch_decode(mesh_device, device_params):
         tokens = {s: int(books[s][i]) for s in range(n_slots)}
         captured.clear()
         t0 = time.time()
-        out = decoder.decode(tokens)
+        if sample and i == 0 and os.environ.get("V41_BATCH_DEBUG", "0") == "1":
+            decoder.sampler.debug = {}
+        out = decoder.decode(tokens, {s: (1, 0.0, 0.0) for s in tokens} if sample else None)
         wall = time.time() - t0
+        if sample and decoder.sampler.debug:
+            dbg = decoder.sampler.debug
+            decoder.sampler.debug = None
+            for s in (0, 1, 4, 5, 9, 31):
+                r, u = divmod(s, users)
+                chips = [
+                    ttnn.to_torch(ttnn.get_device_tensors(dbg["logits"])[r * tp + j])[0, 0, u].float()
+                    for j in range(tp)
+                ]
+                full = torch.cat(chips)
+                vals = ttnn.to_torch(ttnn.get_device_tensors(dbg["values"])[r * tp])[0, 0, u].float()
+                idx = ttnn.to_torch(ttnn.get_device_tensors(dbg["indices"])[r * tp])[0, 0, u].to(torch.int64)
+                ids_r = ttnn.to_torch(ttnn.get_device_tensors(dbg["ids"])[r * tp])[0, 0, 0].to(torch.int64)
+                logger.info(
+                    f"sample debug slot {s} (rank {r} row {u}): host argmax {int(full.argmax())} ({full.max():.2f}); "
+                    f"candidate max {vals.max():.2f} at {int(idx[vals.argmax()])}; sampled {int(ids_r[u])}; "
+                    f"out {out[s]}; per-chip argmax {[int(c.argmax()) + j * (C.VOCAB_SIZE // tp) for j, c in enumerate(chips)]}; "
+                    f"cand idx[0:4] {idx[:4].tolist()} idx[32:36] {idx[32:36].tolist()}"
+                )
         entry = {"step": i, "wall_s": round(wall, 3), **decoder.last, "slots": {}}
         for s in range(n_slots):
-            logits = out[s]
-            assert not torch.isnan(logits).any(), f"NaN in the logits of slot {s} at step {i}"
-            dev = int(logits.argmax())
+            if sample:
+                dev = int(out[s])
+            else:
+                logits = out[s]
+                assert not torch.isnan(logits).any(), f"NaN in the logits of slot {s} at step {i}"
+                dev = int(logits.argmax())
             hits[s] += dev == int(books[s][i + 1])
             if s in reference:
                 ref_logits, ref_blocks = reference[s]["steps"][i]

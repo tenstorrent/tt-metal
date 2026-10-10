@@ -128,8 +128,17 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
         assert out.shape == (len(rows), 1, C.VOCAB_SIZE) and not torch.isnan(out).any()
         return out
 
+    sample_on_device = DeepseekV41ForCausalLM.SAMPLE_ON_DEVICE
+    result["sample_on_device"] = sample_on_device
+
+    class _Params:  # the plugin's TTSamplingParams, as lists per row: argmax (temperature 0) on every row
+        def __init__(self, n):
+            self.temperature, self.top_k, self.top_p = [0.0] * n, [1] * n, [0.0] * n
+            self.repetition_penalty = 1.0
+
     def decode(rows: list[tuple[int, int, int]]) -> torch.Tensor:
-        """rows: (first block, token, position); block 0 rows are idle."""
+        """rows: (first block, token, position); block 0 rows are idle -> fp32 logits [rows, 1, vocab] (a
+        one-hot of the sampled token when sampling on device: the callers take the argmax)."""
         t0 = time.time()
         out = model.decode_forward(
             tokens=torch.tensor([[t] for _, t, _ in rows], dtype=torch.int32),
@@ -138,8 +147,15 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
             kv_cache=kv,
             enable_trace=True,
             read_from_device=True,
+            sampling_params=_Params(len(rows)) if sample_on_device else None,
         )
         result.setdefault("decode_s", []).append(round(time.time() - t0, 3))
+        if sample_on_device:
+            assert out.shape == (len(rows),), tuple(out.shape)
+            ids = out
+            out = torch.zeros(len(rows), 1, C.VOCAB_SIZE)
+            for i in range(len(rows)):
+                out[i, 0, int(ids[i])] = 1.0
         assert out.shape == (len(rows), 1, C.VOCAB_SIZE) and not torch.isnan(out).any()
         return out
 
