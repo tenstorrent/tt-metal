@@ -15,11 +15,12 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_compile_time_arg_val(4);
     constexpr uint32_t G = get_compile_time_arg_val(5);
     constexpr uint32_t cb_sp2 = 7, cb_out = 16;
-    constexpr auto out_args = TensorAccessorArgs<6>();
+    constexpr uint32_t core_base = get_compile_time_arg_val(6);  // first core of this kernel's grid
+    constexpr auto out_args = TensorAccessorArgs<7>();
     constexpr auto sp_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - core_base;
     const uint32_t n = core / G, g = core % G;
     const auto out = TensorAccessor(out_args, out_addr, page);
     const auto sp = TensorAccessor(sp_args, sp_addr, sp_page);

@@ -20,7 +20,8 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_compile_time_arg_val(7);
     constexpr uint32_t G = get_compile_time_arg_val(8);
     constexpr uint32_t cb_x = 0, cb_w = 1, cb_wv = 2, cb_meta = 3, cb_sp = 4;
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t core_base = get_compile_time_arg_val(9);  // first core of this kernel's grid (row-major index)
+    constexpr auto x_args = TensorAccessorArgs<10>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto wv_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<wv_args.next_compile_time_args_offset()>();
@@ -29,7 +30,7 @@ void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t wv_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(3);
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - core_base;
     const uint32_t n = core / G, g = core % G;
     const auto x = TensorAccessor(x_args, x_addr, x_page);
     const auto w = TensorAccessor(w_args, w_addr, w_tile);

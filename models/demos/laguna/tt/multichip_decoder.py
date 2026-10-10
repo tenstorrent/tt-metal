@@ -1472,6 +1472,24 @@ class MultichipDecoder(OptimizedDecoder):
             sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
         )
         x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        if self._sh1_fused and "sh_gate_up_cp" in self.w:
+            # shared expert inside the routed programs: gate/up on the cores after the routed ones (weight 1 per row:
+            # all-ones routing rows), down as one more unit of the next expert group (summed by the group reduce)
+            ones = self.__dict__.setdefault("_sh_rows_t", {})
+            if T not in ones:  # made at the first (eager) call, before any trace capture
+                r = torch.zeros((1, 1, T, 32), dtype=torch.float32)
+                r[..., 0] = 1.0
+                ones[T] = ttnn.from_torch(r, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+                                          memory_config=ttnn.L1_MEMORY_CONFIG,
+                                          mesh_mapper=ttnn.ReplicateTensorToMesh(self.device))  # fmt: skip
+            glu, sh_glu = moe_decode1.gate_up32(
+                x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows,
+                shared=(colpage.column_pages(self.w["sh_gate_up_cp"]), ones[T]),
+            )  # fmt: skip
+            return self._reduce(
+                moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows,
+                                   shared=(sh_glu, colpage.column_pages(self.w["sh_down_cp"])))
+            )  # fmt: skip
         glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows)
         routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows)
         keep = sharded and self._glu_out_sharded

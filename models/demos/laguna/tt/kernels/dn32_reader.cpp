@@ -18,10 +18,16 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_compile_time_arg_val(6);
     constexpr uint32_t CPC = get_compile_time_arg_val(7);
     constexpr uint32_t EG = get_compile_time_arg_val(8);  // expert groups: active expert a goes to group a % EG
-    constexpr uint32_t cb_x = 0, cb_w = 1, cb_meta = 2, cb_sp = 3;
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    // shared expert (Kt_sh > 0): one more unit, on the group after the last routed one (active count % EG): its
+    // Kt_sh activation tiles and its CPC down columns (column pages, own format in cb_w_sh)
+    constexpr uint32_t Kt_sh = get_compile_time_arg_val(9);
+    constexpr uint32_t w_sh_tile = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_x = 0, cb_w = 1, cb_meta = 2, cb_sp = 3, cb_w_sh = 6;
+    constexpr auto x_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto xs_args = TensorAccessorArgs<sp_args.next_compile_time_args_offset()>();
+    constexpr auto ws_args = TensorAccessorArgs<xs_args.next_compile_time_args_offset()>();
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(2);
@@ -52,8 +58,10 @@ void kernel_main() {
             ++seen;
         }
     }
+    const bool has_sh = Kt_sh > 0 && seen % EG == eg;
     cb_reserve_back(cb_meta, 1);
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = na;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[1] = has_sh ? 1 : 0;
     cb_push_back(cb_meta, 1);
     seen = 0;
     for (uint32_t e = 0; e < E; ++e) {
@@ -86,5 +94,30 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_x, Kt);
         cb_push_back(cb_w, CPC * Kt);
+    }
+    if constexpr (Kt_sh > 0) {
+        if (has_sh) {
+            const auto xs = TensorAccessor(xs_args, get_common_arg_val<uint32_t>(5), x_page);
+            const auto ws = TensorAccessor(ws_args, get_common_arg_val<uint32_t>(6), w_sh_tile);
+            cb_reserve_back(cb_w_sh, CPC * Kt_sh);
+            const uint32_t w_l1 = get_write_ptr(cb_w_sh);
+            for (uint32_t j = 0; j < CPC; ++j) {
+                noc_async_read(ws.get_noc_addr(c0 + j), w_l1 + j * Kt_sh * w_sh_tile, Kt_sh * w_sh_tile);
+            }
+            cb_reserve_back(cb_x, Kt_sh);
+            const uint32_t x_l1 = get_write_ptr(cb_x);
+            for (uint32_t k = 0; k < Kt_sh; ++k) {
+                if (x_rows < 16) {
+                    const uint64_t src = xs.get_noc_addr(k);
+                    noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
+                    noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
+                } else {
+                    noc_async_read_tile(k, xs, x_l1 + k * x_page);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x, Kt_sh);
+            cb_push_back(cb_w_sh, CPC * Kt_sh);
+        }
     }
 }

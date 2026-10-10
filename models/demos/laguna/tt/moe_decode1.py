@@ -336,28 +336,18 @@ def _mcast_rects(device, grid):
     return rects
 
 
-def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L1_MEMORY_CONFIG):
-    """32-token routed gate/up + SwiGLU + routing weight over column-page weights (see colpage.py).
-    x [1, 1, 32, H] bf16 TILE interleaved; gu_cols: ColumnPages of the packed [E, H, 2I] weight (Ct = 2 * I/32);
-    wv [1, E, 32, 1] per-(expert, token) weights; sparsity [1, 1, R, E] bf16 row-major: the union row (R = 1) or
-    per-token routing rows (unioned in the kernels). wv None (R > 1 only): each expert's weight tile is built from
-    the routing rows. Returns [1, E, 32, I]."""
-    device = x.device()
+def _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, core_base, groups, chunk, rects):
+    """Kernels and CBs of one gate_up32 core set (cores core_base .. in row-major order)."""
     E, Kt = gu_cols.E, gu_cols.Kt
     nt = gu_cols.Ct // 2
-    out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, E, x.shape[-2], nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
-    )
-    gs = device.compute_with_storage_grid_size()
-    cores = nt * groups
-    assert cores <= gs.x * gs.y and Kt % chunk == 0, (cores, Kt, chunk)
-    grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
-    page, wt, sp_page = 2048, 576, max(E * 2, 64)
+    gs = x.device().compute_with_storage_grid_size()
+    assert Kt % chunk == 0, (Kt, chunk)
+    page, wt, sp_page = 2048, _tile_bytes(gu_cols.buf.dtype), max(E * 2, 64)
     sp_rows = int(sparsity.shape[-2])
     assert wv is not None or sp_rows > 1
     cbs = [
         _cb(grid, 0, ttnn.bfloat16, page, Kt),
-        _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * chunk),
+        _cb(grid, 1, gu_cols.buf.dtype, wt, 2 * chunk),
         _cb(grid, 2, ttnn.bfloat16, page, 2),
         _cb(grid, 3, ttnn.uint32, 64, 1),
         _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows + 1),
@@ -366,12 +356,11 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 16, ttnn.bfloat16, page, 2),
     ]
-    rects = _mcast_rects(device, grid) if _GU32_X_MCAST else []
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "gu32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups]
+        compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups, core_base]
         + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
         common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
                              sparsity.buffer_address(), sp_rows, len(rects)] + [v for r in rects for v in r],
@@ -381,7 +370,7 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         kernel_source=str(_KDIR / "gu32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[nt, E, page, sp_page, gs.x, groups] + _accessor_args(out, sparsity),
+        compile_time_args=[nt, E, page, sp_page, gs.x, groups, core_base] + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -396,15 +385,50 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         compile_time_args=[Kt, chunk],
         config=cfg,
     )
-    ins = [x, gu_cols.buf, sparsity, out] if wv is None else [x, gu_cols.buf, wv, sparsity, out]
+    return [reader, writer, compute], cbs
+
+
+def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L1_MEMORY_CONFIG, shared=None):
+    """32-token routed gate/up + SwiGLU + routing weight over column-page weights (see colpage.py).
+    x [1, 1, 32, H] bf16 TILE interleaved; gu_cols: ColumnPages of the packed [E, H, 2I] weight (Ct = 2 * I/32);
+    wv [1, E, 32, 1] per-(expert, token) weights; sparsity [1, 1, R, E] bf16 row-major: the union row (R = 1) or
+    per-token routing rows (unioned in the kernels). wv None (R > 1 only): each expert's weight tile is built from
+    the routing rows. Returns [1, E, 32, I]. shared = (ColumnPages [1, H, 2 I_sh], all-ones rows [1, 1, R, 32]): the
+    shared expert on the cores after the routed ones, in the same program; returns (routed, shared [1, 1, 32, I_sh])."""
+    device = x.device()
+    E = gu_cols.E
+    nt = gu_cols.Ct // 2
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, E, x.shape[-2], nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    gs = device.compute_with_storage_grid_size()
+    cores = nt * groups
+    assert cores <= gs.x * gs.y, (cores,)
+    grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
+    rects = _mcast_rects(device, grid) if _GU32_X_MCAST else []
+    kernels, cbs = _gate_up32_parts(x, gu_cols, wv, sparsity, out, grid, 0, groups, chunk, rects)
+    io = [x, gu_cols.buf, sparsity, out] if wv is None else [x, gu_cols.buf, wv, sparsity, out]
+    sh_out = None
+    if shared is not None:
+        sh_cols, ones = shared
+        nt_sh = sh_cols.Ct // 2
+        assert cores + nt_sh <= gs.x * gs.y, (cores, nt_sh)
+        sh_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, x.shape[-2], nt_sh * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+        )
+        k2, c2 = _gate_up32_parts(x, sh_cols, None, ones, sh_out, _core_ranges(device, cores, nt_sh), cores, 1, 48, [])
+        kernels, cbs = kernels + k2, cbs + c2
+        io += [sh_cols.buf, ones, sh_out]
     sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=grid, initial_value=0)]
-    ttnn.generic_op(ins, ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs))
-    return out
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+    return out if shared is None else (out, sh_out)
 
 
-def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_config=ttnn.L1_MEMORY_CONFIG):
+def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_config=ttnn.L1_MEMORY_CONFIG, shared=None):
     """32-token routed down projection + sum over active experts, column-page weights. glu [1, E, 32, I] (gate_up32
-    output); d_cols: ColumnPages of [E, I, H]; sparsity as in gate_up32. Returns [1, 1, 32, H] bf16."""
+    output); d_cols: ColumnPages of [E, I, H]; sparsity as in gate_up32. Returns [1, 1, 32, H] bf16. shared =
+    (sh_glu [1, 1, 32, I_sh], ColumnPages [1, I_sh, H]): the shared expert as one more unit of the expert group after
+    the last routed expert (summed by the same group reduction)."""
     device = glu.device()
     E, Kt, Nh = d_cols.E, d_cols.Kt, d_cols.Ct
     # partial sums per expert group, reduced over dim 1 after the kernel
@@ -417,6 +441,9 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
     page, wt, sp_page = 2048, 576, max(E * 2, 64)
     sp_rows = int(sparsity.shape[-2])
+    sh_glu, sh_cols = shared if shared is not None else (glu, d_cols)
+    kt_sh = sh_cols.Kt if shared is not None else 0
+    w_sh = _tile_bytes(sh_cols.buf.dtype)
     T = int(glu.shape[-2])
     x_rows = T if T <= 8 and _DN32_ROW_READS else 32  # <= 8: the packed-rows all-reduce reads rows < T only
     cbs = [
@@ -428,23 +455,26 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         _cb(grid, 5, ttnn.bfloat16, page, 1),
         _cb(grid, 16, ttnn.bfloat16, page, cols_per_core),
     ]
+    if kt_sh:
+        cbs.append(_cb(grid, 6, sh_cols.buf.dtype, w_sh, cols_per_core * kt_sh))
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "dn32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups]
-        + _accessor_args(glu, d_cols.buf, sparsity),
+        compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups, kt_sh, w_sh]
+        + _accessor_args(glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf),
         # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
         # are not used (the packed-rows all-reduce reads rows < T)
         common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address(), sp_rows,
-                             x_rows],
+                             x_rows, sh_glu.buffer_address(), sh_cols.buf.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "dn32_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh] + _accessor_args(out, sparsity),
+        compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh, int(kt_sh > 0)]
+        + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -456,10 +486,11 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         kernel_source=str(_KDIR / "dn32_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[Kt, cols_per_core],
+        compile_time_args=[Kt, cols_per_core, kt_sh],
         config=cfg,
     )
-    ttnn.generic_op([glu, d_cols.buf, sparsity, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs))
+    io = [glu, d_cols.buf, sparsity, out] if shared is None else [glu, d_cols.buf, sparsity, sh_glu, sh_cols.buf, out]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs))
     if expert_groups == 1:
         return out
     red = ttnn.allocate_tensor_on_device(
