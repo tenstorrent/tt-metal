@@ -22,3 +22,15 @@ On clkprobe pass: tt-project/harness/templates/blx03-runner/blx03-enqueue.sh tt-
 hand off waiting on its probe. Then: grep "[t330]", "-> rung", Total Pipeline, AICLK count from
 out_t2va/run.log; ffmpeg stills (same frame times as #314 stills) + frame 0 as kf_t2va_f0.png;
 compare with tt-project/baselines/fasth3/still_t5.jpg.
+
+## Run 3 (2026-10-10 ~05:05 PDT): blx03 out of service, blx01 checked, blocked
+- Coordinator: blx03 OUT OF SERVICE (UBB1 fails POST, #364), AICLK gate dropped (#230). Move to blx01 only if
+  the FastH3 weights fit under the 150 GB project cap there, else hand off blocked.
+- blx01 (12:00 UTC): / 54% used (419G free); project footprint /var/tmp/fasth3 = 140G (ltx-2.5 67G, cache/tt-metal-cache 29G,
+  t343 18G, t48 7.9G, t345 2.9G, lightx2v LoRA 1.3G). MiniMax-H3 weights are NOT there (deleted after #286), and neither is
+  the t284/b build run286.sh used. Weights = 135G (transformer 62G, text_encoder 63G, vae 9.8G, all needed).
+  140 + 135 + build > 150 GB cap -> not allowed. Nothing was copied, built or submitted.
+- exabox: tunnel up (slurm-login-01), no fasth3 dir yet, login / has 87G free -> not enough for 135G weights either.
+- g15blx02: ~/fasth3 at the 100 GB /home cap -> no.
+- blx03 still has everything (weights + READ_OK, build ~/fasth3/t286, specs/t2va.txt). When blx03 is READY again:
+  tt-project/harness/templates/blx03-runner/blx03-enqueue.sh tt-project/t330/specs/t2va.txt
