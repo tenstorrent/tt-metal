@@ -1087,8 +1087,10 @@ Tensor inplace_mul_operation_with_fast_approx(
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    // Block-float still defaults to the FPU path, but an explicit argument is an argument:
+    // the caller's False was discarded here, while divide honours it for the same dtypes.
+    bool fast_and_approx =
+        fast_and_approximate_mode.value_or(is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1114,8 +1116,9 @@ Tensor inplace_mul_operation_with_fast_approx(
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    // Block-float still defaults to the FPU path, but an explicit argument is an argument:
+    // the caller's False was discarded here, while divide honours it for the same dtypes.
+    bool fast_and_approx = fast_and_approximate_mode.value_or(is_block_float(lhs.dtype()));
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1396,8 +1399,10 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    // Block-float still defaults to the FPU path, but an explicit argument is an argument:
+    // the caller's False was discarded here, while divide honours it for the same dtypes.
+    bool fast_and_approx =
+        fast_and_approximate_mode.value_or(is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1424,8 +1429,9 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    // Block-float still defaults to the FPU path, but an explicit argument is an argument:
+    // the caller's False was discarded here, while divide honours it for the same dtypes.
+    bool fast_and_approx = fast_and_approximate_mode.value_or(is_block_float(lhs.dtype()));
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1480,11 +1486,10 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // Block-float arithmetic runs on the FPU only, so the tensor's format forces the mode
-    // here exactly as it does for the other operand orders. Not shared with the scalar-first
-    // macro because MUL is the only op with this override.
-    bool is_block_fmt_inp = (is_block_float(rhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    // Block-float still defaults to the FPU path here, as for the other operand orders, but an
+    // explicit argument is honoured. Not shared with the scalar-first macro because MUL is the
+    // only op with this block-float default.
+    bool fast_and_approx = fast_and_approximate_mode.value_or(is_block_float(rhs.dtype()));
     return ttnn::detail::invoke_binary_ng(
         rhs,
         lhs,
