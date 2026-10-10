@@ -6,6 +6,8 @@
 // write_single_scalar, gather<>, and overwrite_index_row_with_sentinel live in the common header.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp"
 
+#include "ckernel.h"
+
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
     CircularBuffer cb(cb_expert_index_template);
@@ -21,6 +23,13 @@ FORCE_INLINE void generate_index_tile(
         for (uint32_t i = 0; i < columns_per_face; i++) {
             index_cb_ptr[i] = current_index + i;
         }
+        // Force the first-line RISC stores above to be processed into L1 before the loop-back
+        // noc_async_read below reads that line (base_index_noc_addr) to replicate it to the other rows.
+        // A baby-RISCV store can retire before its write-request lands, and the RISCV core and the NoC are
+        // different L1 clients with no program-order guarantee (WormholeB0/.../MemoryOrdering.md); read the
+        // last written word (blocking load + memory clobber) so the fill is visible before the NoC read is
+        // issued.
+        (void)ckernel::load_blocking(index_cb_ptr + (columns_per_face - 1));
         uint32_t dm_engine_index_write_offset = index_write_face_offset + index32_tile::face_line_bytes;
         for (uint32_t i = 1; i < rows_per_face; i++) {
             noc_async_read(base_index_noc_addr, dm_engine_index_write_offset, index32_tile::face_line_bytes);
@@ -52,6 +61,12 @@ FORCE_INLINE void generate_index_tile_transposed(
                 p[r * columns_per_face + c] = v;
             }
         }
+        // Force the first-line RISC stores above to be processed into L1 before the loop-back
+        // noc_async_read below reads that line to replicate it to the lower face. A baby-RISCV store can
+        // retire before its write-request lands, and the RISCV core and the NoC are different L1 clients
+        // with no program-order guarantee (WormholeB0/.../MemoryOrdering.md); read the last written word
+        // (blocking load + memory clobber) so the fill is visible before the NoC read is issued.
+        (void)ckernel::load_blocking(p + (rows_per_face * columns_per_face - 1));
         noc_async_read(get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
     }
     noc_async_read_barrier();

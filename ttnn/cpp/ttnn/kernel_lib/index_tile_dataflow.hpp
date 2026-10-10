@@ -26,9 +26,10 @@ namespace dataflow_kernel_lib {
  * and the two lower faces repeat the two upper ones. Only 32 of the 1024 entries are distinct.
  *
  * Rather than store all 1024 entries with the RISC, seed two rows of each upper face and let the
- * NoC replicate them. Per tile that is 32 stores of a 32-bit word holding two indices, and 15 NoC
- * read commands, against 1024 16-bit stores. This is the same construction the DeepSeek gate
- * writers already use
+ * NoC replicate them. Per 16-bit tile that is 32 stores of a 32-bit word holding two indices, and
+ * 15 NoC read commands, against 1024 16-bit stores. The 32-bit tile has no pairable half-lines, so
+ * the same construction seeds two full rows per face: 64 stores and the same 15 reads against 1024
+ * 32-bit stores. This is the same construction the DeepSeek gate writers already use
  * (experimental/reduction/deepseek_grouped_gate, experimental/deepseek_prefill/moe_grouped_topk).
  *
  * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for the
@@ -118,6 +119,70 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
         return;
     }
 
+    if constexpr (sizeof(T) == 4) {
+        constexpr uint32_t face_line_bytes = face_size * sizeof(T);         // 64
+        constexpr uint32_t face_bytes = face_size * face_size * sizeof(T);  // 1024
+
+        // The 32-bit index tile has no pairable half-lines, so a seeded face row is face_size stores
+        // rather than face_size / 2. Keep the two-row seed the 16-bit path measured as optimal: per
+        // tile that is tile_faces * seed_rows * face_size stores and tile_faces *
+        // (face_size / seed_rows - 1) + 1 NoC read commands -- 64 stores and 15 reads here, against
+        // 1024 stores in the scalar loop below. The reads carry twice the payload of the 16-bit ones.
+        constexpr uint32_t seed_rows = 2;
+        constexpr uint32_t seed_words = seed_rows * face_size;
+        constexpr uint32_t seed_bytes = seed_rows * face_line_bytes;
+
+        Noc noc;
+        const uint8_t noc_id = noc.get_noc_id();
+        UnicastEndpoint local_l1;
+
+        for (uint32_t j = 0; j < tile_faces; ++j) {
+            // Seed rows of the face: one 32-bit index per element, every row identical.
+            const uint32_t face_addr = tile_addr + j * face_bytes;
+            volatile tt_l1_ptr uint32_t* seed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(face_addr);
+            for (uint32_t r = 0; r < seed_rows; ++r) {
+                uint32_t value = w + face_size * j;
+                for (uint32_t m = 0; m < face_size; ++m) {
+                    seed[r * face_size + m] = value;
+                    value++;
+                }
+            }
+            // A baby-RISCV store can retire before its write lands in L1, and the RISCV core and
+            // the NoC are different L1 clients with no program-order guarantee between them
+            // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read the last written word back
+            // so the seed is in L1 before the NoC reads it.
+            (void)ckernel::load_blocking(seed + (seed_words - 1));
+
+            // Replicate the seed down the remaining rows of the face.
+            uint32_t dst_addr = face_addr + seed_bytes;
+            for (uint32_t k = seed_rows; k < face_size; k += seed_rows) {
+                noc.async_read(
+                    local_l1,
+                    CoreLocalMem<uint32_t>(dst_addr),
+                    seed_bytes,
+                    {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = face_addr},
+                    {});
+                dst_addr += seed_bytes;
+            }
+        }
+        noc.async_read_barrier();
+
+        // The two lower faces are copies of the two upper ones.
+        noc.async_read(
+            local_l1,
+            CoreLocalMem<uint32_t>(tile_addr + tile_faces * face_bytes),
+            tile_faces * face_bytes,
+            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
+            {});
+        noc.async_read_barrier();
+
+        dfb.push_back(one_tile);
+        return;
+    }
+
+    // Fallback for any other element width: scalar stores of the whole tile. The value depends only
+    // on the column within the face (l) and the face column (j); all 16 rows of a face are identical
+    // and the two lower faces repeat the two upper ones.
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr);
     uint32_t count = 0;
     for (uint32_t i = 0; i < tile_faces; ++i) {
