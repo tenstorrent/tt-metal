@@ -585,7 +585,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
