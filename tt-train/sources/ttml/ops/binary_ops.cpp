@@ -244,8 +244,16 @@ autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr&
     out->set_value(ttnn::minimum(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         auto res = ttnn::min_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
+        if (was_broadcasted(a, res[0])) {
+            a->add_grad(unbroadcast_grad(a, res[0]));
+        } else {
+            a->add_grad(res[0]);
+        }
+        if (was_broadcasted(b, res[1])) {
+            b->add_grad(unbroadcast_grad(b, res[1]));
+        } else {
+            b->add_grad(res[1]);
+        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;
@@ -256,8 +264,16 @@ autograd::TensorPtr max(const autograd::TensorPtr& a, const autograd::TensorPtr&
     out->set_value(ttnn::maximum(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         auto res = ttnn::max_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
+        if (was_broadcasted(a, res[0])) {
+            a->add_grad(unbroadcast_grad(a, res[0]));
+        } else {
+            a->add_grad(res[0]);
+        }
+        if (was_broadcasted(b, res[1])) {
+            b->add_grad(unbroadcast_grad(b, res[1]));
+        } else {
+            b->add_grad(res[1]);
+        }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;
