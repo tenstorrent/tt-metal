@@ -95,13 +95,17 @@ template <typename Init, typename TransformOne>
 ALWI void reduce_transformed_row(DataflowBuffer& tmp_buf, Init init, TransformOne transform_one) {
     init();
     tmp_buf.reserve_back(Wt);
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    constexpr uint32_t transform_block = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t wt = 0; wt < Wt; wt += transform_block) {
+        const uint32_t n = Wt - wt < transform_block ? Wt - wt : transform_block;
         tile_regs_acquire();
-        transform_one(wt);
+        for (uint32_t i = 0; i < n; ++i) {
+            transform_one(wt + i, i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_tmp, wt);
+        pack_block(0, cb_tmp, n);
         tile_regs_release();
     }
     tmp_buf.push_back(Wt);
@@ -287,7 +291,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_tmp);
                     mul_tiles_init(cb_stream, cb_stream);
                 },
-                [](uint32_t wt) { mul_tiles(cb_stream, cb_stream, wt, wt, 0); });
+                [](uint32_t wt, uint32_t dst) { mul_tiles(cb_stream, cb_stream, wt, wt, dst); });
 
             reduce_transformed_row(
                 tmp_buf,
@@ -296,7 +300,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_tmp);
                     mul_bcast_rows_init(cb_stream, cb_q);
                 },
-                [](uint32_t wt) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, 0); });
+                [](uint32_t wt, uint32_t dst) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, dst); });
 
             if constexpr (fuse_add) {
                 total_buf.pop_front(Wt);
