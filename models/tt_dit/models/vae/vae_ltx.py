@@ -852,7 +852,7 @@ class LTXVideoDecoder(Module):
         # dims it stashes for forward's crop. Only used when forward(traced=True).
         self._decode_tracer = None
         self._yuv_output_tracer = None
-        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
+        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "1") == "1"
         # rgb_to_yuv reads conv_out's patchified output directly instead of after a reshape + permute.
         self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"

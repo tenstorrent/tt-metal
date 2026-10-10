@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """One arm of the conv VAE conv_out unpatchify fusion A/B on the 4x8 mesh at 1088x1920/145f.
 
-The arm is set by LTX_VAE_FUSE_UNPATCH (0: reshape + permute conv_out's output to CHWT, then rgb_to_yuv;
-1: rgb_to_yuv reads conv_out's patchified output directly), on the fused YUV path (LTX_FUSE_YUV_OUTPUT=1).
+The arm is set by LTX_FUSE_YUV_OUTPUT (0: unpatch to BCTHW, then fast_device_to_host_yuv; 1: the fused YUV
+path) and, on the fused path, LTX_VAE_FUSE_UNPATCH (0: reshape + permute conv_out's output to CHWT, then
+rgb_to_yuv; 1: rgb_to_yuv reads conv_out's patchified output directly). Both default to 1.
 Weights: $VAE_CKPT (LTX conv VAE safetensors, decoder built from its header config) if set, else random
 init. Latents: $AB_LATENT_DIR/seed<s>.pt (1080p latents, 128x19x34x60) if set, else seeded randn. Each run
-prints one md5 per seed and saves the yuv outputs to $AB_OUT_DIR/yuv_r<0|1>_s<seed>.pt, then prints AB
-timing lines for the first seed. Both arms' outputs must be bit-identical.
+prints one md5 per seed and saves the yuv outputs to $AB_OUT_DIR/yuv_y<0|1>r<0|1>_s<seed>.pt, then prints AB
+timing lines for the first seed. All arms' outputs must be bit-identical.
 """
 
 import hashlib
@@ -60,9 +61,9 @@ def test_vae_ltx_fuse_unpatch_ab(mesh_device, device_params):
         _TorchLTXVideoDecoder,
     )
 
-    assert os.environ.get("LTX_FUSE_YUV_OUTPUT") == "1", "the unpatchify fusion only applies to the fused YUV path"
+    yuv = os.environ.get("LTX_FUSE_YUV_OUTPUT", "1")
     fuse = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1")
-    arm = f"r{fuse}"
+    arm = f"y{yuv}r{fuse}"
     ckpt = os.environ.get("VAE_CKPT")
     cfg = _vae_header_config(ckpt) if ckpt else {}
     blocks = cfg.get("decoder_blocks") or _LTX_PROD_DECODER_BLOCKS
@@ -86,7 +87,7 @@ def test_vae_ltx_fuse_unpatch_ab(mesh_device, device_params):
         parallel_config=pc,
         ccl_manager=CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=2),
     )
-    assert dec.fuse_unpatch == (fuse == "1")
+    assert dec.fuse_yuv_output == (yuv == "1") and dec.fuse_unpatch == (fuse == "1")
     if ckpt:
         raw = load_file(ckpt)
         dec.load_torch_state_dict({short: raw[k] for k, short in vae_key_map(raw, "decoder").items()})
