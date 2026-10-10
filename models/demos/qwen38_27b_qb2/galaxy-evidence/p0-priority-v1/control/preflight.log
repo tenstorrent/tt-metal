@@ -1,0 +1,29 @@
+.................................................................... [ 13%]
+................................................................................................................s............... [ 39%]
+........................................................................ [ 53%]
+........................................................................ [ 68%]
+...................................................................... [ 82%]
+...................................................... [ 93%]
+..................................                                       [100%]
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+497 passed, 1 skipped, 2 warnings, 40 subtests passed in 3.50s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+models/demos/qwen38_27b_qb2/tests/test_full_trace_profile.py::test_full_trace_profile
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 test collected in 1.84s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

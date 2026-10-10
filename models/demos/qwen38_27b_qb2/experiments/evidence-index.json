@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T19:10:59.814892+00:00",
+  "generated_at": "2026-10-10T19:43:52.568882+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -194,8 +194,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 174387,
-      "sha256": "34566635fe122fc42be26b9f91ffe27afd30edc6fdefdd49558b7f559488ad0a"
+      "bytes": 177735,
+      "sha256": "385119848bfdafa5ba1aebe5bcd38d798fa4e21449308a1654be5144d7d7527f"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -214,8 +214,8 @@
     },
     {
       "path": "experiments/PREFIX-CACHE-OFFLOAD-SCOPE.md",
-      "bytes": 7617,
-      "sha256": "f549643ae41b23e0a1f38c3cb7881210fb9d47301643e9222be895fa549ad099"
+      "bytes": 10791,
+      "sha256": "df28041aaf80498543447b981ed7ea3bbf55bcdc0e5071f3978a22848ebbc036"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -9561,6 +9561,21 @@
       "sha256": "23fabfa9e53d52d6d2614ee17467d57d3937aedbc4595b961e2753252b7c98c7"
     },
     {
+      "path": "galaxy-evidence/prefix-checkpoint-cpu-v1/README.md",
+      "bytes": 1209,
+      "sha256": "fd6ac44ea0887dde5c2596a00147ce7d7428516000bc0294238f289671f89d52"
+    },
+    {
+      "path": "galaxy-evidence/prefix-checkpoint-cpu-v1/unit-result.json",
+      "bytes": 739,
+      "sha256": "49a7cf8f6ad98303dad6b4b48a79d2a9841594b3a2f797221545d4f4e99183f9"
+    },
+    {
+      "path": "galaxy-evidence/prefix-checkpoint-cpu-v1/unit.log.gz",
+      "bytes": 767,
+      "sha256": "131e4e4522b0ffa3168b29b99999ee641b45c407ed1223a701bbec599a41c565"
+    },
+    {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",
       "bytes": 3818,
       "sha256": "dd31e9135bd7f9eb5fa4b1372e80f90a1520ddb2e2b3645d7bd4924e691643ed",
@@ -11591,6 +11606,11 @@
       "sha256": "a455dc7b9bf9efa7b8af17b82ad3d6e484b6b2c14d25d25ab5b74bc9325ee412"
     },
     {
+      "path": "tests/unit/test_prefix_checkpoint.py",
+      "bytes": 18650,
+      "sha256": "466678b833dbdc951511a61f7b7b6c62d5a6ac1373c02c17c536d4f8dd0aae6c"
+    },
+    {
       "path": "tests/unit/test_projection_sweep.py",
       "bytes": 6066,
       "sha256": "9fd51d9ca696be8b6de2b72f7298c9b578828ce4f1796d1ec7044542ed9af8a7"
@@ -11669,6 +11689,16 @@
       "path": "tt/prefill_attention.py",
       "bytes": 3141,
       "sha256": "66884d5326d1920ce3d4504e440aa5c2e2f4b3d0d886405daed21124060f75c2"
+    },
+    {
+      "path": "tt/prefix_checkpoint.py",
+      "bytes": 11171,
+      "sha256": "bf32302ebe4345a7be31f295c528df29dbb940f10d9ff470feae250cf23d7f37"
+    },
+    {
+      "path": "tt/prefix_storage.py",
+      "bytes": 5072,
+      "sha256": "1b6023d5b19b5f3f1112aebe467a0dc3c6e5ecf076be5207393a4f7a8e38cc42"
     }
   ]
 }

@@ -1,0 +1,25 @@
+{
+  "recorded_at": "2026-10-10T19:41:11.265772+00:00",
+  "command": [
+    "/opt/homebrew/opt/python@3.14/bin/python3.14",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "models/demos/qwen38_27b_qb2/tests/unit",
+    "-p",
+    "test_prefix_checkpoint.py",
+    "-v"
+  ],
+  "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "platform": "darwin",
+  "tests_run": 21,
+  "failures": 0,
+  "errors": 0,
+  "elapsed_s": 0.159,
+  "exit_code": 0,
+  "physical_devices_accessed": false,
+  "tt_adapter_implemented": false,
+  "serving_enabled": false,
+  "scope": "Fake device transfer protocol plus actual local filesystem, threads and child-process reopen. No TT numerical, DMA or latency qualification."
+}

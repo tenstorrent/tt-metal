@@ -2154,3 +2154,49 @@ No session connection is needed for that queue to continue.
 - Retained first-repeat, intermediate and completed-candidate snapshots in galaxy-evidence/compact-first-decode-v1. Projected eight-TP4 output is2564.47tok/s at128active users, not measured Galaxy/HTTP throughput. At the user's $2/M output,$10/Galaxy-hour,20% achieved-output-utilization assumptions, output revenue is$3.69/h versus$10/h hardware; output-only break-even is54.16% utilization. Input revenue, serving/prefill duty and other costs are separate.
 - Scoped prefix caching/SSD against actual plugin b7e4292e4193cba20abe9c7c68ce489201b2e36b/vLLM0.26.0, not the older local inference-server submodule. Required hybrid recurrent-state cache groups and aligned snapshot/restore are missing; Qwen explicitly disables APC. Proposed existing-framework reuse plus a TT transfer adapter, with146.8MiB recurrent/conv checkpoint per TP4 frontier. No cache implementation or performance claim was added.
 - Issues: initial read-only collector SSH was sandbox-denied; escalated retry succeeded. Guessed LOGBOOK and plugin paths were corrected using tracked filenames. Broad raw JSON reads were truncated; published metrics were separately recomputed from complete retained files. No firmware/native-install/NFS changes.
+## October 10, 19:21-19:41 UTC: parallel prefix/offload foundation
+
+- User reaffirmed 30 native TSU at B16/32K/TP4 and requested prefix caching and
+  SSD offload development in parallel. Created the isolated worktree
+  `/private/tmp/tt-metal-qwen38-prefix-offload` and branch
+  `anatarajan/qwen38-prefix-offload-20261010` from `6462756f915`; did not change
+  a hardware queue, frozen qualification source or serving configuration.
+- Implemented an opaque-byte hybrid checkpoint codec and capture/restore lease
+  contracts covering KV plus all-rank FP32 GDN/BF16 conv state at one consumed
+  frontier. Keys include token digest, model/implementation/config identity,
+  tenant namespace and physical-layout ABI. Source page IDs are not serialized.
+- Added bounded atomic local-file storage as a reference backend. Completion,
+  segment checksums and the destination commit fence precede publishing a hit.
+  Failed transfers abort private destinations. Exact-prefix lookup leaves a
+  token to compute real logits. Store methods form a replaceable backend API;
+  this is not a new vLLM scheduler or an implemented LMCache connector.
+- Twenty-one local CPU tests passed (0.154 seconds), including corrupted last
+  rank data, branch isolation, cancellation, interruption, concurrent quota
+  admission and child-process reopen. Receipt: `galaxy-evidence/prefix-checkpoint-cpu-v1`.
+  Mock device leases cannot establish TT DMA/numerical/trace correctness.
+- Rechecked pinned plugin `b7e4292e4193cba20abe9c7c68ce489201b2e36b`: allocation
+  accepts AttentionSpec/UniformTypeKVCacheSpecs, not recurrent cache groups.
+  TT transfer adapters and plugin lifecycle wiring remain. Prefix capability
+  stays false. Target benefit is repeated-prefill avoidance, not native TSU.
+- Main hardware comparison finished cleanly at 19:23 UTC. Before/after token
+  hashes match the candidate and control drift is ~0.002% at 32K; measured
+  candidate remains 20.03495 TSU. Persistent follower proceeded to qualification
+  without intervention. At 19:37 UTC it was still loading replicas for G0;
+  GPQA questions had not begun. No prefix hardware test was queued ahead of it.
+- Separate decode experiment: 67 CPU selection/work tests passed for the
+  default-off register-resident GDN prototype. Its CPU simulator failed in the
+  existing control kernel with unsupported SETDVALID/source-format behavior,
+  before the candidate. That is neither a candidate correctness pass nor a
+  candidate failure; physical performance is unmeasured. Retain on the decode
+  branch independently of this prefix foundation.
+- Issues during this task: initial simulator staging SSH was sandbox-blocked;
+  authorized retry launched its isolated CPU-only unit. Guessed source filenames
+  were corrected from repository searches. A documentation patch failed on an
+  unmatched logbook context and was reapplied correctly. No NFS, native-install,
+  firmware or physical-device mutation was used for the prefix tests.
+
+- Clean-worktree publication audit found 31 historical log/CSV files named in
+  the inherited evidence index but excluded from the prior Git publication by
+  ignore rules. Recovered each from the original worktree only after its byte
+  count and SHA256 matched the existing index; explicitly staged those exact
+  files. This repairs missing evidence, not a model/runtime change.

@@ -4,6 +4,57 @@ October 10, 2026. This is an implementation scope, not a supported feature or
 an enabled serving change. Compact GPQA and kernel qualification stay ahead
 of this work. Preserve BFP8 KV, FP32 recurrent state and existing trace safety.
 
+## Parallel implementation, October 10
+
+The isolated branch `anatarajan/qwen38-prefix-offload-20261010` starts from
+`6462756f9159d3d97b40c9781153b30eeedde7ad`. The 30-TSU decode goal and its hardware
+queue retain priority. No active source snapshot or serving launch is changed.
+
+- [Checkpoint codec and transfer leases](../tt/prefix_checkpoint.py) now define
+  a complete KV/GDN/conv frontier across all TP ranks. The format keys exact
+  consumed token IDs, model/implementation/config identity, layout and tenant
+  namespace. It streams opaque packed bytes with per-segment SHA256 checks;
+  physical page IDs and pointers never enter the checkpoint.
+- [Local-file reference backend](../tt/prefix_storage.py) implements immutable,
+  atomically published blobs, an explicit shared quota, restart-readable files
+  and explicit eviction. Incomplete crash files count against capacity and
+  cannot become hits. The operator supplies a deletable directory on local
+  disk or a bounded RAM filesystem. This is a correctness backend, not an
+  LMCache connector or a replacement for vLLM's scheduler/block manager.
+- [CPU tests](../tests/unit/test_prefix_checkpoint.py) cover independent request
+  branches, all-rank opaque-byte round trips with destination page remapping,
+  bad/truncated payloads, missing completion records, export/transfer failure,
+  cancellation, stale identity, concurrent quota admission, eviction leases
+  and reading from a new process. These use a fake device and real filesystem;
+  they do not qualify TT DMA, numerical continuation, traces or model accuracy.
+
+The reference backend serializes transfer/eviction while holding a file lease
+to avoid undercounting an unlinked-but-still-open inode against its quota.
+Concurrent storage leases and asynchronous TT transfers remain production
+integration work. Codec staging is at most 1 MiB per active operation, excluding
+storage buffers, device adapters and source snapshots. SSD bandwidth/latency is
+not measured by these small CPU tests.
+
+Next implementation gates:
+
+1. Implement the TT capture/restore adapters against these leases. Fence and
+   publish resident decode-bucket state before capture, retain the exact
+   consumed frontier, gather logical KV pages without BFP8 conversion, and
+   restore into private pages and stable recurrent slots. Cancellation must
+   abort or quarantine partially written destinations.
+2. Validate all ranks on hardware: long cold/restored continuations, divergent
+   suffixes, shuffled pages, slot reuse and existing decode traces. Keep the
+   capability disabled until these pass.
+3. Extend the pinned plugin's hybrid allocation/lifecycle hooks, reusing vLLM
+   prefix/block management. Then connect the checkpoint store to an existing
+   host/SSD backend and add admission/eviction policy and replica affinity.
+
+Expected benefit is avoided repeated prefill, not a native decode speedup.
+For context, the fixed B16/32K test measured about 95.8 seconds of prefill for
+the batch. Hit benefit is the work skipped minus export/restore, suffix prefill
+and scheduling costs; no hit-rate or TTFT speedup is qualified yet. Keep SSD
+traffic off the per-token decode path.
+
 ## Current implementation
 
 - `tt/generator_vllm.py` declares `supports_prefix_caching=False`, and

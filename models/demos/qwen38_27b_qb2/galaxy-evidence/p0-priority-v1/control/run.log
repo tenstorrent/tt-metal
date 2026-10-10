@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/ttuser/qwen38-artifacts-20261007/p0-priority-source-v1/models/demos/qwen38_27b_qb2/demo/run_p0_priority.py", line 200, in <module>
+    resume(arguments) if arguments.resume_only else run(arguments)
+  File "/home/ttuser/qwen38-artifacts-20261007/p0-priority-source-v1/models/demos/qwen38_27b_qb2/demo/run_p0_priority.py", line 157, in run
+    run_capture(
+  File "/home/ttuser/qwen38-artifacts-20261007/p0-priority-source-v1/models/demos/qwen38_27b_qb2/demo/run_bounded_layer_profile.py", line 25, in run_capture
+    check_artifact_budget(root, **budget)
+  File "/home/ttuser/qwen38-artifacts-20261007/p0-priority-source-v1/models/demos/qwen38_27b_qb2/tests/bounded_profile.py", line 40, in check_artifact_budget
+    raise RuntimeError(f"Profile file exceeds byte budget: {path}")
+RuntimeError: Profile file exceeds byte budget: /dev/shm/qwen38-p0-priority-v1-20261010/profiled/tracy/.logs/tracy_ops_times.csv
