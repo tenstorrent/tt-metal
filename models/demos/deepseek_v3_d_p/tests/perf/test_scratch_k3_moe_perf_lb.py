@@ -17,6 +17,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    fabric_1d_device_params,
     torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
@@ -33,6 +34,7 @@ _ITERS = int(os.environ.get("K3_PERF_ITERS", "1"))
 _MESH = tuple(int(x) for x in os.environ.get("K3_MESH", "2x4").split("x"))
 _FABRIC = {
     "mesh": fabric2d_device_params,
+    "1d": fabric_1d_device_params,
     "torus_x": torus_x_device_params,
     "torus_y": torus_y_device_params,
     "torus_xy": torus_xy_device_params,

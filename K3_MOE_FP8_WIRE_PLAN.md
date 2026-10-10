@@ -153,6 +153,18 @@ workers per sender did not change it. T_comb incl. Q2 not met (512 vs ≤ 313 µ
 not done). DQ1 = 0 met. T_exp met within 1.05× (+2.7%). T_pcr incl. DQ2 met. PCC met (final 0.99405 vs
 0.99424). Memory met (0.63–0.71× of bf16, measured at the default load).
 
+With the 1D fabric (`K3_FABRIC=1d`), dispatch uses its grouped sparse multicast: one payload per destination
+chip, scattered to all of that chip's expert pages, instead of one fabric send per (token, remote expert).
+FABRIC_2D sends one per page.
+
+| 1D fabric, `K3_NUM_EXPERTS=224` | bf16 | fp8 | Δ |
+|---|---|---|---|
+| T_moe (traced) | 4.76 ms | 4.97 ms | +0.21 |
+| dispatch | 380 µs | 340 µs | −40 (T_disp target ≤ 417 met) |
+| combine | 321 µs | 266 µs | −55 |
+| Q1 / Q2 | — | ~50 / 145 µs | +195 |
+| routed expert | 2553 µs | 2621 µs | +68 |
+
 On the LB the wire saves about 90 µs. The fp8 costs, Q1 + Q2 + the fp8 tilize, are about 260 µs. The wire
 only pays off once those costs drop below the dispatch and combine savings, or once dispatch spans more hops,
 as on Galaxy.
