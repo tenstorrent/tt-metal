@@ -22,6 +22,7 @@
 //   [2] count array address        [3] ready semaphore id
 //   [4] go address                 [5..8] routed-expert rectangle (noc x0, y0, x1, y1)
 //   [9] routed-expert cores        [10] waiting cores N     [11 ..) N x (noc_x, noc_y)
+//   [11 + 2N] routed-expert cores outside the rectangle M, then M x (noc_x, noc_y): they get `go` unicast
 
 #include <cstdint>
 
@@ -66,6 +67,13 @@ void kernel_main() {
     const uint32_t go_src_addr = counts_addr + num_steps * sizeof(uint32_t);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_src_addr) = 1;
     noc_semaphore_set_multicast(go_src_addr, get_noc_multicast_addr(re_x0, re_y0, re_x1, re_y1, go_addr), re_cores);
+    constexpr uint32_t extra_base = targets_base + 2 * num_targets;
+    constexpr uint32_t num_extra = get_compile_time_arg_val(extra_base);
+    for (uint32_t t = 0; t < num_extra; t++) {
+        const uint32_t noc_x = kernel_compile_time_args[extra_base + 1 + 2 * t];
+        const uint32_t noc_y = kernel_compile_time_args[extra_base + 2 + 2 * t];
+        noc_semaphore_set_remote(go_src_addr, get_noc_addr(noc_x, noc_y, go_addr));
+    }
 
     // This core's own copy of `ready` is the 4-byte source every remote set is written from.
     const uint32_t ready_addr = static_cast<uint32_t>(get_semaphore(ready_sem));

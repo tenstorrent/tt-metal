@@ -40,6 +40,8 @@ struct FlatCombineOverlapParams {
     uint32_t num_links = 2;
     // the flat expert's grid rectangle (logical): combine multicasts `go` over it
     tt::tt_metal::CoreRange flat_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
+    // its cores outside that rectangle, on combine's rows (MIMO_FL_XDOWN): `go` reaches them by unicast
+    std::vector<tt::tt_metal::CoreCoord> extra_cores;
     // y writers reporting to the collector
     uint32_t writers = 0;
     std::optional<tt::tt_metal::GlobalSemaphore> fwd_arrived;

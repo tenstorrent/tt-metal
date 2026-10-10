@@ -636,6 +636,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             kernel.compile_time_args.push_back(static_cast<uint32_t>(core.x));
             kernel.compile_time_args.push_back(static_cast<uint32_t>(core.y));
         }
+        kernel.compile_time_args.push_back(static_cast<uint32_t>(args.routed_expert_extra_cores.size()));
+        for (const auto& logical : args.routed_expert_extra_cores) {
+            TT_FATAL(
+                logical != collector.logical,
+                "combine_fabric2d: the collector {} is also a routed-expert core",
+                logical.str());
+            const auto core = dev->worker_core_from_logical_core(logical);
+            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.x));
+            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.y));
+        }
         kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,

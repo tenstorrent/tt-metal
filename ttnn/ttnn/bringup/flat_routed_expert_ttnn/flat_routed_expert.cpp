@@ -9,7 +9,10 @@
 #include <tuple>
 
 #include "device/flat_routed_expert_device_operation.hpp"
+#include <set>
+
 #include "device/flat_combine_overlap_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -194,13 +197,41 @@ ttnn::Tensor flat_combine_overlap(
     cfg.cmb_rt = 48 + static_cast<uint32_t>(plan->gu.size()) + 2 * cfg.experts_per_chip;
     // the flat expert's rectangle, where combine multicasts `go`: it must stay off combine's rows (0-1 with untilizers,
     // the senders' row 0 with row-major y, which combine's readers read directly)
+    if (std::getenv("FLAT_CMB_LOG")) {  // combine's cells on every chip (what MIMO_FL_XDOWN must avoid)
+        namespace cmbp = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
+        const auto placement =
+            cmbp::decide_placement(device, combine_axis, combine_num_links, y_row_major ? 0 : cmbp::untilizers_per_group(), true);
+        std::set<std::pair<uint32_t, uint32_t>> used;
+        for (const auto& [coord, dp] : placement) {
+            for (const auto& [stream, sp] : dp.streams) {
+                used.insert({sp.worker_logical.x, sp.worker_logical.y});
+            }
+            for (const auto& g : dp.untilizers) {
+                for (const auto& u : g) {
+                    used.insert({u.logical.x, u.logical.y});
+                }
+            }
+            used.insert({dp.collector->logical.x, dp.collector->logical.y});
+        }
+        std::string str;
+        for (const auto& [x, y] : used) {
+            str += fmt::format(" ({},{})", x, y);
+        }
+        log_info(tt::LogOp, "flat_combine_overlap: combine cells over all chips:{}", str);
+    }
+    // (MIMO_FL_XDOWN: extra down cores on combine's rows, which combine reaches by unicast instead)
     const auto cores = plan->arena_cores();
+    const uint32_t first_row = y_row_major ? 1 : 2;
     CoreCoord lo{1000, 1000}, hi{0, 0};
+    std::vector<CoreCoord> extra;
     for (const auto& c : cores) {
+        if (c.y < first_row) {
+            extra.push_back(c);
+            continue;
+        }
         lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
         hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
     }
-    const uint32_t first_row = y_row_major ? 1 : 2;
     TT_FATAL(
         lo.y >= first_row,
         "flat_combine_overlap: the flat expert uses grid row {} (plan it with MIMO_FL_ROWS={},9)",
@@ -240,6 +271,7 @@ ttnn::Tensor flat_combine_overlap(
         .axis = combine_axis,
         .num_links = combine_num_links,
         .flat_cores = CoreRange(lo, hi),
+        .extra_cores = extra,
         .writers = writers,
         .fwd_arrived = fwd_arrived_semaphore,
         .final_arrived = final_arrived_semaphore,
@@ -281,7 +313,11 @@ ttnn::Tensor flat_combine_overlap(
         cfg.x_bf16,
         cfg.h_bf16,
         cfg.y_row_major,
-        cfg.cmb_rt};
+        cfg.cmb_rt,
+        static_cast<uint32_t>(plan->down.size())};
+    for (const auto& c : extra) {
+        p.flat_key.push_back(static_cast<uint32_t>(c.x << 16 | c.y));
+    }
     auto result = ttnn::prim::bringup::flat_combine_overlap(
         p,
         FlatCombineOverlapInputs{

@@ -48,6 +48,7 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
         .routed_expert_writers = p.writers,
         .routed_expert_cores = p.flat_cores,
         .routed_expert_go_addr = static_cast<uint32_t>(p.expert_go->address()),
+        .routed_expert_extra_cores = p.extra_cores,
     };
     const cmb::CombineFabric2dInputs ci{
         .dispatched_buffer = t.y,

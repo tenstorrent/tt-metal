@@ -532,6 +532,23 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
+    // MIMO_FL_XDOWN="x,y;x,y;.." (probe, with the rows capped): extra down cores outside the rows, e.g. the grid row 0 cells
+    // combine leaves free when it runs on row-major y (flat_combine_overlap)
+    if (const char* xd = std::getenv("MIMO_FL_XDOWN"); xd && rows_cap) {
+        for (const char* q = xd; *q;) {
+            uint32_t x = 0, y = 0;
+            int n = 0;
+            TT_FATAL(std::sscanf(q, "%u,%u%n", &x, &y, &n) == 2, "MIMO_FL_XDOWN: x,y;x,y;..");
+            TT_FATAL(
+                x < grid.x && y < grid.y && (y < row0 || y > row1),
+                "MIMO_FL_XDOWN: {},{} is off the grid or inside the planned rows",
+                x,
+                y);
+            p.down.emplace_back(x, y);
+            q += n;
+            q += *q == ';';
+        }
+    }
     if (p.nsg >
         1) {  // subgrid k: rectangle k, its nearest readers, primary relay k + helpers, a share of the down cores
         std::vector<std::pair<double, double>> ctr;

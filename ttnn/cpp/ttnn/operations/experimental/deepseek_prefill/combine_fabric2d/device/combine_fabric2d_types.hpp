@@ -32,6 +32,8 @@ struct CombineFabric2dParams {
     uint32_t routed_expert_writers = 0;
     tt::tt_metal::CoreRange routed_expert_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
     uint32_t routed_expert_go_addr = 0;
+    // Routed-expert cores outside that rectangle (logical): they get `go` unicast.
+    std::vector<tt::tt_metal::CoreCoord> routed_expert_extra_cores;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 };
