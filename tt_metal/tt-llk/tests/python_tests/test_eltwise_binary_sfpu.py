@@ -1073,11 +1073,11 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
 def _int_arith_negative_spec():
     """Paired Int32 stimuli where both operands independently take either sign.
 
-    The Int32 add/sub kernels convert each operand out of sign-magnitude before the integer
-    add and the result back into it, so three sign folds run per element. The positive-only
-    default never sets an operand's sign bit, which leaves the two input-side folds unreached
-    by every other Int32 test here -- only the output-side one is exercised, and then only
-    because `a - b` on non-negative operands still goes negative.
+    On Wormhole the Int32 add/sub kernels convert each operand out of sign-magnitude before the
+    integer add and the result back into it, so three sign folds run per element; on Blackhole
+    they run in two's complement with no fold. The positive-only default never sets an operand's
+    sign bit, which leaves negative operands, and on Wormhole the two input-side folds, unreached
+    by every other Int32 test here.
 
     The two operands vary at different rates so the face walks the full 8x8 product of
     operand values rather than a single diagonal. A mirrored pair would collapse `a + b` to a
@@ -1106,8 +1106,8 @@ def _int_arith_negative_spec():
 def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
     """Negative and mixed-sign operands for the Int32 add/sub kernels.
 
-    Covers the input-side sign folds in _add_int_ / _sub_int_, which no other Int32 test in
-    this file reaches.
+    Covers negative operands of _add_int_ / _sub_int_ (on Wormhole, the input-side sign folds),
+    which no other Int32 test in this file reaches.
 
     Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
     sign-magnitude default rather than passing twos_complement=True. On Wormhole these kernels
