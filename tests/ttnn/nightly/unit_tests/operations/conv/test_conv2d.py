@@ -3904,6 +3904,59 @@ def test_conv2d_with_fold(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width, padding, act_block_h_override",
+    [
+        (3, 32, 224, 224, 16, 16, 2, 2, (0, 0), 0),
+        (3, 32, 224, 224, 7, 7, 2, 2, (0, 0), 0),
+        (3, 32, 224, 224, 6, 6, 2, 2, (0, 0), 0),
+        (3, 32, 1024, 1024, 7, 7, 3, 3, (1, 1), 0),
+        (3, 32, 1280, 1280, 6, 6, 2, 2, (0, 0), 32),
+        (32, 32, 64, 64, 3, 3, 2, 2, (1, 1), 0),
+        (3, 32, 224, 224, 16, 16, 16, 16, (0, 0), 0),
+    ],
+)
+def test_conv2d_with_fold_dram_path(
+    device,
+    torch_tensor_map,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    kernel_height,
+    kernel_width,
+    stride_height,
+    stride_width,
+    padding,
+    act_block_h_override,
+):
+    # With the input in DRAM and no slice config, conv2d takes the DRAM path, which folds the input before calling
+    # conv2d_L1. The weights must still be folded with the original stride, or the kernel > stride cases go wrong.
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        packer_l1_acc=True,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel_height,
+        filter_width=kernel_width,
+        stride_h=stride_height,
+        stride_w=stride_width,
+        padding=padding,
+        config_override={"act_block_h": act_block_h_override},
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        has_bias=True,
+        enable_kernel_stride_folding=True,
+        use_dram_slicing=True,
+    )
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant, shard_layout, activation",
     (
         (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, None),
