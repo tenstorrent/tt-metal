@@ -108,7 +108,9 @@ int main(void)
 
 #if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
         // INIT with icache prefetch, as tt-metal's trisck.cc runs a kernel's init; counters.h init_zone ends it before the loop
+#if !defined(LLK_EXP_INIT_PF_OFF) // experiment hook (prodpf): INIT without prefetch
         ckernel::icache_prefetch_init_begin();
+#endif
 #endif
         run_kernel(temp_args);
 #if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
@@ -140,6 +142,12 @@ int main(void)
     (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 }
+
+#if defined(LLK_HARNESS_NOPS) // experiment hook (nikola, 2d5b6dafd14): harness code grows by N never executed nops, ahead of run_kernel
+#define LLK_HN_STR_(x) #x
+#define LLK_HN_STR(x)  LLK_HN_STR_(x)
+asm(".pushsection .init, \"ax\"\n.rept " LLK_HN_STR(LLK_HARNESS_NOPS) "\nnop\n.endr\n.popsection");
+#endif
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
 {
