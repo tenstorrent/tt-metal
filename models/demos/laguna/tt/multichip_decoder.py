@@ -303,6 +303,8 @@ class MultichipDecoder(OptimizedDecoder):
         self._ap1_scaler = None
         # attn_prologue1 also for the sequential-KV verify rows (2..8, DFlash); 0 keeps it batch-1 only
         self._ap1_rows = _parse_binary_env("TT_LAGUNA_AP1_ROWS", True)
+        # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
+        self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
         if self._ap1 and self.D >= 1:
             from .attn_prologue1 import reduce_scaler
 
@@ -1775,11 +1777,31 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = self.cfg
         R = x.shape[-2]
         ln = self._rms(x, self.w["input_ln"])
-        qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)
-        _, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(qkv, (1, 1, R, self.meta["qkv_w"])), num_heads=cfg.num_heads, num_kv_heads=cfg.num_kv_heads,
-            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # fmt: skip
+        if self._dflash_kv_only:
+            # only the K and V columns of the fused QKV weight (sliced once, at the first -- eager -- call): ~1/5 of
+            # the weight read, and a head split of 2 x 2 heads instead of the 1-core split of every Q/K/V head
+            if "dflash_wkv" not in self.w:
+                q_w, kv_w = self.meta["q_w"], self.meta["kv_w"]
+                w = self.w["wqkv"]
+                lead = [0] * (len(w.shape) - 1)
+                ends = [w.shape[i] for i in range(len(w.shape) - 1)] + [q_w + 2 * kv_w]
+                self.w["dflash_wkv"] = ttnn.slice(w, lead + [q_w], ends)
+            kv = self._prefill_linear(ln, self.w["dflash_wkv"], self._ck_qkv)  # [1, R, 2 * kv_w]
+            kv_w = self.meta["kv_w"]
+            k, v = (
+                ttnn.permute(
+                    ttnn.reshape(ttnn.slice(kv, [0, 0, i * kv_w], [1, R, (i + 1) * kv_w]),
+                                 (1, R, cfg.num_kv_heads, cfg.head_dim)),
+                    (0, 2, 1, 3),
+                )
+                for i in range(2)
+            )  # fmt: skip
+        else:
+            qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)
+            _, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, (1, 1, R, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # fmt: skip
         return self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope), v
 
     def dflash_query_forward_cached(self, x_q, k_ctx, v_ctx, rope_q, mask):

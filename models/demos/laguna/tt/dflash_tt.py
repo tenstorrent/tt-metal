@@ -50,7 +50,7 @@ from .dflash_reference import (
 )
 from .model_spec import MODEL_ENV, MODEL_ID, dflash_spec
 from .multichip_decoder import MultichipDecoder, _cache_layer_identity
-from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
+from .optimized_decoder import TILE, PrecisionPolicy, _cached_device_tensor, weight_cache_key
 
 DFLASH_CACHE_NAMESPACE = "dflash"
 
@@ -856,15 +856,17 @@ def load_dflash_shared_weights(
     devices = mesh_device.get_num_devices()
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
-    def cached(name: str, build, dtype=ttnn.bfloat16):
+    def cached(name: str, build, dtype=ttnn.bfloat16, shard_dim=None):
         return _cached_device_tensor(
             build,
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate,
-            cache_key=weight_cache_key(f"{cache_namespace}_{name}", "shared", f"rep_d{devices}"),
+            mesh_mapper=replicate if shard_dim is None else ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+            cache_key=weight_cache_key(
+                f"{cache_namespace}_{name}", "shared", f"rep_d{devices}" if shard_dim is None else f"sh{shard_dim}_d{devices}"
+            ),
         )
 
     h = config.hidden_size
@@ -879,7 +881,10 @@ def load_dflash_shared_weights(
     # TT_LAGUNA_DFLASH_FC_WDT=bf8 stores it as bfloat8_b (teacher-forced AIME24 acceptance 2.677 vs 2.667; the round
     # time did not change: the update is not on the critical path)
     fc_dtype = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("TT_LAGUNA_DFLASH_FC_WDT", "bf16")]
-    fc = cached("fc", lambda: shared["fc.weight"].float().t().contiguous(), fc_dtype)
+    # TT_LAGUNA_DFLASH_FC_TP (default on): each chip holds 1/D of the output columns (a quarter of the bytes read)
+    # and combine_aux_hidden_states all-gathers the D column blocks
+    fc_tp = devices > 1 and os.environ.get("TT_LAGUNA_DFLASH_FC_TP", "1") == "1"
+    fc = cached("fc", lambda: shared["fc.weight"].float().t().contiguous(), fc_dtype, shard_dim=1 if fc_tp else None)
     hidden_norm = cached("hidden_norm", lambda: shared["hidden_norm.weight"].float().reshape(1, 1, 1, h))
     final_norm = cached("norm", lambda: shared["norm.weight"].float().reshape(1, 1, 1, h))
     return DFlashTTSharedWeights(
@@ -1092,26 +1097,28 @@ class DFlashTTCore:
         # fp32-destination kernel explicitly instead of relying on TTNN's
         # operation default, whose destination-accumulation policy is not part
         # of this module's accuracy contract.
-        precision_ck = next(iter(self.layers.values()))._ck_hifi4
+        layer0 = next(iter(self.layers.values()))
+        precision_ck = layer0._ck_hifi4
+        # few rows (a round's committed rows): the norms run width-sharded over 32 cores through the draft layer's
+        # _rms (same HiFi4 / fp32 kernel config and epsilon; the interleaved norm used one core per 32-row tile row,
+        # ~65 us each); more rows (a prefill window) keep the interleaved norm
+        if tokens <= TILE and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
+            def norm(x, weight):
+                return layer0._rms(x, weight)
+        else:
+            def norm(x, weight):
+                return ttnn.rms_norm(x, weight=weight, epsilon=self.config.rms_norm_eps, compute_kernel_config=precision_ck)
         normalized = []
         for index, weight in enumerate(self.shared.aux_hidden_norms):
             part = ttnn.slice(flat, [0, 0, 0, index * h], [1, 1, tokens, (index + 1) * h])
-            normalized.append(
-                ttnn.rms_norm(
-                    part,
-                    weight=weight,
-                    epsilon=self.config.rms_norm_eps,
-                    compute_kernel_config=precision_ck,
-                )
-            )
+            normalized.append(norm(part, weight))
         combined = ttnn.concat(normalized, dim=-1)
         combined = ttnn.linear(combined, self.shared.fc, compute_kernel_config=precision_ck)
-        combined = ttnn.rms_norm(
-            combined,
-            weight=self.shared.hidden_norm,
-            epsilon=self.config.rms_norm_eps,
-            compute_kernel_config=precision_ck,
-        )
+        if combined.shape[-1] != h:  # column-sharded fc: gather the D column blocks
+            combined = ttnn.all_gather(
+                combined, dim=3, cluster_axis=layer0.tp_axis, topology=layer0.ccl_topology, num_links=layer0.num_links
+            )
+        combined = norm(combined, self.shared.hidden_norm)
         return ttnn.reshape(combined, (1, tokens, h))
 
     def apply_final_norm(self, hidden_states):
