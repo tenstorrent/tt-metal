@@ -1,7 +1,6 @@
-# Kimi-K3 single-layer transformer tests (LB + Galaxy) — plan v2
+# Kimi-K3 single-layer transformer tests (LB + Galaxy) — plan
 
-Status: v2, revised after independent reviews by Claude Code (Opus 5.5) and Codex Astra (gpt-6-astra)
-of v1 (summary of findings and resolutions in §10). Owner: pjosipovic.
+Owner: pjosipovic.
 
 Base: `origin/pjosipovic/kda-device-request-initialization` (PR #60185, head `5aa5dee81f7`) — the
 request-lifecycle scenarios depend on its device-side request-start reset
@@ -22,6 +21,11 @@ One parametrized test file that runs **every distinct Kimi-K3 layer code path as
 
 Constraints: fast (target set by the Phase 0 gate, aim ≤ 3–4 min per case cold), no `/mnt/weka` or
 checkpoint dependence (LB runners mount none), same test ids on both boxes.
+
+**CI-critical:** whether this can run in CI is decided mainly by **host reference runtime** (§5.5).
+The device side of a single layer takes seconds. The CPU reference for a full layer at real dims is
+tens of TFLOP per case on GH, it runs cold on every CI run because there is no persistent cache, and
+it runs on runner CPUs we have not measured. Phase 0 measures it first, on the actual CI runners.
 
 Non-goals: replacing the Galaxy checkpoint/golden-trace depth tests (they remain the only real-weight
 accuracy evidence); decode; MTP; multi-slot *traced* KDA (refused by
@@ -88,7 +92,7 @@ P2 local/manual.
 ## 4. Current state (why this needs code, not just a test)
 
 Single-layer construction works today only at block-aligned L (0, 12, 24, 36, …) with
-`is_last_rank=True`. Blockers (all refs verified on the base commit by both reviewers):
+`is_last_rank=True`. Blockers:
 
 1. `tt/kimi_k3/transformer.py:149-153` — non-first rank must start at `first_layer_idx % 12 == 0`.
 2. Seal decision uses the **local** index: `TtKimiK3Block.forward` → `residual.open(self.local_idx)`
@@ -163,7 +167,7 @@ synthetic MoE path (today's `test_kimi_k3_moe` builds 896 fp32 experts ≈ 118 G
 
 **`synthetic_weights.py`**
 - `make_layer_state(L, *, seed)` → per-layer dict exactly as `TtKimiK3Block` / `build_attention`
-  consume it (keys in §10.3): `attn_norm_weight`, `ffn_norm_weight` (`1 + 0.02·randn`, never ones —
+  consume it (keys in §10): `attn_norm_weight`, `ffn_norm_weight` (`1 + 0.02·randn`, never ones —
   a missing norm becomes `torch.empty`, #54841), plus
   - KDA: `kda_weights` at `reference/kimi_k3_config.py::kimi_k3_kda_config()` — generalize
     `tests/kda/utils.py::random_weights` to take a seed (it hardcodes `20260723`);
@@ -191,7 +195,8 @@ synthetic MoE path (today's `test_kimi_k3_moe` builds 896 fp32 experts ≈ 118 G
   (block-cyclic SP order).
 - MLA continuation prefix: produced by running chunk 1 on device (tests the real KV write path).
 
-**`reference.py`** — single-layer K3 reference from component references
+**`reference.py`** — single-layer K3 reference from component references (runtime budget,
+sampling and overlap rules in §5.5 — they shape this module's API)
 - AttnRes: `reference/kimi_k3/attn_res/attn_res.py` (`AttnResStream`, `attn_res_layer`,
   `fold_query`); set `stream.block_residual = sealed` (device `[1,S,N,d]` → ref `[N,S,d]`), pass the
   global L; `q_out` + RMSNorm for `L92full`.
@@ -276,7 +281,7 @@ Pooling host weights alone does **not** fix cost — `_convert_and_cache_expert_
 28/chip GH; ≈16.6 GB bf4 across the mesh per case), and the reference still does T·16 expert GEMMs
 (~1e13 FLOP at GH 10240 tokens).
 
-Design constraints from review:
+Design constraints:
 - per-expert identity must survive bf4 (`tt_metal/impl/data_format/blockfloat_common.cpp:245`:
   16-element shared exponent, 3-bit magnitude): small continuous scales (`1 + 0.25·e/896`) collapse
   (only ~33 distinct bf16 values in [1, 1.25]; pool neighbours become byte-identical after bf4);
@@ -303,9 +308,67 @@ distinct transforms, shared expert + latent norm on) comparing the compact refer
 `run_reference_moe`; plus the S9(a) negative control on device. Keep pool weights in bf16 (P=16 ≈
 1 GB) — fp32 P=32 was ~4.2 GB plus stacking temporaries (`tt_routed_expert.py:225`).
 
+### 5.5 Reference runtime budget (CI gate)
+
+The reference, not the device, decides CI feasibility. Rough cost at real K3 dims (fp32, 2 FLOP per
+weight per token; to be replaced by measurements):
+
+| Component | Per token | Notes |
+|---|---:|---|
+| KDA projections (q,k,v,g,o + f/b) | ~0.9 GFLOP | plus a **per-token Python recurrence loop** (`reference/kda/ops.py::kda_recurrent_reference`) — T iterations, overhead-bound |
+| MLA projections (q_a,q_b,kv_a,kv_b,o,g) | ~0.46 GFLOP | plus causal attention ≈ 96 heads × T²/2 × 320 × 2 → **~3.2 TFLOP at T=10240**; `cpu_mla_reference` runs the module in **bf16 on CPU**, which can be 5–20× slower than fp32 without AMX |
+| LatentMoE (16 routed + shared + latent + gate) | ~1.4 GFLOP | routed GEMMs dominate |
+| Dense SiTU-GLU (L0) | ~1.45 GFLOP | |
+| AttnRes reads / seal | small | token-wise, S+1 ≤ 9 planes |
+
+| Box | Tokens (1 / 2 chunks) | KDA+MoE layer, one 2-chunk pass | MLA+MoE layer, one 2-chunk pass |
+|---|---|---:|---:|
+| LB | 1280 / 2560 | ~6 TFLOP | ~5 TFLOP + 0.2 TFLOP attn |
+| GH | 5120 / 10240 | ~24 TFLOP | ~19 TFLOP + 3.2 TFLOP attn |
+
+At a realistic 0.5–2 TFLOP/s of host fp32, one GH pass takes roughly 15 s to 1 min. Several passes
+per case × 7–9 cases × bf16 MLA attention × the KDA loop can turn that into tens of minutes. That
+would not fit the 18 min free in `bh_loudbox` or the 0 min free in `bh_sc1`.
+
+**Measurement (Phase 0a, first deliverable):** `tests/kimi_k3/single_layer/bench_reference.py`, host-only
+and with no device, runs each component reference at the real dims for T ∈ {640, 1280, 2560, 5120,
+10240}. It runs cold, with `CI=true` (MLA cache off), an explicit `torch.set_num_threads`, and both
+fp32 and bf16 for MLA. It reports wall time, peak RSS and thread count. Run it **on the CI runner
+hosts themselves** (a dispatch-only job on an LB runner and a GH runner), because their CPUs may differ
+from dev boxes. The result is a table in this file: seconds per component per T per box.
+
+**Budget model:** for each case, wall time = synthetic weight gen + device weight build/upload + device
+scenarios + **reference on the critical path**. CI time = Σ over the cases in the leg + mesh open.
+Go/no-go: the reference on the critical path is ≤ ~25% of per-case wall, and the leg fits the bucket
+headroom (or the approved raise) at timeout = measured + 50%.
+
+**Levers (apply in order until the budget fits; each is designed in from the start):**
+1. **One pass serves many scenarios.** Every path is causal, so the 2-chunk S2 pass at start 0
+   covers S1 (first chunk), S4's unaligned end (a row slice), and S9's controls. Scenarios S3, S5,
+   S6, S7 and S8 are device-vs-device and need **no reference**. Target: **1 reference pass per case**
+   (plus 1 per rotated start, which is the first thing to move to nightly).
+2. **Token-sampled downstream.** AttnRes, FFN/MoE and the output projections are token-wise. Compute
+   the full T only where it is mathematically required: the inputs to the KDA recurrence, the KDA
+   carries, and MLA K/V. Compute everything after the token-mixing step only for a stratified row
+   sample, e.g. 256–512 rows covering each SP shard, the chunk boundaries, the first and last valid
+   rows, and the heavy-tailed rows. For MLA, compute sampled query rows against the full K/V. This
+   cuts the dominant MoE term about 20–40× and the MLA attention term by T/rows.
+3. **fp32 on host**, with bf16 rounding emulated only where the device rounds. Never run CPU GEMMs
+   in bf16: move `cpu_mla_reference` to fp32 or use a local fp32 path. Pin the thread count.
+4. **Overlap with device work.** Inputs are seeded, so the reference can start in a worker process
+   at test start and run while the device converts and uploads weights (the host CPU is otherwise
+   idle then). MoE routing: the reference uses its own gate. Only the rows whose top-k set differs
+   from the device's are recomputed with the device's ids once those are available, which is cheap.
+5. **Vectorize the KDA recurrence** in chunks (WY/chunked form) if the per-token loop dominates.
+   Keep the loop as a slow oracle in a unit test.
+6. **GH rows per chip 640 → 320** for reference-backed scenarios.
+7. **Last resort:** reference-backed scenarios go nightly only. CI runs S1 (sampled) plus the
+   device-vs-device scenarios S3/S5/S6/S7, which still catch most lifecycle bugs.
+
 ## 6. CI wiring (Phase 4)
 
-**Budget first** (read-only aggregation of the current matrices by Codex review):
+**Budget first** (aggregated from the current matrices). The request is sized from the Phase 0
+reference measurements (§5.5); without them it is a guess.
 
 | Bucket (`verify_time_budget.py`) | Declared / budget | Free |
 |---|---:|---:|
@@ -341,11 +404,32 @@ Deleting a command without lowering its entry's timeout frees nothing.
 
 | Phase | Work | Exit criteria |
 |---|---|---|
-| 0 Feasibility gate (2 d) | Cold measurements on LB and GH for `L12` and `L87`, `weight_cache_path=None`: MoE weight build (options b/c prototype), upload, peak host RAM, peak device DRAM/L1, disk temp; KDA / MLA / MoE reference time at 640 and 320 rows/chip, 1 and 2 chunks; trace capture fits `trace_region_size` for one MoE layer on LB (112 experts/chip) | table in this file; MoE option chosen; per-case cold runtime estimate for S1–S9; go/no-go on GH row count; CI budget request drafted |
+| 0a Reference timing (1 d, first) | `bench_reference.py` (§5.5) on a dev box, then via dispatch on an LB and a GH CI runner | per-component s/T table per box in this file; per-case reference estimate after levers 1–3; decision on which levers are mandatory and whether reference-backed scenarios can run in CI or must be nightly |
+| 0 Feasibility gate (2 d) | Cold measurements on LB and GH for `L12` and `L87`, `weight_cache_path=None`: MoE weight build (options b/c prototype), upload, peak host RAM, peak device DRAM/L1, disk temp; KDA / MLA / MoE reference time at 640 and 320 rows/chip, 1 and 2 chunks; trace capture fits `trace_region_size` for one MoE layer on LB (112 experts/chip) | table in this file; MoE option chosen; per-case cold runtime estimate for S1–S9 **including reference on the critical path**; go/no-go on GH row count; CI budget request drafted |
 | 1 Unaligned entry (2–3 d) | §5.1 code; extended host test; device split-walk test | host test green for all F/n; split-walk within PCC bound, copied planes bitwise; `tests/attn_res/` (LB) and `test_transformer_pipeline_split.py` (GH) green; aligned-pipeline numerics unchanged or documented |
 | 2 Building blocks (3–4 d) | §5.2 modules; MoE option from Phase 0 incl. `TtRoutedExpert` hook; pooled-reference CPU unit test; seedable KDA `random_weights`; reference cache | S1 green for `L0`, `L12`, `L36` on LB |
 | 3 Scenarios (3–4 d) | S1–S9 for P0 cases on LB, then GH; P1 cases | all P0 green on both boxes; thresholds from measurements with margin; negative controls fail as expected; runtime per case recorded |
 | 4 CI (1–2 d) | budget approval; LB + GH entries; non-skip guards; retire old LB test after S8; GH `two_iters` switch | dispatched runs green: `blackhole-e2e-tests.yaml` (`model=kimi_k3`, LoudBox) and `blaze-models-prefill-tests.yaml` (`k3_single_layer`) |
+
+**Commit gate (every phase, every commit).** No code is committed until it has been reviewed by
+**both** of these:
+- a **separate Claude Code instance** (fresh session, not the one that wrote the code; e.g.
+  `claude -p` with the staged diff and this plan);
+- **Codex Astra** (`codex` CLI).
+
+Procedure for each unit of work that is meant to become a commit:
+1. Stage exactly the intended change (`git add …`). The review covers `git diff --cached` plus the
+   relevant plan section and the files the diff touches.
+2. Run both reviews independently. Neither reviewer sees the other's output. Each is asked for
+   correctness bugs, deviations from this plan, numerics and threshold soundness, and test gaps.
+3. Address every finding: fix it, or record why not. Re-stage, then re-run both reviews on the new
+   diff. Repeat until neither reviewer has open blocking findings.
+4. Commit. The commit message body has a short `Reviewed-by:` note for each reviewer that
+   summarizes their findings and resolutions. Larger review notes go in a scratch location and are
+   not committed (like this plan, they stay out of the PR).
+
+This applies equally to production changes (§5.1), test code, CI yaml (§6) and plan-driven
+refactors. A commit that skips the gate is reverted and redone.
 
 ## 8. How to run
 
@@ -370,51 +454,17 @@ timeouts): reset with `tt-smi -r` between runs; prefer one mesh open per pytest 
    `KimiK3LayerSchedule` / `build_attention` / `TtKimiK3Block` / `KdaStateCache` with a test-side walk
    (doesn't test the production transformer wiring).
 2. **MoE cost** — the Phase 0 gate; needs a `TtRoutedExpert` hook either way (b or c).
-3. **GH reference time** at 5120 tokens/chunk (KDA per-token Python loop, MLA host attention, MoE
-   GEMMs) — Phase 0; fallback 320 rows/chip for reference-backed scenarios.
+3. **Reference runtime — the CI-deciding risk.** At GH's 5120 tokens/chunk the cost comes from the
+   KDA per-token Python loop, bf16 MLA attention on CPU, and the MoE GEMMs. CI runners have no
+   reference cache and their CPUs are unmeasured. Measured first (Phase 0a, on the runners); levers
+   in §5.5. If the levers still don't fit, reference-backed scenarios go nightly.
 4. **Synthetic ≠ real activations** — mitigated by calibrated AttnRes entropy, heavy-tailed rows,
    branch-delta checks; real-weight coverage remains on GH depth tests.
 5. **CI budget** — `bh_sc1` demo bucket is full; needs approval.
 6. **Trace on LB** with 112 experts/chip — trace region / L1 small sizing (Phase 0).
 7. **S6 eager-vs-trace** is PCC, not bitwise (different KDA bounds programs); bitwise only replay-vs-replay.
 
-## 10. Review log (v1 → v2)
-
-Reviewers: Claude Code (Opus 5.5, independent instance) and Codex Astra; both read the base commit,
-neither ran devices. Both: direction sound; head-group and ceil formulas correct; request changes.
-
-| Finding | Source | Resolution |
-|---|---|---|
-| Fold also runs at split/pipeline entry over the inherited set (S≥4), and on the dot reduce at R=1; v1 said mid-block never folds | both | §2 rewritten; `L84` added (dot fold + max-width seal); L87 noted as entry-fold |
-| Production last rank is `kv_only_last_layer`; v1's L92 tested the non-serving tail | Claude | `L92kv` P0, `L92full` P1 |
-| 91→92 adjacency / distinct local KV slots untested | Codex | `T91_92kv` P1 |
-| Split vs unsplit not bitwise (handoff flush, R=1 dot fold) | both | PCC + bitwise only for copied planes + fp32 reference arm |
-| Floor plane formulas also in runtime/adapter/test assert | both | fix all four; runtime/adapter assert aligned |
-| Host site-order test already exists | Claude | extend `test_attn_res_pipeline_split.py` |
-| Walk should own global counter; don't change `block.py:202` | Claude | adopted |
-| `q_out` drop changes R on aligned non-last ranks | Codex | gated by GH pipeline-split test; fallback keep unread `q_out` |
-| Pooled + small scales indistinct in bf16/bf4; `Q(sW)≠sQ(W)`; latent norm hides scale | both | exact bf4-commuting transforms (sign/pow2/row perm); reference on dequantized weights; validation with experts > pools; negative control |
-| Pooling doesn't cut conversion/upload/tensorbin/reference cost | both | `weight_cache_path=None`; Phase 0 picks device-side (c) or packed (b) expansion |
-| Gate top-k tie flips vs reference | Claude | reference driven by device-selected experts + flip-rate bound |
-| AttnRes synthetic softmax may be ~one-hot | Claude | entropy-calibrated query scale, asserted |
-| `kda_states.read(0)` wrong — global index | both | `read(L, slot)` |
-| Slabs not bound; old LB test has slab/import/address/two-capacity checks | both | bind slabs; S8 ports them; keep old test until then |
-| `random_weights` unseeded; KDA ref cache not reusable; MLA ref cache off in CI; `MLAReference` prefix mask | both | §5.2 adjusted |
-| Production block config: `routing_use_l1_small_for_semaphores=True` | Claude | harness |
-| `max_seq_len` ≥ 2 chunks; GH ≥ 10240 > hf default 8192 | both | harness + config override |
-| `*_device_params` keyword-only; module-scoped fixture impossible on function-scoped mesh | both | §5.2 |
-| S3 rebuild cost; stronger oracle | both | B→A→B + continue + short restarts |
-| S6 eager vs trace different programs | Claude | PCC 0.999 + bitwise replay |
-| Eager multi-slot untested | Claude | S7 |
-| Rotated starts, traced unaligned/short metadata | Codex | S2 starts, S6 replays S4 metadata |
-| Overflow check must be concrete | Codex | S9(c) via eager diagnostic forward |
-| Whole-layer threshold can hide a broken branch; KDA 0.9995 ≠ layer bar | Codex | branch deltas + rel-L2; component bars cited |
-| CI budget: `bh_sc1` demo 0 min free, `bh_loudbox` e2e 18 min | Codex | §6 budget first; separate GH entry |
-| `|| exit $?` not literally required | both | §6 wording |
-| Sealed planes are block-local, not cumulative | Codex | §2, §5.2 |
-| `two_iters` GH switch valid but same-prompt | Codex | kept as complement |
-
-### 10.3 Weight dict keys (reference for implementers)
+## 10. Weight dict keys (reference for implementers)
 
 Top level: `embed_weight [163840,7168]` (first rank), `norm_weight [7168]`, `layers` (list per local
 layer), `attn_res_weights` (flat checkpoint-key mapping), `attn_res_prefix` (default
@@ -434,10 +484,3 @@ Per layer: `attn_norm_weight`, `ffn_norm_weight` `[7168]`;
   `shared_expert_weights {gate_proj, up_proj [6144,7168], down_proj [7168,6144]}`,
   `latent_weights {down_proj [3584,7168], up_proj [7168,3584], norm [3584]}`,
   `routed_expert_weights`: list of 896 `{gate_proj, up_proj [3072,3584], down_proj [3584,3072]}`.
-
-## 11. Handoff checklist (moving to another machine)
-
-- Branch: `pjosipovic/k3-single-layer-tests` from `origin/pjosipovic/kda-device-request-initialization`
-  (`5aa5dee81f7`); this file at repo root as `K3_SINGLE_LAYER_TESTS_PLAN.md`, removed before the PR.
-- Needs: LB (8×P150) for Phases 0–3; Galaxy SC1 via Blaze dispatch for GH.
-- `./build_metal.sh --release`; device tests only via `scripts/run_safe_pytest.sh`.
