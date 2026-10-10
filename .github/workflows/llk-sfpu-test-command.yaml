@@ -1,0 +1,205 @@
+name: LLK SFPU test command
+run-name: "/llk-sfpu-test on #${{ github.event.issue.number }}"
+
+# Starts the LLK SFPU report (llk-sfpu-report.yaml) from a PR comment:
+#
+#   /llk-sfpu-test                     the ops whose machine code the PR changes, WH + BH
+#   /llk-sfpu-test tanh exp            exactly these ops (MathOperation names, any case)
+#   /llk-sfpu-test --arch bh           one architecture: wh, bh or all
+#   /llk-sfpu-test --base main         current main vs main + the PR's kernel diff
+#
+# Only the first line of the comment is read. This workflow pins the PR head,
+# dispatches the report on main, and posts a "measuring" note; the report run
+# posts the result and hides that note. A newer command on the same PR cancels
+# the report still running for the older one.
+#
+# The human gate is write access, the same as for /test: on a fork PR the command
+# is also the approval to compile and run the PR's device code on our hardware.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dispatch:
+    # Cheap pre-filter so unrelated comments start no run; the write-access
+    # check below is the real control. Exact command only: `/llk-sfpu-tests`
+    # does not fire it. `\r\n` is the line ending the web UI sends.
+    if: "github.repository == 'tenstorrent/tt-metal'
+      && github.event.issue.pull_request != null
+      && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
+                  github.event.comment.author_association)
+      && (github.event.comment.body == '/llk-sfpu-test'
+          || startsWith(github.event.comment.body, '/llk-sfpu-test ')
+          || startsWith(github.event.comment.body, '/llk-sfpu-test\n')
+          || startsWith(github.event.comment.body, '/llk-sfpu-test\r\n'))"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: write             # dispatch llk-sfpu-report.yaml
+      pull-requests: write       # react to the command, post the "measuring" note
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+    steps:
+      - name: Acknowledge the command
+        continue-on-error: true
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes --silent
+
+      - name: Refuse anyone without write access
+        env:
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          if ! level="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" \
+                 --jq .permission 2>"$RUNNER_TEMP/err")"; then
+            # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
+            if ! grep -q "HTTP 404" "$RUNNER_TEMP/err"; then
+              cat "$RUNNER_TEMP/err" >&2
+              echo "FAILURE_REASON=the workflow could not check your access to this repository" >> "$GITHUB_ENV"
+              echo "::error::Cannot read ${ACTOR}'s access to ${GITHUB_REPOSITORY}"
+              exit 1
+            fi
+            level=none
+          fi
+          case "$level" in
+            admin|maintain|write)
+              echo "${ACTOR} has ${level} access" ;;
+            *)
+              echo "FAILURE_REASON=it needs write access to this repository" >> "$GITHUB_ENV"
+              echo "::error::${ACTOR} has ${level} access; /llk-sfpu-test needs write"
+              exit 1 ;;
+          esac
+
+      - name: Parse the command
+        id: parse
+        env:
+          # Attacker-controlled: read through env, never interpolated, and every
+          # word matched against a fixed shape.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "FAILURE_REASON=$1" >> "$GITHUB_ENV"
+            echo "::error::$1"
+            exit 1
+          }
+          line="${COMMENT_BODY%%$'\n'*}"
+          line="${line%$'\r'}"
+          read -r -a words <<< "$line"
+          # The job filter already matched the command; checked again here so the
+          # parser never trusts a prefix it did not see.
+          [ "${words[0],,}" = "/llk-sfpu-test" ] || fail "the command must be exactly /llk-sfpu-test"
+          ops=()
+          arch=all
+          base=merge-base
+          set -- "${words[@]:1}"
+          while [ $# -gt 0 ]; do
+            case "${1,,}" in
+              --arch=*|--base=*)
+                opt="${1%%=*}"; val="${1#*=}"; shift ;;
+              --arch|--base)
+                [ $# -ge 2 ] || fail "--arch and --base need a value"
+                opt="$1"; val="$2"; shift 2 ;;
+              -*)
+                fail "the only options are --arch and --base" ;;
+              *)
+                [[ "$1" =~ ^[A-Za-z][A-Za-z0-9_]{0,63}$ ]] || fail "op names are letters, digits and underscores"
+                ops+=("$1"); shift; continue ;;
+            esac
+            case "${opt,,}:${val,,}" in
+              --arch:wh|--arch:wormhole) arch=wormhole ;;
+              --arch:bh|--arch:blackhole) arch=blackhole ;;
+              --arch:all) arch=all ;;
+              --base:merge-base) base=merge-base ;;
+              --base:main) base=main ;;
+              --arch:*) fail "--arch takes wh, bh or all" ;;
+              *) fail "--base takes merge-base or main" ;;
+            esac
+          done
+          [ "${#ops[@]}" -le 8 ] || fail "name at most 8 ops"
+          {
+            echo "ops=$(IFS=,; echo "${ops[*]-}")"
+            echo "arch=$arch"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+
+      # Dispatched with GITHUB_TOKEN: workflow_dispatch is one of the events that
+      # token may still start a run with. The report runs from the default branch,
+      # so a PR cannot change the workflow that measures it.
+      - name: Start the measurement
+        id: start
+        env:
+          OPS: ${{ steps.parse.outputs.ops }}
+          ARCH: ${{ steps.parse.outputs.arch }}
+          BASE: ${{ steps.parse.outputs.base }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Pinned now, so a push after the command is reported, not measured.
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAILURE_REASON=the workflow could not read the PR head" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          if ! out="$(gh workflow run llk-sfpu-report.yaml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" \
+                 -f pr_number="$PR_NUMBER" -f head_sha="$head" -f ops="$OPS" -f arch="$ARCH" \
+                 -f base="$BASE" -f post_comment=true 2>&1)"; then
+            echo "$out" >&2
+            echo "FAILURE_REASON=the workflow could not start the measurement" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          # Newer gh prints the run's URL; older ones print nothing useful.
+          url="$(grep -o -E "https://[^ ]+/actions/runs/[0-9]+" <<<"$out" | head -n 1 || true)"
+          {
+            echo "head=$head"
+            echo "url=${url:-${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/llk-sfpu-report.yaml}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Dispatched the LLK SFPU report for PR #${PR_NUMBER} at ${head:0:12}: ops='${OPS}' arch=${ARCH} base=${BASE}"
+
+      - name: Post the "measuring" note
+        continue-on-error: true
+        env:
+          OPS: ${{ steps.parse.outputs.ops }}
+          ARCH: ${{ steps.parse.outputs.arch }}
+          BASE: ${{ steps.parse.outputs.base }}
+          HEAD_SHA: ${{ steps.start.outputs.head }}
+          RUN_URL: ${{ steps.start.outputs.url }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OPS" ]; then
+            what="\`${OPS//,/\`, \`}\`"
+          else
+            what="the SFPU ops whose code this PR changes"
+          fi
+          case "$ARCH" in
+            wormhole) where="Wormhole" ;;
+            blackhole) where="Blackhole" ;;
+            *) where="Wormhole and Blackhole" ;;
+          esac
+          if [ "$BASE" = main ]; then
+            against="current main plus this PR's kernel changes"
+          else
+            against="its merge-base"
+          fi
+          # The first line is the marker llk-sfpu-report.yaml uses to hide this note.
+          printf '%s\n' "<!-- llk-sfpu-test:running -->" \
+            "⏳ Measuring ${what} on ${where} for \`${HEAD_SHA:0:10}\` against ${against} ([run](${RUN_URL})). The report replaces this note when it is ready." \
+            > "$RUNNER_TEMP/note.md"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/note.md"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=rocket --silent
+
+      - name: Explain why the measurement did not start
+        if: failure()
+        env:
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason="${FAILURE_REASON:-the workflow could not start the measurement}"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "\`/llk-sfpu-test\` did not start a measurement: ${reason} ([log](${LOG_URL})).
+
+          Usage: \`/llk-sfpu-test [ops...] [--arch wh|bh|all] [--base merge-base|main]\`. With no ops it measures the SFPU ops whose code the PR changes."

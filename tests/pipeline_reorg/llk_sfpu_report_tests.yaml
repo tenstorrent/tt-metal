@@ -1,0 +1,29 @@
+# LLK SFPU report — matrix for llk-sfpu-report.yaml (the `/llk-sfpu-test` PR command).
+# One leg per architecture: detect the SFPU ops a PR changes, measure their perf and
+# accuracy before/after on this device, write summary-<arch>.json + report-<arch>.md.
+# The job env supplies PR_NUMBER, HEAD_SHA, BASE_SHA, MODE, OPS, ITERATIONS, OUT_DIR.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> on_demand).
+
+- name: llk_sfpu_report_wormhole
+  split_group: 1
+  team: llk
+  budget_type: on_demand
+  cmd: |
+    set -euo pipefail
+    ./.github/llk_sfpu_report/ci_run.sh wormhole
+  skus:
+    wh_n150_civ2:
+      timeout: 60
+  owner_id: TODO # Nikola Stamatovic
+
+- name: llk_sfpu_report_blackhole
+  split_group: 1
+  team: llk
+  budget_type: on_demand
+  cmd: |
+    set -euo pipefail
+    ./.github/llk_sfpu_report/ci_run.sh blackhole
+  skus:
+    bh_p150b_civ2:
+      timeout: 60
+  owner_id: TODO # Nikola Stamatovic
