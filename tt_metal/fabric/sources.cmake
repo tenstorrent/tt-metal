@@ -15,7 +15,6 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-    hw/inc/fabric_direction_table_interface.h
     fabric_edm_packet_header.hpp
 )
 

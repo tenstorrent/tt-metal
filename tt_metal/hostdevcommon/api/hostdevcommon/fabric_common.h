@@ -108,12 +108,44 @@ struct __attribute__((packed)) direction_table_t {
     void set_direction(std::uint16_t index, std::uint8_t direction);
     std::uint8_t compress_value(std::uint8_t original_value) const;
     void set_original_direction(std::uint16_t index, std::uint8_t original_direction);
-#else
-    // Device-side methods (declared here, implemented in fabric_direction_table_interface.h):
-    inline std::uint8_t get_direction(std::uint16_t index) const;
-    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
-    inline std::uint8_t get_original_direction(std::uint16_t index) const;
 #endif
+
+    // Host (fabric visualizer: decode) and device methods:
+    std::uint8_t get_direction(std::uint16_t index) const {
+        std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+        std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+        std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
+
+        // Keep the else: without it, GCC treats the first return as an early exit and lays out kernels differently.
+        if (bit_offset <= BITS_PER_BYTE - BITS_PER_COMPRESSED_ENTRY) {
+            // All 3 bits are in the same byte
+            return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
+        } else {  // NOLINT(readability-else-after-return)
+            // Bits span across two bytes
+            std::uint8_t low_bits =
+                (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
+            std::uint8_t high_bits = (packed_directions[byte_index + 1] &
+                                      ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
+                                     << (BITS_PER_BYTE - bit_offset);
+            return low_bits | high_bits;
+        }
+    }
+
+    std::uint8_t decompress_value(std::uint8_t compressed_value) const {
+        switch (static_cast<compressed_routing_values>(compressed_value)) {
+            case compressed_routing_values::COMPRESSED_EAST: return eth_chan_directions::EAST;
+            case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
+            case compressed_routing_values::COMPRESSED_NORTH: return eth_chan_directions::NORTH;
+            case compressed_routing_values::COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+            case compressed_routing_values::COMPRESSED_Z: return eth_chan_directions::Z;
+            case compressed_routing_values::COMPRESSED_INVALID_DIRECTION:
+                return eth_chan_magic_values::INVALID_DIRECTION;
+            case compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY:
+            default: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+        }
+    }
+
+    std::uint8_t get_original_direction(std::uint16_t index) const { return decompress_value(get_direction(index)); }
 };
 
 // ============================================================================
@@ -156,6 +188,14 @@ struct RoutingFieldsConstants {
         static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
         static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
         static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
+    };
+
+    // What the router at the current hop does with a 1D packet.
+    enum class LowLatencyHopAction : uint32_t {
+        NOOP = LowLatency::NOOP,
+        WRITE_ONLY = LowLatency::WRITE_ONLY,
+        FORWARD_ONLY = LowLatency::FORWARD_ONLY,
+        WRITE_AND_FORWARD = LowLatency::WRITE_AND_FORWARD,
     };
 };
 
@@ -840,6 +880,41 @@ inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
     }
 }
 
+//=============================================================================
+// 1D Routing Decoders
+//=============================================================================
+
+constexpr RoutingFieldsConstants::LowLatencyHopAction get_current_1d_hop_action(uint32_t route_word) {
+    return static_cast<RoutingFieldsConstants::LowLatencyHopAction>(
+        route_word & RoutingFieldsConstants::LowLatency::FIELD_MASK);
+}
+
+// Refills the live word of a 1D route once its 16 fields are spent, and returns the new live word.
+// value is the live route word with the current hop already shifted out. read_ext(i) returns extension word i.
+// write_ext(i, word) stores the new extension word i, shifted down one word on a refill and unchanged otherwise.
+template <uint32_t NUM_EXT_WORDS, typename ReadExt, typename WriteExt>
+__attribute__((always_inline)) constexpr uint32_t refill_1d_route(
+    uint32_t value, ReadExt read_ext, WriteExt write_ext) {
+    static_assert(NUM_EXT_WORDS > 0, "a route without extension words has nothing to refill from");
+    if (value == 0) [[unlikely]] {
+        // Refill from buffer[0]
+        value = read_ext(0);
+// Shift buffer left
+#pragma GCC unroll 16
+        for (uint32_t i = 0; i < NUM_EXT_WORDS - 1; i++) {
+            write_ext(i, read_ext(i + 1));
+        }
+        write_ext(NUM_EXT_WORDS - 1, 0);
+    } else {
+// No refill needed - just copy buffer as-is
+#pragma GCC unroll 16
+        for (uint32_t i = 0; i < NUM_EXT_WORDS; i++) {
+            write_ext(i, read_ext(i));
+        }
+    }
+    return value;
+}
+
 }  // namespace routing_encoding
 
 // ============================================================================
@@ -1064,6 +1139,5 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #define FABRIC_COUNTER_BASE MEM_FABRIC_COUNTER_BASE
 #endif
 
-#include "fabric/hw/inc/fabric_direction_table_interface.h"
 #include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif
