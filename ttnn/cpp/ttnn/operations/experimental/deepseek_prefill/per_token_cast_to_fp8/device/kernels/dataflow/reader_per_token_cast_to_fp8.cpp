@@ -127,19 +127,31 @@ void kernel_main() {
     // (num_w_tiles == scale_blocks_per_row * tiles_per_block), so global block g starts at tile g * tiles_per_block.
     const uint32_t in_tile_bytes = get_tile_size(cb_in);
     const uint32_t global_block_end = block_offset + num_blocks;
+    // PER_ROW_SCALE: work unit = one tile-row of PR_CHUNKS chunks, streamed twice (pass 1: row amax,
+    // pass 2: quantize).
     for (uint32_t global_block = block_offset; global_block < global_block_end; ++global_block) {
-        const uint32_t first_tile_id = global_block * tiles_per_block;
-        cb_in_obj.reserve_back(tiles_per_block);
-        for (uint32_t tile_idx = 0; tile_idx < tiles_per_block; ++tile_idx) {
-            noc.async_read(
-                src,
-                cb_in_obj,
-                in_tile_bytes,
-                {.page_id = first_tile_id + tile_idx, .offset_bytes = 0},
-                {.offset_bytes = tile_idx * in_tile_bytes});
+#ifdef PER_ROW_SCALE
+        for (uint32_t pass = 0; pass < 2; ++pass) {
+            for (uint32_t c = 0; c < PR_CHUNKS; ++c) {
+                const uint32_t first_tile_id = (global_block * PR_CHUNKS + c) * tiles_per_block;
+#else
+        {
+            {
+                const uint32_t first_tile_id = global_block * tiles_per_block;
+#endif
+                cb_in_obj.reserve_back(tiles_per_block);
+                for (uint32_t tile_idx = 0; tile_idx < tiles_per_block; ++tile_idx) {
+                    noc.async_read(
+                        src,
+                        cb_in_obj,
+                        in_tile_bytes,
+                        {.page_id = first_tile_id + tile_idx, .offset_bytes = 0},
+                        {.offset_bytes = tile_idx * in_tile_bytes});
+                }
+                noc.async_read_barrier();
+                cb_in_obj.push_back(tiles_per_block);
+            }
         }
-        noc.async_read_barrier();
-        cb_in_obj.push_back(tiles_per_block);
     }
 #else
     // Stream 128-element blocks into tile_h-block batches, one bank-contiguous run per NoC read.

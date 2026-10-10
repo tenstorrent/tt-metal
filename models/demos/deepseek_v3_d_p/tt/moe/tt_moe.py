@@ -40,10 +40,13 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # boundary (host-side allocator state, so it is exact at op-dispatch time). Used for the fp8-wire
 # temp-buffer footprint targets.
 _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
-# Scaled fp8 combine: the origin dequantizes with a standalone per_token_cast_back pass (v1). A fused
-# dequant inside post_combine_reduce (sparse-SDPA style: tilize the slab, bcast-multiply the scales in
-# compute) is the follow-up; MOE_FUSED_DQ2=1 is reserved for it.
-_MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "0") == "1"
+# Scaled fp8 combine with per-token scales: post_combine_reduce dequantizes in compute (fused DQ2: fp8 rows
+# unpacked to 32-bit DEST, scaled by weight * row scale on the SFPU). MOE_FUSED_DQ2=0 or per-block scales
+# use the standalone per_token_cast_back pass instead.
+_MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "1") == "1"
+# Per-token fp8 dispatch: the routed expert consumes the e4m3 rows and applies the scale to its gate/up
+# accumulators (fused DQ1, default); MOE_FUSED_DQ1=0 dequantizes with per_token_cast_back first.
+_MOE_FUSED_DQ1 = os.environ.get("MOE_FUSED_DQ1", "1") == "1"
 
 
 def _dram_allocated_bytes(mesh_device) -> int:
@@ -246,7 +249,7 @@ class TtMoe(LightweightModule):
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
         dispatch_wire: str = "bf16",
-        fp8_scale_block: int = 32,
+        fp8_scale_block: int = 0,
         combine_wire: str = "bf16",
     ):
         """
@@ -336,7 +339,8 @@ class TtMoe(LightweightModule):
                 power-of-two scales) before dispatch, the scales ride in the dispatch metadata tail, and
                 the dispatched buffer is dequantized back to bf16 (valid rows only) before the routed
                 experts. Blackhole only. The caller's ``metadata_len`` must be the bf16 value (3).
-            fp8_scale_block: elements per fp8 scale on the dispatch wire (32 = MXFP8 granularity).
+            fp8_scale_block: elements per fp8 scale on the fp8 wires: 0 (default) = one scale per token row,
+                which lets the dequant fuse as a row-broadcast in compute; 32/64/128 = per-block scales.
             combine_wire: "bf16" (default) or "fp8". With "fp8" combine quantizes each expert-output row
                 (1x32 blocks, power-of-two scales, RNE) and ships [e4m3 | fp32 scales] rows; the origin
                 dequantizes them to bf16 before the weighted reduce. Blackhole only.
@@ -362,15 +366,24 @@ class TtMoe(LightweightModule):
         assert dispatch_wire in ("bf16", "fp8"), f"dispatch_wire must be 'bf16' or 'fp8', got {dispatch_wire!r}"
         self.dispatch_fp8 = dispatch_wire == "fp8"
         self.fp8_scale_block = fp8_scale_block
+        self.fp8_per_row = fp8_scale_block == 0
+        self._fp8_block_kw = dict(
+            scale_block_w=128 if self.fp8_per_row else fp8_scale_block, per_row_scale=self.fp8_per_row
+        )
         dispatch_metadata_len = metadata_len
         assert combine_wire in ("bf16", "fp8"), f"combine_wire must be 'bf16' or 'fp8', got {combine_wire!r}"
         self.combine_fp8 = combine_wire == "fp8"
         if self.dispatch_fp8:
             assert metadata_len == 3, f"dispatch_wire='fp8' expects the bf16 metadata_len (3), got {metadata_len}"
-            assert fp8_scale_block in (32, 64, 128), f"fp8_scale_block must be 32, 64 or 128, got {fp8_scale_block}"
+            assert fp8_scale_block in (
+                0,
+                32,
+                64,
+                128,
+            ), f"fp8_scale_block must be 0, 32, 64 or 128, got {fp8_scale_block}"
             assert self.routed_emb_dim % 128 == 0, f"routed_emb_dim {self.routed_emb_dim} must be a multiple of 128"
-            # 3 routing words + one fp32 scale per block (bit-stored in the int32 metadata tail).
-            dispatch_metadata_len = 3 + self.routed_emb_dim // fp8_scale_block
+            # 3 routing words + the fp32 scale(s) (bit-stored in the int32 metadata tail).
+            dispatch_metadata_len = 3 + (1 if fp8_scale_block == 0 else self.routed_emb_dim // fp8_scale_block)
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -928,8 +941,8 @@ class TtMoe(LightweightModule):
                 routed_x,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                scale_block_w=self.fp8_scale_block,
                 round_to_nearest_even=True,
+                **self._fp8_block_kw,
             )
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
@@ -1019,7 +1032,12 @@ class TtMoe(LightweightModule):
         # tiles it internally for the extract loop. Either way the ROW_MAJOR input
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
-        if self.dispatch_fp8:
+        expert_row_scales = None
+        if self.dispatch_fp8 and self.fp8_per_row and _MOE_FUSED_DQ1:
+            # Fused DQ1: the routed expert reads the e4m3 rows directly and rescales its gate/up accumulators by
+            # each token's scale (word 3 of the dispatch metadata) in compute.
+            expert_row_scales = metadata
+        elif self.dispatch_fp8:
             # DQ1: dequantize the dispatched fp8 rows back to bf16 for the routed experts, reading the
             # scales from the metadata tail. Runs after the sub-device clear: it uses the full grid.
             # Only the valid (count-aware, tile-padded) prefix of the buffer is written.
@@ -1035,12 +1053,24 @@ class TtMoe(LightweightModule):
                 global_expert_idx_table=self.global_expert_idx_tt,
                 experts_per_chip=self.experts_per_chip,
                 metadata=metadata,
-                scale_block_w=self.fp8_scale_block,
+                **self._fp8_block_kw,
             )
             mem_mark("after_dq1")
             ttnn.deallocate(dispatched_fp8)
+        if os.environ.get("MOE_EXPERT_TILE_INPUT") == "1" and dispatched_buffer.layout == ttnn.ROW_MAJOR_LAYOUT:
+            # Experiment: hand the routed expert a bf8_b TILE buffer (its non-tilizing input path).
+            dispatched_tile = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(dispatched_buffer)
+            dispatched_buffer = dispatched_tile
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        expert_outputs = self.routed_expert(
+            squeezed_dispatch,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            x_row_scales=None
+            if expert_row_scales is None
+            else ttnn.squeeze(ttnn.squeeze(expert_row_scales, dim=0), dim=0),
+        )
         mem_mark("after_routed_expert")
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
@@ -1068,8 +1098,8 @@ class TtMoe(LightweightModule):
                 expert_outputs,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                scale_block_w=32,
                 round_to_nearest_even=True,
+                **self._fp8_block_kw,
                 token_count_aware=True,
                 expert_region_offsets=tt_expert_region_offsets,
                 expert_token_counts=tt_expert_token_counts,
@@ -1096,7 +1126,7 @@ class TtMoe(LightweightModule):
             if not self.combine_fp8:
                 ttnn.deallocate(expert_outputs)
             ttnn.deallocate(metadata)
-        if self.combine_fp8 and not _MOE_FUSED_DQ2:
+        if self.combine_fp8 and not (_MOE_FUSED_DQ2 and self.fp8_per_row):
             # DQ2 (v1, standalone): unpack [e4m3 | fp32 scales] rows back to bf16 for the weighted reduce. Slots of
             # non-local experts are never written by combine; post_combine_reduce never reads them.
             combined_fp8 = combined_output
@@ -1105,8 +1135,8 @@ class TtMoe(LightweightModule):
                 None,
                 output_dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                scale_block_w=32,
                 scales_in_row_tail=True,
+                **self._fp8_block_kw,
             )
             mem_mark("after_dq2")
             ttnn.deallocate(combined_fp8)

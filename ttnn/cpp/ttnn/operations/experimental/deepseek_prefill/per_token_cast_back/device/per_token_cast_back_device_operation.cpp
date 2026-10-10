@@ -172,11 +172,11 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t H_in = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
-    const uint32_t H = attrs.scales_in_row_tail ? H_in * sbw / (sbw + 4) : H_in;
+    const uint32_t H = attrs.scales_in_row_tail ? (attrs.per_row_scale ? H_in - 64 : H_in * sbw / (sbw + 4)) : H_in;
     if (attrs.scales_in_row_tail) {
         TT_FATAL(!token_count_aware, "per_token_cast_back: scales_in_row_tail is only supported on the plain path");
         TT_FATAL(
-            H * (sbw + 4) == H_in * sbw && H % fp8::BLOCK_W == 0,
+            (attrs.per_row_scale ? H + 64 == H_in : H * (sbw + 4) == H_in * sbw) && H % fp8::BLOCK_W == 0,
             "per_token_cast_back: packed row width {} must be H + 4*H/{} with H % {} == 0",
             H_in,
             sbw,
@@ -192,7 +192,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
             "per_token_cast_back: e4m3 last dim ({}) must be a multiple of BLOCK_W ({})",
             H,
             fp8::BLOCK_W);
-        const uint32_t blocks_per_row = H / sbw;
+        const uint32_t blocks_per_row = attrs.per_row_scale ? 1u : H / sbw;
         TT_FATAL(
             H_scale >= blocks_per_row,
             "per_token_cast_back: metadata last dim ({}) must be >= H/scale_block_w ({}) to hold the scale tail",
@@ -202,7 +202,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
         // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
         TT_FATAL(
-            H % fp8::BLOCK_W == 0 && H == H_scale * sbw,
+            H % fp8::BLOCK_W == 0 && (attrs.per_row_scale ? H_scale == 1 : H == H_scale * sbw),
             "per_token_cast_back: e4m3 last dim ({}) must be a multiple of {} and equal scale last dim ({}) * "
             "scale_block_w ({})",
             H,
@@ -236,7 +236,7 @@ PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOpera
     auto out_shape = tensor_args.input_e4m3.logical_shape();
     if (attrs.scales_in_row_tail) {
         const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
-        out_shape[-1] = W * attrs.scale_block_w / (attrs.scale_block_w + 4);
+        out_shape[-1] = attrs.per_row_scale ? W - 64 : W * attrs.scale_block_w / (attrs.scale_block_w + 4);
     }
     return tt::tt_metal::TensorSpec(
         out_shape,
@@ -283,7 +283,8 @@ ttnn::Tensor per_token_cast_back(
     uint32_t experts_per_chip,
     bool scales_from_metadata,
     uint32_t scale_block_w,
-    bool scales_in_row_tail) {
+    bool scales_in_row_tail,
+    bool per_row_scale) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
@@ -293,7 +294,8 @@ ttnn::Tensor per_token_cast_back(
         .experts_per_chip = experts_per_chip,
         .scales_from_metadata = scales_from_metadata,
         .scale_block_w = scale_block_w,
-        .scales_in_row_tail = scales_in_row_tail};
+        .scales_in_row_tail = scales_in_row_tail,
+        .per_row_scale = per_row_scale};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,

@@ -138,6 +138,139 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_abs_id, cb_output_e4m3_id);
     cb_scaler.wait_front(1);  // reader-filled 1.0 scaler, reused for every reduce
 
+#ifdef PER_ROW_SCALE
+    // One scale per token row: pass 1 keeps a running elementwise max|x| tile over the tile-row's PR_CHUNKS
+    // chunks (one pack per chunk) and row-reduces it once; pass 2 re-reads the chunks, multiplies by
+    // 1/scale, rounds and untilizes to e4m3.
+    constexpr uint32_t cb_run_id = get_compile_time_arg_val(16);
+    CircularBuffer cb_run(cb_run_id);
+    static_assert(tiles_per_block <= 4, "pass 1 holds one chunk in the 4 fp32 DEST slots");
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        for (uint32_t c = 0; c < PR_CHUNKS; ++c) {
+            cb_in.wait_front(tiles_per_block);
+            reconfig_full_operand_srca(cb_in_id);
+            pack_reconfig_data_format(cb_run_id);
+            copy_init(cb_in_id);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                copy_tile(cb_in_id, k, k);
+            }
+            abs_tile_init();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                abs_tile(k);
+            }
+            binary_max_tile_init();
+            for (uint32_t k = 1; k < tiles_per_block; ++k) {
+                binary_max_tile(0, k, 0);
+            }
+            if (c > 0) {
+                // fold in the running max of the previous chunks (slot 1 is free again)
+                cb_run.wait_front(1);
+                reconfig_full_operand_srca(cb_run_id);
+                copy_init(cb_run_id);
+                copy_tile(cb_run_id, 0, 1);
+                binary_max_tile_init();
+                binary_max_tile(0, 1, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_run.reserve_back(1);
+            pack_tile(0, cb_run_id);
+            tile_regs_release();
+            if (c > 0) {
+                cb_run.pop_front(1);
+            }
+            cb_run.push_back(1);
+            cb_in.pop_front(tiles_per_block);
+        }
+        // row max of the running |x| tile (col 0) -> scale = pow2(clamp(amax)/448) -> writer; 1/scale -> pass 2
+        cb_run.wait_front(1);
+        cb_scale_tiles.reserve_back(1);
+        cb_inv_scale_tiles.reserve_back(1);
+        reconfig_data_format(cb_run_id, cb_scaler_id);
+        pack_reconfig_data_format(cb_scale_tiles_id);
+        tile_regs_acquire();
+        reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_run_id, cb_scaler_id, cb_scale_tiles_id);
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_run_id, cb_scaler_id, 0, 0, IDST0);
+        reduce_uninit();
+        clamp_tile_init();
+        clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(IDST0, inv_448_bits);
+        if constexpr (round_scale_to_power_of_two) {
+            MATH((ceil_power_of_two_tile(IDST0)));
+        }
+        copy_dest_values_init();
+        copy_dest_values<DataFormat::Float32>(IDST0, IDST1);
+        recip_tile_init();
+        recip_tile(IDST1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(IDST0, cb_scale_tiles_id);
+        pack_tile(IDST1, cb_inv_scale_tiles_id);
+        tile_regs_release();
+        cb_scale_tiles.push_back(1);
+        cb_inv_scale_tiles.push_back(1);
+        cb_run.pop_front(1);
+        // pass 2
+        cb_inv_scale_tiles.wait_front(1);
+        for (uint32_t c = 0; c < PR_CHUNKS; ++c) {
+#ifdef PR_DIRECT_SCALE
+            // x * (1/scale) straight from the input CB: a bf16 / bf8_b input sits in SrcA exactly, so this
+            // matches the fp32 round trip below without it (an fp32 input would be truncated to tf32 in SrcA).
+            constexpr uint32_t cb_src_id = cb_in_id;
+            cb_in.wait_front(tiles_per_block);
+#else
+            // input -> fp32 cb_tile (as the per-block path does), then x * (1/scale) per row
+            constexpr uint32_t cb_src_id = cb_tile_id;
+            reconfig_full_operand_srca(cb_in_id);
+            pack_reconfig_data_format(cb_tile_id);
+            copy_init(cb_in_id);
+            cb_in.wait_front(tiles_per_block);
+            cb_tile.reserve_back(tiles_per_block);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                copy_tile(cb_in_id, k, k);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                pack_tile(k, cb_tile_id);
+            }
+            tile_regs_release();
+            cb_tile.push_back(tiles_per_block);
+            cb_in.pop_front(tiles_per_block);
+            cb_tile.wait_front(tiles_per_block);
+#endif
+            cb_output_e4m3.reserve_back(tiles_per_block);
+            reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
+            pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                mul_tiles_bcast_cols(cb_src_id, cb_inv_scale_tiles_id, k, 0, k);
+            }
+            if constexpr (round_to_nearest_even) {
+                MATH((SFPU_UNARY_INIT(unused)));
+                for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                    MATH((round_to_e4m3_rne_tile(k)));
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<tiles_per_block>(cb_output_e4m3_id);
+            tile_regs_release();
+            pack_untilize_uninit(cb_output_e4m3_id);
+            cb_output_e4m3.push_back(tiles_per_block);
+#ifdef PR_DIRECT_SCALE
+            cb_in.pop_front(tiles_per_block);
+#else
+            cb_tile.pop_front(tiles_per_block);
+#endif
+        }
+        cb_inv_scale_tiles.pop_front(1);
+    }
+#else
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
             // ----- Phase 1: get input tiles into fp32 cb_tile -----
@@ -273,4 +406,5 @@ void kernel_main() {
             pack_untilize_uninit(cb_output_e4m3_id);
         }
     }
+#endif
 }

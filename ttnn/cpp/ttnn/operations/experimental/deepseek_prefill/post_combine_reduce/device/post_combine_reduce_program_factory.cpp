@@ -38,7 +38,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     const uint32_t expert_dim = operation_attributes.expert_dim;
 
-    const uint32_t emb_dim = combine_shape[-1];
+    // Per-token scaled fp8 combine rows: [H e4m3 | 64-B tail with the fp32 row scale at byte H] (fused DQ2).
+    const bool fp8_in = combine_output.dtype() == tt::tt_metal::DataType::FP8_E4M3;
+    const uint32_t emb_dim = fp8_in ? combine_shape[-1] - 64 : combine_shape[-1];
     const uint32_t num_experts = combine_shape[expert_dim];
 
     uint32_t num_tokens = 1;
@@ -56,7 +58,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // Number of real 32x32 output tiles per 32-token block.
     const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
     // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
-    const uint32_t emb_dim_bytes = emb_dim * BF16_BYTES;
+    // fp8: the row bytes plus the 16-B head of the tail (fp32 scale), landing in the last pseudo-tile.
+    const uint32_t emb_dim_bytes = fp8_in ? emb_dim + 16 : emb_dim * BF16_BYTES;
 
     TT_FATAL(
         emb_dim % TILE_WIDTH == 0,
@@ -64,6 +67,10 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim,
         TILE_WIDTH,
         emb_dim % TILE_WIDTH);
+    TT_FATAL(
+        !fp8_in || (emb_dim % TILE_SIZE != 0 && emb_dim_cb_tiles <= 4),
+        "fused fp8 dequant: emb_dim {} must leave room for the scale in the last pseudo-tile and fit 4 fp32 DST tiles",
+        emb_dim);
     TT_FATAL(
         emb_dim_cb_tiles <= 8,
         "Embedding dimension tiles {} must fit in 8 DST registers for batching",
@@ -112,14 +119,16 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
+    const uint32_t out_tile_size = tt::tile_size(output_cb_data_format);
+    const uint32_t weight_tile_size = tt::tile_size(weight_cb_data_format);
+    uint32_t weight_cb_size = weight_tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
             .data_format = weight_cb_data_format,
-            .page_size = tile_size,
+            .page_size = weight_tile_size,
         }}},
     });
 
@@ -172,26 +181,26 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     }
 
     // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
-    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
+    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * out_tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = output_cb_size,
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
             .data_format = output_cb_data_format,
-            .page_size = tile_size,
+            .page_size = out_tile_size,
         }}},
     });
 
     // c_17: Row-major scratch for tilize — one chunk at a time
-    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
+    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * out_tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = rowmajor_cb_size,
         .core_ranges = core_range_set,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
             .data_format = output_cb_data_format,
-            .page_size = tile_size,
+            .page_size = out_tile_size,
         }}},
     });
 
@@ -218,6 +227,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
+        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 4: fused per-token fp8 dequant
+        (emb_dim % TILE_SIZE) / 4,              // 5: scale word offset in the last pseudo-tile
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -267,6 +278,19 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         .fp32_dest_acc_en = false,
         .dst_full_sync_en = false,
     };
+    if (fp8_in) {
+        // Fp8_e4m3 CBs on Blackhole need 32-bit DEST; fp8 rows and bf16 weights unpack straight to it.
+        tt::tt_metal::ComputeConfigDescriptor::UnpackToDestModes m(
+            NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        m[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        m[tt::CBIndex::c_1] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .unpack_to_dest_mode = std::move(m),
+        };
+    }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =

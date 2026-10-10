@@ -7,6 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 
@@ -23,6 +24,11 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 // is true; it carries zero from the program factory otherwise.
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
+// Per-token scaled fp8 combine rows (fused DQ2): c_0 holds e4m3 pseudo-tiles with the row's fp32 scale at
+// word fp8_scale_word of the last one. Each local slot is unpacked to 32-bit DEST and scaled by
+// weight * row_scale with two SFPU scalar multiplies; everything stays in compute.
+constexpr bool fp8_in = get_compile_time_arg_val(4) != 0;
+constexpr uint32_t fp8_scale_word = get_compile_time_arg_val(5);
 
 // Like read_tile_value but reads a uint16 element (zero-extended to uint32_t).
 // Indices arrive from DRAM as uint16 and stay uint16 in the CB; this avoids
@@ -80,7 +86,9 @@ void kernel_main() {
         // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
         // one expert at a time by reader and writer respectively.
         for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
-            mul_bcast_scalar_init(cb_combine_input_id, cb_weights_id);
+            if constexpr (!fp8_in) {
+                mul_bcast_scalar_init(cb_combine_input_id, cb_weights_id);
+            }
 
             // first_active tracks whether we've picked the accumulator-initializing
             // expert yet: the DeepSeek path looks for a locally-mapped expert via
@@ -94,6 +102,8 @@ void kernel_main() {
 
                 bool skip_expert = false;
                 bool must_zero_init = false;
+                // Forced last slot of a token with no local expert: its combine row was never written.
+                bool zero_fill = false;
                 if constexpr (use_dispatch_table_skip) {
                     uint32_t expert_id = read_tile_value_uint16(cb_indices_id, i, expert_idx);
                     // Check dispatch table: -1 (0xFFFFFFFF) means non-local
@@ -106,6 +116,7 @@ void kernel_main() {
                     bool is_last = (expert_idx == num_experts - 1);
                     must_zero_init = is_last && first_active;
                     skip_expert = !is_local && !must_zero_init;
+                    zero_fill = must_zero_init && !is_local;
                 } else {
                     // Read weight value — if zero, skip (but always process at least one
                     // expert so the accumulator gets initialized with valid data)
@@ -126,10 +137,35 @@ void kernel_main() {
                     first_active = false;
                 }
 
-                tile_regs_acquire();
-
-                for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
-                    mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input_id, cb_weights_id, j, 0, j);
+                if constexpr (fp8_in) {
+                    // Weight (bf16 element 0 -> fp32 bits) and row scale (fp32), mailboxed to all threads.
+                    const uint32_t w_bits = (read_tile_value(cb_weights_id, 0, 0) & 0xFFFFu) << 16;
+                    const uint32_t s_bits = read_tile_value(cb_combine_input_id, emb_dim_cb_tiles - 1, fp8_scale_word);
+                    tile_regs_acquire();
+                    if (zero_fill) {
+                        // No local expert: the writer zeroed the weight tile; never read the unwritten slot.
+                        reconfig_data_format_srca(cb_weights_id);
+                        copy_init(cb_weights_id);
+                        for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                            copy_tile(cb_weights_id, 0, j);
+                        }
+                    } else {
+                        reconfig_data_format_srca(cb_combine_input_id);
+                        copy_init(cb_combine_input_id);
+                        for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                            copy_tile(cb_combine_input_id, j, j);
+                        }
+                        binop_with_scalar_tile_init();
+                        for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                            mul_unary_tile(j, w_bits);
+                            mul_unary_tile(j, s_bits);
+                        }
+                    }
+                } else {
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                        mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input_id, cb_weights_id, j, 0, j);
+                    }
                 }
 
                 tile_regs_commit();

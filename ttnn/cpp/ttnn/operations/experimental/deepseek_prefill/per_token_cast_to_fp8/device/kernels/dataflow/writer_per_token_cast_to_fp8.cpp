@@ -120,7 +120,11 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
+#ifdef PER_ROW_SCALE
+        1,  // work unit = a whole tile-row
+#else
         chunks_per_row,
+#endif
         core_id,
         ca_num_cores);
     const uint32_t block_offset = range.first_block;
@@ -165,6 +169,58 @@ void kernel_main() {
     };
 
     const uint32_t global_block_end = block_offset + num_blocks;
+#ifdef PER_ROW_SCALE
+    // Work unit = one tile-row: PR_CHUNKS e4m3 chunks, then one scale tile (col 0 = 32 row scales).
+    for (uint32_t row_tile = block_offset; row_tile < global_block_end; ++row_tile) {
+        const uint32_t batch = row_tile / row_tiles_per_batch;
+        const uint32_t local_row_base = (row_tile % row_tiles_per_batch) * tile_h;
+        const uint32_t row_base = batch * rows_per_batch + local_row_base;
+        const uint32_t rows_left = rows_per_batch - local_row_base;
+        const uint32_t n_rows = rows_left < tile_h ? rows_left : tile_h;
+        for (uint32_t c = 0; c < PR_CHUNKS; ++c) {
+            cb_output_e4m3_obj.wait_front(tiles_per_block);
+            for (uint32_t r = 0; r < n_rows; ++r) {
+                noc.async_write(
+                    cb_output_e4m3_obj,
+                    output_e4m3,
+                    output_e4m3_block_bytes,
+                    {.offset_bytes = r * output_e4m3_block_bytes},
+                    {.page_id = row_base + r, .offset_bytes = c * block_w});
+            }
+            noc.async_write_barrier();
+            cb_output_e4m3_obj.pop_front(tiles_per_block);
+        }
+        cb_scale_tiles_obj.wait_front(1);
+        extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales[0]);
+        cb_scale_tiles_obj.pop_front(1);
+        // packed: 16-B write (scale + zero pad) into the row's 64-B tail; else the 4-B [.., 1] scale page
+        constexpr uint32_t run = pack_scales_in_row ? 16 : 4;
+        for (uint32_t r = 0; r < n_rows; ++r) {
+            tok[r * scale_page_words + 0] = block_scales[0][r];
+            tok[r * scale_page_words + 1] = 0;
+            tok[r * scale_page_words + 2] = 0;
+            tok[r * scale_page_words + 3] = 0;
+            if constexpr (pack_scales_in_row) {
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                    output_e4m3,
+                    run,
+                    {.offset_bytes = r * scale_aligned_page_bytes},
+                    {.page_id = row_base + r, .offset_bytes = data_row_bytes});
+            } else {
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                    scale,
+                    run,
+                    {.offset_bytes = r * scale_aligned_page_bytes},
+                    {.page_id = row_base + r, .offset_bytes = 0});
+            }
+        }
+        noc.async_write_barrier();
+    }
+    (void)flush_scale;
+#else
     uint32_t current_row_tile = NO_ROW_TILE_OPEN;
     uint32_t output_row_base = 0, real_rows = 0, owned_first_col = 0, owned_last_col = 0;
 
@@ -217,6 +273,7 @@ void kernel_main() {
     if (current_row_tile != NO_ROW_TILE_OPEN) {
         flush_scale(output_row_base, real_rows, owned_first_col, owned_last_col);
     }
+#endif  // PER_ROW_SCALE
 #else
     constexpr uint32_t scale_row_bytes = scale_blocks_per_row * scale_bytes;
 

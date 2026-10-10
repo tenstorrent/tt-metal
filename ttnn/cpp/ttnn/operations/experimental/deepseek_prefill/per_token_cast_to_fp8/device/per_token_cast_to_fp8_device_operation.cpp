@@ -30,7 +30,7 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
 }
 
-ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape, uint32_t scale_block_w) {
+ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape, uint32_t scale_block_w, bool per_row) {
     const auto rank = input_shape.size();
     const uint32_t H = static_cast<uint32_t>(input_shape[rank - 1]);
     ttsl::SmallVector<uint32_t> dims;
@@ -38,7 +38,7 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape, uint32_t scale_bl
     for (size_t i = 0; i + 1 < rank; ++i) {
         dims.push_back(static_cast<uint32_t>(input_shape[i]));
     }
-    dims.push_back(H / scale_block_w);
+    dims.push_back(per_row ? 1u : H / scale_block_w);
     return ttnn::Shape(std::move(dims));
 }
 
@@ -68,6 +68,10 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
             (input.dtype() == tt::tt_metal::DataType::BFLOAT8_B && input.layout() == tt::tt_metal::Layout::TILE),
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 / FLOAT32, or BFLOAT8_B in TILE layout, got {}",
         static_cast<int>(input.dtype()));
+    if (attrs.per_row_scale) {
+        TT_FATAL(
+            input.layout() == tt::tt_metal::Layout::TILE, "per_token_cast_to_fp8: per_row_scale requires a TILE input");
+    }
     if (attrs.token_count_aware) {
         TT_FATAL(
             input.layout() == tt::tt_metal::Layout::TILE,
@@ -162,7 +166,7 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
 
     auto e4m3_shape = input_shape;
     if (attrs.pack_scales_in_row) {
-        e4m3_shape[-1] = input_shape[-1] + 4 * (input_shape[-1] / attrs.scale_block_w);
+        e4m3_shape[-1] = input_shape[-1] + (attrs.per_row_scale ? 64u : 4 * (input_shape[-1] / attrs.scale_block_w));
     }
     tt::tt_metal::TensorSpec output_e4m3_spec(
         e4m3_shape,
@@ -172,7 +176,8 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
             attrs.output_memory_config));
 
     tt::tt_metal::TensorSpec scale_spec(
-        attrs.pack_scales_in_row ? ttnn::Shape({1, 32}) : scale_output_shape(input_shape, attrs.scale_block_w),
+        attrs.pack_scales_in_row ? ttnn::Shape({1, 32})
+                                 : scale_output_shape(input_shape, attrs.scale_block_w, attrs.per_row_scale),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -226,7 +231,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const std::optional<Tensor>& expert_token_counts,
     const std::optional<Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
-    bool pack_scales_in_row) {
+    bool pack_scales_in_row,
+    bool per_row_scale) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_memory_config = output_memory_config,
@@ -235,7 +241,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
         .round_to_nearest_even = round_to_nearest_even,
         .token_count_aware = token_count_aware,
         .experts_per_chip = experts_per_chip,
-        .pack_scales_in_row = pack_scales_in_row};
+        .pack_scales_in_row = pack_scales_in_row,
+        .per_row_scale = per_row_scale};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor,
         .expert_region_offsets = expert_region_offsets,

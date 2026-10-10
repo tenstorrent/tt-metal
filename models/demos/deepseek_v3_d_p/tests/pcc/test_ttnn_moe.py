@@ -563,7 +563,7 @@ def run_model(
         rms_norm_eps=rms_norm_eps,
         # MOE_DISPATCH_WIRE=fp8 selects the fp8 dispatch wire (K3 fp8 plan) without a new param id.
         dispatch_wire=dispatch_wire or os.environ.get("MOE_DISPATCH_WIRE", "bf16"),
-        fp8_scale_block=int(os.environ.get("MOE_FP8_SCALE_BLOCK", "32")),
+        fp8_scale_block=int(os.environ.get("MOE_FP8_SCALE_BLOCK", "0")),
         combine_wire=os.environ.get("MOE_COMBINE_WIRE", "bf16"),
     )
     ttnn.synchronize_device(mesh_device)
@@ -690,6 +690,19 @@ def run_model(
             continue
         tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=torch.bfloat16)
         _, pcc = comp_pcc(torch_tensor.float(), tt_host.float())
+        # Wire-format numerics gate (K3 fp8 plan §1.2): metrics PCC cannot see.
+        ref_f, tt_f = torch_tensor.float().reshape(-1, torch_tensor.shape[-1]), tt_host.float().reshape(
+            -1, tt_host.shape[-1]
+        )
+        if ref_f.shape == tt_f.shape:
+            rel_l2 = ((tt_f - ref_f).norm() / ref_f.norm().clamp(min=1e-30)).item()
+            cos = torch.nn.functional.cosine_similarity(tt_f, ref_f, dim=-1)
+            live = ref_f.norm(dim=-1) > 0
+            norm_drift = (tt_f.norm(dim=-1)[live] / ref_f.norm(dim=-1)[live] - 1.0).mean().item()
+            logger.info(
+                f"[{name}] NUMERICS rel_l2={rel_l2:.5f} cos_min={cos[live].min().item():.5f} "
+                f"norm_drift={norm_drift:+.5f} finite={bool(torch.isfinite(tt_f).all())}"
+            )
         if pcc >= threshold:
             logger.info(f"[{name}] PASSED - PCC: {pcc:.6f} (threshold: {threshold})")
         else:

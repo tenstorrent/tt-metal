@@ -36,7 +36,8 @@ ttnn::Tensor per_token_cast_back(
     uint32_t experts_per_chip = 0,
     const std::optional<ttnn::Tensor>& metadata = std::nullopt,
     uint32_t scale_block_w = 128,
-    bool scales_in_row_tail = false);
+    bool scales_in_row_tail = false,
+    bool per_row_scale = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back
 

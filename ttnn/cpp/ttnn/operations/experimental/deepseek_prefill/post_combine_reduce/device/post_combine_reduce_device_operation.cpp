@@ -83,7 +83,12 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
-    TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
+    // FP8_E4M3 = per-token scaled-fp8 combine rows [H e4m3 | 64-B tail, fp32 scale at byte H], dequantized
+    // inside this op (fused DQ2).
+    TT_FATAL(
+        combine_output.dtype() == DataType::BFLOAT16 ||
+            (combine_output.dtype() == DataType::FP8_E4M3 && indices.has_value()),
+        "combine_output must be bfloat16, or packed per-token FP8_E4M3 rows (DeepSeek skip path only)");
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
 
@@ -120,10 +125,17 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // Use TILE layout for hardware tilization output
+    const bool fp8_in = combine_output.dtype() == DataType::FP8_E4M3;
+    auto out_shape = output_shape;
+    if (fp8_in) {
+        out_shape[-1] = output_shape[-1] - 64;  // drop the 64-B scale tail
+    }
     return tt::tt_metal::TensorSpec(
-        output_shape,
+        out_shape,
         tt::tt_metal::TensorLayout(
-            combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
+            fp8_in ? DataType::BFLOAT16 : combine_output.dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            output_memory_config));
 }
 
 ttnn::Tensor PostCombineReduceDeviceOperation::create_output_tensors(

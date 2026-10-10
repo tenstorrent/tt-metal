@@ -133,9 +133,10 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             input_tokens);
         // input hidden divisible by the scale block size with one scale per block. The block size is
         // implied by the scales tensor: 128 (DeepSeek 1x128) or 64 / 32 (32 = MXFP8 granularity).
-        const bool block_ok = num_scales > 0 && input_hidden % num_scales == 0 &&
-                              (input_hidden / num_scales == numbers_per_scale_block ||
-                               input_hidden / num_scales == 64 || input_hidden / num_scales == 32);
+        // num_scales == 1 is one scale per token row (per-token quantization).
+        const bool block_ok = num_scales == 1 || (num_scales > 0 && input_hidden % num_scales == 0 &&
+                                                  (input_hidden / num_scales == numbers_per_scale_block ||
+                                                   input_hidden / num_scales == 64 || input_hidden / num_scales == 32));
         TT_FATAL(
             block_ok,
             "fp8_scaled_input requires one fp32 scale per {}, 64 or 32 elements of the input hidden dim ({}); got {} "
