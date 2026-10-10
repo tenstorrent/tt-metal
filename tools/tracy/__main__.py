@@ -2,24 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import re
 from pathlib import Path
 from shutil import copyfile
 
 from tracy import *
 from tracy.perf_counter_multipass import plan_perf_counter_capture, run_perf_counter_passes
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
-
-
-def _perf_counter_mask_from_env():
-    """TT_METAL_PROFILE_PERF_COUNTERS as the runtime reads it, with sscanf("%u") into a uint32_t."""
-    match = re.match(r"\s*([+-]?)(\d+)", os.environ.get("TT_METAL_PROFILE_PERF_COUNTERS", ""), re.ASCII)
-    if match is None:
-        return 0
-    sign, digits = match.groups()
-    # strtoul saturates a magnitude above 2**64 - 1 and wraps a negative value
-    value = 2**64 - 1 if int(digits) >= 2**64 else int(sign + digits)
-    return value % 2**32
 
 
 def main():
@@ -298,6 +286,13 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
+    # The mask comes only from --profiler-capture-perf-counters, which also picks the post-processor that reports it
+    if not options.perf_counter_groups and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ:
+        logger.warning(
+            "Ignoring TT_METAL_PROFILE_PERF_COUNTERS from the environment; pass --profiler-capture-perf-counters to capture counters."
+        )
+        del os.environ["TT_METAL_PROFILE_PERF_COUNTERS"]
+
     # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
     # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
     inherited_mask = options.noCapture and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ
@@ -306,15 +301,8 @@ def main():
             options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
         )
 
-    # The C++ post-processor writes no counter columns, so a counter mask from the environment needs the legacy one too.
-    counters_from_env = _perf_counter_mask_from_env() != 0
-
     if not (
-        options.no_runtime_analysis
-        or options.do_sum
-        or options.profile_dispatch_cores
-        or options.perf_counter_groups
-        or counters_from_env
+        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
     ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
     else:
@@ -327,8 +315,6 @@ def main():
             reasons.append("--profile-dispatch-cores")
         if options.perf_counter_groups:
             reasons.append("--profiler-capture-perf-counters")
-        elif counters_from_env:
-            reasons.append("TT_METAL_PROFILE_PERF_COUNTERS")
 
         reason_str = ", ".join(reasons)
         logger.warning(
