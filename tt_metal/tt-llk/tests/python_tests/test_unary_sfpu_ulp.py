@@ -75,8 +75,10 @@ from helpers.test_variant_parameters import (
 )
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
+    claimed_lanes,
     golden_input,
     measurable_mask,
+    near_zero_floor,
     nonfinite_failures,
     nonfinite_reason,
     stimuli_format_for,
@@ -247,7 +249,13 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # turning it into a skip nobody reads.
     src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
 
-    mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)
+    # Ranked over the op's claim as well as the measurable lanes: a lane past an
+    # argument-reduction limit or on a pole is one the op answers nothing for, so it
+    # can no more set a budget than be a non-finite failure (which already read the
+    # claim). Sin's and Cos's budgets were set by |x| ~ 1e13 lanes answering 2e38.
+    mask = measurable_mask(
+        src, golden, result, in_fmt, out_fmt, dest_acc
+    ) & claimed_lanes(mathop, src, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
         mathop,
         src,
@@ -322,7 +330,10 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # held against its row's "max N ULP" by the headroom report.
         _record_ulp_measurement(distance, mask=mask)
         if ulp_sweep.EMIT:
-            ulp_sweep.record(mathop.name, key, int(stats["max"]))
+            # A cell that only a near-zero lane demotes is recorded with the floor that
+            # covers it, and the emitter enrols it on the lanes outside that floor.
+            floor = near_zero_floor(golden, result, distance, mask, out_fmt)
+            ulp_sweep.record(mathop.name, key, int(stats["max"]), floor=floor)
             return
         # A skip, not a pass: nothing here judged the cell. Without --ulp-measure there
         # is no record for the headroom report either, and a regression would show green.

@@ -89,7 +89,8 @@ swept and then masked out of the statistics, so they still reach hardware.
 
 ## Lanes the sweep does not count
 
-`measurable_mask` drops four kinds, none of them a budget question:
+`measurable_mask` drops five kinds, none of them a budget question, and the driver then
+keeps only the lanes the op *claims* (below):
 
 - **either side NaN** — an op undefined at an input lands here on its own;
 - **the two sides disagreeing about being non-finite** — a reciprocal overflowing where
@@ -105,14 +106,23 @@ swept and then masked out of the statistics, so they still reach hardware.
   Judged on the input as generated *and* as the block-float quantizer hands it to the
   golden: the sweep's one `-0.0` shares a `Bfp8_b` block with the bfloat16 subnormals
   beside it and quantizes to `-2**-127`, so `floor` read -1 there against silicon's 0;
+- **answers the Dest cannot hold** (`dest_holds`) — a `Float16` input runs on an fp16
+  Dest, which tops out at 65504 and flushes below 6.1e-5 whatever the output. Under a
+  `Float32` or `Float16_b` output the hardware hands back 65536 where the answer was
+  70000 and 0 where it was 3e-5, while the golden holds the answer (or substitutes a
+  finite 131008 for an fp16 infinity): 8 million fp32 steps for the Dest's overflow, not
+  the op's. Only where the Dest is narrower than the output; under an fp16 output the
+  two overflow together and that is judged as an output overflow;
 - **the sweep's own zero padding** — the tensor is 65,536 lanes and bfloat16 has 65,279
   finite values, so the last 257 are padding rather than data.
 
-The second kind is a *failure*, not a non-question, so `nonfinite_failures` reports it
-separately — over everywhere the op claims an answer: the whole format, less the
-undefined side of each singularity `sfpu_domains._OP_SINGULARITIES` registers (`Log`
-below zero, `Reciprocal` at zero) and a per-op argument-reduction limit (`Sin` and `Cos`
-past pi, on the formats that reach `sin(2.6e28)`: bfloat16 and Float32, not float16,
+The driver ANDs `claimed_lanes` into that mask, so the budget is measured over
+everywhere the op claims an answer: the whole format, less the undefined side of each
+singularity `sfpu_domains._OP_SINGULARITIES` registers (`Log` below zero, `Reciprocal`
+at zero), every non-positive integer for `Digamma`, `Lgamma` and `Polygamma`
+(`_NONPOSITIVE_INTEGER_POLES`: the poles are a lattice, and every fp32 value of
+magnitude 2^23 or more is an integer) and a per-op argument-reduction limit (`Sin` and
+`Cos` past pi, on the formats that reach `sin(2.6e28)`: bfloat16 and Float32, not float16,
 which ends at 65504 and is reduced correctly throughout). Not the functional driver's
 sampling window, which is where points are drawn rather than where an op stops being
 defined, and not `_SFPU_UNDEFINED_RANGES`, whose holes are guard bands around those
@@ -184,6 +194,15 @@ Four verdicts:
   output's usable ceiling when the measurement itself fits under it. A measured 0 stays
   0 on a 16-bit input the sweep enumerates, and on an op exact by construction; on the
   strided `Float32` input it is written as 1, since a sample cannot assert exactness.
+- **`max_ulp: N, near_zero_atol: A`**, "max R ULP outside a A near-zero floor (M steps
+  over every lane)" — enrolled with a floor. The step count is a difference of
+  bit-pattern ranks, so a lane where the hardware answers 0 for a 2e-9 the golden still
+  holds reads as 2^29 fp32 steps, and one such lane demoted the whole cell. Lanes under
+  1 % of the cell's largest golden (and under `A/0.01`) are judged on absolute error
+  instead; `A` is the smallest floor that rescues the band lanes past the ceiling, with
+  1.1x headroom, and `N` is the budget of everything outside it. The emitter grants a
+  floor up to `ulp_sweep.EMIT_MAX_NEAR_ZERO_ATOL` (1e-3); a cell that would need more
+  is demoted with the figure it would have needed on the row.
 - **`metric: tolerance`, "budget N > ceiling C"** — the measurement itself is past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces; `N` is the budget it would have needed. The op keeps tolerance + PCC on that cell and the number is
@@ -264,11 +283,14 @@ Two ways, and they mean different things:
 If an op is exact over most of its range and catastrophic in a narrow band near zero,
 the measurement will be dominated by the band and the cell will demote to tolerance.
 `near_zero_atol` is the floor under the budget for exactly that: the lanes where the
-reference crosses zero, judged on absolute error instead of steps. `Gelu` and most of
-`Erfinv` are gated that way. The emitter cannot re-derive a floor, so an op with a floor
-row on a cell the run measured keeps its whole block as it was: every other op is
-written, and the summary names the ops it kept. You settle those by hand; the session
-does not fail on them, because such a block is hand-maintained by design.
+reference crosses zero, judged on absolute error instead of steps. The emitter derives
+it from the measurement (`ulp_sweep.near_zero_floor`) and writes it on the row, so a
+re-emit regenerates a floor row like any other; the only blocks still kept verbatim are
+the op-wide `atol`/`rtol` anchors of `GeluAppx` and `SigmoidAppx`, which the summary
+names. A floor past `EMIT_MAX_NEAR_ZERO_ATOL` is a kernel's cut-off rather than its
+rounding -- `Softplus` answers 0 below x = -5 where the answer is up to 0.0065, the
+approximate `Gelu` is 0.024 off -- and stays a hand decision: the demoted row records
+the floor it would have needed.
 
 ## Gotchas
 
