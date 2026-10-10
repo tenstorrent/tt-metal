@@ -17,7 +17,6 @@ from models.common.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 class TestUpdateCache:
-    @skip_for_blackhole("Mismatching on BH, see #12349")
     @pytest.mark.parametrize("seq_len", [32, 512, 2048, 4096])
     def test_fill_cache(self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device):
         cache_dtype = input_dtype
@@ -275,7 +274,6 @@ def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device)
     ), f"Expected a single program-cache entry (genuine hits after first), got {num_new_cache_entries}"
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("in_sharded", [False, True])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 def test_fill_cache_program_cache_hits(in_sharded, input_dtype, device):
@@ -345,6 +343,59 @@ def test_fill_cache_program_cache_hits(in_sharded, input_dtype, device):
     assert (
         num_new_cache_entries == 1
     ), f"Expected a single program-cache entry (genuine hits after first), got {num_new_cache_entries}"
+
+
+# With interleaved input, the work split can put a head boundary inside one core's run of tile rows.
+# A head spans seq_len rows in the input but max_seq_len rows in the cache, so whenever the prompt is
+# shorter than the cache the writer has to jump to the next head's rows at that boundary. Each of the
+# first five cases crosses a head on the 8x8 Wormhole grid and on the 11x10, 12x10 and 13x10
+# Blackhole grids. (8, 1984) with update_idx 64 ends exactly at the end of the cache, (192, 32) puts
+# several heads on one core, and (8, 1376) fills the whole cache, where no jump is needed.
+@pytest.mark.parametrize(
+    "num_heads, seq_len, max_seq_len",
+    [
+        (4, 1312, 2048),
+        (8, 736, 2048),
+        (8, 1376, 2048),
+        (16, 288, 2048),
+        (16, 1568, 2048),
+        (8, 1984, 2048),
+        (192, 32, 256),
+        (8, 1376, 1376),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("update_idx", [0, 64])
+def test_fill_cache_head_crossing(num_heads, seq_len, max_seq_len, input_dtype, update_idx, device):
+    if update_idx + seq_len > max_seq_len:
+        pytest.skip("the fill would run past the end of the cache")
+    torch.manual_seed(0)
+    head_dim = 64
+    num_users = 2
+    sentinel = 7.0
+
+    cache = torch.full([num_users, num_heads, max_seq_len, head_dim], sentinel).bfloat16()
+    cachett = ttnn.from_torch(cache, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Batch 1 is filled first, so rows written past the end of batch 0's last head land in rows the
+    # check covers. The second fill reuses the first fill's program at a different batch_idx and
+    # update_idx, so it also covers the program-cache-hit path.
+    fills = [(1, 0), (0, update_idx)]
+    num_new_cache_entries = 0
+    for batch_idx, idx in fills:
+        x = torch.randn([1, num_heads, seq_len, head_dim]).bfloat16()
+        xt = ttnn.from_torch(x, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        entries_before = device.num_program_cache_entries()
+        cachett = ttnn.fill_cache(cachett, xt, batch_idx, update_idx=idx)
+        num_new_cache_entries += device.num_program_cache_entries() - entries_before
+        # fill_cache copies tiles as they are, so the expected rows are the device input read back
+        # (this also makes the bfloat8_b case exact).
+        cache[batch_idx, :, idx : idx + seq_len, :] = ttnn.to_torch(xt)[0]
+
+    tt_got_back = ttnn.to_torch(cachett)
+    rows_wrong = (tt_got_back != cache).any(-1).sum().item()
+    assert rows_wrong == 0, f"{rows_wrong} cache rows differ from the expected fill"
+    assert num_new_cache_entries == 1, f"Expected one program-cache entry, got {num_new_cache_entries}"
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
