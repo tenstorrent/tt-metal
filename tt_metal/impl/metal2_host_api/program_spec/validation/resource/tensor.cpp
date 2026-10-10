@@ -88,8 +88,7 @@ void ValidateTensorParametersUsed(const ValidationContext& ctx) {
     // Every declared TensorParameter must be referenced by some kernel binding or a DFB
     // borrowed_from. (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
     // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
-    // (resolved by name at runtime) even when no kernel binds it, so that counts as a use. Only local
-    // DFBs are walked: borrowed memory is a local-L1 feature (cross-node DFBs are runtime-unsupported).
+    // (resolved by name at runtime) even when no kernel binds it, so that counts as a use.
     // Existence of the borrowed_from referent is validated in ValidateDFBSpec.
     std::unordered_set<TensorParamName> used_tensor_parameters;
     for (const auto& kernel : spec.kernels) {

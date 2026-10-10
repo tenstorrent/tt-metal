@@ -23,7 +23,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
