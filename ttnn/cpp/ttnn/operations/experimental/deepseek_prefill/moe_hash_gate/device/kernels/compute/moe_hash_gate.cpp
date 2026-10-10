@@ -5,6 +5,7 @@
 // Hash-gate compute: activation -> normalize -> scale. Expert selection (cb_out_indices) is produced
 // by the reader (tid2eid[input_ids] lookup), and the unbiased-score gather runs in the writer, so the
 // compute kernel only needs the shared apply_score_func / normalize_scores / scale blocks.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp"
 
 void kernel_main() {

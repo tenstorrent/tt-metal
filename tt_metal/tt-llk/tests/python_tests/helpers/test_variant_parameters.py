@@ -6,7 +6,7 @@ import math
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -818,6 +818,52 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
+
+
+@dataclass(repr=False)
+class PER_FACE_HANDOFF(TemplateParameter):
+    """Blackhole eltwise binary: SrcDvalid::PerFace on both threads. It follows from the swept op, fidelity and
+    transpose, so it is not a report column; repr carries it into the variant hash."""
+
+    _per_face_handoff: InitVar[bool] = False
+
+    def __post_init__(self, _per_face_handoff: bool):
+        self.value = _per_face_handoff
+
+    def __repr__(self) -> str:
+        return f"PER_FACE_HANDOFF({self.value})"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool per_face_handoff = {str(self.value).lower()};"
+
+
+@dataclass(repr=False)
+class DEST_REUSE_UNPACK_A(TemplateParameter):
+    """Blackhole eltwise binary dest reuse: the folds take the dest-reuse unpack the compute API pairs with the dest-reuse math.
+    Not a report column; repr carries it into the variant hash."""
+
+    def __repr__(self) -> str:
+        return "DEST_REUSE_UNPACK_A()"
+
+    def convert_to_cpp(self) -> str:
+        return "#define DEST_REUSE_UNPACK_A"
+
+
+@dataclass(repr=False)
+class UNPACK_AB_BLOCK(TemplateParameter):
+    """Blackhole eltwise binary: 1 unpacks each block of tile pairs with one call, 2 the same with a B stride of 0, 0 per tile.
+    Not a report column; repr carries it into the variant hash."""
+
+    _unpack_ab_block: InitVar[int] = 0
+
+    def __post_init__(self, _unpack_ab_block: int):
+        self.value = int(_unpack_ab_block)
+
+    def __repr__(self) -> str:
+        return f"UNPACK_AB_BLOCK({self.value})"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t unpack_ab_block = {self.value};"
 
 
 @dataclass

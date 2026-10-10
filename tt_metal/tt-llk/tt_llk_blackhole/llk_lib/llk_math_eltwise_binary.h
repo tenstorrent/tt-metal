@@ -26,8 +26,15 @@ using namespace ckernel;
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam tile_dvalid: Whole-tile program (see @ref eltwise_binary_tile_dvalid): ADDR_MOD_2 and ADDR_MOD_3 return the counters to the tile base
+ * @tparam row_step: Slot of the whole-tile row broadcast's face step; the dest-reuse execute keeps ADDR_MOD_1 for its moves and clears
  */
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity>
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType bcast_type,
+    MathFidelity math_fidelity,
+    bool tile_dvalid      = false,
+    std::uint8_t row_step = ADDR_MOD_1>
 inline void eltwise_binary_configure_addrmod()
 {
     static_assert(
@@ -54,6 +61,27 @@ inline void eltwise_binary_configure_addrmod()
     }
         .set(ADDR_MOD_1);
 
+    if constexpr (tile_dvalid)
+    {
+        if constexpr (bcast_type == BroadcastType::ROW)
+        {
+            // The second instruction of a face moves SrcB to the next face's broadcast row
+            addr_mod_t {
+                .srca = {.incr = MAX_FPU_ROWS},
+                .srcb = {.incr = FACE_R_DIM},
+                .dest = {.incr = MAX_FPU_ROWS},
+            }
+                .set(row_step);
+        }
+
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0, .clr = 1}, .dest = {.incr = 0, .clr = 1}, .fidelity = {.incr = fidelity_increment}}
+            .set(ADDR_MOD_2);
+
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0, .clr = 1}, .dest = {.incr = 0, .clr = 1}, .fidelity = {.incr = 0, .clr = 1}}
+            .set(ADDR_MOD_3);
+        return;
+    }
+
     addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0, .clr = 1}, .dest = {.incr = 0, .clr = 0, .cr = 1}, .fidelity = {.incr = fidelity_increment}}
         .set(ADDR_MOD_2);
 
@@ -63,6 +91,44 @@ inline void eltwise_binary_configure_addrmod()
         .dest     = {.incr = MAX_FPU_ROWS, .clr = 0, .cr = 0, .c_to_cr = 1},
         .fidelity = {.incr = 0, .clr = 1}}
         .set(ADDR_MOD_3);
+}
+
+/**
+ * @brief Whether the dest-reuse path consumes each operand tile as one source bank (no broadcast, or a row broadcast with DEST_TO_SRCA);
+ *        the dest-reuse unpack init applies the same rule (@ref unpack_A_tile_dvalid), so the two threads agree.
+ */
+template <BroadcastType bcast_type, EltwiseBinaryReuseDestType binary_reuse_dest, SrcDvalid src_dvalid>
+inline constexpr bool eltwise_binary_tile_dvalid =
+    src_dvalid == SrcDvalid::PerTile &&
+    (bcast_type == BroadcastType::NONE || (bcast_type == BroadcastType::ROW && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
+
+/**
+ * @brief Whether the two-operand path consumes each operand tile as one source bank; the two-operand unpack init applies the same rule
+ *        (@ref unpack_AB_tile_dvalid).
+ */
+template <SrcDvalid src_dvalid>
+inline constexpr bool eltwise_binary_standard_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
+
+/**
+ * @brief Whether a tile takes the whole-tile program: full 16-row faces, and 2 x 2 faces for a column or row broadcast, whose SrcB bank
+ *        holds B's faces in the order the unpack init writes them.
+ */
+template <BroadcastType bcast_type>
+inline bool eltwise_binary_tile_shape(const ckernel::TensorShape tensor_shape)
+{
+    constexpr bool needs_2x2_faces = bcast_type == BroadcastType::COL || bcast_type == BroadcastType::ROW;
+    return tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
+}
+
+/**
+ * @brief Whether the dest-reuse path takes the whole-tile program for this tile shape: two or more full 16-row faces, 2 x 2 for a row
+ *        broadcast; the dest-reuse unpack init applies the same rule.
+ */
+template <BroadcastType bcast_type>
+inline bool eltwise_binary_reuse_tile_shape(const ckernel::TensorShape tensor_shape)
+{
+    return tensor_shape.face_r_dim == FACE_R_DIM && tensor_shape.total_num_faces() > 1 &&
+           (bcast_type != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
 }
 
 /**
@@ -94,6 +160,72 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
     else
     {
         return TT_OP_ELWMUL(clr_src, acc_to_dest, broadcast_type, addr_mod, 0 /*dst*/);
+    }
+}
+
+/**
+ * @brief Configure the MOP that processes a whole tile from one source bank per operand (see @ref eltwise_binary_tile_dvalid):
+ *        num_faces x 2 eight-row instructions per fidelity phase, both source banks released once at the end.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR> (see @ref eltwise_binary_tile_shape for the SrcB layout)
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam row_step: Address-mod slot of a row broadcast's face step, as programmed by @ref eltwise_binary_configure_addrmod
+ * @param acc_to_dest: Accumulate result to destination register instead of overwriting (ELWADD/ELWSUB only)
+ * @param num_faces: Faces of the tile, 1, 2 or 4
+ */
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity, std::uint8_t row_step = ADDR_MOD_1>
+inline void eltwise_binary_configure_mop_tile(const std::uint32_t acc_to_dest, const std::uint32_t num_faces)
+{
+    static_assert(
+        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise multiply");
+    constexpr auto broadcast_type = (bcast_type == BroadcastType::COL)      ? p_elwise::SRCB_BCAST_COL
+                                    : (bcast_type == BroadcastType::ROW)    ? p_elwise::SRCB_BCAST_ROW
+                                    : (bcast_type == BroadcastType::SCALAR) ? p_elwise::SRCB_BCAST_ALL
+                                                                            : p_elwise::SRCB_NO_BCAST;
+    // A row broadcast pairs the two instructions of a face: ADDR_MOD_0 keeps SrcB on the face's row, row_step moves it to the next face
+    constexpr bool row_pairs      = bcast_type == BroadcastType::ROW;
+    const std::uint32_t innerloop = row_pairs ? num_faces : num_faces * (FACE_R_DIM >> MAX_FPU_ROWS_LOG2);
+    const std::uint32_t acc       = (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? 0 : acc_to_dest;
+
+    if constexpr (is_high_fidelity(math_fidelity))
+    {
+        const std::uint32_t elwmul = eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_0);
+        if constexpr (row_pairs)
+        {
+            ckernel_template tmp(
+                to_underlying(math_fidelity),
+                innerloop,
+                elwmul,
+                eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, row_step));
+            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
+            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(p_setrwc::CLR_AB, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
+            tmp.program();
+        }
+        else
+        {
+            ckernel_template tmp(to_underlying(math_fidelity), innerloop, elwmul);
+            tmp.set_last_inner_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(0 /*clr_src*/, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_2));
+            tmp.set_last_outer_loop_instr(eltwise_binary_func<EltwiseBinaryType::ELWMUL>(p_setrwc::CLR_AB, 0 /*acc_to_dest*/, broadcast_type, ADDR_MOD_3));
+            tmp.program();
+        }
+    }
+    else if constexpr (row_pairs)
+    {
+        ckernel_template tmp(
+            1,
+            innerloop,
+            eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc, broadcast_type, ADDR_MOD_0),
+            eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc, broadcast_type, row_step));
+        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(1, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc, broadcast_type, ADDR_MOD_0));
+        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
+        tmp.program();
     }
 }
 
@@ -196,17 +328,34 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the unpack init
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
  * @note @ref _llk_math_eltwise_binary_standard_ runs the configured op with matching template args.
  */
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t acc_to_dest)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_standard_init_", tensor_shape);
 
-    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
-    eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+    if constexpr (eltwise_binary_standard_tile_dvalid<src_dvalid>)
+    {
+        if (eltwise_binary_tile_shape<src_b_bcast_type>(tensor_shape))
+        {
+            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity, true>();
+            eltwise_binary_configure_mop_tile<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape.total_num_faces());
+        }
+        else
+        {
+            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
+            eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+        }
+    }
+    else
+    {
+        eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
+        eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+    }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -221,6 +370,7 @@ inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape t
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the init
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @note Call @ref _llk_math_eltwise_binary_standard_init_ with matching template args before this function.
@@ -230,7 +380,8 @@ template <
     BroadcastType src_b_bcast_type,
     DstSync Dst,
     bool is_fp32_dest_acc_en,
-    MathFidelity math_fidelity = MathFidelity::LoFi>
+    MathFidelity math_fidelity = MathFidelity::LoFi,
+    SrcDvalid src_dvalid       = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index)
 {
     static_assert(
@@ -246,6 +397,16 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape tensor
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    if constexpr (eltwise_binary_standard_tile_dvalid<src_dvalid>)
+    {
+        if (eltwise_binary_tile_shape<src_b_bcast_type>(tensor_shape))
+        {
+            ckernel_template::run();
+            math::clear_dst_reg_addr();
+            return;
+        }
+    }
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
@@ -345,6 +506,61 @@ inline void eltwise_binary_reuse_dest_as_src()
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
         move_d2b_fixed_face(ADDR_MOD_1);
+    }
+}
+
+/**
+ * @brief Move one face of the DEST tile into rows 16 x face .. 16 x face + 15 of the reused source bank (four 4-row moves, no wait).
+ *
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam face: Face of the tile, 0 to 3 (a template parameter: TTI_ operands must be immediates)
+ */
+template <EltwiseBinaryReuseDestType binary_reuse_dest, std::uint32_t face>
+inline void eltwise_binary_move_dest_face_to_src()
+{
+    constexpr std::uint32_t row = face * FACE_R_DIM;
+    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+    {
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 0, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 0);
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 4);
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 8, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 8);
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 12, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 12);
+    }
+    else
+    {
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + row + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, row + 0);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + row + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, row + 4);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + row + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, row + 8);
+        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + row + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, row + 12);
+    }
+}
+
+/**
+ * @brief Move every face of the DEST tile into the reused source bank with one pipeline drain and bank wait (whole-tile program).
+ *
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param num_faces: Faces of the tile, 1, 2 or 4
+ */
+template <EltwiseBinaryReuseDestType binary_reuse_dest>
+inline void eltwise_binary_reuse_dest_as_src_tile(const std::uint32_t num_faces)
+{
+    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+    }
+    else
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+    }
+    eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 0>();
+    if (num_faces > 1)
+    {
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 1>();
+    }
+    if (num_faces > 2)
+    {
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 2>();
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 3>();
     }
 }
 
@@ -464,6 +680,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the unpack init
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register
  * @note @ref _llk_math_eltwise_binary_with_dest_reuse_ runs the configured op with matching template args.
@@ -472,14 +689,33 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t acc_to_dest)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_with_dest_reuse_init_", tensor_shape);
 
-    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
-    eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+    if constexpr (eltwise_binary_tile_dvalid<src_b_bcast_type, binary_reuse_dest, src_dvalid>)
+    {
+        if (eltwise_binary_reuse_tile_shape<src_b_bcast_type>(tensor_shape))
+        {
+            // The execute's moves and clears use ADDR_MOD_1, so a row broadcast steps its faces with ADDR_MOD_4
+            constexpr std::uint8_t row_step = (src_b_bcast_type == BroadcastType::ROW) ? ADDR_MOD_4 : ADDR_MOD_1;
+            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity, true, row_step>();
+            eltwise_binary_configure_mop_tile<eltwise_binary_type, src_b_bcast_type, math_fidelity, row_step>(acc_to_dest, tensor_shape.total_num_faces());
+        }
+        else
+        {
+            eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
+            eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+        }
+    }
+    else
+    {
+        eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
+        eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
+    }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -577,6 +813,38 @@ inline void eltwise_binary_run_with_dest_reuse(
 }
 
 /**
+ * @brief Run the dest-reuse op on a whole tile: one drain, every face moved into the source bank, the DEST faces
+ *        cleared for the multiply, then the one-run whole-tile MOP (see @ref eltwise_binary_tile_dvalid).
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param num_faces: Faces of the tile, 1, 2 or 4.
+ * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator faces when FP32 mode is enabled.
+ * @param dst_index: Tile index into the destination register.
+ */
+template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest>
+inline void eltwise_binary_run_with_dest_reuse_tile(const std::uint32_t num_faces, const bool clear_fp32_dst_acc, const std::uint32_t dst_index)
+{
+    eltwise_binary_reuse_dest_as_src_tile<binary_reuse_dest>(num_faces);
+
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
+    {
+        // With the DEST counter at the tile base the ZEROACC bank-select sum stays below the bank size
+        const int clear_fp32               = is_fp32_dest_acc_en && clear_fp32_dst_acc ? 1 : 0;
+        const std::uint32_t tiles_per_bank = clear_fp32 ? MAX_TILES_IN_HALF_DEST >> 1 : MAX_TILES_IN_HALF_DEST;
+        const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+        for (std::uint32_t face = 0; face < num_faces; face++)
+        {
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face));
+        }
+    }
+
+    ckernel_template::run();
+}
+
+/**
  * @brief Perform elementwise binary operation with dest reuse: Output = SrcA [+, -, *] SrcB, where one src comes from the dest register.
  *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
@@ -585,6 +853,7 @@ inline void eltwise_binary_run_with_dest_reuse(
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the init
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
@@ -596,7 +865,8 @@ template <
     DstSync Dst,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest>
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
     const std::uint32_t num_faces       = tensor_shape.total_num_faces();
@@ -615,6 +885,16 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    if constexpr (eltwise_binary_tile_dvalid<src_b_bcast_type, binary_reuse_dest, src_dvalid>)
+    {
+        if (eltwise_binary_reuse_tile_shape<src_b_bcast_type>(tensor_shape))
+        {
+            eltwise_binary_run_with_dest_reuse_tile<eltwise_binary_type, is_fp32_dest_acc_en, binary_reuse_dest>(num_faces, clear_fp32_dst_acc, dst_index);
+            math::clear_dst_reg_addr();
+            return;
+        }
+    }
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
@@ -693,6 +973,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the unpack init of the op (see @ref eltwise_binary_tile_dvalid)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_init_ which feeds SrcA/SrcB.
@@ -702,16 +983,18 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t acc_to_dest)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {
-        _llk_math_eltwise_binary_standard_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity>(tensor_shape, acc_to_dest);
+        _llk_math_eltwise_binary_standard_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity, src_dvalid>(tensor_shape, acc_to_dest);
     }
     else
     {
-        _llk_math_eltwise_binary_with_dest_reuse_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(tensor_shape, acc_to_dest);
+        _llk_math_eltwise_binary_with_dest_reuse_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest, src_dvalid>(
+            tensor_shape, acc_to_dest);
     }
 
     // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag but
@@ -732,6 +1015,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the init
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
@@ -745,7 +1029,8 @@ template <
     DstSync Dst,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc = false)
 {
     // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB honor ALU_ACC_CTRL_Zero_Flag_disabled_src; a prior
@@ -758,12 +1043,18 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
 
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {
-        _llk_math_eltwise_binary_standard_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity>(tensor_shape, dst_index);
+        _llk_math_eltwise_binary_standard_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity, src_dvalid>(tensor_shape, dst_index);
     }
     else
     {
-        _llk_math_eltwise_binary_with_dest_reuse_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity, binary_reuse_dest>(
-            tensor_shape, dst_index, clear_fp32_dst_acc);
+        _llk_math_eltwise_binary_with_dest_reuse_<
+            eltwise_binary_type,
+            src_b_bcast_type,
+            Dst,
+            is_fp32_dest_acc_en,
+            math_fidelity,
+            binary_reuse_dest,
+            src_dvalid>(tensor_shape, dst_index, clear_fp32_dst_acc);
     }
 }
 

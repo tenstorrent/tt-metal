@@ -145,19 +145,79 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 }
 
 /**
+ * @brief Whether the two-operand unpack hands each operand over as one source bank; the init adds the transpose and shape checks, and the
+ *        math init applies the same rule so both threads agree.
+ */
+template <BroadcastType BType, SrcDvalid src_dvalid>
+inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
+
+/**
+ * @brief Whether a tile takes the whole-tile hand-off: full 16-row faces, and 2 x 2 faces for a column or row broadcast. Matches the math
+ *        side's eltwise_binary_tile_shape.
+ */
+template <BroadcastType BType>
+inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
+{
+    constexpr bool needs_2x2_faces = BType == BroadcastType::COL || BType == BroadcastType::ROW;
+    return tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
+}
+
+/**
+ * @brief Configure the MOP that hands each operand over as one source bank: one UNPACR of A's whole tile; B in the layout the math MOP
+ *        reads (whole tile, face 0 for a scalar, faces 0 0 2 2 for a column broadcast, faces 0 and 1 twice for a row broadcast).
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ */
+template <BroadcastType BType>
+inline void _llk_unpack_AB_mop_config_tile_()
+{
+    static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_last = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    // B counters back to the tile base for the next call
+    static constexpr std::uint32_t srcb_reset_zw = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+    if constexpr (BType == BroadcastType::COL)
+    {
+        // AddrMode bits 5:4 step the SrcB row by one face (Ch1 Z), bits 1:0 step the L1 face (Ch0 Z)
+        static constexpr std::uint32_t srcb_same_face = TT_OP_UNPACR(SrcB, 0b00010000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr std::uint32_t srcb_to_face_2  = TT_OP_UNPACR(SrcB, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, 2, srcb_same_face, srcb_to_face_2);
+        tmp.set_start_op(unpack_srca_tile);
+        tmp.set_last_inner_loop_instr(unpack_srcb_last);
+        tmp.set_last_outer_loop_instr(unpack_srcb_last);
+        tmp.set_end_op(srcb_reset_zw);
+        tmp.program();
+    }
+    else if constexpr (BType == BroadcastType::ROW)
+    {
+        static constexpr std::uint32_t srcb_two_faces = TT_OP_UNPACR(SrcB, 0b00100000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, 1, srcb_two_faces, unpack_srcb_last);
+        tmp.set_start_op(unpack_srca_tile);
+        tmp.set_end_op(srcb_reset_zw);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_last);
+        tmp.program();
+    }
+}
+
+/**
  * @brief Initialize unpacker to unpack two source operands A and B into SrcA and SrcB registers
  *
  * Configures the unpacker hardware for dual-operand unpacking with support for various
  * broadcast modes and optional transpose. Sets up number of datums to unpack based on face dimensions.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the math init (see @ref unpack_AB_tile_dvalid)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <BroadcastType BType = BroadcastType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
@@ -165,6 +225,29 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
+
+    if constexpr (unpack_AB_tile_dvalid<BType, src_dvalid>)
+    {
+        LLK_ASSERT(
+            transpose == ckernel::Transpose::None,
+            "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
+        if (transpose == ckernel::Transpose::None && unpack_AB_tile_shape<BType>(tensor_shape))
+        {
+            constexpr std::uint32_t face_datums = FACE_R_DIM * FACE_C_DIM;
+            const std::uint32_t tile_datums     = tensor_shape.total_num_faces() * face_datums;
+            if constexpr (BType == BroadcastType::NONE)
+            {
+                TT_SETADCXX(p_setadc::UNP_AB, tile_datums - 1, 0x0);
+            }
+            else
+            {
+                TT_SETADCXX(p_setadc::UNP_A, tile_datums - 1, 0x0);
+                TT_SETADCXX(p_setadc::UNP_B, (BType == BroadcastType::ROW ? 2 * face_datums : face_datums) - 1, 0x0);
+            }
+            _llk_unpack_AB_mop_config_tile_<BType>();
+            return;
+        }
+    }
 
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
 
@@ -177,14 +260,15 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * Convenience overload that forwards to the transpose-aware init with @ref ckernel::Transpose::None.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile> (see the transpose-aware init)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
-template <BroadcastType BType = BroadcastType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
+    _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, ckernel::Transpose::None);
 }
 
 /**
@@ -194,15 +278,16 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
  * zero selects @ref ckernel::Transpose::None.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile> (see the transpose-aware init)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
-template <BroadcastType BType = BroadcastType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
 {
-    _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
+    _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
 /**
@@ -292,5 +377,82 @@ inline void _llk_unpack_AB_(
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
+    switch_config_context(unp_cfg_context);
+}
+
+/**
+ * @brief Unpack a block of consecutive tile pairs from L1 into SrcA and SrcB with one config context acquire: the base addresses are
+ *        written once and advanced by the tile strides in the instruction stream, and the MOP programmed by the init runs once per tile.
+ *
+ * @tparam BType: Broadcast type for source B, must be NONE.
+ * @param address_a: L1 address of the first source A tile (16 B units).
+ * @param address_b: L1 address of the first source B tile (16 B units).
+ * @param num_tiles: Number of consecutive tile pairs, at least 1.
+ * @param stride_a: Distance between the starts of consecutive source A tiles (16 B units), the operand's page size.
+ * @param stride_b: Distance between the starts of consecutive source B tiles (16 B units), the operand's page size.
+ * @note Call @ref _llk_unpack_AB_init_ with BroadcastType::NONE (either hand-off) before this function; it uses SCRATCH_SEC0 and SCRATCH_SEC1.
+ */
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_block_(
+    const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t num_tiles, const std::uint32_t stride_a, const std::uint32_t stride_b)
+{
+    static_assert(BType == BroadcastType::NONE, "_llk_unpack_AB_block_ supports BroadcastType::NONE only");
+    LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
+    LLK_ASSERT(is_valid_L1_address(address_a) && is_valid_L1_address(address_b), "L1 addresses must be in valid L1 memory region");
+    LLK_ASSERT(
+        is_valid_L1_address(address_a + (num_tiles - 1) * stride_a) && is_valid_L1_address(address_b + (num_tiles - 1) * stride_b),
+        "L1 addresses of the last tiles must be in valid L1 memory region");
+
+    // Strides into SCRATCH_SEC0/1 from the instruction stream, ordered behind the CFGSHIFTMASKs of an earlier block
+    TT_SETDMAREG(0, LOWER_HALFWORD(stride_a), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(stride_a), 0, HI_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD(stride_b), 0, LO_16(p_gpr_unpack::TMP1));
+    TT_SETDMAREG(0, UPPER_HALFWORD(stride_b), 0, HI_16(p_gpr_unpack::TMP1));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, SCRATCH_SEC1_val_ADDR32);
+
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    // Every tile, the first one included, adds the stride before its unpack
+    if (unp_cfg_context == 0)
+    {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a - stride_a;
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b - stride_b;
+    }
+    else
+    {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a - stride_a;
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b - stride_b;
+    }
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Hold the CFGSHIFTMASKs and the UNPACRs until the base address stores from the RISC have landed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+    if (unp_cfg_context == 0)
+    {
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b00, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b01, THCON_SEC1_REG3_Base_address_ADDR32);
+            // reset counters; also the instruction between the config writes and the UNPACRs that consume them
+            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+            ckernel::ckernel_template::run();
+        }
+    }
+    else
+    {
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b00, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b01, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+            ckernel::ckernel_template::run();
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
     switch_config_context(unp_cfg_context);
 }

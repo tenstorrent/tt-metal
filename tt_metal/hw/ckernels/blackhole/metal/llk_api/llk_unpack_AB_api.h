@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_binary_src_dvalid.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
@@ -18,9 +19,10 @@
 // formats are programmed once at compute_kernel_hw_startup, so the op needs only the two L1 addresses (plus
 // the SrcB source format for the ROW-broadcast path).
 
-template <BroadcastType BType = BroadcastType::NONE>
+// src_dvalid must match the math init of the op (SrcDvalid in llk_defs.h).
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_AB_init_impl(const ckernel::TensorShape& tensor_shape, const ckernel::Transpose transpose) {
-    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
+    _llk_unpack_AB_init_<BType, src_dvalid>(tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
@@ -38,7 +40,7 @@ inline void llk_unpack_AB_impl(
     WAYPOINT("UABD");
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
@@ -67,12 +69,18 @@ inline void llk_unpack_AB_init(
         StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
-    llk_unpack_AB_init_impl<BType>(tensor_shape, transpose);
+    if constexpr (eltwise_binary_bcast_per_tile<BType, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(operandB_id)) {
+            llk_unpack_AB_init_impl<BType, SrcDvalid::PerFace>(tensor_shape, transpose);
+            return;
+        }
+    }
+    llk_unpack_AB_init_impl<BType, src_dvalid>(tensor_shape, transpose);
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
+template <BroadcastType BType = BroadcastType::NONE, SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
-    llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
+    llk_unpack_AB_init<BType, src_dvalid>(operandA, operandB, ckernel::Transpose::None);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
@@ -119,4 +127,55 @@ inline void llk_unpack_AB(
         StateDiscard<std::uint32_t>(bcast_row_idx)));
 
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
+}
+
+// ntiles consecutive tile pairs from one config context: one context acquire per block instead of per tile.
+inline void llk_unpack_AB_block(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t start_tile_index_a,
+    const std::uint32_t start_tile_index_b,
+    const std::uint32_t ntiles) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const std::uint32_t page_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t page_b = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1 + page_a * start_tile_index_a;
+    const std::uint32_t address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1 + page_b * start_tile_index_b;
+
+    LLK_ASSERT(
+        cb_access_within_bounds(operandA_id, start_tile_index_a, ntiles),
+        "Block tile read exceeds CB boundary");
+    LLK_ASSERT(
+        cb_access_within_bounds(operandB_id, start_tile_index_b, ntiles),
+        "Block tile read exceeds CB boundary");
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        get_operand_face_r_dim(operandA_id),
+        get_operand_face_r_dim(operandB_id),
+        get_operand_num_faces(operandA_id),
+        get_operand_num_faces(operandB_id)));
+
+    // One execute per tile; the state is identical for every iteration, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id)),
+        StateDiscard<std::uint32_t>(start_tile_index_a),
+        StateDiscard<std::uint32_t>(start_tile_index_b),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    WAYPOINT("UABW");
+    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, page_a, page_b);
+    WAYPOINT("UABD");
 }

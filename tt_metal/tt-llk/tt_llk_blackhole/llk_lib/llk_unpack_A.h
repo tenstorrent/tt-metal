@@ -273,6 +273,51 @@ inline void _llk_unpack_A_mop_config_(
 }
 
 /**
+ * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank (no broadcast, or a row broadcast with DEST_TO_SRCA).
+ *        The init adds the run-time shape check; the math init applies the same rule so both threads agree.
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest, SrcDvalid src_dvalid>
+inline constexpr bool unpack_A_tile_dvalid =
+    src_dvalid == SrcDvalid::PerTile && acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::NONE && !unpack_to_dest &&
+    (BType == BroadcastType::NONE || (BType == BroadcastType::ROW && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
+
+/**
+ * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank: one UNPACR of every face, or faces 0 and 1
+ *        twice for a row broadcast, and one dummy publication for the reused source.
+ *
+ * @tparam BType: Broadcast type of the L1 operand, values = <NONE/ROW>
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ */
+template <BroadcastType BType, EltwiseBinaryReuseDestType binary_reuse_dest>
+inline void _llk_unpack_A_mop_config_tile_()
+{
+    static constexpr std::uint32_t unpack_srca_tile =
+        TT_OP_UNPACR(SrcA, 0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_tile =
+        TT_OP_UNPACR(SrcB, 0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t srca_op = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+                                                 ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
+                                                 : unpack_srca_tile;
+    static constexpr std::uint32_t srcb_op = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
+                                                 ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCB>()
+                                                 : unpack_srcb_tile;
+    if constexpr (BType == BroadcastType::ROW)
+    {
+        // AddrMode bits 5:4 step the SrcB face by two (Ch1 Z); the second UNPACR reads the same two L1 faces
+        static constexpr std::uint32_t srcb_two_faces =
+            TT_OP_UNPACR(SrcB, 0b00100000, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, 1, srcb_two_faces, unpack_srcb_tile);
+        tmp.set_start_op(srca_op);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(1, 1, srca_op, srcb_op);
+        tmp.program();
+    }
+}
+
+/**
  * @brief Initialize the unpacker for a single-operand (A) unpack.
  *
  * Configures the within-face transpose register and per-unpacker datum count, then programs
@@ -282,6 +327,7 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @tparam src_dvalid: Source bank hand-off of the dest-reuse form, values = <PerFace/PerTile>; must match the math init (see @ref unpack_A_tile_dvalid)
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
@@ -296,7 +342,8 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -316,6 +363,23 @@ inline void _llk_unpack_A_init_(
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+
+    if constexpr (unpack_A_tile_dvalid<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>)
+    {
+        LLK_ASSERT(
+            transpose_of_faces == 0 && within_face_16x16_transpose == 0,
+            "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
+        if (transpose_of_faces == 0 && within_face_16x16_transpose == 0 && face_r_dim == FACE_R_DIM && num_faces > 1 &&
+            (BType != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2)))
+        {
+            // The L1 operand goes to SrcB for DEST_TO_SRCA and to SrcA for DEST_TO_SRCB
+            constexpr std::uint32_t UNP_SEL      = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_setadc::UNP_B : p_setadc::UNP_A;
+            const std::uint32_t faces_per_unpack = (BType == BroadcastType::ROW) ? 2 : num_faces;
+            TT_SETADCXX(UNP_SEL, faces_per_unpack * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+            _llk_unpack_A_mop_config_tile_<BType, binary_reuse_dest>();
+            return;
+        }
+    }
 
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
