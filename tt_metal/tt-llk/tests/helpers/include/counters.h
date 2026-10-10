@@ -714,9 +714,27 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
 namespace llk_perf
 {
+// The unpack and pack threads run INIT with their icache stream prefetch on (ckernel.h icache_prefetch_on), as a kernel's
+// init runs where production turns it on: on before the INIT entry rendezvous, off once every INIT has ended, so it is
+// never on outside INIT. Math keeps it off: with 2 MSHRs and a 512 B icache, prefetch makes its INIT slower.
+constexpr bool init_prefetch_thread()
+{
+#if defined(LLK_EXP_INIT_PF_OFF) // experiment hook (init-opt2): INIT without prefetch
+    return false;
+#elif defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_PACK)
+    return true;
+#else
+    return false;
+#endif
+}
+
 template <PerfRunType RUN_TYPE, typename F>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
+    if constexpr (init_prefetch_thread())
+    {
+        ckernel::icache_prefetch_on();
+    }
     const bool opened = !llk_profiler::is_buffer_full();
     if (opened)
     {
@@ -728,6 +746,9 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     {
         const perf_counter_scoped<RUN_TYPE, false> counters(get_zone_id(detail::zone_name_hash("INIT")));
         body();
+#if defined(LLK_EXP_SIG_LOOP) // experiment (initpad agent): known INIT work right before the end read, LLK_EXP_SIG_LOOP x (thread + 1) iterations
+        asm volatile("addi sp, sp, -16\n\tsw t0, 0(sp)\n\tli t0, %0\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b\n\tlw t0, 0(sp)\n\taddi sp, sp, 16" ::"i"(LLK_EXP_SIG_LOOP * (COMPILE_FOR_TRISC + 1)) : "memory");
+#endif
         asm volatile(
             ".balign 16\n\tlui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])\n\t"
             "li t0, 2048\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b"
@@ -747,6 +768,10 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     if constexpr (!exit_barrier_for(RUN_TYPE)) // no INIT exit rendezvous: hold here until every INIT has ended
     {
         llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
+    }
+    if constexpr (init_prefetch_thread())
+    {
+        ckernel::icache_prefetch_off();
     }
 }
 } // namespace llk_perf
