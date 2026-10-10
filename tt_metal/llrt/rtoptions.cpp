@@ -92,8 +92,6 @@ enum class EnvVarID {
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
-    TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
-
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
@@ -1936,15 +1934,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             const std::string lowered = to_lower_copy(trim_copy(std::string(value)));
             this->topology_mapping_use_sat_engine_ =
                 lowered == "sat" || lowered == "1" || lowered == "true" || lowered == "yes";
-            break;
-        }
-
-        // TT_METAL_DISABLE_XIP_DUMP
-        // Disable XIP dump
-        // Default: false
-        // Usage: export TT_METAL_DISABLE_XIP_DUMP=1
-        case EnvVarID::TT_METAL_DISABLE_XIP_DUMP: {
-            this->disable_xip_dump = is_env_enabled(value);
             break;
         }
 
