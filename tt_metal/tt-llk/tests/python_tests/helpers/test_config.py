@@ -13,6 +13,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
@@ -92,6 +93,21 @@ from .test_variant_parameters import (
 from .utils import create_directories, run_shell_command
 
 TEMP_DIR = Path(tempfile.gettempdir())
+
+_NON_DEBUG_SECTION = re.compile(
+    r"^\s*(\.section\s+(?!\.debug_)|\.pushsection\b|\.text\b|\.data\b|\.bss\b)",
+    re.M,
+)
+
+
+def _without_debug_sections(text: str) -> str:
+    """GCC assembly without its debug sections (from .debug_info to the closing .ident), which no loaded section
+    refers to; unchanged when anything but debug sections follows .debug_info"""
+    start = text.find("\t.section\t.debug_info")
+    end = text.rfind("\t.ident")
+    if not 0 <= start < end or _NON_DEBUG_SECTION.search(text, start + 1, end):
+        return text
+    return text[:start] + text[end:]
 
 
 class ProfilerBuild(Enum):
@@ -1721,11 +1737,46 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
 
+    # kept assemblies of the variants this process built last, {path: (text, text without debug sections)}
+    _ASSEMBLIES: ClassVar[dict] = {}
+    _ASSEMBLIES_LOCK: ClassVar = threading.Lock()
+
+    @staticmethod
+    def _remember_assembly(path: Path, text: str):
+        with TestConfig._ASSEMBLIES_LOCK:
+            TestConfig._ASSEMBLIES[str(path)] = (text, None)
+            while len(TestConfig._ASSEMBLIES) > 12:
+                TestConfig._ASSEMBLIES.pop(next(iter(TestConfig._ASSEMBLIES)))
+
+    @staticmethod
+    def _kept_assembly(path: Path, probe: bool) -> str:
+        """A kept thread assembly; probe: without its debug sections, which link to the same loaded sections faster"""
+        with TestConfig._ASSEMBLIES_LOCK:
+            got = TestConfig._ASSEMBLIES.get(str(path))
+        if got is None:
+            with gzip.open(path, "rt") as f:
+                got = (f.read(), None)
+        text, stripped = got
+        if probe and stripped is None:
+            stripped = _without_debug_sections(text)
+        with TestConfig._ASSEMBLIES_LOCK:
+            TestConfig._ASSEMBLIES[str(path)] = (text, stripped)
+            while len(TestConfig._ASSEMBLIES) > 12:
+                TestConfig._ASSEMBLIES.pop(next(iter(TestConfig._ASSEMBLIES)))
+        return stripped if probe else text
+
     def _build_kernel_part(
-        self, name: str, variant_dir: Path, elf_dir: Path, pads=None, init_only=False
+        self,
+        name: str,
+        variant_dir: Path,
+        elf_dir: Path,
+        pads=None,
+        init_only=False,
+        probe=False,
     ):
         """Compiles and links one thread's ELF of this variant into elf_dir. Wormhole perf builds compile to assembly
         once and link it with the layout pads (pads = (P, Z) bytes, see perf/layout.py) as assembler symbols.
+        probe: a link perf/layout.py only reads the code of, made without debug sections.
         """
         local_options_compile, local_memory_layout_ld, _ = (
             self.resolve_compile_options()
@@ -1847,7 +1898,8 @@ class TestConfig:
             )
             return
 
-        # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread
+        # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread. The INIT
+        # build has no padded copies, so its assembly is not kept.
         assembly = variant_dir / ("obj_init" if init_only else "obj") / f"{name}.s"
         assembly.parent.mkdir(parents=True, exist_ok=True)
         if pads is None:
@@ -1864,12 +1916,16 @@ class TestConfig:
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
             run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             text = assembly.read_text()
-            with gzip.open(assembly.with_suffix(".s.gz"), "wt") as f:
-                f.write(text)
+            if not init_only:
+                # level 6: a seventh of the time of the default 9 for 6 % more bytes
+                with gzip.open(
+                    assembly.with_suffix(".s.gz"), "wt", compresslevel=6
+                ) as f:
+                    f.write(text)
+                TestConfig._remember_assembly(assembly.with_suffix(".s.gz"), text)
             assembly.unlink()
         else:
-            with gzip.open(assembly.with_suffix(".s.gz"), "rt") as f:
-                text = f.read()
+            text = TestConfig._kept_assembly(assembly.with_suffix(".s.gz"), probe)
         p, z = pads or (0, 0)
         # without -g, as the one step build, so the link gives the same ELF
         link_command = [
@@ -1965,7 +2021,7 @@ class TestConfig:
                         runtime,
                         variant_dir / "layout",
                         relink=lambda p, z, out, t=t: self._build_kernel_part(
-                            t, variant_dir, Path(out), (p, z)
+                            t, variant_dir, Path(out), (p, z), probe=True
                         ),
                         log=os.environ.get("LLK_LAYOUT_LOG"),
                         # variants whose thread compiles to the same code share the layout work
@@ -2064,14 +2120,23 @@ class TestConfig:
                 with open(VARIANT_DIR / "build.h", "w") as f:
                     f.write(header_content)
 
-            with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
-            ) as executor:
-                futures = [
-                    executor.submit(
-                        self._build_kernel_part, name, VARIANT_DIR, VARIANT_ELF_DIR
-                    )
+            # Wormhole perf builds also build the INIT measurement ELFs (LLK_PERF_INIT_ONLY, unpadded), in the same pool
+            init_build = self._wormhole_perf_barrier() and TestConfig.PERF_INIT_LAUNCH
+            if init_build:
+                init_elf_dir = VARIANT_DIR / "init_elf"
+                create_directories([init_elf_dir])
+            jobs = [
+                (name, VARIANT_DIR, VARIANT_ELF_DIR)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ]
+            if init_build:
+                jobs += [
+                    (name, VARIANT_DIR, init_elf_dir, None, True)
                     for name in TestConfig.KERNEL_COMPONENTS
+                ]
+            with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+                futures = [
+                    executor.submit(self._build_kernel_part, *job) for job in jobs
                 ]
                 for fut in futures:
                     fut.result()
@@ -2100,15 +2165,8 @@ class TestConfig:
                         TestConfig.TESTS_WORKING_DIR,
                     )
 
-            # Wormhole perf builds: the INIT measurement ELFs (LLK_PERF_INIT_ONLY, unpadded) and their profiler metadata
-            # under <variant>_init, for the INIT launch of perf/core.py
-            if self._wormhole_perf_barrier() and TestConfig.PERF_INIT_LAUNCH:
-                init_elf_dir = VARIANT_DIR / "init_elf"
-                create_directories([init_elf_dir])
-                for name in TestConfig.KERNEL_COMPONENTS:
-                    self._build_kernel_part(
-                        name, VARIANT_DIR, init_elf_dir, None, init_only=True
-                    )
+            # the INIT measurement ELFs' profiler metadata under <variant>_init, for the INIT launch of perf/core.py
+            if init_build:
                 if self.profiler_build == ProfilerBuild.Yes:
                     meta_dir = Path(
                         TestConfig.PROFILER_META
