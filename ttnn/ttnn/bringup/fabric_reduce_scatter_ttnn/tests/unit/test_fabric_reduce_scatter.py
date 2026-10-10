@@ -106,3 +106,56 @@ def test_fabric_rs(mesh_device, device_params, cluster_axis):
             + (f" | device {dev_us:7.1f} us, {busiest / dev_us / 1e3:5.1f} GB/s" if dev_us else "")
         )
     assert worst["fabric"] <= max(0.25, 2 * worst["ttnn"]), worst
+
+
+@MESH_PARAMS
+def test_fabric_rs_full_mesh(mesh_device, device_params):
+    """cluster_axis=None (one snake line over the mesh; chip d gets block d in row-major order) vs the torch sum over
+    every chip, and against the two-stage form it replaces (axis 0, then axis 1 on the result)."""
+    from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter import (
+        fabric_reduce_scatter,
+    )
+
+    rows, cols = tuple(mesh_device.shape)
+    n = rows * cols
+    if rows < 2 or cols < 2:
+        pytest.skip("needs a 2D mesh")
+    T = int(os.environ.get("MIMO_RS_ROWS", "5120"))
+    H = 4096
+    torch.manual_seed(7)
+    parts = torch.randn(rows, cols, T, H).bfloat16()
+    x = ttnn.from_torch(
+        parts,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(0, 1)),
+    )
+    x = ttnn.reshape(x, (1, 1, T, H))
+    Sb = T // n
+    ref = parts.float().sum((0, 1))
+
+    def two_stage():
+        a = fabric_reduce_scatter(x, cluster_axis=0, num_links=2)
+        b = fabric_reduce_scatter(a, cluster_axis=1, num_links=2)
+        ttnn.deallocate(a)
+        return b
+
+    worst = {}
+    for name, f in (
+        ("full_mesh", lambda: fabric_reduce_scatter(x, cluster_axis=None, num_links=2)),
+        ("two_stage", two_stage),
+    ):
+        out = f()
+        err = 0.0
+        for d, t in enumerate(ttnn.get_device_tensors(out)):
+            err = max(err, (ttnn.to_torch(t).float()[0, 0] - ref[d * Sb : (d + 1) * Sb]).abs().max().item())
+        worst[name] = err
+        ttnn.deallocate(out)
+        us = _time(mesh_device, lambda: ttnn.deallocate(f()))
+        dev_us = _device_us(mesh_device, lambda: ttnn.deallocate(f()))
+        print(
+            f"FABRIC_RS {mesh_id(mesh_device)} full mesh T {T}: {name:9s} {us:8.1f} us/call, max abs err {err:.3g}"
+            + (f" | device {dev_us:7.1f} us" if dev_us else "")
+        )
+    assert worst["full_mesh"] <= max(0.25, 2 * worst["two_stage"]), worst
