@@ -96,6 +96,20 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
+    MATH(if constexpr (ckernel::sfpu::celu_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        if (alpha == 0x3f800000u && alpha_recip == 0x3f800000u) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_celu,
+                (APPROX, is_fp32_dest_acc_en, 32),
+                idst,
+                VectorMode::None,
+                alpha,
+                alpha_recip);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
