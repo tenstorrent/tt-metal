@@ -10,6 +10,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "debug_tools_fixture.hpp"
+#include "drisc_test_utils.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
@@ -35,8 +36,7 @@ public:
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-        constexpr CoreCoord core = {0, 1};
+        const CoreCoord core = first_drisc_core(*mesh_device);
         KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, DramConfig{.noc = tt_metal::NOC::NOC_0});
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);

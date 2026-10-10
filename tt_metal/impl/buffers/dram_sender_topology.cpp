@@ -54,14 +54,15 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
             continue;
         }
 
-        // A single receiver cannot be split across two senders. Since the prefetcher always
-        // provisions both senders per bank and routes PREFETCH only to the senders this target
-        // actually maps, we can map just the primary sender for such a bank and leave the
-        // secondary parked -- same as the single-sender path. Dual- and single-sender banks may
-        // therefore coexist in one dual-mode target.
+        // A single receiver cannot be split across two senders. Since the prefetcher provisions
+        // every sender of a bank and routes PREFETCH only to the senders this target actually
+        // maps, we can map just the primary sender for such a bank and leave the secondary
+        // parked -- same as the single-sender path. Dual- and single-sender banks may therefore
+        // coexist in one dual-mode target. A bank with only one sender (no DRISC firmware on its
+        // NOC1 endpoint) takes the same path.
         const std::vector<CoreCoord> sender_cores =
             mesh_device->impl().dram_sender_logical_cores(reference_device, bank_id);
-        if (n == 1) {
+        if (n == 1 || sender_cores.size() == 1) {
             mapping.emplace_back(sender_cores.at(0), receivers);
             continue;
         }

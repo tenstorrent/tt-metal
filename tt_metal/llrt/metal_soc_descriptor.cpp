@@ -65,29 +65,29 @@ uint8_t metal_SocDescriptor::get_dram_endpoint_noc_mask(const tt::tt_metal::Core
     return mask;
 }
 
-bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
-    return (get_dram_endpoint_noc_mask(translated_coord) & 0b1) != 0;
+bool metal_SocDescriptor::is_syseng_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
+    return (get_dram_endpoint_noc_mask(translated_coord) & this->syseng_dram_endpoint_noc_mask) != 0;
 }
 
 std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
-    // Blackhole reserves each DRAM view's NOC0 worker endpoint for the syseng firmware; no other
+    // Blackhole reserves the DRAM view endpoints the syseng firmware may run on; no other
     // architecture has that restriction (and future ones won't), so the exclusion is confined to this
     // one spot rather than every DRAM loop in Metal.
-    const bool exclude_noc0_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
+    const bool exclude_syseng_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
     std::vector<tt::tt_metal::CoreCoord> dram_cores;
     const auto& umd_dram_cores = get_cores(tt::CoreType::DRAM, coord_system);
     dram_cores.reserve(umd_dram_cores.size());
     for (const tt::umd::CoreCoord& core : umd_dram_cores) {
         const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
-        if (exclude_noc0_endpoints && is_noc0_dram_endpoint({translated.x, translated.y})) {
+        if (exclude_syseng_endpoints && is_syseng_dram_endpoint({translated.x, translated.y})) {
             continue;
         }
         // UMD's LOGICAL DRAM coord is {channel, raw subchannel}, but Metal's logical DRAM space is
         // {dram_view, index into dram_bank_endpoint_coords}, which orders the NOC0 worker endpoint
         // first rather than by subchannel id. Handing back the UMD coord would make a caller that
         // resolves it through get_physical_dram_core_from_logical land on a different core -- and for
-        // any view whose worker_endpoint[0] is not subchannel 0, that core is the syseng-owned NOC0
-        // endpoint this loop just excluded, whose mailbox is never initialized.
+        // any view whose worker_endpoint[0] is not subchannel 0, that core is a syseng endpoint this
+        // loop just excluded, whose mailbox is never initialized.
         if (coord_system == tt::CoordSystem::LOGICAL) {
             dram_cores.push_back(get_logical_dram_core_from_translated({translated.x, translated.y}));
         } else {
@@ -303,6 +303,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             for (size_t view = 0; view < channels.size(); ++view) {
                 add_dram_view(channels[view], harvested_dram_views[view]);
             }
+            this->syseng_dram_endpoint_noc_mask = 0b11;
             return;
         }
     }

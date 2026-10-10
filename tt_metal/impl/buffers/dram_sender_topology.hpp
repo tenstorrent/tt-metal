@@ -44,7 +44,9 @@ enum class DramSenderSplit : uint8_t { OnePerBank, TwoPerBank };
 // recv_index_base, whose per-bank reset assumes a bank's senders are contiguous in this mapping --
 // hence the no-duplicate-bank guard). Each transport reads the bases off this mapping once, when
 // it builds its senders, so the resulting order is a convention of what the factory returns and
-// not something a later caller has to reproduce.
+// not something a later caller has to reproduce. A bank with one receiver, or with only one
+// provisioned sender (MeshDeviceImpl::dram_sender_logical_cores), gets one sender under
+// TwoPerBank too.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     const distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,

@@ -264,12 +264,15 @@ private:
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
-    // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
-    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
-    // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
-    // enumerate_dram_senders TT_FATALs if a device disagrees.
+    // primary/secondary role) pair; slot senders_per_bank_ * b is bank b's primary. Every sender
+    // core of a bank is provisioned at start (two, or one where its NOC1 endpoint runs no DRISC
+    // firmware); each queued GCB may map the primary only or both, and PREFETCH requests target
+    // that subset. One list covers the whole mesh (see
+    // metal_SocDescriptor::dram_bank_endpoint_coords); enumerate_dram_senders TT_FATALs if a device
+    // disagrees.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
+    uint32_t senders_per_bank_ = 0;
     uint32_t num_banks_ = 0;
 
     // One program per IDevice in the mesh; programs_[d].
