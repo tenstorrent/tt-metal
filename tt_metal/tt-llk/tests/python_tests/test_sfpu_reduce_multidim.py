@@ -104,7 +104,7 @@ def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
     """Pass orders (REDUCE_ORDER in the kernel) under the single shared init. RowCol and ColRowCol are
     MAX/MIN only -- there every order leaves the tile extreme at [0][0] -- and put a column reduce after
     a row reduce, which is what breaks if the row path writes the replay slots holding the column path's
-    LOADMACRO window (float/UInt32) or if a column path trusts the SFPSWAP direction its init wrote: the
+    LOADMACRO window (float) or if a column path trusts the SFPSWAP direction its init wrote: the
     manual column paths (signed Int32, and every non-Int32 format under DISABLE_SFPLOADMACRO, which
     routes them through the UInt16 column reducer) need the opposite direction from the row path for the
     same pool type.
