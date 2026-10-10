@@ -79,6 +79,36 @@ Getting the weights:
   LoudBox (s4096 ~30 GB) or regenerate on the CPU (31 min, 30 GB):
   `python -m models.demos.common.bringup.reference.generate_golden --spec $BRINGUP_SPEC --rung s4096`.
 
+## 1b. Four rows as a 4x4 torus (SP 4 x TP 4, EP 16)
+
+Rows 2-5 of the 8x4 close both rings on a Galaxy whose rows 2 and 5 are cabled together (`galaxy_carve.py 4x4mid`;
+on bh-glx-110-a03u02: `2,6,14,10,3,7,15,11,27,31,23,19,26,30,22,18`). Only carve that is a torus there; rows 0-3 / 4-7
+are LINE x RING.
+
+```bash
+export TT_VISIBLE_DEVICES=<the 4x4mid line>
+export TT_MESH_GRAPH_DESC_PATH=$PWD/$D/single_bh_galaxy_4x4_torus_xy_graph_descriptor.textproto
+export BRINGUP_SPEC=models/demos/glm53_flash_d_p_lb/bringup/spec_galaxy_4x4.yaml   # mesh 4x4, FABRIC_2D_TORUS_XY
+scripts/run_safe_pytest.sh --no-precompile models/demos/glm53_flash_d_p_lb/tests/test_layer_perf.py -s
+scripts/run_safe_pytest.sh --no-precompile models/demos/glm53_flash_d_p_lb/tests/test_galaxy_4x4.py -s  # vs references
+```
+
+What differs from the 2x4 (same model code):
+- MoE (`tt/experts_ag.py`): more than two mesh rows skip the fused send-back: `moe_ag_local_reduce` phase 0 over all T
+  tokens as tiles, `fabric_reduce_scatter` over axis 0, then the usual column reduce.
+- Indexer (`tt/indexer.py`, `GLM_INDEXER_RING_AXIS`): at chunk 5120 the full-mesh ring's per-chip pooled-key stripe
+  (5120 / 16 / 4 = 80 pools) is not tile aligned, so the ring runs along the SP axis (the GLM-5 2D pattern): cache
+  striped over the 4 mesh rows and replicated along them, each chip's own-row pools all-gathered along its row, each
+  chip scoring its own 320 query rows with all heads (`seq_subshard_axis` = TP). Selects the same tokens as the
+  replicated indexer.
+- `moe_ag_route_plan` now pads its per-expert arrays to 16 B (18 experts per chip hung it).
+
+Per-layer device ms (busiest chip, fake weights, chunk 5120 at 51200): kda_dense 6.31, dsa_moe 10.21, kda_moe 7.89;
+estimate 375.9 ms per chunk (2x4 ring: 578).
+
+Full reset of the Galaxy (retrains every eth link; a hang's partial reset of only the test's chips leaves the links to
+the other chips down and the 4x4 no longer places): `ttop-ipmi-reset` (ignores arguments: even `--help` resets).
+
 ## 2. Flat expert alone (one chip)
 
 ```bash
