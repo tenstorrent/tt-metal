@@ -79,7 +79,7 @@ B=4 39.8 vs 40.0, B=8 43.3 vs 46.5, B=16 41.9 vs 43.7 (decode indexer off, as in
 ## 9. Update: supported batch sizes and the scope of speculative decoding
 
 * Batch 128 is dropped: the largest supported build is B=64 (`max_num_seqs <= 64`, buckets {4, 8, 16, 32, 64}); every B=128 number above is historical.
-* Speculative decoding applies up to 32k ISL (plus generation); beyond that serve plain decode (no `speculative_config`). The adapter refuses a spec launch whose `max_model_len` exceeds `tt/spec_policy.SPEC_MAX_CTX` for the batch (B=32: 40000, B<=16: 70000; the DRAM of the spec runners + traces, measured 11.8 MiB per 1k tokens), with a message that says so. 40000 total context covers a 32k ISL (32768) plus ~7k generated tokens at B=32.
+* The adapter refuses a spec launch whose `max_model_len` exceeds `tt/spec_policy.SPEC_MAX_CTX` for the batch (B=32: 40000, B<=16: 131072 = the matmul indexer backend limit; the DRAM of the spec runners + traces, measured), with a message that says so; beyond it serve plain decode (no `speculative_config`). B=16, k=5, max_model_len 131072, fp8 pool: 391 MiB/bank free after warm-up with all traces (the spec runner shares the decode model's rope tables since the table sharing commit: its cost at 131072 fell from 273 to 113 MiB/bank).
 * Largest ISL + generation validated for the spec path: demo (tt-metal) B=32 ISL 30059 + 64 tokens at max_seq_len 40000 (SPEC_MATRIX_NOTES.md, log pf_spec_int_specdef_isl32k_b32); B=8/16 ISL 60453 at 70000. Through vLLM: ISL ~4k prompts at B=32 k=3 with max_model_len 33280 (indexer on, TTFT 3.1-3.5 s) and GSM8K (ISL ~100-200, 384 generated) at B=4/8/16/32. A vLLM run at 32k ISL has not been measured.
 
 ## 10. Sampled speculative decoding and the environment of a spec server

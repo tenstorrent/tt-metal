@@ -390,7 +390,7 @@ class DeepseekV41ForCausalLM:
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """Plugin admission of ``speculative_config`` (docs/SPEC_DECODE_CONTRACT.md section 2). One verify round runs T = U (1 + k) token rows per mesh row (U = users per mesh row = ceil(B / 4)),
         and the mHC / router kernels support at most 32: U = 8 (B = 32) -> k <= 3, U <= 4 -> k <= 5 (the drafter proposes 5 tokens). B >= 64 is refused (the demo's default is plain there too). The
-        spec runners' DRAM cost bounds the context (tt/spec_policy.SPEC_MAX_CTX). Speculative decoding is meant for ISL up to 32k (plus generation): a build with a longer max_model_len is refused, serve it plain.
+        spec runners' DRAM cost bounds the context (tt/spec_policy.SPEC_MAX_CTX). A build with a longer max_model_len than the measured cap is refused, serve it plain.
         """
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
@@ -408,7 +408,7 @@ class DeepseekV41ForCausalLM:
         lim = spec_policy.SPEC_MAX_CTX.get(U, spec_policy.SPEC_MAX_CTX[8])
         if ctx is not None and int(ctx) > lim and os.environ.get("DSV41_VLLM_SPEC_GUARD", "1") != "0":
             return SpecReject(
-                f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim}). Speculative decoding applies up to 32k ISL (plus generation); beyond that serve with plain decode (no speculative_config)",
+                f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim}). beyond that serve with plain decode (no speculative_config)",
                 ks,
             )
         if int(requested_k) < 1:
