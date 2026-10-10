@@ -36,31 +36,21 @@ namespace {
 
 constexpr uint32_t kPageSize = 1024;
 
-ShardedBufferConfig one_shard_config(IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    // One shard, on one core. Size is irrelevant to the core validation, but must be page-aligned.
+// One shard of kPageSize bytes, on one core. Size is irrelevant to the core validation, but must be page-aligned.
+BufferShardingArgs one_shard_args(const CoreCoord& core) {
     const CoreRangeSet grid(std::set<CoreRange>({CoreRange(core, core)}));
-    return ShardedBufferConfig{
-        .device = device,
-        .size = kPageSize,
-        .page_size = kPageSize,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
+    return BufferShardingArgs(
+        ShardSpecBuffer(
             grid,
             {1, kPageSize / sizeof(uint32_t)},
             ShardOrientation::ROW_MAJOR,
             {1, 1},
-            {1, kPageSize / sizeof(uint32_t)})};
+            {1, kPageSize / sizeof(uint32_t)}),
+        TensorMemoryLayout::WIDTH_SHARDED);
 }
 
 std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    const auto config = one_shard_config(device, buffer_type, core);
-    return BufferImpl::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+    return BufferImpl::create(device, kPageSize, kPageSize, buffer_type, one_shard_args(core));
 }
 
 // Constructs the buffer without allocating it: the explicit-address overload skips allocate_impl().
@@ -70,14 +60,13 @@ std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType bu
 // out, so an L1_SMALL config tensor there is constructed and never allocated.
 std::shared_ptr<Buffer> make_unallocated_width_sharded_buffer(
     IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    const auto config = one_shard_config(device, buffer_type, core);
     return BufferImpl::create(
-        config.device,
+        device,
         device->allocator()->get_base_allocator_addr(HalMemType::L1),
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+        kPageSize,
+        kPageSize,
+        buffer_type,
+        one_shard_args(core));
 }
 
 }  // namespace

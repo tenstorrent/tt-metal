@@ -36,6 +36,7 @@
 #include <distributed/mesh_device_impl.hpp>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -397,12 +398,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     // Buffer spans all 8 banks so every assigned bank_id has pages_per_bank pages.
     uint32_t total_size = num_banks * cfg.eth_pages_per_bank * page_size_bytes;
-    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device,
-        .size = total_size,
-        .page_size = page_size_bytes,
-        .buffer_type = BufferType::DRAM,
-    });
+    auto dram_buffer = BufferImpl::create(device, total_size, page_size_bytes, BufferType::DRAM);
     cfg.eth_dram_buffer_addr = dram_buffer->address();
 
     // Populate with a recognisable pattern so DRAM contains live data.
@@ -435,15 +431,8 @@ static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg)
     const uint32_t tile_rows = 32, tile_cols = 32;
     uint32_t tile_bytes_bfloat16 = tile_size_bytes(DataFormat::Float16_b, tile_rows, tile_cols);
     uint32_t buffer_size_bfloat16 = cfg.num_tiles * tile_bytes_bfloat16;
-    auto dram_cfg_bfloat16 = InterleavedBufferConfig{
-        .device = device,
-        .size = buffer_size_bfloat16,
-        .page_size = tile_bytes_bfloat16,
-        .buffer_type = BufferType::DRAM,
-    };
-
-    auto dram_buffer0 = CreateBuffer(dram_cfg_bfloat16);
-    auto dram_buffer1 = CreateBuffer(dram_cfg_bfloat16);
+    auto dram_buffer0 = BufferImpl::create(device, buffer_size_bfloat16, tile_bytes_bfloat16, BufferType::DRAM);
+    auto dram_buffer1 = BufferImpl::create(device, buffer_size_bfloat16, tile_bytes_bfloat16, BufferType::DRAM);
 
     uint32_t dram_buffer0_addr = dram_buffer0->address();
     uint32_t dram_buffer1_addr = dram_buffer1->address();
