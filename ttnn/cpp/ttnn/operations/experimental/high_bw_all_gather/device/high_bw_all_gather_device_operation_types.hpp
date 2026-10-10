@@ -82,6 +82,13 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // SEGMENTED prefix (requires the scalar `gathered_dim_size`, no slot select, no metadata extent). The
+    // input's gather dim is `gathered_segments` equal segments of stride input_dim / gathered_segments, and
+    // `gathered_dim_size / (num_devices * gathered_segments)` rows at the start of EACH segment are active,
+    // instead of one contiguous prefix. Every segment lands at its own fixed offset in the rank's output
+    // slot, so the layout is unchanged; only the transferred pages shrink. 1 = contiguous prefix.
+    uint32_t gathered_segments = 1;
 };
 
 struct HighBwAllGatherInputs {
