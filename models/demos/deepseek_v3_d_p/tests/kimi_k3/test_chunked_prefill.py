@@ -27,8 +27,18 @@ like a broken recurrence. `test_kda_golden.py` pins that convention; this file j
 
 Twenty chunks also covers the standing memory gate: device DRAM is sampled after every chunk and
 must not grow, which is what would catch the KDA carries or the walk's per-block batches leaking.
+
+The environment knobs below run one depth over a whole 1M-token KDA trace instead, scoring every KDA
+layer's input, output and carries per chunk. For example, layers 0..2 against the trace recaptured
+with vLLM's Triton KDA kernel:
+
+    KIMI_K3_GOLDEN_TRACE=<1M Triton KDA trace> K3_CHUNKED_NUM_CHUNKS=204 K3_CHUNKED_NUM_LAYERS=3 \\
+    K3_CHUNKED_MODULE_PCC=1 K3_CHUNKED_ALLOW_MISSING_LAYER_OUT=1 K3_CHUNKED_TIMEOUT_S=14400 \\
+    K3_CHUNKED_PCC_DUMP=chunked.jsonl pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -s
 """
 
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -62,7 +72,8 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gathe
 
 CHUNK = 5120
 # 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
-NUM_CHUNKS = 11
+# `$K3_CHUNKED_NUM_CHUNKS` raises it for long-context runs; the 1M traces hold 204 full chunks.
+NUM_CHUNKS = int(os.environ.get("K3_CHUNKED_NUM_CHUNKS", "11"))
 # Two depths, because the two traces cover different halves and neither covers both.
 #
 #   5  on the 100k trace: it snapshots the KDA recurrent state every 640 tokens, so the carry can be
@@ -73,10 +84,46 @@ NUM_CHUNKS = 11
 #      cumulative KV can be scored at full depth — including past the second AttnRes seal at layer
 #      12, which is where the sealed set first has two blocks. It carries no KDA snapshots, so the
 #      carry oracle is the depth-5 case's job.
-DEPTHS = [5, 24]
+# `$K3_CHUNKED_NUM_LAYERS` runs one depth instead; pair a shallow one with `$KIMI_K3_GOLDEN_TRACE`,
+# since depths below DEEP_TRACE_FROM otherwise resolve to the 100k trace.
+DEPTHS = [int(os.environ["K3_CHUNKED_NUM_LAYERS"])] if os.environ.get("K3_CHUNKED_NUM_LAYERS") else [5, 24]
 TOTAL_LEN = CHUNK * NUM_CHUNKS  # the KV cache must span every chunk, not just one
 DEEP_TRACE_FROM = 12
-SNAPSHOT_STRIDE = 640
+# One JSON line per chunk (and one for the KV slabs) when set, so a long run can be plotted, or read
+# back after a crash, without scraping the log.
+PCC_DUMP = os.environ.get("K3_CHUNKED_PCC_DUMP")
+# `$K3_CHUNKED_MODULE_PCC=1` also scores each layer's modules — the attention and FFN inputs (post
+# norm) and outputs — and every KDA layer's carries against the trace, wherever it records them.
+# The 1M KDA traces do, for layers 0..2 at every 5120-token chunk. Informational: only the layer
+# outputs, the layer-0 carry and the KV slabs gate the test, as before.
+MODULE_PCC = os.environ.get("K3_CHUNKED_MODULE_PCC") == "1"
+# `$K3_CHUNKED_ALLOW_MISSING_LAYER_OUT=1` scores only the layer outputs the trace records. The 1M
+# KDA trace recaptured with vLLM's Triton KDA kernel records the KDA streams but not every layer's
+# decoder_output, so its oracles are the module taps and the carries. Opt-in: by default a missing
+# stream still fails.
+ALLOW_MISSING_LAYER_OUT = os.environ.get("K3_CHUNKED_ALLOW_MISSING_LAYER_OUT") == "1"
+
+
+def _dump(record):
+    if PCC_DUMP:
+        with open(PCC_DUMP, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+
+
+def _pcc(want, got):
+    return float(str(comp_pcc(want, got)[1]).split()[-1])
+
+
+def _module_streams(layer_idx, is_mla):
+    """Trace stream (group, key) for each module tap of one model layer."""
+    attn_group, attn_prefix = ("mla_io", "mla") if is_mla else ("kda", "kda")
+    return {
+        "attn_in": (attn_group, f"{attn_prefix}_input_layer_{layer_idx}"),
+        "attn_out": (attn_group, f"{attn_prefix}_output_layer_{layer_idx}"),
+        "ffn_in": ("moe_io", f"moe_input_layer_{layer_idx}"),
+        "ffn_out": ("moe_io", f"moe_output_layer_{layer_idx}"),
+    }
+
 
 # Chunking costs nothing at the first chunk — chunk 0's worst layer is 0.997075 against the 0.997013
 # the same layer scores in the one-shot L5 rung — and then decays gently with context as the carry
@@ -114,13 +161,41 @@ def _compose_carry(mesh_device, state):
     return torch.cat(head_shards, dim=0).float()
 
 
+def _compose_conv(mesh_device, convolution):
+    """The global `[kernel - 1, q | k | v]` conv carry from its TP shards.
+
+    The conv carry is TP-sharded and SP-replicated like the recurrent half, but its channel axis is
+    GROUPED, not contiguous: `group_output_shards` fuses the q, k and v taps so each chip holds
+    [q_slice | k_slice | v_slice] of width 3 * (q_dim / tp). The golden is laid out [all q | all k |
+    all v]. Concatenating the shards naively therefore produces q0k0v0q1k1v1... against
+    q0q1q2q3k0k1..., which is a permutation of the right values and reads as PCC ~0.05-0.10 —
+    bouncing, not zero, which is how a layout error tells itself apart from lost state.
+    """
+    shards = [ttnn.to_torch(sh) for sh in ttnn.get_device_tensors(convolution)]
+    columns = tuple(mesh_device.shape)[1]
+    tp_size = tuple(mesh_device.shape)[TP_AXIS]
+    history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
+    per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
+    tp_shards = []
+    for t in range(tp_size):
+        row, column = (0, t) if SP_AXIS == 0 else (t, 0)
+        tp_shards.append(shards[row * columns + column].reshape(history, -1))
+    return torch.cat(
+        [
+            torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)
+            for stream in range(3)  # q, k, v
+        ],
+        dim=-1,
+    ).float()
+
+
 def _dram_bytes(mesh_device):
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
     return view.total_bytes_allocated_per_bank * view.num_banks
 
 
 # Same weight-loading floor as the depth ladder, then eleven chunks of real work on top of it.
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(int(os.environ.get("K3_CHUNKED_TIMEOUT_S", "3600")))
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
@@ -205,8 +280,8 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         model.kda_states.bind_slabs(slabs)
         slab_scratch = allocate_native_state(mesh_device, geometry)
 
-    # Only the 100k trace snapshots the carry; at depth 24 the oracle is the per-layer output and the
-    # cumulative KV instead, and the carry is covered by the depth-5 case.
+    # Only the 100k trace and the 1M KDA traces snapshot the carry; at depth 24 the oracle is the
+    # per-layer output and the cumulative KV instead, and the carry is covered by the depth-5 case.
     golden_carry = (
         trace.rows("kda", "kda_recurrent_state_layer_0") if trace.has("kda", "kda_recurrent_state_layer_0") else None
     )
@@ -216,10 +291,32 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     # instead of the tail of the previous chunk. That is a small, localized error that per-chunk PCC
     # over 5120 tokens would comfortably hide, which is exactly why it needs its own oracle.
     golden_conv = trace.rows("kda", "kda_conv_state_layer_0") if trace.has("kda", "kda_conv_state_layer_0") else None
+    # The 100k trace snapshots the carries every 640 tokens, the 1M KDA traces every 5120.
+    snapshot_stride = trace.metadata.get("kda_state_every", 640)
     output_pcc_bar = DEEP_OUTPUT_PCC if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_OUTPUT_PCC
     footprints = []
     failures = []
     per_chunk_layer_pccs = {}
+
+    # Module taps. The block reaches each module through an instance attribute, so shadowing those
+    # records every module's output for the current chunk without adding debug plumbing to the block.
+    taps = {}
+    if MODULE_PCC:
+
+        def _record(local_idx, name, fn):
+            def wrapped(*args, **kwargs):
+                out = fn(*args, **kwargs)
+                taps[(local_idx, name)] = _compose(mesh_device, out)
+                return out
+
+            return wrapped
+
+        for local_idx, layer in enumerate(model.layers):
+            layer.attn_norm = _record(local_idx, "attn_in", layer.attn_norm)
+            layer.attention.forward = _record(local_idx, "attn_out", layer.attention.forward)
+            if not layer.kv_only:
+                layer.ffn_norm = _record(local_idx, "ffn_in", layer.ffn_norm)
+                layer._ffn_path = _record(local_idx, "ffn_out", layer._ffn_path)
 
     for chunk in range(NUM_CHUNKS):
         start = chunk * CHUNK
@@ -256,43 +353,24 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
                 ).split()[-1]
             )
             for idx in range(num_layers)
+            if not ALLOW_MISSING_LAYER_OUT or trace.has("decoder_io", f"decoder_output_layer_{idx}")
         }
-        output_pcc = min(layer_pccs.values())
+        output_pcc = min(layer_pccs.values()) if layer_pccs else float("nan")
         per_chunk_layer_pccs[chunk] = layer_pccs
 
-        # Snapshots land every 640 tokens, so the boundary after chunk k is row 8(k+1) - 1. The
-        # golden's [heads, v_dim, k_dim] needs transposing into the layer's [heads, k_dim, v_dim].
+        # On the 100k trace snapshots land every 640 tokens, so the boundary after chunk k is row
+        # 8(k+1) - 1; on the 1M KDA traces it is row k. The golden's [heads, v_dim, k_dim] needs
+        # transposing into the layer's [heads, k_dim, v_dim].
+        row = (start + CHUNK) // snapshot_stride - 1
         conv_pcc = float("nan")
         if golden_conv is not None:
-            # The conv carry is TP-sharded and SP-replicated like the recurrent half, but its
-            # channel axis is GROUPED, not contiguous: `group_output_shards` fuses the q, k and v
-            # taps so each chip holds [q_slice | k_slice | v_slice] of width 3 * (q_dim / tp). The
-            # golden is laid out [all q | all k | all v]. Concatenating the shards naively therefore
-            # produces q0k0v0q1k1v1... against q0q1q2q3k0k1..., which is a permutation of the right
-            # values and reads as PCC ~0.05-0.10 — bouncing, not zero, which is how a layout error
-            # tells itself apart from lost state.
-            shards = [ttnn.to_torch(sh) for sh in ttnn.get_device_tensors(model.kda_states.read(0, 0).convolution)]
-            columns = tuple(mesh_device.shape)[1]
-            tp_size = tuple(mesh_device.shape)[TP_AXIS]
-            history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
-            per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
-            tp_shards = []
-            for t in range(tp_size):
-                row, column = (0, t) if SP_AXIS == 0 else (t, 0)
-                tp_shards.append(shards[row * columns + column].reshape(history, -1))
-            got_conv = torch.cat(
-                [
-                    torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)
-                    for stream in range(3)  # q, k, v
-                ],
-                dim=-1,
-            ).float()
-            want_conv = golden_conv[(start + CHUNK) // SNAPSHOT_STRIDE - 1].reshape(history, -1)
+            # See `_compose_conv` for why the shards cannot simply be concatenated.
+            got_conv = _compose_conv(mesh_device, model.kda_states.read(0, 0).convolution)
+            want_conv = golden_conv[row].reshape(got_conv.shape)
             conv_pcc = float(str(comp_pcc(want_conv, got_conv, CARRY_PCC)[1]).split()[-1])
 
         carry_pcc = float("nan")
         if golden_carry is not None:
-            row = (start + CHUNK) // SNAPSHOT_STRIDE - 1
             want_carry = golden_carry[row].transpose(-1, -2)
             got_carry = _compose_carry(mesh_device, model.kda_states.read(0, 0).recurrent)
             carry_pcc = float(str(comp_pcc(want_carry, got_carry, CARRY_PCC)[1]).split()[-1])
@@ -313,13 +391,61 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
                             failures.append(f"chunk {chunk} layer {layer_idx} {name} slab != carry on device {dev}")
                             break
 
+        # Every module of every layer, and every KDA layer's carries, wherever the trace records them.
+        module_pccs, state_pccs = {}, {}
+        if MODULE_PCC:
+            for local_idx in range(num_layers):
+                layer_idx = model.schedule.global_index(local_idx)
+                is_mla = model.schedule.local_is_mla(local_idx)
+                scores = {}
+                for name, (group, key) in _module_streams(layer_idx, is_mla).items():
+                    got = taps.get((local_idx, name))
+                    if got is not None and trace.has(group, key):
+                        scores[name] = _pcc(trace.rows(group, key, start, start + CHUNK), got)
+                module_pccs[layer_idx] = scores
+                if not is_mla and trace.has("kda", f"kda_recurrent_state_layer_{layer_idx}"):
+                    state = model.kda_states.read(layer_idx, 0)
+                    got_r = _compose_carry(mesh_device, state.recurrent)
+                    got_c = _compose_conv(mesh_device, state.convolution)
+                    want_r = trace.rows("kda", f"kda_recurrent_state_layer_{layer_idx}", row, row + 1)[0]
+                    want_c = trace.rows("kda", f"kda_conv_state_layer_{layer_idx}", row, row + 1)[0]
+                    state_pccs[layer_idx] = {
+                        "recurrent": _pcc(want_r.transpose(-1, -2), got_r),
+                        "conv": _pcc(want_c.reshape(got_c.shape), got_c),
+                    }
+            taps.clear()
+            logger.info(
+                "  modules: "
+                + "  ".join(
+                    f"L{i} "
+                    + " ".join(f"{k}={v:.5f}" for k, v in m.items())
+                    + (f" state={state_pccs[i]['recurrent']:.5f}" if i in state_pccs else "")
+                    for i, m in module_pccs.items()
+                )
+            )
+
         footprints.append(_dram_bytes(mesh_device))
+        _dump(
+            {
+                "kind": "chunk",
+                "num_layers": num_layers,
+                "chunk": chunk,
+                "start": start,
+                "end": start + CHUNK,
+                "layer_pcc": layer_pccs,
+                "carry_pcc": carry_pcc,
+                "conv_pcc": conv_pcc,
+                "module_pcc": module_pccs,
+                "state_pcc": state_pccs,
+                "dram_bytes": footprints[-1],
+            }
+        )
         logger.info(
             f"  chunk {chunk:2d} [{start:6d}:{start + CHUNK:6d}]  worst-layer {output_pcc:.6f} "
-            f"(L{min(layer_pccs, key=layer_pccs.get)})  "
+            f"(L{min(layer_pccs, key=layer_pccs.get) if layer_pccs else '-'})  "
             f"carry {carry_pcc:.6f}  conv {conv_pcc:.6f}  dram {footprints[-1] / 2**20:8.1f} MiB"
         )
-        if output_pcc < output_pcc_bar:
+        if layer_pccs and output_pcc < output_pcc_bar:
             failures.append(f"chunk {chunk} worst layer {min(layer_pccs, key=layer_pccs.get)} {output_pcc}")
         if golden_carry is not None and carry_pcc < CARRY_PCC:
             failures.append(f"chunk {chunk} carry {carry_pcc}")
@@ -354,6 +480,17 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             golden_rows = trace.kv_cache(model_layer, 0, TOTAL_LEN)
             # NoPE: the second half carries no rotation to re-base.
             pcc_nope, pcc_pe = cache_half_pccs(golden_rows, device_rows, KimiK3Config.KV_LORA_RANK, pe_interleave=False)
+            _dump(
+                {
+                    "kind": "kv",
+                    "num_layers": num_layers,
+                    "slot": slot,
+                    "model_layer": model_layer,
+                    "tokens": TOTAL_LEN,
+                    "lora_pcc": pcc_nope,
+                    "rope_pcc": pcc_pe,
+                }
+            )
             logger.info(
                 f"  KV slot {slot} (model layer {model_layer}) over {TOTAL_LEN} tokens: "
                 f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
