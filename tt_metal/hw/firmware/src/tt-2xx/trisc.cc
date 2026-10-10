@@ -118,6 +118,11 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
+namespace pack {
+// Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
+// Declared extern thread_local in cpack_common.h.
+thread_local std::uint32_t clear_dest_bank_id __attribute__((used)) = 0;
+}  // namespace pack
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
