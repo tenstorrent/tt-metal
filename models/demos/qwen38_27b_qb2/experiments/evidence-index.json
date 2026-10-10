@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:04:21.072611+00:00",
+  "generated_at": "2026-10-10T18:16:18.572167+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -108,6 +108,11 @@
       "sha256": "2cb79a2ea958b716aae6f86ba9a0005e109189f22f650350e8ea97578f82baae"
     },
     {
+      "path": "demo/run_compact_followup.py",
+      "bytes": 13271,
+      "sha256": "6e5437516f6018a9d3a314d63d9cc48d869e952f36d3be40d3d1dfae1b466e0f"
+    },
+    {
       "path": "demo/run_compact_gdn.py",
       "bytes": 10432,
       "sha256": "cff925af5d7b852ad2f4dc8877f3fb467970468e2d3a3f47cf2414fc14c0aa27"
@@ -179,8 +184,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 159015,
-      "sha256": "2cbd7af191bf35eacd9a3ac8f3f8e1344d3d5508586b5a0ed8dfc87ef673d77f"
+      "bytes": 161806,
+      "sha256": "9936387cbfffb1ebad137568e296ecb5925e61a745955e135003186f8ae58bce"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -1975,6 +1980,81 @@
       "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
       "bytes": 5829,
       "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/README.md",
+      "bytes": 3000,
+      "sha256": "822a7c5dd97ad70515c5daffd43135bbf57cc3e63396bfeaf7eeb9f1e1c1192a"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v1/preflight.log",
+      "bytes": 1852,
+      "sha256": "85983681dcba4de0135dbbee0cdf4ae9cfb1e79a3443c9951e72c8cb8fdce882"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v2/launch-unit.json",
+      "bytes": 180,
+      "sha256": "3ba87a0dc68b4b74a25913bd72506c2ee830e714593fbec09cfbd230d767c79d"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v2/launch.json",
+      "bytes": 3399,
+      "sha256": "1f996b7fd8ce0fd7238a7c2d0a721918c89cd8fd2723cb6562f57e4348fbf7c7"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v2/preflight.log",
+      "bytes": 1877,
+      "sha256": "e38ec204dc46d8a9dc2926135a2ab910ddfe7eeea51ed7f61c5078207c367ae7"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v2/source-manifest.json",
+      "bytes": 26756,
+      "sha256": "ceb8f53ae53f08d42f18262d9363392e1f2af5a87212c69ca877a2cb069a02db"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-control-v2/unit.xml.gz",
+      "bytes": 10296,
+      "sha256": "fd8e59b99371227e505991ec3199ee1c3d269e568b10ba0140ef2fb105dfaee1"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-followup-v2/queue.json",
+      "bytes": 688,
+      "sha256": "95a54243d39bbbc49a9d4907c7e4fea413e46d6dee91049d446eafe4800533cd"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-gdn-v2/before/sweep.json",
+      "bytes": 16849,
+      "sha256": "863eef8de7e0cfe2e46cea8ac122b853c14f074761637fd3acadc8d5299b0fbc"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/compact-gdn-v2/queue.json",
+      "bytes": 3059,
+      "sha256": "26748098bbaaabbfb880d55c71240e40432f0a95a9ce4023ed6536226b1eb5e7"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/projection-sweep-control-v4/launch-unit.json",
+      "bytes": 180,
+      "sha256": "4fd9a610c13b8a44a98f33bb6452d08e9fd12f731925ac9688fcd04e14bb589e"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/projection-sweep-control-v4/launch.json",
+      "bytes": 1737,
+      "sha256": "ffd3300751a6371de9b225b0c338817f82a722d3fccfcfaf94ce619983c07fc9"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/projection-sweep-control-v4/previous-waiter.json",
+      "bytes": 525,
+      "sha256": "28c5be1edb9193ebcc66698001f346a44bbf47a815bde3d98e1bfb272be45c5b"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/receipts/projection-sweep-v4/queue.json",
+      "bytes": 616,
+      "sha256": "7a67accb6ccda0ad26f7ecb64b6086e9c925dc18590ea2bbc6b6743a0e019128"
+    },
+    {
+      "path": "galaxy-evidence/compact-followup-v2/stage-followup.py.gz",
+      "bytes": 3068,
+      "sha256": "24e6399b5c52a90b1a356ce62c829e6eb07af04ee1f0e969c00e63307ba04e52"
     },
     {
       "path": "galaxy-evidence/compact-gdn-launch-v1/README.md",
@@ -10926,6 +11006,11 @@
       "sha256": "9ba2d336f98470baea2006f5769c913962cdffa48e2ebb7ddd13d5570abb99e4"
     },
     {
+      "path": "tests/test_full_trace_profile.py",
+      "bytes": 10246,
+      "sha256": "c73aef6019ca2fc20bc202ca75b83a494e04072e2dd67d3ec1448623dc68b87f"
+    },
+    {
       "path": "tests/test_gdn_epilogue.py",
       "bytes": 9516,
       "sha256": "ade9adcc4f901e3b81df791164528a568cf5a1bf71b307c27782c1b0a5b3f66b"
@@ -10984,6 +11069,11 @@
       "path": "tests/unit/test_chunked_prefill_scenario.py",
       "bytes": 2243,
       "sha256": "3727fe41be4f20678cdec203dd5f7d8d2630e7d18d2c1bbf18e7054e09b537a9"
+    },
+    {
+      "path": "tests/unit/test_compact_followup.py",
+      "bytes": 8717,
+      "sha256": "1e24e42331b56fd4763f8e6b78dfd695b47da5c8c858018d5eb272e9673a1d7a"
     },
     {
       "path": "tests/unit/test_compact_gdn_epilogue.py",

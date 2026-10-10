@@ -28,6 +28,12 @@ def test_full_trace_profile():
     assert not path.exists(), "Preserve each attempt"
     length, batch = int(os.environ["QWEN_PROFILE_CONTEXT"]), int(os.environ["QWEN_PROFILE_BATCH"])
     assert (length, batch) in CASES
+    recurrence = os.getenv("QWEN_PROFILE_RECURRENCE", "single_step_shared_qk")
+    assert recurrence in (
+        "single_step_shared_qk",
+        "single_step_flat_prepare_epilogue",
+        "single_step_compact_gdn",
+    ), "Profile only the explicitly selected BFP8 decoder policy"
     source = Path(__file__).resolve().parents[1]
     report = dict(
         state="opening",
@@ -36,6 +42,7 @@ def test_full_trace_profile():
         scope=SCOPE,
         input_tokens=length,
         batch=batch,
+        expected_recurrence=recurrence,
         layer_indices=list(range(64)),
         prefill_calls=0,
         output_hashes=[],
@@ -82,7 +89,7 @@ def test_full_trace_profile():
         report.update(device_ids=list(mesh.get_device_ids()), precision=gen.model.precision)
         assert len(report["device_ids"]) == 4
         assert all(
-            layer.policy.get("decode_recurrence") == "single_step_shared_qk"
+            layer.policy.get("decode_recurrence") == recurrence
             for layer in gen.model.layers
             if layer.kind == "linear_attention"
         )

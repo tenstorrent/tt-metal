@@ -1,0 +1,26 @@
+
+==================================== ERRORS ====================================
+_ ERROR collecting models/demos/qwen38_27b_qb2/tests/unit/test_compact_followup.py _
+ImportError while importing test module '/home/ttuser/qwen38-artifacts-20261007/compact-followup-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_compact_followup.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+models/demos/qwen38_27b_qb2/tests/unit/test_compact_followup.py:12: in <module>
+    from models.demos.qwen38_27b_qb2.demo import run_compact_followup as queue
+models/demos/qwen38_27b_qb2/demo/run_compact_followup.py:20: in <module>
+    from models.demos.qwen38_27b_qb2.tests.full_trace_profile import ARTIFACT_BUDGET, collect
+E   ModuleNotFoundError: No module named 'models.demos.qwen38_27b_qb2.tests.full_trace_profile'
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR models/demos/qwen38_27b_qb2/tests/unit/test_compact_followup.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+2 warnings, 1 error in 2.51s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

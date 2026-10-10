@@ -1,0 +1,19 @@
+{
+  "before": {
+    "MainPID": "208592",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "SubState": "running",
+    "InvocationID": "b8a146f6117847b2afba2ccbe1bee1f4"
+  },
+  "after": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "SubState": "failed",
+    "InvocationID": "b8a146f6117847b2afba2ccbe1bee1f4"
+  },
+  "reason": "Qualify >=1% measured compact B16/32K gain, then profile matching unprofiled/profiled full traces"
+}
