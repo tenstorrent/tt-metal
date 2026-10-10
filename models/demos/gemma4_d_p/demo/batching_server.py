@@ -12,7 +12,8 @@ then fire prompts from another terminal with demo/batching_client.py, e.g.
     python models/demos/gemma4_d_p/demo/batching_client.py compare
 
 Two modes, switchable at any time (requests already running keep the mode they were admitted with):
-- continuous batching: every active request (up to DEMO_SLOTS) gets its next 2k chunk in one traced step;
+- continuous batching: every active request (up to DEMO_SLOTS) gets its next chunk in one traced step: 2k for most,
+  8k for one prompt that is a multiple of 8k at a time (see PACK), so it is not slowed to 2k chunks by the short ones;
 - serial: one request at a time in arrival order, the way an unbatched server runs. A prompt whose length is a
   multiple of 8k is prefilled in 8k chunks (one 8k-wide lane, the faster unbatched chunk size), others in 2k chunks.
   A request keeps one chunk width for its whole life.
@@ -21,7 +22,7 @@ The server draws the lanes of each step and every request's queue / prefill / to
 are host wall clock around each step (staging + trace replay).
 
 Env: DEMO_PORT (default 8765), DEMO_SLOTS (requests in flight, default 4), DEMO_CAPACITY (max prompt tokens, default
-65536).
+65536), DEMO_PACK (default 1).
 """
 
 import collections
@@ -51,6 +52,21 @@ from models.demos.gemma4_d_p.tt.attention import operations as attention_operati
 
 CHUNK = 2048
 WIDE = 8192  # serial mode's chunk for prompts that are a multiple of it
+# Pack (DEMO_PACK, default on): in batching mode too, one prompt that is a multiple of 8k at a time takes an 8k-wide
+# lane next to up to DEMO_SLOTS - 1 2k lanes (mixed-width steps, one trace per layout), so it keeps 8k chunks while
+# short ones batch beside it. DEMO_PACK=0: every batched request takes 2k lanes.
+PACK = os.environ.get("DEMO_PACK", "1") == "1"
+
+
+def step_layouts(num_slots):
+    """Every step layout the scheduler can produce, widest first (the compile order). A layout is the lanes' widths
+    in order; the trace is keyed by it alone, slots and prefixes are staged per step."""
+    layouts = [(WIDE,)]
+    if PACK:
+        layouts += [(WIDE,) + (CHUNK,) * (n - 1) for n in range(num_slots, 1, -1)]
+    return layouts + [(CHUNK,) * n for n in range(num_slots, 0, -1)]
+
+
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 600_000_000))
 COLORS = ["cyan", "magenta", "green", "yellow", "blue", "red", "bright_cyan", "bright_magenta"]
 BATCHED, SERIAL = "batched", "serial"
@@ -96,6 +112,7 @@ class Scheduler:
 
     def __init__(self, runner, num_slots, capacity, stream):
         self.runner = runner
+        self.layouts = set(step_layouts(num_slots))
         self.num_slots = num_slots
         self.capacity = capacity
         self.stream = stream
@@ -138,14 +155,24 @@ class Scheduler:
                 self.waiting.append(self.incoming.get_nowait())
             limit = self.num_slots if self.mode == BATCHED else 1
             free = [s for s in range(self.num_slots) if all(r.slot != s for r in self.active)]
-            while self.waiting and len(self.active) < limit and free:
+            admitted = []
+            while self.waiting and len(self.active) + len(admitted) < limit and free:
                 request = self.waiting.popleft()
                 request.slot, request.mode, request.started = free.pop(0), self.mode, time.perf_counter()
-                request.width = WIDE if self.mode == SERIAL and len(request.tokens) % WIDE == 0 else CHUNK
-                self.active.append(request)
+                admitted.append(request)
+            # A width is fixed for a request's life: the 8k lane, when free, goes to the longest new prompt that is a
+            # multiple of 8k; a long prompt that finds it taken runs at 2k. An 8k prompt holds it for one step only.
+            # Serial mode admits one request at a time, so its lane is always free.
+            fits = [r for r in admitted if len(r.tokens) % WIDE == 0]
+            if fits and (self.mode == SERIAL or (PACK and not any(r.width == WIDE for r in self.active))):
+                max(fits, key=lambda r: len(r.tokens)).width = WIDE
+            self.active.extend(admitted)
 
     def _step(self):
-        lanes = [(r.slot, r.done, r.tokens[r.done : r.done + r.width]) for r in self.active]
+        # The wide lane first: every captured mixed layout is (8192, 2048, ...).
+        ordered = sorted(self.active, key=lambda r: r.width != WIDE)  # stable: the 2k lanes keep their order
+        lanes = [(r.slot, r.done, r.tokens[r.done : r.done + r.width]) for r in ordered]
+        assert StepRunner.layout(lanes) in self.layouts, f"layout {StepRunner.layout(lanes)} was not captured"
         t0 = time.perf_counter()
         replay_ms = self.runner.step(lanes)
         step_s = time.perf_counter() - t0
@@ -290,12 +317,9 @@ def test_batching_server(mesh_device, reset_seeds, monkeypatch):
     # Mixed widths (the serial 8k lane next to 2k steps): every step takes the PrefillLanes path, and the widest
     # layout compiles first, so lazily created all-gather semaphores land above every layout's SDPA buffers.
     runner.always_lanes = True
-    layouts = [[(0, 0, torch.zeros(WIDE, dtype=torch.int32))]]
-    layouts += [
-        [(slot, 0, torch.zeros(CHUNK, dtype=torch.int32)) for slot in range(n)] for n in range(num_slots, 0, -1)
-    ]
+    layouts = step_layouts(num_slots)
     logger.info(f"[demo] compiling and capturing {len(layouts)} step traces")
-    runner.capture_all(layouts)
+    runner.capture_all([[(slot, 0, torch.zeros(w, dtype=torch.int32)) for slot, w in enumerate(l)] for l in layouts])
 
     scheduler = Scheduler(runner, num_slots, capacity, _text_token_stream(_hf_model_id())[0])
     # The default listen backlog (5) makes a burst of clients wait out a TCP SYN retry (~0.5-1 s).
