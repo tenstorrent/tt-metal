@@ -8,6 +8,12 @@
 #include <array>
 #include <bit>
 #include <memory>
+#include <random>
+#include <future>
+#include <chrono>
+#include <stdexcept>
+#include "impl/data_format/bfp_simd.hpp"
+#include "impl/data_format/bfp_tasks.hpp"
 
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
@@ -110,3 +116,148 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
 
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
+
+namespace {
+template <int bits, typename T>
+void check_simd_rows(int isa) {
+    auto encode = tt::tt_metal::bfp_simd::select_row_packer<bits, T>(isa);
+    if (!encode) {
+        return;  // Unsupported ISAs must never execute on this host.
+    }
+    constexpr auto format = [] {
+        if constexpr (bits == 7) {
+            return tt::DataFormat::Bfp8_b;
+        } else if constexpr (bits == 3) {
+            return tt::DataFormat::Bfp4_b;
+        } else {
+            return tt::DataFormat::Bfp2_b;
+        }
+    }();
+    std::mt19937 rng(5127);
+    for (uint32_t row = 0; row < 4096; ++row) {
+        std::array<T, 16> input;
+        std::array<uint32_t, 16> words;
+        uint8_t exponent = 0;
+        for (size_t j = 0; j < input.size(); ++j) {
+            if constexpr (std::is_same_v<T, bfloat16>) {
+                // Exhaust every BF16 bit pattern, including signed zeros and NaNs.
+                input[j] = std::bit_cast<bfloat16>(static_cast<uint16_t>(row * 16 + j));
+            } else {
+                uint32_t word = rng();
+                if (row % 2 == 0) {
+                    word = (word & 0x807fffff) | ((row % 256) << 23);
+                }
+                input[j] = std::bit_cast<float>(word);
+            }
+            words[j] = std::bit_cast<uint32_t>(static_cast<float>(input[j]));
+            exponent = std::max(exponent, static_cast<uint8_t>(words[j] >> 23));
+        }
+        std::array<uint8_t, 16> expected{}, actual{};
+        constexpr int per_byte = 8 / (bits + 1);
+        for (size_t j = 0; j < input.size(); ++j) {
+            auto code = convert_u32_to_bfp<format, false>(words[j], exponent, false);
+            expected[j / per_byte] |= code << ((j % per_byte) * (bits + 1));
+        }
+        uint8_t actual_exponent = 0;
+        encode(input.data(), &actual_exponent, actual.data());
+        ASSERT_EQ(actual_exponent, exponent) << "row=" << row << " bits=" << bits << " isa=" << isa;
+        ASSERT_EQ(actual, expected) << "row=" << row << " bits=" << bits << " isa=" << isa;
+    }
+}
+
+template <tt::DataFormat Fast, tt::DataFormat Reference, typename T>
+void check_packed_tiles() {
+    std::mt19937 rng(4903);
+    for (auto shape : std::vector<tt::tt_metal::Tile::TileShape>{
+             {1, 16}, {1, 32}, {2, 32}, {4, 32}, {8, 32}, {16, 16}, {16, 32}, {32, 16}, {32, 32}}) {
+        for (bool row_major : {true, false}) {
+            for (uint32_t count : {0, 1, 257}) {
+                std::vector<T> input(count * shape[0] * shape[1]);
+                for (auto& value : input) {
+                    if constexpr (std::is_same_v<T, float>) {
+                        value = std::bit_cast<float>(static_cast<uint32_t>(rng()));
+                    } else {
+                        value = std::bit_cast<bfloat16>(static_cast<uint16_t>(rng()));
+                    }
+                }
+                // The exponent-A specialization retains the original converter.
+                // With is_exp_a=false it uses the exact same B-format exponent rules.
+                auto expected = pack_as_bfp_tiles<Reference, T>(input, row_major, false, tt::tt_metal::Tile(shape));
+                auto actual = pack_as_bfp_tiles<Fast, T>(input, row_major, false, tt::tt_metal::Tile(shape));
+                ASSERT_EQ(actual, expected)
+                    << "tile=" << shape[0] << "x" << shape[1] << " row_major=" << row_major << " tiles=" << count;
+            }
+        }
+    }
+}
+}  // namespace
+
+class BfpSimdRows : public ::testing::TestWithParam<int> {};
+TEST_P(BfpSimdRows, CPU_MatchesOriginalIntegerConverter) {
+    check_simd_rows<7, float>(GetParam());
+    check_simd_rows<3, float>(GetParam());
+    check_simd_rows<1, float>(GetParam());
+    check_simd_rows<7, bfloat16>(GetParam());
+    check_simd_rows<3, bfloat16>(GetParam());
+    check_simd_rows<1, bfloat16>(GetParam());
+}
+INSTANTIATE_TEST_SUITE_P(BlockfloatCommonTests, BfpSimdRows, ::testing::Values(0, 1, 2, 3));
+
+TEST(BfpSimdTiles, CPU_MatchesOriginalPackingAndExponentPadding) {
+    check_packed_tiles<tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8, float>();
+    check_packed_tiles<tt::DataFormat::Bfp4_b, tt::DataFormat::Bfp4, float>();
+    check_packed_tiles<tt::DataFormat::Bfp2_b, tt::DataFormat::Bfp2, float>();
+    check_packed_tiles<tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8, bfloat16>();
+    check_packed_tiles<tt::DataFormat::Bfp4_b, tt::DataFormat::Bfp4, bfloat16>();
+    check_packed_tiles<tt::DataFormat::Bfp2_b, tt::DataFormat::Bfp2, bfloat16>();
+}
+
+TEST(BfpSimdTiles, CPU_ConcurrentCalls) {
+    std::vector<float> input(512 * 1024);
+    std::mt19937 rng(42);
+    for (auto& x : input) {
+        x = std::bit_cast<float>(static_cast<uint32_t>(rng()));
+    }
+    auto expected = pack_as_bfp_tiles<tt::DataFormat::Bfp4, float>(input, true, false, std::nullopt);
+    std::vector<std::future<std::vector<uint32_t>>> calls;
+    calls.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        calls.emplace_back(std::async(std::launch::async, [&] {
+            return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b, float>(input, true, false, std::nullopt);
+        }));
+    }
+    for (auto& call : calls) {
+        EXPECT_EQ(call.get(), expected);
+    }
+}
+
+class BfpTaskLifetime : public ::testing::TestWithParam<bool> {};
+
+TEST_P(BfpTaskLifetime, CPU_DrainBeforeRethrowing) {
+    // Promise-backed futures, like pool futures, do not join on destruction.
+    // Keep one task pending while either submission or another task fails.
+    const bool submission_fails = GetParam();
+    std::promise<void> unfinished, failed, submitted;
+    auto unfinished_result = unfinished.get_future().share();
+    auto failed_result = failed.get_future().share();
+    failed.set_exception(std::make_exception_ptr(std::runtime_error("packing failed")));
+    auto submitted_result = submitted.get_future();
+    auto operation = std::async(std::launch::async, [&] {
+        tt::tt_metal::detail::run_bfp_tasks(2, [&](size_t i) {
+            if (i == 0) {
+                return submission_fails ? unfinished_result : failed_result;
+            }
+            submitted.set_value();
+            if (submission_fails) {
+                throw std::runtime_error("submission failed");
+            }
+            return unfinished_result;
+        });
+    });
+    EXPECT_EQ(submitted_result.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(operation.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    unfinished.set_value();
+    EXPECT_THROW(operation.get(), std::runtime_error);
+}
+
+INSTANTIATE_TEST_SUITE_P(BlockfloatCommonTests, BfpTaskLifetime, ::testing::Bool());

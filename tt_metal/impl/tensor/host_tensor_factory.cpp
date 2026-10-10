@@ -9,12 +9,14 @@
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
+#include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include "tensor_impl.hpp"
+#include "bfp_host_encode.hpp"
 
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
@@ -22,6 +24,18 @@
 #include <algorithm>
 
 namespace tt::tt_metal {
+
+namespace experimental {
+template <typename T>
+std::optional<HostTensor> try_create_bfp_host_tensor(
+    std::span<const T> buffer, const TensorSpec& spec, size_t row_stride) {
+    return detail::try_encode_bfp_matrix(buffer, spec, row_stride);
+}
+
+template std::optional<HostTensor> try_create_bfp_host_tensor<float>(std::span<const float>, const TensorSpec&, size_t);
+template std::optional<HostTensor> try_create_bfp_host_tensor<bfloat16>(
+    std::span<const bfloat16>, const TensorSpec&, size_t);
+}  // namespace experimental
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -41,6 +55,9 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (auto packed = detail::try_encode_bfp_matrix(buffer, spec)) {
+        return std::move(*packed);
+    }
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
     }
@@ -93,6 +110,10 @@ template <typename T>
 HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
+
+    if (auto packed = detail::try_encode_bfp_matrix(ttsl::make_const_span(buffer), spec)) {
+        return std::move(*packed);
+    }
 
     if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types only supported in TILE layout");
