@@ -13,7 +13,10 @@
 #include "api/compute/tile_move_copy.h"
 #define APPROX false
 #include "api/compute/common.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
@@ -130,6 +133,22 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Guard: when t is non-finite, c = (t - acc) - y is NaN (inf - inf) and poisons
+            // subsequent outputs (#58986). Retain c only when t is finite; otherwise clear it.
+            // DST usage: DST_T holds t (needed for pack), DST_COMP holds c. We need a finite-mask
+            // and a zero tile as inputs to where. DST_IN held y which is dead after the last sub,
+            // and DST_ACC held the old acc which is dead after t was computed, so both are free.
+            // Use DST_IN for the mask and DST_ACC as the zero constant.
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(DST_T, DST_IN); // DST_IN = t (preserve t in DST_T)
+            isfinite_tile_init();
+            isfinite_tile(DST_IN);                          // DST_IN = isfinite(t) ? 1 : 0
+            fill_tile_init();
+            fill_tile(DST_ACC, 0.0f);                       // DST_ACC = 0 (false-branch for where)
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_IN, DST_COMP, DST_ACC, DST_COMP); // c = isfinite(t) ? c : 0
+            // Restore binary SFPU config for next Kahan iteration (where/isfinite/fill/copy clobbered it)
+            BINARY_OP_INIT();
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
