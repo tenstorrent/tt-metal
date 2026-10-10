@@ -140,6 +140,18 @@ class KimiK3Config:
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
     @classmethod
+    def attn_res_planes(cls, boundary_layer_idx: int) -> int:
+        """Planes that cross a pipeline boundary placed before `boundary_layer_idx`.
+
+        One live stream plus every AttnRes snapshot sealed before the boundary. Seals fire at
+        layers 0, 12, 24, ..., so `ceil(boundary / 12)` of them precede it -- `boundary // 12` is
+        the same number only on a block edge, and one short everywhere else (93 included).
+        """
+        if boundary_layer_idx < 0:
+            raise ValueError(f"boundary_layer_idx must be non-negative, got {boundary_layer_idx}")
+        return 1 + -(-boundary_layer_idx // cls.ATTN_RES_BLOCK_SIZE)
+
+    @classmethod
     def mla_layer_ids(cls) -> list[int]:
         """0-indexed model-layer indices of the full-attention (MLA) layers.
 

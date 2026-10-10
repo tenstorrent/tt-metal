@@ -194,10 +194,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """Pipeline ranks may only start on an AttnRes block boundary.
 
         AttnRes seals every `ATTN_RES_BLOCK_SIZE` layers, and a rank starting at layer `F` inherits
-        exactly `F // 12` sealed snapshots from upstream. Constraining `F` to a multiple of 12 makes
-        that count static, which is what lets the cross-rank activation handoff have a fixed width
-        instead of one that depends on where the split landed. GLM-5.3 constrains its splits for the
-        same class of reason.
+        `ceil(F / 12)` sealed snapshots from upstream -- a function of the boundary, so the handoff
+        has a static width either way. A multiple of 12 is what keeps the cross-rank dependency to
+        the single straddling pre-read: off a block edge the next rank reads the rest of the
+        inherited block against that set (TtAttnResWalk handles it, and the single-layer tests use
+        it), but the socket and trace paths were only qualified on block edges. GLM-5.3 constrains
+        its splits for the same class of reason.
         """
         block = KimiK3Config.ATTN_RES_BLOCK_SIZE
         return {boundary for boundary in range(0, num_layers + 1, block)}
@@ -246,9 +248,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
         A read scores the live sum against every sealed snapshot, and the snapshots for layers
         upstream of the boundary are produced on another rank — nothing on this side can recompute
         them, so they ride the payload. `layer_split_boundaries` keeps `boundary_layer_idx` a
-        multiple of the block size, which is what makes this count exact rather than approximate.
+        multiple of the block size for every boundary that carries a socket. The far edge of the last
+        rank (93) is not one, which is why this is the ceil count, not `boundary // 12`.
         """
-        return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+        return KimiK3Config.attn_res_planes(boundary_layer_idx)
 
     # --- migration table configs: 0 = kvpe, 1 = KDA recurrent, 2 = KDA convolution ---
     kda_golden_default = (

@@ -25,7 +25,7 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk, sealed_before
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, K3KdaChunk, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
@@ -107,6 +107,10 @@ class TtKimiK3Transformer(LightweightModule):
         padding_side: str = "right",
         sparse_kv_cache_format=None,
         mtp_predictor=None,
+        # Lets a non-first rank start mid-block. Production splits stay block-aligned (the adapter's
+        # `layer_split_boundaries`); this exists for the single-layer suite, which runs any layer
+        # alone against a synthetic inherited state.
+        allow_unaligned_entry: bool = False,
         **block_kwargs,
     ):
         super().__init__()
@@ -140,16 +144,17 @@ class TtKimiK3Transformer(LightweightModule):
         self.num_layers = num_layers
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
-        # A rank boundary has to land on an AttnRes block edge. Off one, three things break at
-        # once: local layer 0 fires a seal the architecture does not have there and suppresses
-        # the real one; the boundary lands inside a read group, so the sealed set alone no
-        # longer carries the handoff; and the plane count stops being a function of the
-        # boundary. `KimiK3Adapter.layer_split_boundaries` already constrains this — repeated
-        # here so a direct user of the module cannot route around the adapter.
-        if not is_first_rank and first_layer_idx % BLOCK_SIZE != 0:
+        # A production rank boundary lands on an AttnRes block edge: there the handoff is the live
+        # stream plus the sealed set and nothing else, and the head read group is the single
+        # straddling pre-read. The walk itself handles any entry point -- it seals on the GLOBAL
+        # index and reads the rest of an inherited block against the inherited set -- so the
+        # restriction is policy, not correctness. `KimiK3Adapter.layer_split_boundaries` enforces it
+        # for the runner; repeated here so a direct user opts out explicitly rather than by accident.
+        if not is_first_rank and first_layer_idx % BLOCK_SIZE != 0 and not allow_unaligned_entry:
             raise ValueError(
                 f"a non-first rank must start on an AttnRes block boundary (a multiple of "
-                f"{BLOCK_SIZE}); got first_layer_idx={first_layer_idx}"
+                f"{BLOCK_SIZE}); got first_layer_idx={first_layer_idx}. Pass allow_unaligned_entry=True "
+                f"to start mid-block (test use)."
             )
         self.kv_only_last_layer = kv_only_last_layer
         # AttnRes is the model, not an option. Defaulting to a plain running sum would run, produce
@@ -170,7 +175,7 @@ class TtKimiK3Transformer(LightweightModule):
                 tt_ccl=get_tt_ccl(mesh_device),
                 # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
                 # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
-                # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
+                # that depth on its FIRST layer (it inherits `ceil(first_layer_idx / 12)` snapshots),
                 # where a single-rank run of the same width never would — 36 layers tops out at 3.
                 # Exposed so the fold can be taken out of the picture when diagnosing an L1
                 # placement failure. #54876's author later corrected its cause to layers-per-rank
@@ -193,7 +198,7 @@ class TtKimiK3Transformer(LightweightModule):
             )
             attn_res = self._attn_res
 
-            def residual_factory(hidden, block_residual=None, _n=num_layers):
+            def residual_factory(hidden, block_residual=None, _n=num_layers, _first=first_layer_idx):
                 # A fresh walk per forward: AttnRes state is per token — every reduction is over the
                 # hidden dimension and the token axis is a free batch axis — so there is nothing to
                 # carry between chunks, unlike the KDA recurrence.
@@ -209,6 +214,7 @@ class TtKimiK3Transformer(LightweightModule):
                         attn_res.weights.output,
                         _n,
                         inherited_block_residual=block_residual,
+                        first_layer_idx=_first,
                     )
                 )
 
@@ -364,15 +370,15 @@ class TtKimiK3Transformer(LightweightModule):
         """Planes this rank receives: one live stream plus the snapshots sealed before it.
 
         A seal fires every `BLOCK_SIZE` layers starting at layer 0, so a boundary at layer F
-        has `F // BLOCK_SIZE` snapshots behind it. A function of the boundary alone, which is
+        has `ceil(F / BLOCK_SIZE)` snapshots behind it. A function of the boundary alone, which is
         what keeps the transfer a static shape and therefore trace-capturable.
         """
-        return 1 + self.first_layer_idx // BLOCK_SIZE
+        return 1 + sealed_before(self.first_layer_idx)
 
     @property
     def outbound_planes(self) -> int:
         """Planes this rank sends on — the same count evaluated at the far edge of its slice."""
-        return 1 + (self.first_layer_idx + self.num_layers) // BLOCK_SIZE
+        return 1 + sealed_before(self.first_layer_idx + self.num_layers)
 
     def _pack_handoff(self, live, sealed):
         """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.

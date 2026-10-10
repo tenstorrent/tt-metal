@@ -152,6 +152,46 @@ def _block_sites(layers, q_pre, q_post, q_out, block_size):
     return [order[start : start + sites] for start in range(0, len(order), sites)]
 
 
+def sealed_before(layer_idx, block_size=BLOCK_SIZE):
+    """Snapshots sealed before global layer `layer_idx` opens: seals fire at 0, B, 2B, ..."""
+    return -(-layer_idx // block_size)
+
+
+def rank_site_groups(first_layer_idx, num_layers, block_size=BLOCK_SIZE):
+    """Read-site groups for a walk over global layers `[first_layer_idx, first_layer_idx + num_layers)`.
+
+    Sites are descriptors -- `("pre", local)`, `("post", local)`, `("out", None)` -- so the
+    grouping is pure bookkeeping, testable without tensors. Returns `(head, groups)`:
+
+    * `head`: the sites read against the INHERITED sealed set, before this window's first seal,
+      or None when the window starts at layer 0 (nothing inherited). On a block edge that is just
+      `[pre_F]`, the one read that straddles a rank boundary; off one it runs on through the
+      rest of the inherited block, up to and including the pre-read of the next seal layer.
+    * `groups`: one per seal inside the window, in order, each the sites from that seal's
+      `post` through the next seal layer's `pre` (or the window's end).
+
+    The model-level `out` site always closes the last group. Every group is a contiguous slice of
+    one global group, so a split window reads each site against the same sealed set the undivided
+    walk does; only the batching (and with it any fold that keys on the batch width) may differ.
+    """
+    first, end = first_layer_idx, first_layer_idx + num_layers
+    if first < 0 or num_layers < 1:
+        raise ValueError(f"need first_layer_idx >= 0 and num_layers >= 1, got {first_layer_idx}, {num_layers}")
+    head = None if first == 0 else []
+    groups = []
+    current = head
+    for layer in range(first, end):
+        local = layer - first
+        if layer > 0:
+            current.append(("pre", local))
+        if layer % block_size == 0:
+            current = []
+            groups.append(current)
+        current.append(("post", local))
+    current.append(("out", None))
+    return head, groups
+
+
 class TtAttnResWalk(object):
     """One forward pass's residual bookkeeping, driven by the caller's layer loop.
 
@@ -187,30 +227,60 @@ class TtAttnResWalk(object):
     """
 
     def __init__(
-        self, op, hidden_states, q_pre, q_post, q_out, num_layers, block_size=BLOCK_SIZE, inherited_block_residual=None
+        self,
+        op,
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        num_layers,
+        block_size=BLOCK_SIZE,
+        inherited_block_residual=None,
+        first_layer_idx=None,
     ):
         """`inherited_block_residual` is the sealed set an upstream pipeline rank handed over.
 
-        Given one, the walk opens OWING a read: `q_pre[0]`, the site `walk_sites` drops
-        because layer 0 of a *whole* model has nothing sealed to read against. On a rank
-        that does not hold layer 0 that site is real — it is the pre-read of the layer
-        opening the next block, the one read that straddles the boundary, and it scores
-        against the set that arrives rather than anything this rank has sealed.
+        Given one, the walk opens OWING reads against it: `q_pre[0]`, the site `walk_sites`
+        drops because layer 0 of a *whole* model has nothing sealed to read against. On a rank
+        that does not hold layer 0 that site is real — it is the pre-read of this rank's first
+        layer, and it scores against the set that arrives rather than anything this rank has
+        sealed. Off a block edge, every site up to the next seal reads against that set too
+        (`rank_site_groups`' head).
+
+        `first_layer_idx` is the GLOBAL index of local layer 0; seals fire on global multiples
+        of `block_size`. It is required with an inherited set (the walk cannot tell an aligned
+        entry from a mid-block one by the set alone) and defaults to 0 without one.
 
         Nothing statistical crosses the boundary: `inter_block` is a pure function of
-        `(block_residual, queries)`, and this rank owns `q_pre[0]`, so the batch is
+        `(block_residual, queries)`, and this rank owns the head queries, so the batch is
         recomputed here rather than shipped. Ownership of the tensor transfers in.
         """
+        if first_layer_idx is None:
+            if inherited_block_residual is not None:
+                raise ValueError("a walk with an inherited sealed set needs its first_layer_idx")
+            first_layer_idx = 0
+        inherited = 0 if inherited_block_residual is None else inherited_block_residual.shape[1]
+        if inherited != sealed_before(first_layer_idx, block_size):
+            raise ValueError(
+                f"a walk starting at layer {first_layer_idx} inherits "
+                f"{sealed_before(first_layer_idx, block_size)} sealed snapshots, got {inherited}"
+            )
         self.op = op
         self.block_size = block_size
+        self.first_layer_idx = first_layer_idx
+        self._next_local = 0
         self.stream = TtAttnResStream(op, hidden_states, block_size=block_size, block_residual=inherited_block_residual)
-        # Unchanged by the inheritance: local group 0 is the group that opens after this
-        # rank's first seal, which is exactly what `_block_sites` yields first.
-        self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
+
+        def query(site):
+            kind, local = site
+            return q_out if kind == "out" else (q_pre if kind == "pre" else q_post)[local]
+
+        head, groups = rank_site_groups(first_layer_idx, num_layers, block_size)
+        self._blocks = iter([[query(site) for site in group] for group in groups])
         self._pending = iter(())
         self._partials = self._shifts = self._masses = None
-        if inherited_block_residual is not None:
-            boundary = [q_pre[0]]
+        if head is not None:
+            boundary = [query(site) for site in head]
             self._partials, self._shifts, self._masses = op.inter_block(inherited_block_residual, boundary)
             self._pending = enumerate(boundary)
 
@@ -230,10 +300,14 @@ class TtAttnResWalk(object):
         the live stream itself and the caller must not free what it got — every later layer
         owns its `h`.
         """
+        # The caller's index is rank-local; the seal schedule is global. Counting here rather
+        # than trusting the caller keeps a rank that starts mid-block from sealing on ITS layer 0.
+        assert layer_idx == self._next_local, f"open_layer({layer_idx}) out of order, expected {self._next_local}"
+        self._next_local += 1
         borrowed = self.stream.num_sealed == 0
         h = self.stream.running_sum if borrowed else self.read()
 
-        if layer_idx % self.block_size == 0:
+        if (self.first_layer_idx + layer_idx) % self.block_size == 0:
             self.stream.seal()
             # The read above was the outgoing block's last site, so replacing the batches
             # here strands nothing.

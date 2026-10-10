@@ -42,7 +42,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         `KimiK3Adapter.pipeline_activation_planes`, which sizes the socket — the two are read at the
         same boundary and disagreeing shows up as a rendezvous failure, not a wrong answer.
         """
-        return 1 + self.config.first_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+        first = self.config.first_layer_idx
+        # The runner only splits on block edges (`KimiK3Adapter.layer_split_boundaries`); a rank
+        # starting mid-block would read more than the straddling site against the inherited set,
+        # which the socket and trace paths were never qualified for.
+        if first % KimiK3Config.ATTN_RES_BLOCK_SIZE != 0:
+            raise ValueError(f"runtime rank starts mid-block at layer {first}; the runner splits on block edges only")
+        return KimiK3Config.attn_res_planes(first)
 
     def _my_mla_layer_ids(self):
         """The GLOBAL model layers in this rank's slice that own a KV slab."""
