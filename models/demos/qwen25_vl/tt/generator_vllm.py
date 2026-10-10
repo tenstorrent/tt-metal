@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import os
+import time
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 import torch
 from loguru import logger
@@ -29,34 +31,61 @@ from models.demos.qwen25_vl.tt.common import (
 )
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.demos.qwen25_vl.tt.model_config import MAX_IMAGE_PIXELS, ModelArgs, VisionModelArgs
+from models.tt_transformers.tt.generator import create_submeshes
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
-    for layer_idx in range(num_layers):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    kv_cache = []
+    for mesh_idx, model_inst in enumerate(dp_model):
+        model_args_inst = model_inst.args
+        for layer_idx in range(num_layers):
+            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
-        model.layers[layer_idx].attention.layer_past = [
-            ttnn.as_tensor(
-                cache_kv,
-                device=model.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                # Separate cache files for K and V to avoid collision.
-                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
-            )
-            for kv in ["k", "v"]
-        ]
+            model_inst.layers[layer_idx].attention.layer_past = [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=model_inst.mesh_device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=model_args_inst.model_config["ATTN_W_LAYOUT_TILE"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(model_inst.mesh_device),
+                    cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
+                )
+                for kv in ["k", "v"]
+            ]
 
-    return [l.attention.layer_past for l in model.layers]
+        kv_cache.append([l.attention.layer_past for l in model_inst.layers])
+    return kv_cache
+
+
+def _dp_rank_and_cache_marker():
+    """(data-parallel rank of this engine process, marker file rank 0 touches once its tensor cache is complete)."""
+    rank = int(os.environ.get("VLLM_DP_RANK", "0") or 0)
+    cache_root = os.environ.get("TT_CACHE_PATH")
+    marker = Path(cache_root) / ".dp_rank0_tensor_cache_ready" if cache_root else None
+    return rank, marker
+
+
+def _wait_for_rank0_cache(marker, rank, timeout_s=3600, poll_s=5):
+    if marker is None or marker.exists():
+        return
+    logger.info(f"DP rank {rank}: waiting for rank 0 to finish generating the tensor cache ({marker})")
+    waited = 0
+    while not marker.exists() and waited < timeout_s:
+        time.sleep(poll_s)
+        waited += poll_s
+    if not marker.exists():
+        logger.warning(f"DP rank {rank}: no tensor cache marker after {timeout_s}s; loading anyway")
 
 
 def get_platform_specific_optimizations(model_name):
     max_seq_len = 131072
 
+    # Same policy as upstream: the Qwen2.5-7B class (7B / olmOCR-2) already keeps BF16 attention + BFP8 MLPs under
+    # ``performance``; the larger variants need the BFP4 MLPs / BFP8 attention of this policy to fit (72B on 1x8 runs
+    # out of DRAM while loading the vision tower with the ``accuracy`` policy).
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
     return performance_opt, max_seq_len
@@ -64,38 +93,46 @@ def get_platform_specific_optimizations(model_name):
 
 def initialize_vllm_text_transformer(
     hf_config,
+    tt_data_parallel,
     mesh_device,
     max_batch_size,
     max_seq_len,
     dtype=ttnn.bfloat8_b,
     optimizations=None,
 ):
-    # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
     hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-    tt_model_args = ModelArgs(
-        mesh_device,
-        instruct=("Instruct" in hf_model_id),
-        max_batch_size=max_batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-    )
-    tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
-    assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
-        "-", ""
-    ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
-    state_dict = tt_model_args.load_state_dict()
+    model_args = []
+    for submesh in submesh_devices:
+        tt_model_args = ModelArgs(
+            submesh,
+            instruct=("Instruct" in hf_model_id),
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+        )
+        tt_model_args.use_qk_fused = False
+        assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_model_id}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
+        model_args.append(tt_model_args)
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
-    )
+    state_dict = model_args[0].load_state_dict()
 
-    return tt_model_args, model
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(model_i)
+
+    return tt_model, model_args
 
 
 class CustomNamespace(SimpleNamespace):
@@ -104,6 +141,13 @@ class CustomNamespace(SimpleNamespace):
 
 
 class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+    def get_hf_processor(self, **kwargs: object):
+        # Keep every image within the windowed-attention budget (see MAX_IMAGE_PIXELS); a smaller
+        # user-supplied ``max_pixels`` (mm_processor_kwargs) is honoured.
+        requested = kwargs.get("max_pixels")
+        kwargs["max_pixels"] = MAX_IMAGE_PIXELS if requested is None else min(int(requested), MAX_IMAGE_PIXELS)
+        return super().get_hf_processor(**kwargs)
+
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
@@ -118,8 +162,16 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
     # Class-level capabilities
     model_capabilities = {
-        "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        # vLLM automatic prefix caching: a request whose leading KV blocks are already cached arrives with
+        # start_pos > 0 and prefills only the suffix (see Generator.prefill_forward_text); images whose
+        # tokens lie inside the cached prefix come without pixel data and skip the vision tower.
+        "supports_prefix_caching": True,
+        # Split decode submission (decode_forward(read_from_device=False) + read_decode_output(async_read=True))
+        # and the resident token feedback buffer come from the shared tt_transformers generator, the same way
+        # the text models declare them; vLLM's async scheduling needs this flag.
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):
@@ -128,6 +180,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         assert (
             self.reference_model is not None and self.visual_model is not None
         ), "Reference model and visual model must be provided for vLLM"
+
+        self._decode_iteration = 0
 
         super().__init__(*args, **kwargs)
 
@@ -143,6 +197,20 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         devices_per_dp_cache = num_devices // tt_data_parallel
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
             return 65_536
+        # 32B on a 1x8 Wormhole cache: ~4.5 GB of the 12 GB DRAM holds weights (bfp4 MLPs / bfp8 attention), the
+        # bfp8 KV cache costs 17 KB per token per chip, so 256k tokens (4.5 GB) still leave room for the prefill
+        # working set of the full 128k context.
+        if "Qwen2.5-VL-32B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
+            return 262_144
+        # 7B-class models on a 1x8 Wormhole cache: one padded KV head per chip at bf16 costs 14 KB per
+        # token per chip (3B: 18 KB), and ~1.5 GB of the 12 GB DRAM holds weights, so three times the
+        # fallback budget (5.6 GB of KV) leaves room for the 128k prefill working set.
+        if (
+            devices_per_dp_cache == 8
+            and is_wormhole_b0()
+            and any(n in model_name for n in ("Qwen2.5-VL-7B", "Qwen2.5-VL-3B", "olmOCR-2-7B"))
+        ):
+            return 393_216
         return super().get_max_tokens_all_users(
             model_name=model_name,
             num_devices=num_devices,
@@ -155,7 +223,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_model_id)
         if max_seq_len > max_seq_len_native:
@@ -163,8 +230,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
-        model_args, model = initialize_vllm_text_transformer(
+        # With multi-process data parallelism every engine converts and caches the same weights; on a
+        # cold cache the ranks race on the shared cache files. Let rank 0 populate it first.
+        dp_rank, cache_marker = _dp_rank_and_cache_marker()
+        if dp_rank > 0:
+            _wait_for_rank0_cache(cache_marker, dp_rank)
+
+        tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
+            tt_data_parallel,
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
@@ -172,27 +246,33 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=optimizations,
         )
 
-        ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
+        ref_model_name = model_args[0].CKPT_DIR
         config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-        # config.vision_config.depth = 1 # [INFO] useful for debugging
         reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
             ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
-        # Create the TorchVisionTransformer wrapper using the original vision model as reference
+
+        vision_mesh = tt_model[0].mesh_device if tt_data_parallel > 1 else mesh_device
         vision_model_args = VisionModelArgs(
-            mesh_device,
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=model_args.max_seq_len,
+            vision_mesh,
+            max_batch_size=model_args[0].max_batch_size,
+            max_seq_len=model_args[0].max_seq_len,
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
+        if dp_rank == 0 and cache_marker is not None:
+            try:
+                cache_marker.parent.mkdir(parents=True, exist_ok=True)
+                cache_marker.touch()
+            except OSError as e:  # read-only cache mounts: the other ranks fall back to the wait timeout
+                logger.warning(f"Could not write tensor cache marker {cache_marker}: {e}")
 
         return cls(
-            model,
+            tt_model,
             model_args,
             mesh_device,
-            tokenizer=model_args.tokenizer,
+            tokenizer=model_args[0].tokenizer,
             reference_model=reference_model,
             visual_model=visual_model,
         )
@@ -203,7 +283,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(
-            *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
+            *args, **kwargs, dp_model=self._ttt_generator.model, tt_cache_path=self.cache_path
         )
 
     def prefill_forward(
@@ -215,13 +295,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         enable_trace,
         **kwargs,  # pixel_values and image_grid_thw
     ):
-        start_pos = kwargs.get("start_pos", None)
-        assert (start_pos is None) or all(
-            x == 0 for x in start_pos
-        ), f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
-        # Must add this so that vLLM can call without errors
-        enable_trace = False
-        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
+        empty_slots = kwargs.pop("empty_slots", None)
+        start_pos = kwargs.get("start_pos", None)  # per-user cached prefix lengths (automatic prefix caching)
+        num_cached_per_user = self._normalize_start_pos(start_pos, tokens.shape[0])
+        # enable_trace is passed through from vLLM
 
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
@@ -232,46 +309,80 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
         inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
-        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
-        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
         inputs.attention_mask = torch.zeros(
             (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
         )
         for i, plen in enumerate(prompt_lens):
             inputs.attention_mask[i, :plen] = 1
 
-        if (
-            "pixel_values" in kwargs
-            and len(kwargs["pixel_values"]) > 0
-            and kwargs["pixel_values"][0] is not None
-            # kwargs["pixel_values"] is a list,
-            # each element is a list of images for one user
-            # We only check if the first user's pixel_values is not None
-            # as we currently do not support mixed inputs of text-only
-            # users and text-image users
+        # A batched prefill may mix users with and without an image (per-user entries are None for text-only
+        # prompts); the image token positions in input_ids carry the user mapping, so only the users with
+        # images contribute to the flattened pixel / grid lists.
+        # With automatic prefix caching, vLLM strips the pixel data of an image whose tokens are fully
+        # inside the cached prefix (its grid stays, since M-RoPE positions need it): that image's rows of
+        # the merged embedding are never read by the resumed prefill, so they get zero placeholders and
+        # the vision tower runs only on the images that still carry pixels.
+        images = []  # (user, pixel_values or None, grid) in prompt order
+        for user, (pv_list, grid_list) in enumerate(
+            zip(kwargs.get("pixel_values", []), kwargs.get("image_grid_thw", []))
         ):
-            inputs.pixel_values = torch.concat(
-                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
-            )
-            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-            # vLLM Qwen2.5-VL provides per-image `image_grid_thw` as a length-3
-            # 1D tensor (t, h, w). Stack into (num_images, 3).
-            assert _grid_items and all(
-                im is not None for im in _grid_items
-            ), "Expected non-empty image_grid_thw for image inputs."
-            for g in _grid_items:
+            if grid_list is None:
+                assert pv_list is None or all(pv is None for pv in pv_list), f"user {user}: pixels without grids"
+                continue
+            pv_list = pv_list if pv_list is not None else [None] * len(grid_list)
+            assert len(pv_list) == len(
+                grid_list
+            ), f"user {user}: {len(pv_list)} pixel entries for {len(grid_list)} grids"
+            for pv, g in zip(pv_list, grid_list):
                 assert (
-                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+                    g is not None and torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                ), f"user {user}: expected per-image image_grid_thw shape (3,), got {g!r}"
+                if pv is None:
+                    assert num_cached_per_user[user] > 0, f"user {user}: an uncached image arrived without pixels"
+                    images.append((user, None, g))
+                else:
+                    images.append((user, pv, g))
+        if images:
             inputs.image_grid_thw = torch.stack(
-                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
-                dim=0,
+                [g.to(device=tokens.device, dtype=torch.int32) for _, _, g in images], dim=0
             )
-            # Vision prefill
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            live = [(pv, g) for _, pv, g in images if pv is not None]
+            if live:
+                vision_start = time.perf_counter()
+                live_embeds = self.visual_model(
+                    torch.concat([pv for pv, _ in live], dim=0),
+                    grid_thw=torch.stack([g.to(device=tokens.device, dtype=torch.int32) for _, g in live], dim=0),
+                )
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill: {vision_time*1000:.2f}ms "
+                    f"({vision_time/batch_size*1000:.2f}ms/user)"
+                    + (f" [{len(images) - len(live)} cached image(s) skipped]" if len(live) < len(images) else "")
+                )
+            else:
+                live_embeds = None
+                logger.info(f"[PERF] Vision prefill skipped: all {len(images)} image(s) are in cached prefixes")
+            merge_unit = self.reference_model.config.vision_config.spatial_merge_size**2
+            hidden = (
+                self.reference_model.config.text_config.hidden_size
+                if hasattr(self.reference_model.config, "text_config")
+                else self.reference_model.config.hidden_size
+            )
+            placeholder_dtype = live_embeds.dtype if live_embeds is not None else torch.bfloat16
+            parts, cursor = [], 0
+            for _, pv, g in images:
+                n_tokens = int(g.prod().item()) // merge_unit
+                if pv is None:
+                    parts.append(torch.zeros(n_tokens, hidden, dtype=placeholder_dtype, device=tokens.device))
+                else:
+                    parts.append(live_embeds[cursor : cursor + n_tokens])
+                    cursor += n_tokens
+            assert (
+                live_embeds is None or cursor == live_embeds.shape[0]
+            ), f"vision tower produced {live_embeds.shape[0]} rows, grids account for {cursor}"
+            image_embeds = torch.cat(parts, dim=0)
         else:
-            # text-only users
             image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
         # Prepare text + vision inputs for decoder model
@@ -294,13 +405,27 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
         rot_mats = (cos, sin)
 
+        prefill_start = time.perf_counter()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=enable_trace,
+            empty_slots=empty_slots,
+            start_pos=num_cached_per_user,
         )
+        prefill_time = time.perf_counter() - prefill_start
+        batch_size = tokens.shape[0]
+        avg_ttft = prefill_time / batch_size
+        prefill_tok_s = _prefill_lens[0] / prefill_time * batch_size if prefill_time > 0 else 0
+        logger.info(
+            f"[PERF] Text prefill (TTFT): {prefill_time*1000:.2f}ms "
+            f"({avg_ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
+        )
+
+        self._decode_iteration = 0
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
@@ -322,4 +447,51 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             # independently move dormant/on-device sampling RNG state.
             kwargs["slot_remap"] = slot_remap
 
-        return super().decode_forward(*args, **kwargs)
+        decode_start = time.perf_counter()
+        result = super().decode_forward(*args, **kwargs)
+        decode_time = time.perf_counter() - decode_start
+
+        self._decode_iteration += 1
+        batch_size = 1
+        tokens_tensor = args[0] if len(args) > 0 else kwargs.get("tokens", None)
+        if isinstance(tokens_tensor, torch.Tensor) and tokens_tensor.ndim > 0:
+            batch_size = tokens_tensor.shape[0]
+
+        # Step-to-step time gives the real per-iteration latency including
+        # device compute, D2H read, host processing, and vLLM scheduling.
+        # The dispatch-only time (decode_time) is misleading when
+        # read_from_device=False since it only measures async launch.
+        step_time = None
+        if hasattr(self, "_prev_decode_start"):
+            step_time = decode_start - self._prev_decode_start
+        self._prev_decode_start = decode_start
+
+        dispatch_tok_s = 1.0 / decode_time * batch_size if decode_time > 0 else 0
+        # Gate verbose per-step perf to DEBUG so steady-state decode doesn't emit
+        # a loguru record every ~70 ms (this adds measurable host overhead and
+        # dominates the log at high concurrency). Keep the first few iterations
+        # at INFO so compile / first-token latency is still visible.
+        # Set TT_PERF_DECODE_LOG_EVERY=N in the environment to ALSO emit one
+        # INFO line every N steady-state iterations (N defaults to 0 = off).
+        # Used to inspect steady-state step time vs. first-few-iterations when
+        # investigating client-observed TPOT vs engine device step gaps.
+        steady_log_every = int(os.environ.get("TT_PERF_DECODE_LOG_EVERY", "0") or 0)
+        is_sampled_steady = (
+            steady_log_every > 0 and self._decode_iteration > 3 and self._decode_iteration % steady_log_every == 0
+        )
+        log_fn = logger.info if self._decode_iteration <= 3 or is_sampled_steady else logger.debug
+        if step_time and step_time > 0 and self._decode_iteration > 2:
+            real_tok_s_user = 1.0 / step_time
+            real_tok_s = real_tok_s_user * batch_size
+            log_fn(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"step={step_time*1000:.0f}ms dispatch={decode_time*1000:.0f}ms | "
+                f"{real_tok_s_user:.1f} tok/s/user, {real_tok_s:.1f} tok/s throughput (batch={batch_size})"
+            )
+        else:
+            log_fn(
+                f"[PERF] Decode iteration {self._decode_iteration}: "
+                f"dispatch={decode_time*1000:.0f}ms (batch={batch_size})"
+            )
+
+        return result

@@ -137,6 +137,7 @@ class Attention(LightweightModule):
         # reduction for large head_dim. Config-gated flag; False for every other model.
         if getattr(configuration, "sdpa_decode_use_default_compute_config", False):
             self.sdpa_decode_compute_kernel_cfg = None
+
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
@@ -182,17 +183,29 @@ class Attention(LightweightModule):
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
+        self.k_bias_shift_decode = None
+        self.k_bias_shift_prefill = None
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
             bias_num_devices = self.num_devices_per_group if self.TG else configuration.num_devices
+            wq_bias = state_dict[f"{wq_str}.bias"]
+            wk_bias = state_dict[f"{wk_str}.bias"]
+            wv_bias = state_dict[f"{wv_str}.bias"]
+
+            if self._needs_head_rearrangement():
+                wq_bias, wk_bias, wv_bias = self._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
+
+            if configuration.subtract_k_bias_post_rope:
+                self._create_k_bias_shift(wk_bias, bias_num_devices, configuration)
+
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], bias_num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], bias_num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(wq_bias, bias_num_devices)[i],
+                            torch.chunk(wk_bias, bias_num_devices)[i],
+                            torch.chunk(wv_bias, bias_num_devices)[i],
                         ],
                         dim=-1,
                     )
@@ -254,7 +267,6 @@ class Attention(LightweightModule):
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
         assert self.n_kv_heads % self.num_devices_per_group == 0
         assert configuration.qkv_size % self.num_devices_per_group == 0
@@ -265,14 +277,19 @@ class Attention(LightweightModule):
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
 
+        wq_weight = state_dict[f"{wq_str}.weight"]
+        wk_weight = state_dict[f"{wk_str}.weight"]
+        wv_weight = state_dict[f"{wv_str}.weight"]
+
+        if self._needs_head_rearrangement():
+            wq_weight, wk_weight, wv_weight = self._rearrange_qkv_2d(wq_weight, wk_weight, wv_weight)
+
         qkv_list = []
         for i in range(self.num_devices_per_group):
-            # Chunk weights
-            wq_selected = torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(wq_weight, self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(wk_weight, self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(wv_weight, self.num_devices_per_group, dim=0)[i]
 
-            # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
             wk = torch.transpose(wk_selected, -2, -1)
             wv = torch.transpose(wv_selected, -2, -1)
@@ -342,7 +359,12 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
-        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        wo_weight = state_dict[f"{wo_str}.weight"]
+
+        if self._needs_head_rearrangement():
+            wo_weight = self._rearrange_wo(wo_weight)
+
+        pt_wo = wo_weight.transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
@@ -402,6 +424,123 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _needs_head_rearrangement(self):
+        return getattr(self.args, "unpadded_n_kv_heads", self.n_kv_heads) != self.n_kv_heads
+
+    def _head_rearrangement_params(self):
+        original_n_heads = self.args.unpadded_n_heads
+        original_n_kv_heads = self.args.unpadded_n_kv_heads
+        gqa_ratio = original_n_heads // original_n_kv_heads
+        heads_per_device = self.n_heads // self.num_devices_per_group
+        devices_per_kv_group = self.num_devices_per_group // original_n_kv_heads
+        return original_n_heads, original_n_kv_heads, gqa_ratio, heads_per_device, devices_per_kv_group
+
+    def _build_q_head_order(self):
+        """Returns a list of (original_q_head_index_or_None) for each padded head slot."""
+        (
+            original_n_heads,
+            original_n_kv_heads,
+            gqa_ratio,
+            heads_per_device,
+            devices_per_kv_group,
+        ) = self._head_rearrangement_params()
+        q_order = []
+        for kv_group in range(original_n_kv_heads):
+            group_q_start = kv_group * gqa_ratio
+            for dev_in_group in range(devices_per_kv_group):
+                for h in range(heads_per_device):
+                    q_idx = group_q_start + dev_in_group * heads_per_device + h
+                    if q_idx < group_q_start + gqa_ratio and q_idx < original_n_heads:
+                        q_order.append(q_idx)
+                    else:
+                        q_order.append(None)
+        return q_order
+
+    def _build_kv_head_order(self):
+        """Returns a list of original_kv_head_index for each padded KV slot (duplicated)."""
+        _, original_n_kv_heads, _, _, devices_per_kv_group = self._head_rearrangement_params()
+        kv_order = []
+        for kv_group in range(original_n_kv_heads):
+            for _ in range(devices_per_kv_group):
+                kv_order.append(kv_group)
+        return kv_order
+
+    def _rearrange_qkv_1d(self, wq_bias, wk_bias, wv_bias):
+        """Rearrange 1D Q/K/V biases to preserve GQA mapping across devices."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        kv_order = self._build_kv_head_order()
+
+        new_q = torch.cat(
+            [
+                wq_bias[idx * hd : (idx + 1) * hd] if idx is not None else torch.zeros(hd, dtype=wq_bias.dtype)
+                for idx in q_order
+            ]
+        )
+        new_k = torch.cat([wk_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        new_v = torch.cat([wv_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        return new_q, new_k, new_v
+
+    def _create_k_bias_shift(self, wk_bias, bias_num_devices, configuration):
+        """Device tensors holding this device's K-projection bias, one per KV head, in the
+        same head layout as the keys written to the cache.
+
+        Softmax is invariant to adding a per-query constant, and the K bias contributes
+        exactly such a constant: for a query q, q . (k_pos - b_k) = q . k_pos - q . b_k at every
+        position. Subtracting b_k from every post-RoPE key therefore leaves attention
+        unchanged mathematically, but it removes the large position-independent component
+        of the scores (Qwen2.5 K biases reach ~170, giving raw QK^T scores of ~1e4 whose
+        bf16 rounding inside the decode SDPA kernel is coarser than the gaps between
+        competing positions). Subtracting the bias *before* RoPE would not work: the
+        rotation would turn it into a position-dependent term.
+        """
+        # wk_bias is laid out as [device][local kv head][head_dim], matching the fused QKV bias chunks
+        shift = wk_bias.reshape(bias_num_devices, self.n_local_kv_heads, self.head_dim)
+        shift_decode = shift.reshape(1, 1, bias_num_devices * self.n_local_kv_heads, self.head_dim)  # [1,1,B*K,D]
+        shift_prefill = shift.reshape(1, bias_num_devices * self.n_local_kv_heads, 1, self.head_dim)  # [1,B*K,1,D]
+        # Tiny tensors built straight from the bias: not written to the weight cache (CI caches are read-only)
+        common = dict(
+            device=self.mesh_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        )
+        if self.TG:
+            mapper = lambda dim: ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(dim, None), mesh_shape=configuration.cluster_shape
+            )
+        else:
+            mapper = lambda dim: ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+        # Broadcast over users (dim 1) against the [1, B, K, D] decode keys
+        self.k_bias_shift_decode = ttnn.as_tensor(shift_decode, mesh_mapper=mapper(2), **common)
+        # Broadcast over the sequence (dim 2) against the [1, K, S, D] prefill keys
+        self.k_bias_shift_prefill = ttnn.as_tensor(shift_prefill, mesh_mapper=mapper(1), **common)
+
+    def _rearrange_qkv_2d(self, wq, wk, wv):
+        """Rearrange 2D Q/K/V weight matrices [out_features, in_features] to preserve GQA mapping."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        kv_order = self._build_kv_head_order()
+
+        new_q = torch.cat(
+            [
+                wq[idx * hd : (idx + 1) * hd] if idx is not None else torch.zeros(hd, wq.shape[1], dtype=wq.dtype)
+                for idx in q_order
+            ]
+        )
+        new_k = torch.cat([wk[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        new_v = torch.cat([wv[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        return new_q, new_k, new_v
+
+    def _rearrange_wo(self, wo_weight):
+        """Rearrange wo weight columns to match Q head rearrangement. wo_weight: [out_features, in_features]."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        new_cols = [
+            wo_weight[:, idx * hd : (idx + 1) * hd]
+            if idx is not None
+            else torch.zeros(wo_weight.shape[0], hd, dtype=wo_weight.dtype)
+            for idx in q_order
+        ]
+        return torch.cat(new_cols, dim=1)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -824,6 +963,14 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        if self.k_bias_shift_decode is not None:
+            # Softmax-invariant shift, see _create_k_bias_shift
+            k_heads_shifted = ttnn.subtract(
+                k_heads_1BKD, self.k_bias_shift_decode, memory_config=k_heads_1BKD.memory_config()
+            )
+            ttnn.deallocate(k_heads_1BKD)
+            k_heads_1BKD = k_heads_shifted
         ###
         # KV update
         ###
@@ -1128,6 +1275,14 @@ class Attention(LightweightModule):
         q_heads_1QSD, k_heads_1KSD = self.rotary_embedding_prefill(q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        if self.k_bias_shift_prefill is not None:
+            # Softmax-invariant shift, see _create_k_bias_shift
+            k_heads_shifted = ttnn.subtract(
+                k_heads_1KSD, self.k_bias_shift_prefill, memory_config=k_heads_1KSD.memory_config()
+            )
+            ttnn.deallocate(k_heads_1KSD)
+            k_heads_1KSD = k_heads_shifted
 
         # Fill KV-Cache
         if kv_cache:

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 from loguru import logger
 
@@ -179,6 +180,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self.reference_model = reference_model
         self.model_args = model_args
         self.debug = debug
+        self._traces = {}
 
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
@@ -201,6 +203,97 @@ class DropInVisionTransformer(torch.nn.Module):
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
 
+    # Trace capture per padded image length. Measured neutral on a 1x8 lane (the pass is bound by per-op
+    # device launch overhead, not host dispatch), so it is off by default; it helps when the host is busy.
+    use_trace = False
+
+    def _mappers(self, image_parallel):
+        mesh = self.model_args.mesh_device
+        if image_parallel:
+            shard0 = ttnn.ShardTensorToMesh(mesh, dim=0)
+            return shard0, shard0, shard0
+        return (
+            ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=self.model_args.cluster_shape),
+            ttnn.ReplicateTensorToMesh(mesh),
+            ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def _host_inputs(self, x, cos, sin, cu, cuw, image_parallel):
+        x_mapper, rope_mapper, bounds_mapper = self._mappers(image_parallel)
+        # The activations go over as row-major bf16 and are tilized on device: host-side tilization
+        # of the ~300 MB input of an 8-image pass costs 0.2-0.6 s per pass. The RoPE tables are small
+        # and their width (head_dim 80) is not tile-aligned, so they stay host-tilized.
+        rm_bf16 = dict(layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        tile_bf16 = dict(layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        rm_u32 = dict(layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+        return [
+            ttnn.from_torch(x, mesh_mapper=x_mapper, **rm_bf16),
+            ttnn.from_torch(cos, mesh_mapper=rope_mapper, **tile_bf16),
+            ttnn.from_torch(sin, mesh_mapper=rope_mapper, **tile_bf16),
+            ttnn.from_torch(cu, mesh_mapper=bounds_mapper, **rm_u32),
+            ttnn.from_torch(cuw, mesh_mapper=bounds_mapper, **rm_u32),
+        ]
+
+    def _run_model(self, dev_inputs, S):
+        """One vision pass from device-resident inputs; copies them first so the blocks may free their input."""
+        x, cos, sin, cu, cuw = dev_inputs
+        # tilize makes fresh tensors, so the blocks may free them without touching the persistent inputs
+        work_x = ttnn.tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        rot_mats = [
+            ttnn.clone(cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.clone(sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ]
+        out = self.tt_model(
+            work_x,
+            unpadded_seq_len=S,  # the merger sees the padded length; the padding rows are dropped on the host
+            rot_mats=rot_mats,
+            cu_seqlens=ttnn.reshape(cu, (cu.shape[-1],)),  # per-device 1-D rows, as the windowed SDPA expects
+            cu_window_seqlens=ttnn.reshape(cuw, (cuw.shape[-1],)),
+        )
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+        return out
+
+    def _run_group(self, x, cos, sin, cu, cuw, S, image_parallel):
+        """Run one group of images (one per chip) and return the merged tokens as [N, 1, S // merge, H_out]."""
+        mesh = self.model_args.mesh_device
+        host_inputs = self._host_inputs(x, cos, sin, cu, cuw, image_parallel)
+        key = (S, tuple(cu.shape), tuple(cuw.shape), tuple(x.shape))
+        if not self.use_trace:
+            dev_inputs = [ttnn.to_device(t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host_inputs]
+            tt_out = self._run_model(dev_inputs, S)
+            for t in dev_inputs:
+                ttnn.deallocate(t)
+        else:
+            entry = self._traces.get(key)
+            if entry is None:
+                dev_inputs = [ttnn.to_device(t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host_inputs]
+                ttnn.deallocate(self._run_model(dev_inputs, S))  # compile run
+                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                tt_out = self._run_model(dev_inputs, S)
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+                entry = self._traces[key] = dict(trace_id=trace_id, inputs=dev_inputs, out=tt_out)
+                logger.info(f"Captured vision trace for padded length {S} ({len(self._traces)} traces)")
+            else:
+                for h, d in zip(host_inputs, entry["inputs"]):
+                    ttnn.copy_host_to_device_tensor(h, d)
+                ttnn.execute_trace(mesh, entry["trace_id"], cq_id=0, blocking=False)
+                tt_out = entry["out"]
+        if image_parallel:
+            out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        else:
+            out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1))[:, 0:1]
+        if not self.use_trace:
+            ttnn.deallocate(tt_out)
+        return out
+
+    def release_traces(self):
+        for entry in self._traces.values():
+            ttnn.release_trace(self.model_args.mesh_device, entry["trace_id"])
+            for t in entry["inputs"]:
+                ttnn.deallocate(t)
+        self._traces = {}
+
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
         Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
@@ -213,124 +306,99 @@ class DropInVisionTransformer(torch.nn.Module):
 
         Returns:
             torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
-        """
-        # process pixel_values for each image/video separately
-        all_pixel_values = pixel_values
-        all_grid_thw = grid_thw
-        final_outputs = []
-        # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
-        for grid_thw in all_grid_thw:
-            # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
-            pixel_values = all_pixel_values[: grid_thw.prod(), :]
-            all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
-            # --- Preprocessing ---
-            # 1. Calculate total unpadded sequence length
-            grid_thw = grid_thw.unsqueeze(0)
-            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
-            # 2. Use preprocessing function from reference/functional to get indices and embeddings
+        The vision weights are replicated on every chip of the mesh, so the images are run data-parallel:
+        each pass takes one image per chip (inputs, RoPE tables and window boundaries sharded on dim 0),
+        padded to the longest image of the group. A group with fewer images than chips repeats its last
+        image on the idle chips.
+        """
+        mesh = self.model_args.mesh_device
+        # On a 32-chip Galaxy mesh the vision tower is tensor-parallel over the mesh columns (VisionModelArgs
+        # splits the weights), so images go through one at a time with the hidden dim column-sharded; on
+        # every other mesh the weights are replicated and the chips take one image each.
+        image_parallel = not self.model_args.is_galaxy
+        num_devices = mesh.get_num_devices() if image_parallel else 1
+        # --- per-image host preprocessing ---
+        images = []
+        offset = 0
+        for g in grid_thw:
+            n_pix = int(g.prod())
+            pv = pixel_values[offset : offset + n_pix]
+            offset += n_pix
+            g = g.unsqueeze(0)
+            unpadded_seq_len = int((g[:, 1] * g[:, 2]).sum())
+            # padded sequence length (multiple of 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
-                grid_thw=grid_thw,
+                grid_thw=g,
                 head_dim=self.model_args.vision_head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
-
-            # 3. Use reference model's patch embedding
-            patch_input = self.reference_model.patch_embed(pixel_values)
-
-            # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
-            cos_orig, sin_orig = position_embeddings
-            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
-            # pad sequence length with cos = 1, sin = 0 (identity rotation)
-            cos_padded = (
-                torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            sin_padded = (
-                torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            # Convert to TT tensors on the mesh device
-            cos = ttnn.from_torch(
-                cos_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
-            )
-            sin = ttnn.from_torch(
-                sin_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
-            )
-            rot_mats = [cos, sin]
-
-            # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
-
-            # --- TT Model Execution ---
-            tt_out = self.tt_model(
-                tt_input,
-                unpadded_seq_len=unpadded_seq_len,
-                rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
-                cu_seqlens=ttnn.from_torch(
-                    cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
-                ),
-                cu_window_seqlens=ttnn.from_torch(
-                    cu_window_seqlens,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.model_args.mesh_device,
-                ),
+            patch_input = self.reference_model.patch_embed(pv)
+            cos, sin = convert_rope_style_hf_to_meta(*position_embeddings)
+            # window-ordered patches, as the TT model consumes them
+            spatial_merge_unit = self.model_args.hf_config.vision_config.spatial_merge_size**2
+            x = patch_input.reshape(unpadded_seq_len // spatial_merge_unit, spatial_merge_unit, -1)[
+                window_index
+            ].reshape(unpadded_seq_len, -1)
+            images.append(
+                dict(
+                    x=x,
+                    cos=cos,
+                    sin=sin,
+                    cu_seqlens=cu_seqlens,
+                    cu_window_seqlens=cu_window_seqlens,
+                    window_index=window_index,
+                    unpadded=unpadded_seq_len,
+                    padded=seq_len,
+                )
             )
 
-            # deallocate device tensors that are not needed by decode
-            ttnn.deallocate(tt_input)
-            ttnn.deallocate(cos)
-            ttnn.deallocate(sin)
-            ttnn.deallocate(rot_mats[0])
-            ttnn.deallocate(rot_mats[1])
+        out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+        # Group images of similar length together so a pass is padded to the longest image of its group only
+        order = sorted(range(len(images)), key=lambda i: images[i]["padded"])
+        final_outputs = [None] * len(images)
+        for group_start in range(0, len(images), num_devices):
+            group_ids = order[group_start : group_start + num_devices]
+            group = [images[i] for i in group_ids]
+            n_real = len(group)
+            group = group + [group[-1]] * (num_devices - n_real)  # idle chips repeat the last image
+            S = max(im["padded"] for im in group)
+            max_unpadded = max(im["unpadded"] for im in group)
+            L = max(im["cu_seqlens"].numel() for im in group)
+            Lw = max(im["cu_window_seqlens"].numel() for im in group)
+            if self.use_trace:
+                # fixed boundary-vector lengths per padded length, so one trace serves every group of that length
+                L = max(L, 2)
+                Lw = max(Lw, min(S // 32 + 2, 1024))
 
-            # --- Postprocessing ---
-            # 1. Convert TT output back to torch tensor
-            tt_output_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
+            def _pad_rows(t, value=0.0):
+                return torch.nn.functional.pad(t, (0, 0, 0, S - t.shape[-2]), value=value)
 
-            # deallocate TT output
-            ttnn.deallocate(tt_out)
+            def _pad_bounds(b, n):  # repeated trailing boundaries are empty windows (no-ops for the kernel)
+                return torch.cat([b, b[-1:].expand(n - b.numel())]).to(torch.int32)
 
-            # 2. Extract the relevant output part and adjust shape (matching test logic)
-            out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
-            # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
+            x = torch.stack([_pad_rows(im["x"]) for im in group]).unsqueeze(1)  # [N, 1, S, H]
+            cos = torch.stack([_pad_rows(im["cos"], 1.0) for im in group]).unsqueeze(1)  # [N, 1, S, D]
+            sin = torch.stack([_pad_rows(im["sin"], 0.0) for im in group]).unsqueeze(1)
+            cu = torch.stack([_pad_bounds(im["cu_seqlens"], L) for im in group])  # [N, L]
+            cuw = torch.stack([_pad_bounds(im["cu_window_seqlens"], Lw) for im in group])  # [N, Lw]
+            out = self._run_group(x, cos, sin, cu, cuw, S, image_parallel)  # [N, 1, S // merge, H_out_padded]
+            for i, im in enumerate(group[:n_real]):
+                merged_len = im["unpadded"] // spatial_merge_unit
+                o = out[i, 0, :merged_len, :out_hidden_size]
+                final_outputs[group_ids[i]] = o[torch.argsort(im["window_index"]), :]
 
-            # 3. Apply reverse window indexing to match reference model output order
-            reverse_indices = torch.argsort(window_index)
-            final_output = tt_output_torch[reverse_indices, :]
+        if self.debug:
+            logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
+            reference_output = self.reference_model.forward(pixel_values, grid_thw)
+            reference_output = getattr(reference_output, "pooler_output", reference_output)
+            _, pcc = comp_pcc(reference_output, torch.cat(final_outputs, dim=0))
+            logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            if self.debug:
-                logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output = self.reference_model.forward(pixel_values, grid_thw)
-                _, pcc = comp_pcc(reference_output, final_output)
-                logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
-
-            final_outputs.append(final_output)
-
-        # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
 
 
@@ -347,8 +415,11 @@ class Transformer(TTTransformer):
     # Fix: route greedy decode through the force-argmax path (enabled in
     # __init__ below) and run sampling eagerly so the all-gather re-acquires a
     # fresh semaphore. The decode token input cannot alias the sampling output.
-    _tt_supports_decode_token_feedback = False
-    _tt_disable_sampling_trace = True
+    # Traced sampling and on-device token feedback stay enabled: vLLM's resident/async decode feeds the
+    # device-sampled token straight back into the next traced step, and with the force-argmax path
+    # (enabled in __init__) batch-32 greedy decode is correct (demo outputs identical to host argmax).
+    _tt_supports_decode_token_feedback = True
+    _tt_disable_sampling_trace = False
 
     def __init__(
         self,
@@ -359,6 +430,9 @@ class Transformer(TTTransformer):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
+        prefetcher=None,
     ):
         # Enable the single-gather force-argmax sampling path for greedy decode. The
         # non-Galaxy default (default_sampling_force_argmax) sets allow_force_argmax=False,
@@ -393,20 +467,80 @@ class Transformer(TTTransformer):
                     mat.expand(cos_matrix.shape[0], -1, -1, -1),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=self.rope_setup.datatype,
+                    dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 ),
             )
         return outputs
 
-    def prepare_inputs_prefill(self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, rot_mats, page_table=None):
+        """
+        Prepare inputs for trace-based prefill. Returns host tensors (device=None)
+        that can be copied to pre-allocated device tensors between trace replays.
+
+        Args:
+            tokens: [1, seq_len, hidden_dim] torch tensor (embeddings)
+            rot_mats: (cos[1, 1, seq_len, head_dim], sin[1, 1, seq_len, head_dim]) torch tensors
+            page_table: [1, num_blocks] torch tensor
+        Returns:
+            Tuple of host tensors: (tokens, cos, sin, page_table)
+        """
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
-        # tokens is actually embeddings
-        assert tokens.dim() == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
-        S = tokens.shape[-2]
-        tokens_embd = ttnn.from_torch(
+        assert tokens.dim() == 3, "tokens should be a 3D tensor"
+
+        host_tokens = ttnn.from_torch(
             tokens.unsqueeze(1),
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+            ),
+        )
+
+        cos_matrix, sin_matrix = rot_mats[0], rot_mats[1]
+        host_cos = ttnn.from_torch(
+            cos_matrix.expand(cos_matrix.shape[0], -1, -1, -1),
+            device=None,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        host_sin = ttnn.from_torch(
+            sin_matrix.expand(sin_matrix.shape[0], -1, -1, -1),
+            device=None,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        host_page_table = None
+        if page_table is not None:
+            host_page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return (host_tokens, host_cos, host_sin, host_page_table)
+
+    def prepare_inputs_prefill(
+        self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None, batch_size=1
+    ):
+        assert isinstance(rot_mats[0], torch.Tensor)
+        assert isinstance(rot_mats[1], torch.Tensor)
+        assert tokens.dim() == 3  # [B, seq_len, hidden_dim]
+        B, S, H = tokens.shape
+        if batch_size > 1:
+            tokens = tokens.reshape(1, 1, B * S, H)
+        else:
+            tokens = tokens.unsqueeze(1)
+
+        tokens_embd = ttnn.from_torch(
+            tokens,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -415,36 +549,60 @@ class Transformer(TTTransformer):
             ),
         )
 
-        # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
-        assert (
-            cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
-            cos_matrix[:, :, start_pos : start_pos + S, :],
-            sin_matrix[:, :, start_pos : start_pos + S, :],
-        ]
+        assert cos_matrix.shape[2] >= start_pos + S
+        cos_slice = cos_matrix[:, :, start_pos : start_pos + S, :]
+        sin_slice = sin_matrix[:, :, start_pos : start_pos + S, :]
+        if batch_size > 1:
+            cos_slice = ttnn.reshape(cos_slice, [1, 1, B * S, cos_slice.shape[-1]])
+            sin_slice = ttnn.reshape(sin_slice, [1, 1, B * S, sin_slice.shape[-1]])
+        tt_rot_mats_prefill = [cos_slice, sin_slice]
 
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
+        tt_page_table = (
+            ttnn.from_torch(
                 page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_page_table = None
-
-        if chunk_page_table is not None:
-            tt_chunk_page_table = ttnn.from_torch(
+            if page_table is not None
+            else None
+        )
+        tt_chunk_page_table = (
+            ttnn.from_torch(
                 chunk_page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_chunk_page_table = None
+            if chunk_page_table is not None
+            else None
+        )
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+
+    def ttnn_prefill_forward(
+        self,
+        x,
+        rot_mats_global=None,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+    ):
+        return super().ttnn_prefill_forward(
+            x,
+            rot_mats_global=rot_mats_global,
+            user_id=user_id,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            get_last_token=get_last_token,
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+        )

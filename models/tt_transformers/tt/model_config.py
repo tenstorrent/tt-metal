@@ -301,7 +301,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -570,6 +570,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
+    PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
+
     LOCAL_LLAMA_PARAMS = {
         k: str(_REPO_ROOT / v)
         for k, v in {
@@ -595,6 +598,7 @@ class ModelArgs:
             "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
             "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+            "Qwen2.5-VL-7B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
             "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
             "Phi-4": "models/tt_transformers/model_params/phi-4",
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
@@ -690,6 +694,10 @@ class ModelArgs:
         self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
+        # Opt-in (models with QKV biases): subtract the K-projection bias from post-RoPE keys.
+        # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
+        # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
+        self.subtract_k_bias_post_rope = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -764,7 +772,10 @@ class ModelArgs:
             self.base_model_name
             in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
+        ) or (
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
+            and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -871,22 +882,7 @@ class ModelArgs:
                     )
                 }
             )
-            if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
-            else:
-                lm_head_num_rows = 8
-            lm_head_cores_per_row = 8
-            while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
-                lm_head_num_rows -= 1
-                if lm_head_num_rows == 0:
-                    lm_head_cores_per_row -= 1
-                    if lm_head_cores_per_row == 0:
-                        raise ValueError(
-                            f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
-                        )
-                    lm_head_num_rows = 8
+            lm_head_num_rows, lm_head_cores_per_row = self._lm_head_grid_dims()
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
             self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
                 self.lm_head_core_grid, self.prefetcher
@@ -2406,6 +2402,26 @@ class ModelArgs:
     # =========================================================================
     # LM HEAD PROGRAM AND MEMORY CONFIGS AND HELPER METHODS
     # =========================================================================
+    def _lm_head_grid_dims(self):
+        """Return (rows, cores_per_row) for the LM head core grid; subclasses may override."""
+        if self.num_devices == 32:
+            lm_head_num_rows = 4
+            while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
+                lm_head_num_rows -= 1
+        else:
+            lm_head_num_rows = 8
+        lm_head_cores_per_row = 8
+        while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
+            lm_head_num_rows -= 1
+            if lm_head_num_rows == 0:
+                lm_head_cores_per_row -= 1
+                if lm_head_cores_per_row == 0:
+                    raise ValueError(
+                        f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
+                    )
+                lm_head_num_rows = 8
+        return lm_head_num_rows, lm_head_cores_per_row
+
     def get_lm_head_max_columns_per_device(self, core_grid: ttnn.CoreGrid, prefetcher: Prefetcher = None):
         # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
         # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
@@ -2584,14 +2600,15 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
+                "olmOCR-2-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 # Large single-chunk prefill matters for EXAONE: chunked prefill is
                 # unsupported on sliding-window layers (48 of its 64 layers).
                 "EXAONE-4.5-33B": {"P150x8": 128},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
-                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None, "P150x8": 64},
@@ -2933,6 +2950,25 @@ class ModelArgs:
         else:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+
+        # GQA models whose KV heads do not split across the tensor-parallel width get padded heads:
+        # each KV head is duplicated over tp // n_kv_heads devices and each device's Q-head slots are
+        # zero-padded up to ceil(gqa_ratio / devices_per_kv_head). Weights are rearranged to match in
+        # Attention (see _rearrange_qkv_*), e.g. Qwen2.5-VL-7B 28/4 -> 32/8 and 3B 16/2 -> 16/8 at TP=8.
+        self.unpadded_n_heads = self.n_heads
+        self.unpadded_n_kv_heads = self.n_kv_heads
+        if self.base_model_name in self.PAD_HEADS_FOR_TP_MODELS and self.num_devices > 1:
+            tp = 8 if self.num_devices == 32 else self.num_devices
+            if self.n_kv_heads % tp != 0 and tp % self.n_kv_heads == 0:
+                devices_per_kv_head = tp // self.n_kv_heads
+                heads_per_device = math.ceil((self.n_heads // self.n_kv_heads) / devices_per_kv_head)
+                self.n_heads = heads_per_device * tp
+                self.n_kv_heads = tp
+                logger.info(
+                    f"Padding attention heads for TP={tp}: {self.unpadded_n_heads}/{self.unpadded_n_kv_heads} "
+                    f"-> {self.n_heads}/{self.n_kv_heads} (q/kv)"
+                )
+
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.num_local_experts = text_config.get("num_local_experts", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -2967,9 +3003,15 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [
+            0,
+            2,
+            4,
+            8,
+            32,
+        ]:
             raise AssertionError(
-                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), 8 devices (T3K), or 32 devices (TG)"
             )
 
         if self.num_devices > 0 and self.cluster_shape != [1, 1]:
@@ -4732,10 +4774,14 @@ class HfAttentionWrapper:
                 if self.rope_layer_type is not None
                 else getattr(self.attention, "layer_type", None)
             )
+            rope_position_ids = position_ids
+            if "Qwen2_5_VL" in type(self.rotary_emb).__name__ or "Qwen2VL" in type(self.rotary_emb).__name__:
+                # M-RoPE rotary expects (3, bs, S); text-only positions are identical on all three axes.
+                rope_position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
-                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
+                position_embeddings = self.rotary_emb(x, rope_position_ids, layer_type=_layer_type)
             else:
-                position_embeddings = self.rotary_emb(x, position_ids)
+                position_embeddings = self.rotary_emb(x, rope_position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,

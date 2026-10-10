@@ -444,7 +444,7 @@ def _legacy_rmsnorm_compute_kernel_config(arch, base_model_name: str | None) -> 
         arch,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=base_model_name not in ("Qwen2.5-7B", "Qwen2.5-VL-7B"),
+        fp32_dest_acc_en=base_model_name not in ("Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"),
         packer_l1_acc=False,
     )
 
