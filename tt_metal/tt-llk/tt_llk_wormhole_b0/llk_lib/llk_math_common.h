@@ -53,7 +53,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     // asserts read them; refreshing here is what keeps them from ever going stale).
     src_zero_flag_srca_fmt = srca_data_format;
     src_zero_flag_srcb_fmt = srcb_data_format;
-    _configure_default_zero_flag_state_();
+    _configure_default_zero_flag_state_<true>();
 }
 
 /**
