@@ -20,11 +20,11 @@ Through the vLLM server, batch 1, versus the first version of this branch (2026-
 
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
-- Met: batch-1 TTFT at 128 tokens (60 ms vs 66 ms) and batch-32 decode at every length (22-28 vs 18-20 tok/s/user).
+- Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (24-30 vs 18-20 tok/s/user).
 - Not met: batch-1 decode (74-79 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding: 3.3x faster than on 2026-10-09 (25 -> 83 tok/s on AIME24), now faster than normal
-  decode on AIME24 (83 vs ~78 tok/s) and still slower on the real-text prompts (55-58 tok/s), where the draft model
-  guesses fewer tokens right.
+- DFlash speculative decoding: 4.6x faster than on 2026-10-09 (25 -> 115 tok/s on AIME24, 21-25 -> 86-92 tok/s on
+  real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
+  input tokens.
 
 ## Results
 
@@ -37,9 +37,9 @@ through the traced decode path the server runs (token picked on device). `tests/
 | Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
 |---|---:|---:|---:|---:|---:|---:|
 | 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.98 | 0.97 |
-| 235 tokens | 32 | 0.99 | 1.00 | 1.00 | 0.99 | 0.97 |
+| 235 tokens | 32 | 0.98 | 1.00 | 1.00 | 0.97 | 0.97 |
 | 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.97 | 0.97 |
-| 128 tokens | 32 | 0.95 | 1.00 | 1.00 | 0.96 | 0.97 |
+| 128 tokens | 32 | 0.96 | 1.00 | 1.00 | 0.96 | 0.97 |
 | Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
 ### Performance
@@ -53,39 +53,39 @@ Decode, tok/s per user (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 78.6 / 158 | 28.0 / 20 |
-| 1,024 | 76.0 / 157 | 26.4 / 20 |
-| 2,048 | 75.5 / 156 | 25.8 / 19 |
-| 4,096 | 75.2 / 155 | 23.5 / 19 |
-| 8,192 | 74.4 / 152 | 22.4 / 18 |
+| 128 | 78.5 / 158 | 29.9 / 20 |
+| 1,024 | 75.9 / 157 | 28.0 / 20 |
+| 2,048 | 75.4 / 156 | 27.0 / 19 |
+| 4,096 | 75.1 / 155 | 26.3 / 19 |
+| 8,192 | 74.4 / 152 | 24.0 / 18 |
 
 Time to first token (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 60.5 ms / 66 ms | 0.42 s / 0.066 s |
-| 1,024 | 140 ms / 66 ms | 2.90 s / 0.39 s |
-| 2,048 | 238 ms / 66 ms | 5.82 s / 0.78 s |
-| 4,096 | 387 ms / 66 ms | 11.6 s / 1.60 s |
-| 8,192 | 717 ms / 103 ms | 23.4 s / 3.31 s |
+| 128 | 60.6 ms / 66 ms | 0.42 s / 0.066 s |
+| 1,024 | 140 ms / 66 ms | 2.89 s / 0.39 s |
+| 2,048 | 238 ms / 66 ms | 5.83 s / 0.78 s |
+| 4,096 | 391 ms / 66 ms | 11.6 s / 1.60 s |
+| 8,192 | 715 ms / 103 ms | 23.4 s / 3.31 s |
 
 DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 74-79 tok/s at these lengths). A round
 drafts 15 tokens, then checks the first 5 in Laguna in one step and keeps the matching ones plus one of Laguna's
-own: 37-42 ms per round (draft 8-11 ms, check 29-31 ms) vs 12.7-13.4 ms per token for normal decode, so DFlash
-wins when more than ~2 drafts per round are accepted:
+own: 26-28 ms per round (draft 4.3-4.8 ms, check 21.5-23.1 ms) vs 12.7-13.5 ms per token for normal decode, so
+DFlash wins when more than ~1.1 drafts per round are accepted:
 
 | Prompt | Input tokens | Decode, tok/s | Drafts accepted per round |
 |---|---:|---:|---:|
-| AIME24 | 235 | 83.1 | 2.6 |
-| Real text | 128 | 58.1 | 1.3 |
-| Real text | 1,024 | 56.6 | 1.5 |
-| Real text | 2,048 | 57.8 | 1.6 |
-| Real text | 4,096 | 56.4 | 1.6 |
-| Real text | 8,192 | 55.0 | 1.5 |
+| AIME24 | 235 | 115.2 | 2.2 |
+| Real text | 128 | 88.8 | 1.5 |
+| Real text | 1,024 | 92.1 | 1.6 |
+| Real text | 2,048 | 88.0 | 1.5 |
+| Real text | 4,096 | 85.6 | 1.4 |
+| Real text | 8,192 | 87.5 | 1.5 |
 
-Real text = a "summarize this document" request over a technical report. On AIME24 the device accepts as many drafts
-as the draft model does on CPU (2.66 vs 2.64 per round), so the acceptance rate is the draft model's own, not a port
-error.
+Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
+draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
+model's own. Single runs vary by about +-10%, since the output (and so the acceptance) shifts with near-tie tokens.
 
 ## Quick start
 
