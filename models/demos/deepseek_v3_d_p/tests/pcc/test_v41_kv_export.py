@@ -92,6 +92,20 @@ def test_v41_kv_export_through_the_table(mesh_device, device_params, tmp_path):
         num_users=USERS,
     )
     exp = rt.allocate_kv_cache()
+    try:
+        _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path)
+    except Exception:
+        logger.exception("[v41 kv export] FAILED")  # the traceback, before any teardown can crash
+        raise
+    finally:
+        rt.release()
+
+
+def _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path):
+    if os.environ.get("V41_PREFILL_ISLANDS", "0") == "1":
+        # the runner's warm-up chunk: builds every width (warm-all) and captures the trace islands; the requests below
+        # then run on the islands (each request's first chunk resets the slot)
+        rt.prefill_chunk(ids[:CHUNK], exp, slot_id=0, actual_start=0, actual_end=CHUNK, warmup=True)
     requests = [(0, S)] + ([(1, S), (1, PREFIX)] if USERS > 1 else [])
     for slot, n in requests:
         assert n % CHUNK == 0, (n, CHUNK)

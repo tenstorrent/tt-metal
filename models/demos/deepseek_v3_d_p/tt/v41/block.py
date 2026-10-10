@@ -28,6 +28,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v4 import mhc_math as M
 from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import TtHyperConnection
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 from .attention import V41CSA, V41SWA, V41CSAConsumer
 from .moe import build_v41_moe
@@ -239,6 +240,7 @@ class V41PrefillBlock(LightweightModule):
         )
         self.state = None  # the CURRENT slot's attention state (use_slot)
         self.states: dict = {}
+        self._islands = None  # (A, B, S_in, pre_in, y_buf) once enable_trace_islands ran
 
     def alloc_state(self, max_seq_len: int, chunk_tokens: int, slot: int = 0):
         self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
@@ -280,3 +282,79 @@ class V41PrefillBlock(LightweightModule):
         ttnn.deallocate(moe_out)
         mark("hc.mix")
         return streams, ffn_pre
+
+    # ---- trace islands (V41_PREFILL_ISLANDS, DS41F-0037 C-P1; V4-Flash's DS4F-0246/0247 pattern) ---------------------------
+    # The eager prefill is host-issue bound and the mHC sites + MoE are ~60% of its programs and know nothing about the
+    # chunk position: island A = attn mixes + collapse + attn norm, island B = attn mix + ffn mixes + collapse + ffn norm +
+    # MoE + ffn mix, both captured once (full chunks) and replayed every chunk; the attention between them stays eager.
+    # Rules (v4/trace_island.py): inputs are block-owned persistent buffers fed by ttnn.copy; outputs are persistent; no
+    # eager tensor may live across a replay (the CSA source's selection mask goes through persistent buffers, attention.py);
+    # every lazily cached constant must exist before the capture (the runtime captures after its warm-all).
+    def enable_trace_islands(self, streams: list, pre_row, chunk_tokens: int):
+        """Capture A and B with ``streams`` / ``pre_row`` as shape templates (their contents do not matter) ->
+        (out_streams, ffn_pre): B's persistent outputs, which serve as the next block's templates."""
+        assert self._islands is None, "islands already enabled"
+        S_in = [ttnn.clone(t) for t in streams]
+        pre_in = ttnn.clone(pre_row)
+        S_l, D_l = int(streams[0].shape[2]), int(streams[0].shape[3])
+
+        def island_a(*args):
+            s = list(args[:HC])
+            attn_pre, attn_post, attn_comb = self.attn_hc.mixes(s)
+            h = self.attn_norm(self.attn_hc.collapse(s, args[HC]))
+            return attn_pre, attn_post, attn_comb, h
+
+        A = TraceIsland(self.mesh_device, island_a, S_in + [pre_in], name=f"v41.L{self.layer}.A")
+        attn_pre, attn_post, attn_comb, h = A.capture()
+        y_buf = ttnn.clone(h)  # the attention output has the stream shape (o-proj back to D_l)
+
+        def island_b(*args):
+            s = list(args[:HC])
+            streams2 = self.attn_hc.mix(s, args[HC], attn_post, attn_comb)
+            ffn_pre, ffn_post, ffn_comb = self.ffn_hc.mixes(streams2)
+            hh = self.ffn_norm(self.ffn_hc.collapse(streams2, attn_pre))
+            moe_out, _ = self.moe(ttnn.reshape(hh, [1, S_l, D_l]), actual_isl=chunk_tokens, actual_start=0)
+            moe_out = ttnn.reshape(moe_out, [1, 1, S_l, D_l])
+            out = self.ffn_hc.mix(streams2, moe_out, ffn_post, ffn_comb)
+            ttnn.deallocate(moe_out)
+            for t in streams2:
+                ttnn.deallocate(t)
+            return tuple(out) + (ffn_pre,)
+
+        B = TraceIsland(self.mesh_device, island_b, S_in + [y_buf], moe=self.moe, name=f"v41.L{self.layer}.B")
+        outs = B.capture()
+        self._islands = (A, B, S_in, pre_in, y_buf)
+        self._island_chunk = int(chunk_tokens)
+        return list(outs[:HC]), outs[HC]
+
+    def forward_islands(self, streams: list, pre_row, *, real_len: int, owned: bool, owned_pre: bool = False):
+        """The traced forward: copy the inputs in, replay A, run the attention eagerly, replay B. ``owned`` /
+        ``owned_pre``: the streams / the pre row are eager tensors of the caller's, freed after the copy -- never a
+        previous island's persistent outputs (an Engram layer gets eager streams but the previous block's persistent pre
+        row: freeing that one freed block L-1's island-B output, 19:23)."""
+        A, B, S_in, pre_in, y_buf = self._islands
+        assert real_len == self._island_chunk, f"islands run full chunks only ({real_len} of {self._island_chunk})"
+        for dst, src in zip(S_in, streams):
+            copy_into(dst, src)
+        copy_into(pre_in, pre_row)
+        if owned:
+            for t in streams:
+                ttnn.deallocate(t)
+        if owned_pre:
+            ttnn.deallocate(pre_row)
+        _attn_pre, _post, _comb, h = A.replay()
+        y = self.attn(h, seq_len_actual=real_len, state=self.state)
+        if y.dtype != y_buf.dtype:
+            y2 = ttnn.typecast(y, y_buf.dtype)
+            ttnn.deallocate(y)
+            y = y2
+        copy_into(y_buf, y)
+        ttnn.deallocate(y)
+        outs = B.replay()
+        return list(outs[:HC]), outs[HC]
+
+    def release_islands(self) -> None:
+        if self._islands is not None:
+            self._islands[0].release()
+            self._islands[1].release()
+            self._islands = None

@@ -194,6 +194,7 @@ def reference_attention_input(mpy, layer, x_in: torch.Tensor, pre_in: torch.Tens
 
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCACompressor  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.v4.attention.csa import TtCSA, TtCSAIndexer  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.v4.trace_island import copy_into  # noqa: E402
 
 
 class V41Compressor(TtHCACompressor):
@@ -453,6 +454,17 @@ def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=N
     out = TtCSA.forward(self, hidden_states, seq_len_actual, state=state, export=export)
     # what this chunk's consumers read (DS41F-0037): the selection mask over the live entries and those entries
     w = _live_width(self, state, state.entry_count)
+    bufs = getattr(self, "_shared_mask_bufs", None)
+    if bufs is not None:
+        # trace islands (V41_PREFILL_ISLANDS): the consumers' island replays run while this lives, so the mask goes into a
+        # persistent buffer (allocated before the capture) and the entries are re-sliced by each consumer in its own eager
+        # window from the persistent state
+        mask = self.debug_last_selection
+        copy_into(bufs[w], mask)
+        ttnn.deallocate(mask)
+        self.debug_last_selection = None
+        self.shared = dict(mask_sel=bufs[w], compressed=None, state=state, width=w, entry_count=state.entry_count)
+        return out
     comp = (
         state.compressed_kv
         if w == int(state.compressed_kv.shape[2])
@@ -460,6 +472,29 @@ def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=N
     )
     self.shared = dict(mask_sel=self.debug_last_selection, compressed=comp, width=w, entry_count=state.entry_count)
     return out
+
+
+def _precreate_shared_masks(self, state) -> None:
+    """Islands: one persistent selection-mask buffer per live width this source can take (multiples of the live quantum
+    up to the dense capacity), shaped like the last eager mask (the warm-up's), padded / sliced on the width axis."""
+    template = self.debug_last_selection
+    assert template is not None, "run an eager chunk before enabling islands"
+    cap = int(state.compressed_kv.shape[2])
+    q = self.live_quantum if (self.live_extent and self.live_quantum > 0) else cap
+    widths = sorted({min(cap, k * q) for k in range(1, -(-cap // q) + 1)} | {cap})
+    w0 = int(template.shape[3])
+    bufs = {}
+    for w in widths:
+        if w == w0:
+            bufs[w] = ttnn.clone(template)
+        elif w > w0:
+            bufs[w] = ttnn.pad(template, padding=[(0, 0), (0, 0), (0, 0), (0, w - w0)], value=0.0)
+        else:
+            bufs[w] = ttnn.slice(template, [0, 0, 0, 0], [1, 1, int(template.shape[2]), w])
+    self._shared_mask_bufs = bufs
+
+
+V41CSA.precreate_shared_masks = _precreate_shared_masks
 
 
 V41CSA.forward = _source_forward
@@ -533,10 +568,16 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        comp, own_comp = sh["compressed"], False
+        if comp is None:  # islands: slice the source's persistent entries here (freed below, before the next replay)
+            src = sh["state"].compressed_kv
+            w = int(sh["width"])
+            comp = src if w == int(src.shape[2]) else ttnn.slice(src, [0, 0, 0, 0], [1, 1, w, self.head_dim])
+            own_comp = comp is not src
         attn, next_carry, slab = self._attention(
             q,
             sliding_kv,
-            sh["compressed"],
+            comp,
             sh["mask_sel"],
             cos,
             sin,
@@ -544,6 +585,8 @@ class V41CSAConsumer(_V41QStem, TtCSA):
             kv_actual=state.kv_actual,
             real_len=real_len,
         )
+        if own_comp:
+            ttnn.deallocate(comp)
         if export is not None:
             self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
         state.kv_actual += real_len

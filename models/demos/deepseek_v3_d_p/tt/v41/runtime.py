@@ -159,8 +159,12 @@ class V41PrefillRuntime:
             for L in range(self.num_layers):
                 self._ack(L)
         t4 = time.time()
-        if warmup and os.environ.get("V41_PREFILL_WARM_ALL", "0") == "1":
+        islands = os.environ.get("V41_PREFILL_ISLANDS", "0") == "1"
+        if warmup and (islands or os.environ.get("V41_PREFILL_WARM_ALL", "0") == "1"):
+            # islands need every width's programs and cached constants built BEFORE the capture: warm-all first
             self._warm_all(ids[:real], kv_caches, int(slot_id), int(actual_end))
+        if warmup and islands and not self.pf.islands:
+            self.pf.enable_islands()
         logger.info(
             f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
@@ -182,6 +186,12 @@ class V41PrefillRuntime:
             n += 1
         ttnn.synchronize_device(self.mesh_device)
         logger.info(f"[v41 runtime] warm-all: {n} more chunk(s) to {self.max_seq_len} in {time.time() - t0:.1f} s")
+
+    def release(self) -> None:
+        """Free the trace islands BEFORE the mesh closes (a trace buffer destroyed during close segfaults, DS4F-0258)."""
+        for blk in self.pf.blocks:
+            blk.release_islands()
+        self.pf.islands = False
 
     def set_layer_ack_channel(self, channel) -> None:
         self._ack = lambda layer_idx: channel.inject(1)

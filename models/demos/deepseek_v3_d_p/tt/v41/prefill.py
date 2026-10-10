@@ -100,6 +100,7 @@ class V41Prefill:
         self.mesh, self.cfg, self.ck = mesh_device, cfg, ck
         self.num_users, self.slot = int(num_users), 0
         self.last_profile = None  # V41_PREFILL_PROFILE: the last chunk's PhaseProfile
+        self.islands = False  # enable_islands: blocks replay their mHC / MoE trace islands
         weight_cache_path = Path(weight_cache_path) if weight_cache_path else None  # the modules join it with `/`
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp, self.tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
@@ -229,7 +230,26 @@ class V41Prefill:
             ttnn.synchronize_device(self.mesh)
             logger.info(f"[v41 prefill] chunk [{c0}, {c0 + len(part)}) in {time.time() - t0:.1f} s")
 
+    def enable_islands(self) -> None:
+        """Capture every block's trace islands (block.enable_trace_islands) once, after eager warm-up chunks have built every
+        program and every lazily cached constant at every live width (the runtime's warm-all). The CSA sources get their
+        persistent selection-mask buffers first (they must exist before any capture). Templates: zero streams of the chunk
+        shape, each block's capture feeding the next its persistent outputs (contents do not matter)."""
+        assert not self.islands
+        for blk in self.blocks:
+            if hasattr(blk.attn, "precreate_shared_masks"):
+                blk.attn.precreate_shared_masks(blk.state)
+        streams = self._streams([0] * self.chunk)
+        pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
+        t0 = time.time()
+        for blk in self.blocks:
+            streams, pre = blk.enable_trace_islands(streams, pre, self.chunk)
+        self.islands = True
+        logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
+
     def _chunk(self, part: list[int], start: int, engram_host, on_hidden):
+        if self.islands:
+            return self._chunk_islands(part, start, engram_host)
         real_len = len(part)
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
@@ -257,6 +277,43 @@ class V41Prefill:
         self.kv_actual += real_len
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot}")
+
+    def _chunk_islands(self, part: list[int], start: int, engram_host):
+        """``_chunk`` on the captured islands: the embedding streams, the pre row and the Engram outputs are eager (owned,
+        freed by the block after its copy-in); each block's outputs are its island's persistent buffers."""
+        real_len = len(part)
+        prof = PhaseProfile(self.mesh) if PROFILE else None
+        mark = prof if prof is not None else (lambda name: None)
+        streams = self._streams(part)
+        pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
+        mark("embed")
+        rows = engram_host.rows_for(self.slot, part, start) if (self.engrams and engram_host is not None) else {}
+        mark("engram.host")
+        owned = True
+        for blk in self.blocks:
+            L = blk.layer
+            if L in self.engrams:
+                rd = self.engrams[L].upload_rows(rows[L], self.chunk)
+                new = self.engrams[L](streams, rd)
+                ttnn.deallocate(rd)
+                if owned:
+                    for t in streams:
+                        ttnn.deallocate(t)
+                streams, owned = new, True
+                mark("engram.dev")
+            streams, pre = blk.forward_islands(
+                streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
+            )
+            owned = False
+            mark(f"block.{type(blk.attn).__name__}")
+        if self.kv_attn is not None:
+            h = self.kv_norm(self.kv_hc.collapse(streams, pre))
+            self.kv_attn.kv_only(h, seq_len_actual=real_len, state=self.kv_state)
+            ttnn.deallocate(h)
+            mark("kv_only")
+        self.kv_actual += real_len
+        if prof is not None:
+            self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot} (islands)")
 
     # ---- export ---------------------------------------------------------------------------------------------------
     def _window(self, state) -> torch.Tensor:
