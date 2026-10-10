@@ -78,7 +78,11 @@ def _spec_requested():
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 # BHGLX: each (1, 8) DP submesh is one Galaxy column; its Ring CCLs need the column's wrap link, which only the ring (torus) fabric routes — FABRIC_1D has no route from the column's first chip to its last.
-_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D_RING if _MESH_SHAPE == (4, 8) else ttnn.FabricConfig.FABRIC_1D
+_FABRIC_CONFIG = (
+    ttnn.FabricConfig.FABRIC_1D_RING
+    if (_MESH_SHAPE == (4, 8) or os.environ.get("QWEN36_FABRIC_RING") == "1")
+    else ttnn.FabricConfig.FABRIC_1D
+)
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
@@ -280,6 +284,10 @@ def test_demo_text(
         pytest.skip("single-model demo needs a (1, N) mesh; use test_demo_text_dp on BHGLX")
     from transformers import AutoTokenizer
 
+    if os.environ.get("QWEN36_PROF_MAX_TOKENS"):
+        max_generated_tokens = int(os.environ["QWEN36_PROF_MAX_TOKENS"])
+    _prof_layers = os.environ.get("QWEN36_PROF_LAYERS")
+    _prof_layers = [int(x) for x in _prof_layers.split(",")] if _prof_layers else None
     device = mesh_device
     if batch > 1 and not _MULTI:
         pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
@@ -297,6 +305,7 @@ def test_demo_text(
         enable_mtp=None if _spec_requested() else False,
         # n_layers=4,  # fast iteration
         # layer_indices=[0, 3],  # profile specific layers
+        layer_indices=_prof_layers,
     )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
