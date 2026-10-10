@@ -1,0 +1,40 @@
+# DeepSeek-V4.1-Flash -- END-TO-END disaggregated prefill -> decode (tt-blaze DS41F-0037 M2, 2026-10-10): the prefill runner on
+# host 30 (endpoint 1; the encoder 0..19 + layer 20 KV-only computed; 40 table layers migrated) prefills ids[:S'] of ONE prompt and migrates slot 0 into
+# slot 0 of the blaze 48-stage ring on hosts 31/29/48 (endpoint 2, --migration-decode-only). The ring then REPLAYS ids[S':S]
+# itself (R >= 2541, DSV41_REPLAY_PROMPT_IDS = the full prompt) -- that also yields the first token, so no first-token dir here.
+# Done / handoff are written on host 30 (local disk) and relayed to the ring master (host 31) by e2e_v41.sh RELAY=1: an NFS
+# sentinel reached the ring ~17 s late (attribute caching, DS41F-0037 13:20).
+model:
+  variant: deepseek_v4_1_flash
+  num_layers: 40          # the contract's layers (21 computed + 19 decoder layers aliasing layer 20's rows)
+  max_seq_len: 2048
+  chunk_size: 512
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: dsv41_prefill
+  connect_timeout_s: 900
+workload:
+  num_users: 1
+  chunks: "1"
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: false
+  trace_dir: /mnt/tt-data/sdawle/dsv41_traces/e2e/n4096_1536
+migration:
+  issue: true
+  src_endpoint_id: 1
+  dest_endpoint_id: 2
+  dst_slot_offset: 0
+  timeout_ms: 3600000
+  done_file: /home/ttuser/sdawle/prefill_runs/v41/done.sentinel
+  handoff_path: /home/ttuser/sdawle/prefill_runs/v41/handoff.json
+  client_dir: /home/ttuser/sdawle/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/dsv41_kv_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/dsv41_kv_devmap.json
+  PREFILL_HF_MODEL: /mnt/tt-data/sdawle/models/DeepSeek-V4.1-Flash
+  PREFILL_TTNN_CACHE: /mnt/tt-data/sdawle/v41p_weight_cache
