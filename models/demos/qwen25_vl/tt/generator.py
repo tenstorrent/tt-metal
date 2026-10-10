@@ -695,6 +695,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if tokens.shape[1] < end:  # suffix bucket runs past the prompt bucket: extend with the pad rows
             pad = tokens[:, -1:, :].expand(-1, end - tokens.shape[1], -1)
             tokens = torch.cat([tokens, pad], dim=1)
+        cos, sin = rot_mats
+        if cos.shape[2] < end:
+            # The per-user rotary tables are sized to the prompt's power-of-two bucket; a short
+            # suffix after a long cached prefix pads past it. The extra rows feed padding tokens
+            # only, so repeat the last row rather than recompute.
+            pad_rows = end - cos.shape[2]
+            cos = torch.cat([cos, cos[:, :, -1:, :].expand(-1, -1, pad_rows, -1)], dim=2)
+            sin = torch.cat([sin, sin[:, :, -1:, :].expand(-1, -1, pad_rows, -1)], dim=2)
+            rot_mats = (cos, sin)
         num_blocks = num_blocks_in_seq(end, block_size)
         page_table_user = page_table[0:1, :]
         if page_table_user.shape[1] < num_blocks:

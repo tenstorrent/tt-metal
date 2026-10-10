@@ -145,6 +145,13 @@ def test_resumed_prefill_matches_full_prefill(mesh_device, qwen25_vl_mesh_device
     resumed_a = h.prefill(pt_a, rot_a, pos_a, start_pos=[cached])
     _assert_same_next_token(f"same prompt, {cached}/{pos_a[0]} cached", full_a, resumed_a)
 
+    # 1b) Almost everything cached: the padded 128-token suffix bucket runs past the prompt's
+    #     power-of-two rotary table, which the resumed path must extend (seen in the server warm-up).
+    nearly_all = ((pos_a[0] - 4) // bs) * bs
+    assert nearly_all < pos_a[0]
+    resumed_tail = h.prefill(pt_a, rot_a, pos_a, start_pos=[nearly_all])
+    _assert_same_next_token(f"same prompt, {nearly_all}/{pos_a[0]} cached (short suffix)", full_a, resumed_tail)
+
     # 2) Different question after the same context: the shared blocks come from prompt A's prefill.
     ids_b, pt_b, rot_b, pos_b = h.encode("Which clause mentions a 4-week cadence first?")
     full_b = h.prefill(pt_b, rot_b, pos_b)  # reference, also overwrites the cache with B
