@@ -150,13 +150,18 @@ class V41PrefillRuntime:
         self._request_id = int(request_id)
         t0 = time.time()
         self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
+        t1 = time.time()
         export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end))
+        t2 = time.time()
         ttnn.synchronize_device(self.mesh_device)
+        t3 = time.time()
         if self._ack is not None and not warmup:
             for L in range(self.num_layers):
                 self._ack(L)
+        t4 = time.time()
         logger.info(
-            f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {time.time() - t0:.2f} s"
+            f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
+            f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
             + (" (warm-up)" if warmup else "")
         )
         return None
