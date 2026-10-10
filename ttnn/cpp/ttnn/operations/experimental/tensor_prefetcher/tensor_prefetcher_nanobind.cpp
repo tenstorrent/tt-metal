@@ -206,9 +206,16 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to stop.
+                force (bool): abandon the kernels instead of waiting for them. For error paths
+                    only: if requests were queued that no matmul will consume, the kernel blocks
+                    on a full circular buffer and never reaches the stop sentinel, so the normal
+                    wait hangs and buries the error that caused it. A forced stop drops the
+                    pending queue and skips that wait, leaving DRISC kernels running -- so the
+                    device must be closed or reset afterwards. Defaults to False.
         )doc",
         &stop_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::arg("force") = false);
 
     // DRAM-sender GCB factories. MeshDevice-only (the per-mesh DRISC L1 arena lives on
     // MeshDeviceImpl) and only ever paired with the Tensor prefetcher above.
@@ -229,6 +236,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     Set False to promise each receiver owns a disjoint contiguous shard
                     (receiver-contiguous layout); a bank with two or more receivers may then split
                     them across two DRISC sender cores for higher bandwidth.
+                config_buffer_type: Buffer type (L1 or L1_SMALL) of the per-receiver config pages
+                    (read pointer and credit counters). None (default) uses buffer_type. L1_SMALL
+                    lies above every statically allocated circular buffer, so the pages survive
+                    programs whose circular buffers alias the ring data while the ring is empty.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_tensor_prefetcher,
         nb::keep_alive<0, 1>(),
@@ -236,7 +247,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("support_multi_receiver_shards") = true);
+        nb::arg("support_multi_receiver_shards") = true,
+        nb::arg("config_buffer_type") = nb::none());
 
     ttnn::bind_function<"create_prefetcher_pipes_for_tensor_prefetcher", "ttnn.experimental.">(
         mod,

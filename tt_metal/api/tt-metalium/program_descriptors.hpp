@@ -25,6 +25,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -84,6 +85,11 @@ struct CBDescriptor {
     const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+    // Keeps the object `global_circular_buffer` points at alive across copies of this
+    // descriptor. Empty when that pointer is owned by the caller (the synchronous
+    // device-op path). Program build reads the raw pointer; copies share this handle
+    // so the address does not change.
+    std::shared_ptr<const experimental::GlobalCircularBuffer> owned_global_circular_buffer;
 };
 
 struct SemaphoreDescriptor {

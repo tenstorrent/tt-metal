@@ -833,6 +833,10 @@ void TensorPrefetcherManager::build_and_launch_programs(
 
 void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
+    TT_FATAL(
+        !kernels_abandoned_,
+        "Tensor prefetcher was force-stopped and left DRISC kernels running. Close the device before starting "
+        "another prefetcher.");
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
     bool benchmark_enabled = false;
     std::optional<MpfePolicy> mpfe_policy = std::nullopt;
@@ -1588,6 +1592,10 @@ void TensorPrefetcherManager::worker_loop() {
         {
             std::unique_lock<std::mutex> lk(queue_mu_);
             queue_cv_.wait(lk, [&] { return !pending_.empty() || stop_requested_.load(); });
+            if (abort_requested_.load()) {
+                // Forced stop: drop whatever is still queued rather than trying to place it.
+                return;
+            }
             if (pending_.empty()) {
                 // Stop with empty queue → break out, the main thread handles
                 // sentinel broadcast outside the lock.
@@ -1658,6 +1666,11 @@ void TensorPrefetcherManager::worker_loop() {
             // If no socket drained this pass, every remaining target is back-pressured;
             // yield rather than busy-spinning at 100% CPU until a receiver frees a page.
             if (next_pending.size() == still_pending.size()) {
+                if (abort_requested_.load()) {
+                    // A wedged kernel never drains its socket, so this loop would otherwise
+                    // never terminate and stop() could never join us.
+                    return;
+                }
                 std::this_thread::yield();
             }
             still_pending = std::move(next_pending);
@@ -1665,12 +1678,47 @@ void TensorPrefetcherManager::worker_loop() {
     }
 }
 
-void TensorPrefetcherManager::stop() {
+void TensorPrefetcherManager::stop(bool force) {
     // Note: the MeshDevice close path (close_impl) calls stop() without holding
     // api_mutex_, and the destructor only reaches here after active_ is already
     // false, so taking the lock here never self-deadlocks.
     auto lock = lock_api_function_();
     if (!active_) {
+        return;
+    }
+    if (force) {
+        // Abandon rather than handshake: see the header for why the clean path cannot retire a
+        // prefetcher that has undrained requests. Drop the queue and wake the worker, which
+        // checks abort_requested_ both before taking a request and inside its try_write spin.
+        abort_requested_.store(true);
+        {
+            std::lock_guard<std::mutex> lk(queue_mu_);
+            pending_.clear();
+            stop_requested_.store(true);
+        }
+        queue_cv_.notify_all();
+        if (host_worker_.joinable()) {
+            host_worker_.join();
+        }
+        // No sentinel and no WaitProgramDone: the kernels are presumed wedged, and both of those
+        // would block forever. They keep running until the device is closed, which destroys this
+        // manager. Host state is released so the close path sees an inactive prefetcher and does
+        // not try to stop it again (which would hang). kernels_abandoned_ stays set so start()
+        // cannot launch a second program onto the L1 those kernels still use.
+        sockets_.clear();
+        programs_.clear();
+        devices_.clear();
+        device_index_by_coord_.clear();
+        sender_logical_cores_.clear();
+        trace_requests_.clear();
+        num_senders_ = 0;
+        active_ = false;
+        kernels_abandoned_ = true;
+        abort_requested_.store(false);
+        log_warning(
+            tt::LogMetal,
+            "Tensor prefetcher force-stopped: pending requests were dropped and the DRISC kernels "
+            "abandoned. Close the device before starting another prefetcher.");
         return;
     }
     // Stop = a zero-filled page broadcast to every device in the mesh. The leading
@@ -1792,9 +1840,9 @@ void WaitForCqOnTensorPrefetcher(
     manager.enqueue_cq_signal_and_wait(cq, device_subset);
 }
 
-void StopTensorPrefetcher(distributed::MeshDevice& mesh_device) {
+void StopTensorPrefetcher(distributed::MeshDevice& mesh_device, bool force) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.stop();
+    manager.stop(force);
 }
 
 }  // namespace tt::tt_metal::experimental

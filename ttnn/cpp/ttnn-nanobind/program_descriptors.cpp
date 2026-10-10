@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -29,6 +30,7 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -458,7 +460,12 @@ void py_module_types(nb::module_& mod) {
         .def(
             "set_global_circular_buffer",
             [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
-                self.global_circular_buffer = &gcb;
+                // Own a copy so a later copy of this CB (fusion merges descriptors by
+                // copying them) still has a live GlobalCircularBuffer. The copy shares
+                // the device buffer with `gcb`.
+                self.owned_global_circular_buffer =
+                    std::make_shared<const tt::tt_metal::experimental::GlobalCircularBuffer>(gcb);
+                self.global_circular_buffer = self.owned_global_circular_buffer.get();
             },
             nb::keep_alive<1, 2>(),
             nb::arg("global_circular_buffer"),
@@ -466,8 +473,9 @@ void py_module_types(nb::module_& mod) {
                 Set the GlobalCircularBuffer for this CB descriptor.
 
                 The CB will use the GlobalCircularBuffer's address space for
-                cross-core data transfer. The GlobalCircularBuffer must outlive
-                this CBDescriptor.
+                cross-core data transfer. The descriptor keeps a copy, so later
+                copies of the CB stay valid after this call returns. The copy
+                shares the device buffer with the caller's buffer.
 
                 Args:
                     global_circular_buffer: The GlobalCircularBuffer to associate with this CB.
@@ -475,12 +483,16 @@ void py_module_types(nb::module_& mod) {
         .def(
             "set_global_circular_buffer_from_cb",
             [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
-                self.global_circular_buffer = other.global_circular_buffer;
+                self.owned_global_circular_buffer = other.owned_global_circular_buffer;
+                self.global_circular_buffer = other.owned_global_circular_buffer
+                                                  ? other.owned_global_circular_buffer.get()
+                                                  : other.global_circular_buffer;
             },
             nb::keep_alive<1, 2>(),
             nb::arg("other"),
             R"pbdoc(
-                Copy GlobalCircularBuffer pointer from another CBDescriptor.
+                Copy the GlobalCircularBuffer from another CBDescriptor, including
+                the owning copy when the source holds one.
 
                 Args:
                     other: The CBDescriptor to copy the GlobalCircularBuffer from.
