@@ -205,11 +205,12 @@ sampling and overlap rules in §5.5 — they shape this module's API)
   `KIMI_K3_FIRST_KDA_LAYER`, takes no initial state and writes under `ttnn.CONFIG.model_cache_path`
   → generalize it (key: content hash of weights + inputs + initial state + config + source
   fingerprint) or add a sibling cache for this suite.
-- MLA: `utils/chunked_prefill_utils.py::cpu_mla_reference` as a **full-prefix** oracle (run on the
-  whole request, compare the chunk's slice). Do **not** use `reference/mla_reference.py::MLAReference.forward`
-  incrementally (causal mask not offset for a prefix, `:188`). Its disk cache is disabled under
-  `CI=true` and defaults to `/tmp` (`chunked_prefill_utils.py:29-30,159`) — acceptable, but budget
-  the time.
+- MLA: `single_layer/reference_ops.py::mla_forward` (fp32, NoPE, output gate; pinned against
+  `MLAReference` by `test_reference_ops.py`). It takes a `prefix_kvpe` and offsets the causal mask
+  for it, so chunk 2 runs against chunk 1's KV without recomputing the prefix; the prefix KV comes
+  from the reference's own chunk-1 pass (and the device's chunk-1 KV is compared to it separately).
+  Do **not** use `reference/mla_reference.py::MLAReference.forward` incrementally (causal mask not
+  offset for a prefix, `:188`); `cpu_mla_reference` stays usable as a whole-request cross-check.
 - Dense FFN: `KimiMLP` + `SituAndMul` (betas 4/25, `kimi_k3_hf_config()`), `reference/kimi_k3/modeling_kimi_moe.py`.
 - MoE: compact pooled reference (§5.4) **driven by the device's selected expert ids and weights**
   (exported from an eager diagnostic forward, outside capture) to remove top-k tie flips between
@@ -316,15 +317,15 @@ weight per token; to be replaced by measurements):
 | Component | Per token | Notes |
 |---|---:|---|
 | KDA projections (q,k,v,g,o + f/b) | ~0.9 GFLOP | plus a **per-token Python recurrence loop** (`reference/kda/ops.py::kda_recurrent_reference`) — T iterations, overhead-bound |
-| MLA projections (q_a,q_b,kv_a,kv_b,o,g) | ~0.46 GFLOP | plus causal attention ≈ 96 heads × T²/2 × 320 × 2 → **~3.2 TFLOP at T=10240**; `cpu_mla_reference` runs the module in **bf16 on CPU**, which can be 5–20× slower than fp32 without AMX |
+| MLA projections (q_a,q_b,kv_a,kv_b,o,g) | ~0.46 GFLOP | plus causal attention in the absorbed (latent) form ≈ 96 heads × T²/2 × (576+512) × 2 → **~11 TFLOP at T=10240**; `cpu_mla_reference` runs the module in **bf16 on CPU** (measured end to end below) |
 | LatentMoE (16 routed + shared + latent + gate) | ~1.4 GFLOP | routed GEMMs dominate |
 | Dense SiTU-GLU (L0) | ~1.45 GFLOP | |
 | AttnRes reads / seal | small | token-wise, S+1 ≤ 9 planes |
 
 | Box | Tokens (1 / 2 chunks) | KDA+MoE layer, one 2-chunk pass | MLA+MoE layer, one 2-chunk pass |
 |---|---|---:|---:|
-| LB | 1280 / 2560 | ~6 TFLOP | ~5 TFLOP + 0.2 TFLOP attn |
-| GH | 5120 / 10240 | ~24 TFLOP | ~19 TFLOP + 3.2 TFLOP attn |
+| LB | 1280 / 2560 | ~6 TFLOP | ~5 TFLOP + 0.7 TFLOP attn |
+| GH | 5120 / 10240 | ~24 TFLOP | ~19 TFLOP + 11 TFLOP attn |
 
 At a realistic 0.5–2 TFLOP/s of host fp32, one GH pass takes roughly 15 s to 1 min. Several passes
 per case × 7–9 cases × bf16 MLA attention × the KDA loop can turn that into tens of minutes. That
@@ -336,6 +337,45 @@ and with no device, runs each component reference at the real dims for T ∈ {64
 fp32 and bf16 for MLA. It reports wall time, peak RSS and thread count. Run it **on the CI runner
 hosts themselves** (a dispatch-only job on an LB runner and a GH runner), because their CPUs may differ
 from dev boxes. The result is a table in this file: seconds per component per T per box.
+
+**Measured (Phase 0a, 2026-10-10), dev LB host `bh-lb-19`, AMD EPYC 9124 (16 cores, no AMX),
+torch 2.11 CPU, 16 threads, cold, fp32 functional references (`reference_ops.py`), 512 sampled rows:**
+
+| Component | variant | T=1280 | T=2560 | T=5120 | T=10240 |
+|---|---|---:|---:|---:|---:|
+| KDA | full | 5.9 s | 7.1 s | 15.1 s | 29.8 s |
+| KDA | sampled | 5.8 s | 6.6 s | 13.7 s | 27.1 s |
+| MLA | full | 1.2 s | 2.9 s | 8.1 s | 25.0 s |
+| MLA | sampled | 0.6 s | 0.8 s | 1.3 s | 2.3 s |
+| MLA module (`cpu_mla_reference`, bf16) | full | 2.5 s | 4.5 s | 10.1 s | 26.3 s |
+| MoE (P=16 pool, 896 experts) | full | 1.5 s | 3.1 s | 8.2 s | 16.5 s |
+| MoE | sampled | 0.7 s | 0.7 s | 0.7 s | 0.7 s |
+| Dense FFN (L0) | full | 1.7 s | 3.4 s | 6.5 s | 12.3 s |
+| Dense FFN | sampled | 0.8 s | 0.8 s | 0.8 s | 0.8 s |
+
+Raw: `bench_reference.py --tokens 1280 2560 5120 10240 --rows 512`; one repeat, so every number is the
+first (cold) call; the box also ran an 80 s host pytest partway through (slightly pessimistic).
+
+Reading:
+- **The reference is not the CI blocker on this host.** One 2-chunk reference pass per case costs
+  at worst ~28 s on GH (KDA+MoE, sampled) and ~7 s on LB; ~46 s on GH unsampled. With lever 1 at
+  one pass per case, the 7 P0 cases add ≤ ~3.5 min on GH and < 1 min on LB. Keeping S2's two
+  rotated starts in CI makes it ~3 passes per case (~10 min GH); they are the first thing to move to
+  nightly. P1 `T91_92kv` cannot sample layer 91's MoE (it feeds layer 92's token mixing), so it pays
+  the full ~16.5 s MoE term per pass.
+- **KDA is bound by the per-token loop** (Python overhead and/or streaming the ~6 MB fp32 state
+  per step; not separated yet): sampling barely helps, so lever 5 (a chunked/WY recurrence) is the
+  one that would move it. Not needed at these numbers. The T=1280 KDA point (5.9 s) is above the
+  ~2.7 ms/token trend of T ≥ 2560 and is likely noise from the concurrent pytest; T=640 measured
+  1.8 s in the smoke run (now in the default `--tokens`).
+- **MLA and MoE: sampling is the lever** (MLA 25 → 2.3 s, MoE 16.5 → 0.7 s at T=10240).
+- End to end, the bf16 module reference (`cpu_mla_reference`: module construction, cache-key hashing,
+  chunked SDPA) took 2.5 / 4.5 / 10.1 / 26.3 s against 1.2 / 2.9 / 8.1 / 25.0 s for the fp32 functional
+  path — a different implementation, so this does not isolate dtype. Either way both lose ~10× to the
+  sampled fp32 path at T=10240, which is what the suite uses.
+- Not yet measured: synthetic weight generation (the 163840×7168 embedding for L0, MoE pools), and
+  the **CI runner hosts** (LB and GH runners via dispatch) — still required before the CI budget
+  request, because the KDA loop is single-thread-latency bound and runner CPUs differ.
 
 **Budget model:** for each case, wall time = synthetic weight gen + device weight build/upload + device
 scenarios + **reference on the critical path**. CI time = Σ over the cases in the leg + mesh open.
