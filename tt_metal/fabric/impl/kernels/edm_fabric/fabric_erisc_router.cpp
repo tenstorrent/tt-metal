@@ -270,23 +270,6 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
-// read and write stream scratch register store values as uint32_t
-enum class CoordinatedEriscContextSwitchState : uint32_t {
-    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
-    // state at the end of the handshake
-    NORMAL_EXECUTION = 0,
-    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
-    RETRAIN_INTENT = 1,
-    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
-    // erisc1's cooperation
-    INTENT_ACK = 2,
-    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
-    RETRAIN_COMPLETE = 3,
-    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
-    // NORMAL_EXECUTION
-    COMPLETE_ACK = 4,
-};
-
 // In case underlying type for the enum class is changed later
 using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
 
@@ -1894,11 +1877,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     uint16_t fabric_heartbeat_counter = 0;
 #if defined(ARCH_BLACKHOLE)
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE;
 #else
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
 #endif
-    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(fabric_kernel_heartbeat_addr);
 
     auto execute_main_loop = [&]() __attribute__((always_inline)) {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2247,8 +2230,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
-            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
-                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            if ((++fabric_heartbeat_counter & (FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS - 1)) == 0) {
+                *fabric_heartbeat_ptr = FABRIC_KERNEL_HEARTBEAT_MAGIC | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {
