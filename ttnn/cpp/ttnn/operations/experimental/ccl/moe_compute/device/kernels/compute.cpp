@@ -47,6 +47,11 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 };
 
 template <>
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+};
+
+template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
@@ -66,7 +71,7 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_silu,
-            (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+            (DST_ACCUM_MODE, 8 /*ITERATIONS*/),
             0 /*DST_IDX*/,
             ::ckernel::VectorMode::RC));
         if constexpr (kPairs == 2) {
@@ -74,7 +79,7 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_silu,
-                (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+                (DST_ACCUM_MODE, 8 /*ITERATIONS*/),
                 2 /*DST_IDX*/,
                 ::ckernel::VectorMode::RC));
         }
@@ -105,9 +110,29 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU, kPairs> {
     static inline void compute() {
-        PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
+        PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(0, 1, 0)));
         if constexpr (kPairs == 2) {
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(2, 3, 2)));
+        }
+    }
+};
+
+#ifdef TRISC_PACK
+// silu(min(gate, limit)) * clamp(up, -limit, limit)
+struct ClampedSiluConfig {
+    static constexpr float alpha = 1.0f;
+    static constexpr float clamp_limit =
+        __builtin_bit_cast(float, get_named_compile_time_arg_val("activation_limit_bits"));
+};
+#endif
+
+template <uint32_t kPairs>
+struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU, kPairs> {
+    static inline void compute() {
+        PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(0, 1, 0)));
+        if constexpr (kPairs == 2) {
+            PACK(
+                (llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(2, 3, 2)));
         }
     }
 };
@@ -120,12 +145,12 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
         // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
         // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
         // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
-        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
+        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, DST_ACCUM_MODE>)));
         PACK(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_gelu,
-            (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+            (true /*APPROXIMATE*/, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
             0 /*DST_IDX*/,
             ::ckernel::VectorMode::RC));
         if constexpr (kPairs == 2) {
@@ -133,7 +158,7 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_gelu,
-                (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+                (true /*APPROXIMATE*/, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
                 2 /*DST_IDX*/,
                 ::ckernel::VectorMode::RC));
         }

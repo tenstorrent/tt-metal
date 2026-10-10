@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <numeric>
 #include <tuple>
 #include <utility>
@@ -1277,6 +1278,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"num_banks", num_dram_banks},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
+        {"activation_limit_bits", std::bit_cast<uint32_t>(args.activation_limit)},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
@@ -1332,8 +1334,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
         matmul_core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
+            .math_fidelity = args.math_fidelity,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
             .math_approx_mode = true,
