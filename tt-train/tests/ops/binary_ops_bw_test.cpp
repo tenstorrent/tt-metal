@@ -51,6 +51,38 @@ TEST_F(BinaryOpsBackwardTest, AddSameShape) {
     EXPECT_TRUE(xt::allclose(b_grad, xt::ones_like(data_b)));
 }
 
+TEST_F(BinaryOpsBackwardTest, AddBroadcastLeftRawTensor) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F};
+    xt::xarray<float> data_b = xt::ones<float>({2, 1, 1, 4}) * 3.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = core::from_xtensor(data_b, device);
+
+    auto out = a + b;
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    EXPECT_EQ(a_grad.shape(), data_a.shape());
+    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 2.0F));
+}
+
+TEST_F(BinaryOpsBackwardTest, AddBroadcastLeftAutocastTensor) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F};
+    xt::xarray<float> data_b = xt::ones<float>({2, 1, 1, 4}) * 3.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = autograd::AutocastTensor(core::from_xtensor(data_b, device));
+
+    auto out = a + b;
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    EXPECT_EQ(a_grad.shape(), data_a.shape());
+    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 2.0F));
+}
+
 TEST_F(BinaryOpsBackwardTest, SubSameShape) {
     auto* device = &autograd::ctx().get_device();
     xt::xarray<float> data_a = {{{{1.F, 2.F, 3.F, 4.F}}}};
