@@ -70,6 +70,11 @@ Options (keyword-only):
   were, uninitialised for a fresh buffer). The N reader computes the source page as
   `src_base + t * src_row_stride + h * src_head_stride` (runtime args 11-13); without `src` these are
   `(0, 4, S/32 * 4)`, i.e. the `q` buffer itself.
+- `q_out1=q1` (with `src`, not `all_rows`): split output. `q` and `q1` are `[1, H, S/(2*cols), 128]` bf8
+  buffers; the R writer stores local slice 0 (ring slice `c`) in `q` and local slice 1 (ring slice
+  `2*cols-1-c`) in `q1`, each row at page `(h * sl_t + tl) * 4` of its slice (`RowWalker::slice_page`, writer
+  runtime args 10-11). The values are those of the natural form; the context-parallel prefill hands the two
+  buffers straight to its two chunked SDPA calls instead of slicing a natural `[1, H, S, 128]` Q.
 
 ### Program
 
