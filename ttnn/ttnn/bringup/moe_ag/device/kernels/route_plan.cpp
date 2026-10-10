@@ -15,6 +15,8 @@
 //   C1 expert core e: prefix of its column over ranges -> start row of each range inline-written into range core r's
 //      message, its count inline-written to core 0                                     -> core 0 (S_C)
 //   C2 core 0: regions (prefix of padded counts) -> multicast region | count per expert, the counts / regions rows, go
+// The message's three arrays and core 0's 1 word sit at EPCA = EPC rounded up to 4 words: NoC copies need the source
+// and destination 16 B aligned alike, so an EPC * 4 offset (EPC = 18: 72 B) would lose the go signal (a hang).
 //   2 B  rescan: y_slot of the range; each local pair's gathered row inline-written into the expert core's list at its
 //      rank                                                                             -> core 0 (S_E), go 3
 //   D  expert core: zero its list's tile tail, write the list at its region.
@@ -38,6 +40,7 @@ void kernel_main() {
     constexpr uint32_t MC_X1 = get_compile_time_arg_val(7), MC_Y1 = get_compile_time_arg_val(8);
     constexpr uint32_t S_A = 0, S_C = 1, S_E = 2, G1 = 3, G2 = 4, G3 = 5;
     constexpr uint32_t NONE = 0xFFFFFFFFu;
+    constexpr uint32_t EPCA = (EPC + 3) & ~3u;  // array stride in words: 16 B aligned
 
     const uint32_t idx_addr = get_common_arg_val<uint32_t>(0), lmap_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t counts_addr = get_common_arg_val<uint32_t>(2), regions_addr = get_common_arg_val<uint32_t>(3);
@@ -58,7 +61,7 @@ void kernel_main() {
     const uint32_t l1_ys = get_write_ptr(tt::CBIndex::c_4), l1_list = get_write_ptr(tt::CBIndex::c_5);
     const uint32_t l1_rows = get_write_ptr(tt::CBIndex::c_6), l1_cnt = get_write_ptr(tt::CBIndex::c_7);
     auto go = [&](uint32_t id) {  // core 0: a 1 into every core's go semaphore
-        const uint32_t one = l1_cnt + EPC * 4;
+        const uint32_t one = l1_cnt + EPCA * 4;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(one) = 1;
         noc_semaphore_set_multicast_loopback_src(
             one, get_noc_multicast_addr(MC_X0, MC_Y0, MC_X1, MC_Y1, get_semaphore(id)), R);
@@ -131,21 +134,21 @@ void kernel_main() {
         uint32_t region = 0;
         for (uint32_t e = 0; e < EPC; ++e) {
             const uint32_t c = cnt[e];
-            m[EPC + e] = region;
-            m[2 * EPC + e] = c;
+            m[EPCA + e] = region;
+            m[2 * EPCA + e] = c;
             region += (c + 31) & ~31u;
         }
         noc_async_write_multicast_loopback_src(
-            l1_msg + EPC * 4,
-            get_noc_multicast_addr(MC_X0, MC_Y0, MC_X1, MC_Y1, l1_msg + EPC * 4),
-            2 * EPC * 4,
+            l1_msg + EPCA * 4,
+            get_noc_multicast_addr(MC_X0, MC_Y0, MC_X1, MC_Y1, l1_msg + EPCA * 4),
+            2 * EPCA * 4,
             R,
             false);
         tt_l1_ptr uint32_t* rows = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_rows);
         for (uint32_t gid = 0; gid < NG; ++gid) {
             const uint32_t l = lmap[gid];
-            rows[gid] = l < EPC ? m[2 * EPC + l] : 0;
-            rows[NG + gid] = l < EPC ? m[EPC + l] : 0;
+            rows[gid] = l < EPC ? m[2 * EPCA + l] : 0;
+            rows[NG + gid] = l < EPC ? m[EPCA + l] : 0;
         }
         noc_async_write(l1_rows, dram(counts_addr), NG * 4);
         noc_async_write(l1_rows + NG * 4, dram(regions_addr), NG * 4);
@@ -159,7 +162,7 @@ void kernel_main() {
         uint32_t start[EPC], region[EPC];
         for (uint32_t e = 0; e < EPC; ++e) {
             start[e] = m[e];
-            region[e] = m[EPC + e];
+            region[e] = m[EPCA + e];
         }
         tt_l1_ptr uint32_t* ys = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_ys);
         for (uint32_t i = 0; i < n; ++i) {
@@ -188,7 +191,7 @@ void kernel_main() {
     // D: the expert core writes its list (tile tail zeroed) at its region
     wait_go(G3);
     if (me < EPC) {
-        const uint32_t count = m[2 * EPC + me], region = m[EPC + me], padded = (count + 31) & ~31u;
+        const uint32_t count = m[2 * EPCA + me], region = m[EPCA + me], padded = (count + 31) & ~31u;
         volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_list);
         for (uint32_t i = count; i < padded; ++i) {
             list[i] = 0;
