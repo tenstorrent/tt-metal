@@ -11,7 +11,9 @@
 #include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/context/metal_env_impl.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -82,13 +84,14 @@ tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
     return fabric_telemetry_converter::unpack_snapshot_from_hal(view);
 }
 
-std::vector<FabricTelemetrySample> read_fabric_telemetry(const tt::tt_fabric::FabricNodeId& fabric_node_id) {
-    auto& metal_ctx = tt::tt_metal::MetalContext::instance();
-    auto& control_plane = metal_ctx.get_control_plane();
+std::vector<FabricTelemetrySample> read_fabric_telemetry(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_fabric::FabricNodeId& fabric_node_id) {
+    auto& metal_env = mesh_device.impl().metal_env();
+    auto& control_plane = metal_env.get_control_plane();
     const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
 
-    const auto& hal = metal_ctx.hal();
-    const auto& cluster = metal_ctx.get_cluster();
+    const auto& hal = metal_env.get_hal();
+    const auto& cluster = metal_env.get_cluster();
 
     const auto channels = collect_channel_contexts(control_plane, cluster, physical_chip_id);
     if (channels.empty()) {

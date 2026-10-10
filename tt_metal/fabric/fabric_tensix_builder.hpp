@@ -313,6 +313,7 @@ class FabricTensixDatamoverBuilder : public FabricDatamoverBuilderBase {
 public:
     // Static builder method called from topology to construct a tensix builder
     static FabricTensixDatamoverBuilder build(
+        const FabricContext& fabric_context,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
@@ -326,6 +327,7 @@ public:
     // This is used for edge devices that need tensix builders in all 4 directions for inter-mux communication
     // routing_plane_id specifies which routing plane (link index) this tensix builder belongs to
     static FabricTensixDatamoverBuilder build_for_missing_direction(
+        const FabricContext& fabric_context,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,

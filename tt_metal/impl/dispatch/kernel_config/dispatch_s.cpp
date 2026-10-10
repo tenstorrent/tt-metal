@@ -107,7 +107,6 @@ DispatchSKernel::DispatchSKernel(
     dispatch_core_manager& dispatch_core_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     FDKernel(
         node_id,
@@ -119,7 +118,6 @@ DispatchSKernel::DispatchSKernel(
         dispatch_core_manager,
         get_control_plane,
         get_dispatch_query_manager,
-        get_max_num_eth_cores,
         get_reads_dispatch_cores) {
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     this->logical_core_ = dispatch_core_manager.dispatcher_s_core(device_id, channel, cq_id_);
@@ -158,15 +156,10 @@ void DispatchSKernel::GenerateStaticConfigs() {
 
     static_config_.mcast_go_signal_addr =
         descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-    static_config_.unicast_go_signal_addr =
-        (descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-            ? descriptor_.hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
-            : 0;
     static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
-    static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     static_config_.realtime_profiler_msg_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, cq_id_);
     static_config_.dispatch_telemetry_addr =
@@ -284,18 +277,6 @@ void DispatchSKernel::GenerateDependentConfigs() {
 }
 
 void DispatchSKernel::CreateKernel() {
-    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // num_virtual_active_eth_cores is set if the user application requested virtualizing the
-    // number of ethernet cores across devices (to essentially fake uniformity). This value is the
-    // max number of ethernet cores across all chips in the opened cluster.
-    // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
-    // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
-    // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = get_max_num_eth_cores();
-    uint32_t num_physical_active_eth_cores =
-        get_control_plane_ref().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
-    bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
-
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
     auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
@@ -335,16 +316,10 @@ void DispatchSKernel::CreateKernel() {
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
-        {"UNICAST_GO_SIGNAL_ADDR", std::to_string(static_config_.unicast_go_signal_addr.value())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
-        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
-         std::to_string(static_config_.max_num_go_signal_noc_data_entries.value())},
-        {"VIRTUALIZE_UNICAST_CORES", std::to_string(virtualize_num_eth_cores)},
-        {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(num_virtual_active_eth_cores)},
-        {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(num_physical_active_eth_cores)},
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},

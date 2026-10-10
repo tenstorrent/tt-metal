@@ -103,6 +103,32 @@ inline void fill_constant_tiles(
     block_masks.push_back(mask_tile_count);
 }
 
+// Issue zero writes for rows [first_row, TILE_HEIGHT) of each reserved tile; the
+// caller waits with write_zeros_l1_barrier() before publishing the buffer.
+// A tile stores its four 16x16 faces in order f0 f1 f2 f3, so for 0 < first_row its
+// padded rows are two contiguous ranges: the tail of the left face (f0 or f2) in the
+// face row that holds first_row, and everything from the same row of the right face
+// (f1 or f3) to the end of the tile; below a padded top face row, f2 and f3 are all
+// padding. Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and both ranges
+// start at the 16-byte alignment of the zero writes.
+inline void zero_rows_from(const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
+    constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
+    constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
+    static_assert(faces_per_tile_row == 2, "two padded ranges per tile assume 2x2 faces");
+    const uint32_t entry_bytes = buffer.get_entry_size();
+    const uint32_t face_bytes = entry_bytes / (faces_per_tile_row * faces_per_tile_row);
+    const uint32_t row_bytes = face_bytes / face_height;
+    const uint32_t row_offset = first_row % face_height * row_bytes;
+    const uint32_t left = first_row / face_height * faces_per_tile_row * face_bytes + row_offset;
+    const uint32_t right = left + face_bytes;
+    for (uint32_t tile = 0; tile < tiles; ++tile) {
+        const uint32_t tile_base = tile * entry_bytes;
+        noc.async_write_zeros(buffer, face_bytes - row_offset, {.offset_bytes = tile_base + left});
+        noc.async_write_zeros(buffer, entry_bytes - right, {.offset_bytes = tile_base + right});
+    }
+}
+
 template <
     uint32_t Ct,
     uint32_t Kt,
@@ -115,6 +141,8 @@ template <
 TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks, uint32_t num_heads) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    // Padding is zeroed per tile, so each tile row must be one whole chunk.
+    static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
 
     const auto q_accessor = TensorAccessor(tensor::q);
     const auto k_accessor = TensorAccessor(tensor::k);
@@ -133,6 +161,8 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     Noc noc;
 
     uint32_t valid_chunks;
+    uint32_t partial_chunk;
+    uint32_t partial_rows;
     {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
@@ -151,7 +181,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             noc.async_read_barrier();
             topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
         }
-        valid_chunks = topology.valid_rows / tt::constants::TILE_HEIGHT;
+        valid_chunks = topology.chunk_count();
+        partial_chunk = topology.partial_chunk();
+        partial_rows = topology.partial_rows();
         kda_chronology::store(words, topology);
         control.push_back(1);
         DataflowBuffer writer_control(dfb::chronology_writer);
@@ -205,6 +237,16 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
+        // Zero G, beta, K, and V past the valid end: zero decay and update strength make
+        // each padded row an identity step, and replacing (not scaling) the rows keeps
+        // arbitrary padding, including NaN, out of the carries. Q only reaches padded outputs.
+        if (partial_rows != 0 && head_chunk_index % num_chunks == partial_chunk) {
+            zero_rows_from(noc, k, chunk_key_tiles, partial_rows);
+            zero_rows_from(noc, v, chunk_value_tiles, partial_rows);
+            zero_rows_from(noc, g, chunk_key_tiles, partial_rows);
+            zero_rows_from(noc, beta, Ct, partial_rows);
+            noc.write_zeros_l1_barrier();
+        }
         q.push_back(chunk_key_tiles);
         k.push_back(chunk_key_tiles);
         v.push_back(chunk_value_tiles);
