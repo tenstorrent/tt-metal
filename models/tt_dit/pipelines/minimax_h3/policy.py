@@ -288,25 +288,30 @@ MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES = max(
 )
 
 
-def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
-    """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
+def _keyframe_patches(canvas: tuple[int, int]) -> int:
+    return 4 * (canvas[0] // MINIMAX_H3_CANVAS_MULTIPLE) * (canvas[1] // MINIMAX_H3_CANVAS_MULTIPLE)
+
+
+def keyframe_layout_key(n_keyframes: int, canvas: tuple[int, int], patch_alignment: int) -> tuple[int, bool]:
+    """The vision tower's program key for `n_keyframes` keyframes on `canvas`: `(padded patches, ring)`.
 
     The tower pads the patch count to `patch_alignment`. It runs ring attention only for one keyframe
     that needs no pad; everything else is windowed, and windowed programs depend only on the padded
     size (the window count is kept out of the key).
     """
+    total = n_keyframes * _keyframe_patches(canvas)
+    padded = -(-total // patch_alignment) * patch_alignment
+    return padded, n_keyframes == 1 and padded == total
+
+
+def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
+    """One `(n_keyframes, canvas)` per vision-tower program set (`keyframe_layout_key`) an fl2va
+    request can reach."""
     canvases = decodable_canvases()
-    multiple = MINIMAX_H3_CANVAS_MULTIPLE
-
-    def patches(canvas: tuple[int, int]) -> int:
-        return 4 * (canvas[0] // multiple) * (canvas[1] // multiple)
-
     by_key: dict[tuple[int, bool], tuple[int, tuple[int, int]]] = {}
     for n_keyframes in (1, 2):
-        for canvas in sorted(canvases, key=lambda canvas: (patches(canvas), canvas)):
-            total = n_keyframes * patches(canvas)
-            padded = -(-total // patch_alignment) * patch_alignment
-            by_key.setdefault((padded, n_keyframes == 1 and padded == total), (n_keyframes, canvas))
+        for canvas in sorted(canvases, key=lambda canvas: (_keyframe_patches(canvas), canvas)):
+            by_key.setdefault(keyframe_layout_key(n_keyframes, canvas, patch_alignment), (n_keyframes, canvas))
     return tuple(by_key[key] for key in sorted(by_key))
 
 

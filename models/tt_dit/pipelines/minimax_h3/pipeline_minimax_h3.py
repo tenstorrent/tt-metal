@@ -129,6 +129,7 @@ from .policy import (
     align_num_frames,
     decodable_canvases,
     get_num_frames,
+    keyframe_layout_key,
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
@@ -505,6 +506,8 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        warm_rungs: Sequence[int] | None = None,
+        warm_canvases: Sequence[tuple[int, int]] | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -591,6 +594,14 @@ class MiniMaxH3Pipeline:
             bucket_ladder = preset["bucket_ladder"][task]
         self.bucket_ladder = tuple(bucket_ladder)
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
+        self.warm_rungs = None
+        if warm_rungs is not None:
+            unknown = sorted(set(warm_rungs) - set(self.bucket_ladder))
+            if unknown:
+                raise ValueError(f"warm_rungs {unknown} are not in the ladder {self.bucket_ladder}")
+            # The full walk binds the top rung first; keeping it keeps that allocation order.
+            self.warm_rungs = frozenset(warm_rungs) | {self.bucket_ladder[-1]}
+        self.warm_canvases = None if warm_canvases is None else frozenset(map(tuple, warm_canvases))
         self.arena_caps = arena_caps or preset.get(f"{task}_arena_caps") or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
         self.presentation_ladder = tuple(
@@ -753,6 +764,8 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        warm_rungs: Sequence[int] | None = None,
+        warm_canvases: Sequence[tuple[int, int]] | None = None,
         coresident: bool | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
@@ -764,6 +777,10 @@ class MiniMaxH3Pipeline:
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
         `arena_caps` and `adaln_slot_roles` default to the task's envelope. `subclass_kwargs` go to the constructor of
         whichever subclass is being built.
+
+        `warm_rungs` and `warm_canvases` narrow construction warmup to the rungs and keyframe canvases a known request
+        reaches, for a run that serves only that request: see `_warm_denoise_buckets` and
+        `_warm_prompt_encoder_envelope`. The default warms everything a served request can reach.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -795,6 +812,8 @@ class MiniMaxH3Pipeline:
             vae_output_type=vae_output_type,
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
+            warm_rungs=warm_rungs,
+            warm_canvases=warm_canvases,
             coresident=coresident,
             **subclass_kwargs,
         )
@@ -1485,7 +1504,14 @@ class MiniMaxH3Pipeline:
             if seq_len > rung:
                 raise ValueError(f"forced bucket {rung} is smaller than the packed length {seq_len}")
             return rung
-        return select_bucket(seq_len, self.bucket_ladder)
+        rung = select_bucket(seq_len, self.bucket_ladder)
+        if self.warm_rungs is not None and rung not in self.warm_rungs and not self._warming:
+            message = f"packed length {seq_len} lands on rung {rung}, outside warm_rungs {sorted(self.warm_rungs)}"
+            # A program first compiled under live traces can corrupt a replay.
+            if self.trace_denoise:
+                raise ValueError(message)
+            self._host_log(f"{message}: this call compiles its programs")
+        return rung
 
     @staticmethod
     def _pad_host_rows(rows: torch.Tensor, capacity: int) -> torch.Tensor:
@@ -2281,7 +2307,7 @@ class MiniMaxH3Pipeline:
         fitted: dict[int, dict] = {}
         shrunk = generation_kwargs
         host = _is_host_rank()
-        bind_rungs = sorted(self.bucket_ladder, reverse=True)
+        bind_rungs = sorted(self.bucket_ladder if self.warm_rungs is None else self.warm_rungs, reverse=True)
         if host:
             _tqdm_spacer()
         for rung in tqdm.tqdm(
@@ -2381,12 +2407,22 @@ class MiniMaxH3Pipeline:
         warm_image = Image.new("RGB", (64, 64), (127, 127, 127))
         before = self.mesh_device.num_program_cache_entries()
         tower_sizes = set()
+        layouts = list(served_envelope(self.task, patch_alignment=alignment))
+        if self.warm_canvases is not None:
+            # `_warmup_on_init` generates on the 16:9 canvas with one or two keyframes.
+            canvases = self.warm_canvases | {resolve_canvas_size(16, 9)}
+            wanted = {keyframe_layout_key(n, canvas, alignment) for n in (1, 2) for canvas in canvases}
+            layouts = [
+                (n_keyframes, canvas)
+                for n_keyframes, canvas in layouts
+                if canvas is None or keyframe_layout_key(n_keyframes, canvas, alignment) in wanted
+            ]
 
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
         for n_keyframes, canvas in tqdm.tqdm(
-            list(served_envelope(self.task, patch_alignment=alignment)),
+            layouts,
             desc="Warming prompt encoder keyframe layouts",
             disable=not host,
             file=sys.stderr,

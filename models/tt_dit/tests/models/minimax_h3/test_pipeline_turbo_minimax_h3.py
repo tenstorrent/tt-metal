@@ -38,7 +38,7 @@ from PIL import Image
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils import tensor as tt_tensor
@@ -79,6 +79,16 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
+
+# Opt-in warm scope for a run that only ever serves this test's request, e.g. a timed A/B on a
+# clock-clamped box. WARM_RUNGS lists the rungs to bind (comma-separated; the top rung is always
+# kept); WARM_USED_LAYOUTS=1 warms only the keyframe layouts of this canvas and keyframe. Neither
+# changes what is generated: the untimed priming call compiles anything they leave out.
+# CACHE_ONLY=1 builds the pipeline without warmup, which writes the weight caches (and the
+# precomputed AdaLN table), and stops.
+WARM_RUNGS = [int(rung) for rung in os.environ.get("MINIMAX_H3_TURBO_WARM_RUNGS", "").split(",") if rung.strip()]
+WARM_USED_LAYOUTS = os.environ.get("MINIMAX_H3_TURBO_WARM_USED_LAYOUTS") == "1"
+CACHE_ONLY = os.environ.get("MINIMAX_H3_TURBO_CACHE_ONLY") == "1"
 
 # 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
 DEVICE_BOUND_TARGETS = 52 * 4
@@ -145,6 +155,9 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     keyframe = Image.open(keyframe_path).convert("RGB") if TASK == "fl2va" else None
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    warm_canvases = None
+    if WARM_USED_LAYOUTS:
+        warm_canvases = [(HEIGHT, WIDTH)] + ([resolve_canvas_size(*keyframe.size)] if keyframe is not None else [])
 
     pipeline = MiniMaxH3TurboPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -154,7 +167,16 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         lora_path=lora_path,
         video_shift=VIDEO_SHIFT,
         audio_shift=AUDIO_SHIFT,
+        warmup=not CACHE_ONLY,
+        warm_rungs=WARM_RUNGS or None,
+        warm_canvases=warm_canvases,
     )
+    if CACHE_ONLY:
+        if pipeline._precomputed_adaln():
+            # The table is otherwise built on the first denoise; this writes its disk cache too.
+            pipeline._prepare_adaln(pipeline.adaln_slot_roles)
+        logger.info("MINIMAX_H3_TURBO_CACHE_ONLY=1: weight caches written, skipping generation")
+        return
 
     # Construction warms the 5 s rung only, and the 4x8 preset does not bucket or trace, so a longer
     # clip would otherwise pay its kernel compiles inside the measured call.
