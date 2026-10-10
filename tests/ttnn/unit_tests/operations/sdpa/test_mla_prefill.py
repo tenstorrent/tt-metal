@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_prefill_impl
@@ -71,3 +72,20 @@ def test_chunked_flash_mla_prefill_partial_single_page_paged_cache(
         use_paged_attention=True,
         block_size=64,
     )
+
+
+# The head_dim_v <= K head dim check used to print Q's head dim: "512 and 576" here, instead of K's 256.
+def test_flash_mla_prefill_head_dim_v_wider_than_k(device, expect_error):
+    def to_device(shape):
+        return ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    tt_q = to_device([1, 8, 128, 576])
+    tt_k = to_device([1, 1, 128, 256])
+    with expect_error(RuntimeError, "head dim of K, got 512 and 256"):
+        ttnn.transformer.flash_mla_prefill(tt_q, tt_k, head_dim_v=512, is_causal=True)
