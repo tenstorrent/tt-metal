@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
@@ -30,11 +31,13 @@ namespace ckernel::sfpu {
 //
 //                32-bit DEST                      16-bit DEST
 //   P(t)         degree 8 in t                    degree 5 in t
-//   exp(|x|)     Cody-Waite + degree-6 poly       bit pattern of |x|/ln2 + 383,
+//   exp(|x|)     Cody-Waite + degree-6 poly (*)   bit pattern of |x|/ln2 + 383,
 //                                                 cubic correction
 //   1/sqrt(|x|)  magic seed, cubic correction,    magic seed, cubic correction
 //                one Newton step
 //   Q(u)         degree 5                         degree 1
+//   (*) _sfpu_exp_fp32_accurate_nonneg_unsafe_, the ckernel_sfpu_exp.h
+//       variant for 0 <= x < 88.72.
 //
 // Cost is set by instruction count plus stalls, not by FLOPs: an SFPLOADI
 // pair materialises each float32 constant, and Blackhole stalls an
@@ -88,65 +91,27 @@ namespace ckernel::sfpu {
 // are already the accurate ones and it does not select a cheaper route.
 // ======================================================================
 
-// exp(|x|) * rsqrt_y * Q(rsqrt_y^2), with rsqrt_y = 1/sqrt(|x|) from the
-// caller. Each branch is ordered so independent work fills SFPMAD latency
-// slots.
-template <bool is_fp32_dest_acc_en>
-inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat rsqrt_y) {
-    // 1/|x| = (1/sqrt(|x|))^2 -- reuses the rsqrt instead of a fresh reciprocal.
-    // Q(u) on u in [1/88.5, 1/6], minimax for relative error.
-    if constexpr (is_fp32_dest_acc_en) {
-        const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
-        // Degree 5, fit 3.4e-8 relative, with the top four coefficients bf16- or
-        // fp16-exact.
-        const sfpi::vFloat correction = PolynomialEvaluator::eval(
-            inv_abs_x,
-            3.9894217e-01f,
-            4.9883097e-02f,
-            0.0273284912109375f,
-            0.04400634765625f,
-            -0.0947265625f,
-            0.62109375f);
-
-        // exp(|x|) to ~1 float32 ULP (7.6e-8 relative over [6, 88.5] in float32
-        // arithmetic):
-        // j = rint(|x|/ln2), f = |x| - j*ln2 in two parts, e^f by a degree-6
-        // polynomial, 2^j added to the exponent. ln2_hi = 0.693359375 has 11
-        // significant bits and j <= 128, so j*ln2_hi is exact and |x| - j*ln2_hi
-        // is exact (Sterbenz); ln2_lo = ln2 - ln2_hi. |x| >= 0 makes j >= 0, so
-        // its sign-magnitude form is already the integer the exponent needs.
-        // rsqrt_y * Q is formed while the rounding to j is in flight, so the
-        // last multiply waits on nothing.
-        const sfpi::vFloat jx = abs_x * 1.442695f;
-        const sfpi::vFloat scale = rsqrt_y * correction;
-        const sfpi::vSMag16 j = sfpi::convert<sfpi::vSMag16>(jx, sfpi::RoundMode::Nearest);
-        const sfpi::vFloat jf = sfpi::convert<sfpi::vFloat>(j, sfpi::RoundMode::Nearest);
-        sfpi::vFloat f = jf * -0.693359375f + abs_x;
-        f = jf * 2.1219444e-04f + f;
-        // e^f = 1 + f * (1 + f * (c2 + f * (... + f * c6))), minimax on
-        // |f| <= 0.348 (3.97e-9 relative); c5 and c6 are fp16-exact.
-        sfpi::vFloat r = PolynomialEvaluator::eval(
-            f, 4.9999994e-01f, 1.6666515e-01f, 4.1668385e-02f, 0.00836944580078125f, 1.3818741e-03f);
-        r = r * f + 1.0f;
-        r = r * f + 1.0f;
-        return sfpi::setexp(r, sfpi::exexp(r, sfpi::ExponentMode::Biased) + sfpi::as<sfpi::vInt>(j)) * scale;
-    } else {
-        // exp(|x|) from the bit pattern of w = |x|/ln2 + 383: for |x| in
-        // [0, 89.4], w lies in [383, 512), so its exponent is fixed and its 23
-        // fraction bits hold (|x|/ln2 + 127) * 2^15. Shifted left by 8 they
-        // read as a float32 z = 2^n * (1 + r), n = floor(|x|/ln2), r the
-        // fraction to 15 bits -- the integer split costs two instructions.
-        // exp(|x|) = z * C(m), C(m) = 2^(m-1)/m with m = 1 + r, a cubic fit
-        // (8.7e-4 relative, all four coefficients fp16-exact).
-        const sfpi::vFloat w = abs_x * 1.442695f + 383.0f;
-        const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
-        const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(sfpi::exman(w)) << 8);
-        const sfpi::vFloat c = PolynomialEvaluator::eval(
-            sfpi::setexp(z, 127), 1.775390625f, -1.376953125f, 0.70751953125f, -0.10650634765625f);
-        // Degree 1, fit 4.9e-4 relative, both coefficients fp16-exact.
-        const sfpi::vFloat correction = inv_abs_x * 0.05609130859375f + 0.398681640625f;
-        return z * c * rsqrt_y * correction;
-    }
+// 16-bit DEST: exp(|x|) * rsqrt_y * Q(rsqrt_y^2), with rsqrt_y = 1/sqrt(|x|)
+// from the caller, ordered so independent work fills SFPMAD latency slots.
+// 1/|x| = (1/sqrt(|x|))^2 reuses the rsqrt instead of a fresh reciprocal;
+// Q(u) is fit on u in [1/88.5, 1/6] for relative error. The 32-bit DEST
+// counterpart is written out in calculate_i0.
+inline sfpi::vFloat calculate_i0_asymptotic_bf16_(const sfpi::vFloat abs_x, const sfpi::vFloat rsqrt_y) {
+    // exp(|x|) from the bit pattern of w = |x|/ln2 + 383: for |x| in
+    // [0, 89.4], w lies in [383, 512), so its exponent is fixed and its 23
+    // fraction bits hold (|x|/ln2 + 127) * 2^15. Shifted left by 8 they
+    // read as a float32 z = 2^n * (1 + r), n = floor(|x|/ln2), r the
+    // fraction to 15 bits -- the integer split costs two instructions.
+    // exp(|x|) = z * C(m), C(m) = 2^(m-1)/m with m = 1 + r, a cubic fit
+    // (8.7e-4 relative, all four coefficients fp16-exact).
+    const sfpi::vFloat w = abs_x * 1.442695f + 383.0f;
+    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+    const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(sfpi::exman(w)) << 8);
+    const sfpi::vFloat c = PolynomialEvaluator::eval(
+        sfpi::setexp(z, 127), 1.775390625f, -1.376953125f, 0.70751953125f, -0.10650634765625f);
+    // Degree 1, fit 4.9e-4 relative, both coefficients fp16-exact.
+    const sfpi::vFloat correction = inv_abs_x * 0.05609130859375f + 0.398681640625f;
+    return z * c * rsqrt_y * correction;
 }
 
 // The rsqrt seed constant and its cubic-correction constants, shared by both
@@ -189,6 +154,7 @@ inline void calculate_i0() {
         // result is ~343 float32 ULP off.
         sfpi::vFloat val;
         sfpi::vFloat rsqrt_y;
+        sfpi::vFloat q;  // Q(1/|x|), 32-bit DEST only
         {
             const sfpi::vFloat t = abs_x * abs_x;
             const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
@@ -210,9 +176,26 @@ inline void calculate_i0() {
                 rsqrt_y = rsqrt_y * k;
                 p = p * t + 0.25f;
                 c = abs_x * rsqrt_y;
-                val = p * t + 1.0f;
+                const sfpi::vFloat half_y = sfpi::addexp(rsqrt_y, -1 /* exp */);
                 c = (-rsqrt_y) * c + 1.0f;
-                rsqrt_y = c * sfpi::addexp(rsqrt_y, -1 /* exp */) + rsqrt_y;
+                val = p * t + 1.0f;
+                rsqrt_y = c * half_y + rsqrt_y;
+
+                // Q(u), u = 1/|x| = rsqrt_y^2 in [1/88.5, 1/6]: degree 5, fit 3.4e-8
+                // relative, the top four coefficients bf16- or fp16-exact. Evaluated
+                // here, ahead of the |x| > 6 compare, whose two instructions then
+                // separate Q's last SFPMAD from the multiply by rsqrt_y; q5 is
+                // materialised before rsqrt_y^2 for the same reason.
+                const sfpi::vFloat q5 = 0.62109375f;
+                const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+                q = PolynomialEvaluator::eval(
+                    inv_abs_x,
+                    3.9894217e-01f,
+                    4.9883097e-02f,
+                    0.0273284912109375f,
+                    0.04400634765625f,
+                    -0.0947265625f,
+                    q5);
             } else {
                 // Degree 5 in t, 1.3e-4 relative, every coefficient bf16- or
                 // fp16-exact: bf16 output cannot see the terms the 32-bit fit
@@ -237,7 +220,12 @@ inline void calculate_i0() {
         // iteration; NaN lanes keep the NaN that region 1's arithmetic
         // propagates, or take it from the SFPMUL. See the file-level comment.
         v_if(abs_x > I0_THRESHOLD) {
-            val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x, rsqrt_y);
+            if constexpr (is_fp32_dest_acc_en) {
+                const sfpi::vFloat scale = rsqrt_y * q;
+                val = _sfpu_exp_fp32_accurate_nonneg_unsafe_(abs_x) * scale;
+            } else {
+                val = calculate_i0_asymptotic_bf16_(abs_x, rsqrt_y);
+            }
             v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
             v_endif;
         }
