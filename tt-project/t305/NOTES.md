@@ -44,3 +44,13 @@ Same scripts as t301 (t301/run301.sh, env.yaml on blx01 /var/tmp/fasth3/t301), k
 - Next: probe tt-project/t305/clkprobe.sh (exit 0 = newest device job on blx01 ran unclamped, or deadline
   2026-10-10 02:00 UTC). On pass: lint, then resubmit PR arm (bash /var/tmp/fasth3/t305/run305.sh pr, -w t305,
   -e t301/env.yaml, -t 570), wait, quote its table. If still clamped at deadline: report with t301 PR sample only.
+
+## Run 4 (2026-10-10 02:24 UTC wake)
+- Clamp still on: every ltx-host job through 348 (01:09 UTC) shows "AICLK failed to settle" on 32 chips; no reboot
+  (uptime 23:33). clkprobe deadline passed.
+- Decision: rerun the MAIN arm under the same 900 MHz clamp, to pair with PR job 242 (7.83 s) at matching clocks.
+  This gives a second same-conditions main/PR pair (relative delta only; absolute numbers are not comparable to 1350 MHz).
+- 02:25:29 UTC: main arm = broker job 349 (bash t305/run305.sh main, -w t305, -e t301/env.yaml, -t 570), lint ok.
+  Output: blx01 /var/tmp/fasth3/t305/out_main/run.log. /var/tmp/fasth3 was 145G before (cap 150G), df / 53%.
+- Next: when 349 ends, check its clamp (expect 32 warnings), quote its gen #2 table, compare with 242.
+  Then final report; cleanup t301/pr worktree, t301/jit-*, t301/out_*, t305/out_* (keep run logs).
