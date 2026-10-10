@@ -274,9 +274,20 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     const uint32_t mt_cap = p.g * std::min(p.dst_tiles / (2 * p.np), MT_MAX / p.g);
     p.mt = std::min(mt_cap, std::max(p.g, p.m / 32 / p.g * p.g));
     const uint32_t mt_full = p.mt;
+    p.rdown = p.Ht > 6 * 26;  // readers compute down columns when down is heavy (> 6 columns per down core)
+    if (const char* rd = std::getenv("MIMO_FL_RDOWN")) {  // (perf probe: force the readers' down columns on / off)
+        p.rdown = std::atoi(rd) != 0;
+    }
+    // h units (MIMO_FL_HU = row tiles per unit): one M-group, one subgrid, no reader down columns
+    if (const char* hu = std::getenv("MIMO_FL_HU")) {
+        p.hu = static_cast<uint32_t>(std::atoi(hu));
+    }
+    if (p.hu && (p.g != 1 || p.nsg != 1 || p.rdown || p.mt % p.hu != 0)) {
+        p.hu = 0;
+    }
     // bf16 h: 64-row sub-blocks (256 KB h buffers, 4 of them fit; 128-row ones leave room for 2 and expose the
-    // h -> down -> done -> go loop: bf16 x + h at M 2048 483 -> 384 us per expert)
-    if (cfg.h_bf16) {
+    // h -> down -> done -> go loop: bf16 x + h at M 2048 483 -> 384 us per expert); with h units the sub-block stays
+    if (cfg.h_bf16 && !p.hu) {
         p.mt = std::min(p.mt, 2u / p.g * p.g);
     }
     if (const char* mt = std::getenv("MIMO_FL_MT")) {  // (perf probe: cap the sub-block's row tiles)
@@ -288,10 +299,6 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     TT_FATAL(p.mt % p.g == 0 && (p.mt / p.g) * 2 * p.np <= p.dst_tiles, "flat_routed_expert: sub-block split");
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
-    p.rdown = p.Ht > 6 * 26;  // readers compute down columns when down is heavy (> 6 columns per down core)
-    if (const char* rd = std::getenv("MIMO_FL_RDOWN")) {  // (perf probe: force the readers' down columns on / off)
-        p.rdown = std::atoi(rd) != 0;
-    }
     p.nh = p.g > 1 ? 2 : 1;
     p.land_slots = p.nh > 1 || p.x_tile != BF8_TILE ? 2 : 3;
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions); bf16 h: 1.5 experts, the
@@ -519,7 +526,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.out_tiles_r = p.mt * p.pcd_r;
     }
     const uint32_t x_bytes = p.mt * KBLK * p.x_tile;
-    p.h_tiles = p.It * p.mt;
+    p.h_tiles = p.It * (p.hu ? p.hu : p.mt);  // one down h buffer: a sub-block, or an h unit
     const uint32_t out_tiles = p.mt * pcd;
     uint32_t rect_min = 1000;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
@@ -589,7 +596,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // bfp8 x and h: the layout the research builder (FlatExpert) shares, budgeted against the whole bank as before;
     // bf16 x / h: the exact budget (and h_local in the arena), which the larger tiles need
-    const bool exact = cfg.x_bf16 || cfg.h_bf16;
+    const bool exact = cfg.x_bf16 || cfg.h_bf16 || p.hu;
     p.hl_in_arena = exact;
     const uint32_t L1_BANK = exact ? L1_BANK_BYTES - (2048 + 4 * dyn_half + 2048) - 2048 - 2048 : L1_BANK_BYTES;
     p.hbuf = p.h_off + al(3 * p.h_tiles * p.h_tile) + out_bytes + 2048 <= L1_BANK ? 3 : 2;
@@ -598,11 +605,25 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (cfg.h_bf16 && p.h_off + al(4 * p.h_tiles * p.h_tile) + out_bytes + 2048 <= L1_BANK) {
         p.hbuf = 4;
     }
+    if (p.hu) {  // h units: as many unit buffers as fit (<= 8: the gather semaphores on the down heads)
+        uint32_t cap = 8;
+        if (const char* hb = std::getenv("MIMO_FL_HBUF")) {  // (perf probe: cap the h unit buffers)
+            cap = std::min(cap, static_cast<uint32_t>(std::atoi(hb)));
+        }
+        p.hbuf = 2;
+        for (uint32_t n = cap; n > 2; --n) {
+            if (p.h_off + al(n * p.h_tiles * p.h_tile) + out_bytes + 2048 <= L1_BANK) {
+                p.hbuf = n;
+                break;
+            }
+        }
+    }
+    p.hl_slots = p.hu ? 3 : p.hbuf;
     p.o_off = p.h_off + al(p.hbuf * p.h_tiles * p.h_tile);
     // (bf16 h: two h buffers leave the row-major y out CB less than out_bytes; it takes what is left, >= 1 row tile)
     const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, L1_BANK);
     TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= L1_BANK, "flat_routed_expert: down core arena does not fit");
-    const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hbuf * p.mtg * p.np * p.h_tile) : 0);
+    const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.np * p.h_tile) : 0);
     TT_FATAL(gu_bytes <= L1_BANK, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % KBLK == 0) {
