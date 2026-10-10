@@ -5,6 +5,7 @@
 #include "moreh_dot_backward_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -83,6 +84,36 @@ MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::crea
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     TT_FATAL(!tensor_args.output_tensors.empty(), "Invalid number of output tensors.");
     return tensor_args.output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // Every output is caller-owned: create_output_tensors hands output_tensors back as is, and compute_output_specs
+    // has an entry only for a slot the caller filled. input_grad = output_grad * other and other_grad = output_grad *
+    // input: each present grad keeps the label it arrived with while the two tensors that produce it are compatible
+    // with that label (device_operation::detail::caller_owned_output_topology), else it takes the union of every tensor
+    // here -- a replicated input_grad written from a mesh-sharded `other` differs on every device.
+    std::vector<std::reference_wrapper<const Tensor>> all_tensors = {
+        tensor_args.output_grad, tensor_args.input, tensor_args.other};
+    for (const auto& output_tensor : tensor_args.output_tensors) {
+        if (output_tensor.has_value()) {
+            all_tensors.emplace_back(*output_tensor);
+        }
+    }
+    const auto union_topology = union_output_topology(all_tensors, tensor_args.input);
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(tensor_args.output_tensors.size());
+    for (size_t slot = 0; slot < tensor_args.output_tensors.size(); ++slot) {
+        const auto& output_tensor = tensor_args.output_tensors[slot];
+        if (!output_tensor.has_value()) {
+            continue;
+        }
+        const Tensor* factor = slot == 0 ? &tensor_args.other : &tensor_args.input;
+        topologies.push_back(ttnn::device_operation::detail::caller_owned_output_topology(
+                                 *output_tensor, {&tensor_args.output_grad, factor}, "ttnn::moreh_dot_backward")
+                                 .value_or(union_topology));
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_dot_backward
