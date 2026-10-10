@@ -53,8 +53,8 @@ static std::uint32_t src_zero_flag_hw       = 0xff; // last value written to the
 static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats feeding the compute default
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-// The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
-// kernel otherwise overflows its slot).
+// The one writer. Out-of-line at loop and reconfig sites so the STALLWAIT + RMW exist in a single copy
+// there (code size: a matmul kernel otherwise overflows its slot); op inits inline it (_update_src_zero_flag_).
 // Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
 // (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
 // flag per instruction at issue and needs no stall.)
@@ -64,16 +64,37 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 #else
 #define LLK_INIT_CALLEE_SECTION
 #endif
-inline __attribute__((noinline)) LLK_INIT_CALLEE_SECTION void _apply_src_zero_flag_(const std::uint32_t value)
+inline __attribute__((always_inline)) void _write_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
 }
 
+inline __attribute__((noinline)) LLK_INIT_CALLEE_SECTION void _apply_src_zero_flag_(const std::uint32_t value)
+{
+    _write_src_zero_flag_(value);
+}
+
+// Op inits (at_init) write inline: init runs once with the icache prefetch on (trisck.cc), and a call would restart the
+// prefetch stream at the callee. LLK_ZEROFLAG_OUTLINE kernels keep the call there too, for code size.
+template <bool at_init>
+inline __attribute__((always_inline)) void _update_src_zero_flag_(const std::uint32_t value)
+{
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at_init)
+    {
+        _write_src_zero_flag_(value);
+        return;
+    }
+#endif
+    _apply_src_zero_flag_(value);
+}
+
 // Set the flag to `disable`; skip if it already holds that value. The check is inlined at every call
 // site so hot loops (whose operand formats change but map to the same flag value) stay call-free; only
 // a genuine value change pays the out-of-line write.
+template <bool at_init = false>
 inline void _configure_src_zero_flag_(const bool disable)
 {
     const std::uint32_t value = disable ? 1u : 0u;
@@ -81,7 +102,7 @@ inline void _configure_src_zero_flag_(const bool disable)
     {
         return;
     }
-    _apply_src_zero_flag_(value);
+    _update_src_zero_flag_<at_init>(value);
 }
 
 // A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
@@ -102,6 +123,7 @@ inline void _configure_src_zero_flag_(const bool disable)
 // whether the resulting flag value changed).
 // TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once that lands this collapses to
 // _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag() / the format cache are dropped.
+template <bool at_init = false>
 inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 {
     const std::uint32_t value = requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u;
@@ -109,13 +131,14 @@ inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
     {
         return;
     }
-    _apply_src_zero_flag_(value);
+    _update_src_zero_flag_<at_init>(value);
 }
 
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
+template <bool at_init = false>
 inline void _configure_preserve_zero_flag_state_()
 {
-    _configure_src_zero_flag_(true);
+    _configure_src_zero_flag_<at_init>(true);
 }
 
 // Datacopy zero-flag, chosen by the source (SrcA) format. Default is preserve (keep) so bf16 -0.0 and
