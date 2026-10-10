@@ -38,6 +38,14 @@ static const mailbox_t brisc_counter        = mailboxes_arr + 5;
 static const mailbox_t brisc_bread0 = mailboxes_arr + 6;
 static const mailbox_t brisc_bread1 = mailboxes_arr + 7;
 
+// Tensix GPR snapshot: 3 threads x 64 GPRs, laid out as REGFILE_BASE + (thread * 64 + index) * 4,
+// placed directly below the mailboxes. The host reads it over NoC, so BRISC never has to be halted.
+// Must match GPR_DUMP_WORDS and its read address in tests/python_tests/helpers/tensix.py.
+constexpr std::uint32_t GPRS_PER_THREAD = 64;
+constexpr std::uint32_t TENSIX_THREADS  = 3;
+constexpr std::uint32_t GPR_DUMP_WORDS  = GPRS_PER_THREAD * TENSIX_THREADS;
+static const mailbox_t gpr_dump         = mailboxes_arr - GPR_DUMP_WORDS;
+
 static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
 
 enum class BriscCommandState : std::uint32_t
@@ -46,6 +54,7 @@ enum class BriscCommandState : std::uint32_t
     START_TRISCS                      = 1,
     RESET_TRISCS                      = 2,
     UPDATE_START_ADDR_CACHE_AND_START = 3,
+    DUMP_GPRS                         = 4,
 };
 
 // Written to `brisc_counter` as the LAST step of firmware init. The host polls
@@ -144,6 +153,15 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread1, counter);
+                break;
+
+            case BriscCommandState::DUMP_GPRS:
+                for (std::uint32_t i = 0; i < GPR_DUMP_WORDS; i++)
+                {
+                    ckernel::store_blocking(gpr_dump + i, ckernel::regfile[i]);
+                }
+
+                reset_state(counter);
                 break;
 
             default:

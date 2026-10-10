@@ -97,8 +97,9 @@ _SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
-# In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
-# most of the Tensix state, without causing any runtime issues.
+# In a nutshell, everything except Tensix GPRs is accessible over NoC, and ttexalens reads GPRs by halting
+# BRISC. On silicon, TensixState.fetch reads them from an L1 copy made by the BRISC firmware instead;
+# on ttsim that copy aborts the simulator, so the state there has no GPRs.
 # Quasar is a no-op: ttexalens has no Tensix register description yet
 # (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():

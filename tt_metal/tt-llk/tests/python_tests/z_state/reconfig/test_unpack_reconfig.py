@@ -6,7 +6,8 @@ from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
-from helpers.tensix import TensixState
+from helpers.reconfig_formats import NEXT_TILE_SIZE
+from helpers.tensix import TensixState, TensixThread
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX, TO_FROM_INT8
 
@@ -117,6 +118,10 @@ def test_unpack_reconfig(
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+    if TensixState.has_gprs(expected):
+        # Both reconfig paths store the tile size in the unpack thread's tile-size GPRs.
+        assert expected["gpr"][TensixThread.UNPACK]["tile_size_a"] == NEXT_TILE_SIZE
+        assert expected["gpr"][TensixThread.UNPACK]["tile_size_b"] == NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
     configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]

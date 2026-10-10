@@ -8,7 +8,13 @@ from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
-from helpers.tensix import TensixState
+from helpers.reconfig_formats import (
+    NEXT_TILE_SIZE,
+    configured_key,
+    kernel_visible_key,
+    kernel_visible_variants,
+)
+from helpers.tensix import TensixState, TensixThread
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
 
@@ -68,8 +74,8 @@ def get_valid_dest_acc(
     )
 
 
-@parametrize(
-    formats=generate_valid_formats(
+_VARIANTS = kernel_visible_variants(
+    generate_valid_formats(
         [
             DataFormat.Float16,
             DataFormat.Float16_b,
@@ -84,7 +90,13 @@ def get_valid_dest_acc(
             DataFormat.UInt8,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_acc(formats),
+    get_valid_dest_acc,
+)
+
+
+@parametrize(
+    formats=list(_VARIANTS),
+    dest_acc=lambda formats: _VARIANTS[formats],
 )
 def test_pack_reconfig(
     formats,
@@ -102,9 +114,13 @@ def test_pack_reconfig(
         ],
         dest_acc=dest_acc,
     )
+    assert configured_key(configuration) == kernel_visible_key(formats, dest_acc)
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+    if TensixState.has_gprs(expected):
+        # configure_pack stores the tile size in the pack thread's TILE_HEADER GPR.
+        assert expected["gpr"][TensixThread.PACK]["tile_header"] == NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
     configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]
