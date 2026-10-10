@@ -6,9 +6,10 @@
 [`poolside/Laguna-S-2.1`](https://huggingface.co/poolside/Laguna-S-2.1) (117.6B parameters, 8.45B active, 1M-token
 context) as an OpenAI-compatible vLLM server on four Blackhole ASICs (a TT-QuietBox 2 or four P150 cards).
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
-Through the vLLM server, batch 1, versus the first version of this branch (2026-10-06), same measurement:
+Through the vLLM server, batch 1, versus the first version of this branch (2026-10-06), same measurement
+(2026-10-09):
 
 | | First version | Now |
 |---|---:|---:|
@@ -20,9 +21,10 @@ Through the vLLM server, batch 1, versus the first version of this branch (2026-
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
 - Met: batch-1 TTFT at 128 tokens (60 ms vs 66 ms) and batch-32 decode at every length (22-28 vs 18-20 tok/s/user).
-- Not met: batch-1 decode (72-76 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding is not optimized yet and is currently slower than normal decode; it is the next work
-  item.
+- Not met: batch-1 decode (74-79 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
+- DFlash speculative decoding: 3.3x faster than on 2026-10-09 (25 -> 83 tok/s on AIME24), now faster than normal
+  decode on AIME24 (83 vs ~78 tok/s) and still slower on the real-text prompts (55-58 tok/s), where the draft model
+  guesses fewer tokens right.
 
 ## Results
 
@@ -30,13 +32,13 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
 
 Laguna's next-token predictions vs the original model in fp32, over the AIME24 prompt (235 tokens, or cut to 128)
 plus a fixed 100-token answer; batch 32 is the worst of 32 identical users. "top-1, traced" is the same top-1 check
-through the traced decode path the server runs (token picked on device). `tests/test_accuracy.py`, 2026-10-09.
+through the traced decode path the server runs (token picked on device). `tests/test_accuracy.py`, 2026-10-10.
 
 | Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
 |---|---:|---:|---:|---:|---:|---:|
 | 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.98 | 0.97 |
 | 235 tokens | 32 | 0.99 | 1.00 | 1.00 | 0.99 | 0.97 |
-| 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.95 | 0.97 |
+| 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.97 | 0.97 |
 | 128 tokens | 32 | 0.95 | 1.00 | 1.00 | 0.96 | 0.97 |
 | Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
@@ -44,42 +46,46 @@ through the traced decode path the server runs (token picked on device). `tests/
 
 Target = 50% of speed of light (SoL), the roofline limit from [All About Transformer
 Inference](https://jax-ml.github.io/scaling-book/inference/) computed by `demo/roofline.py`. Measured with
-`demo/perf_direct.py`: no vLLM, device time plus reading the token back, 2026-10-09 (DFlash 2026-10-10). Batch 32: 32 prompts arrive
+`demo/perf_direct.py`: no vLLM, device time plus reading the token back, 2026-10-10. Batch 32: 32 prompts arrive
 together; TTFT is the last user's; total decode throughput is 32x the per-user speed.
 
 Decode, tok/s per user (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 75.9 / 158 | 28.0 / 20 |
-| 1,024 | 73.6 / 157 | 26.4 / 20 |
-| 2,048 | 73.2 / 156 | 25.8 / 19 |
-| 4,096 | 72.2 / 155 | 23.5 / 19 |
-| 8,192 | 72.3 / 152 | 22.4 / 18 |
+| 128 | 78.6 / 158 | 28.0 / 20 |
+| 1,024 | 76.0 / 157 | 26.4 / 20 |
+| 2,048 | 75.5 / 156 | 25.8 / 19 |
+| 4,096 | 75.2 / 155 | 23.5 / 19 |
+| 8,192 | 74.4 / 152 | 22.4 / 18 |
 
 Time to first token (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
 | 128 | 60.5 ms / 66 ms | 0.42 s / 0.066 s |
-| 1,024 | 140 ms / 66 ms | 2.89 s / 0.39 s |
+| 1,024 | 140 ms / 66 ms | 2.90 s / 0.39 s |
 | 2,048 | 238 ms / 66 ms | 5.82 s / 0.78 s |
-| 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
-| 8,192 | 716 ms / 103 ms | 23.4 s / 3.31 s |
+| 4,096 | 387 ms / 66 ms | 11.6 s / 1.60 s |
+| 8,192 | 717 ms / 103 ms | 23.4 s / 3.31 s |
 
-DFlash speculative decoding, batch 1, real-text prompts (a "summarize this document" request; the draft model's
-guesses decide the speed):
+DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 74-79 tok/s at these lengths). A round
+drafts 15 tokens, then checks the first 5 in Laguna in one step and keeps the matching ones plus one of Laguna's
+own: 37-42 ms per round (draft 8-11 ms, check 29-31 ms) vs 12.7-13.4 ms per token for normal decode, so DFlash
+wins when more than ~2 drafts per round are accepted:
 
-| Input tokens | Decode, tok/s | Draft tokens accepted per round |
-|---:|---:|---:|
-| 128 | 20.5 | 1.2 |
-| 1,024 | 22.4 | 1.5 |
-| 2,048 | 25.2 | 1.8 |
-| 4,096 | 25.1 | 1.8 |
-| 8,192 | 21.9 | 1.5 |
+| Prompt | Input tokens | Decode, tok/s | Drafts accepted per round |
+|---|---:|---:|---:|
+| AIME24 | 235 | 83.1 | 2.6 |
+| Real text | 128 | 58.1 | 1.3 |
+| Real text | 1,024 | 56.6 | 1.5 |
+| Real text | 2,048 | 57.8 | 1.6 |
+| Real text | 4,096 | 56.4 | 1.6 |
+| Real text | 8,192 | 55.0 | 1.5 |
 
-DFlash is slower than normal decode for now: a round (draft 15 tokens, then check 16 in Laguna) takes ~105 ms and
-keeps ~2.5 tokens, while normal decode takes ~13 ms per token.
+Real text = a "summarize this document" request over a technical report. On AIME24 the device accepts as many drafts
+as the draft model does on CPU (2.66 vs 2.64 per round), so the acceptance rate is the draft model's own, not a port
+error.
 
 ## Quick start
 
@@ -142,7 +148,7 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
 
 ```bash
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py   # performance tables, ~10 min
-PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash   # DFlash, ~4 min
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash --dflash-prompt aime,text   # DFlash table
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/roofline.py      # SoL and targets, no device
 python $MODEL_DIR/demo/perf_demo.py                                           # end to end through vLLM
 ```
