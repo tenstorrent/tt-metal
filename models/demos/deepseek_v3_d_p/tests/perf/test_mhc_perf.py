@@ -5,7 +5,7 @@
 
 Run under tracy and sum device time per signposted region:
 
-    python -m tracy -r -p -v -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_mhc_perf.py -k <id>
+    python -m tracy --no-web-server -r -p -v -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_mhc_perf.py -k <id>
 
 Token counts are per device. V4 prefills in 5k chunks, sequence-parallel over the 8-wide axis of
 an 8x4 Galaxy mesh, so the shape that ships is T=5120/8 = 640 -- 20 token-tiles. Because a token's

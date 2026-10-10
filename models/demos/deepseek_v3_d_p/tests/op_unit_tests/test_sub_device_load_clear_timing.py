@@ -292,6 +292,7 @@ def _run_case(case, iters):
         sys.executable,
         "-m",
         "tracy",
+        "--no-web-server",
         "-r",
         "-p",
         "-m",

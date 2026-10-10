@@ -16,7 +16,7 @@ Example (31B blackhole 1×4):
     export TT_METAL_DEVICE_PROFILER=1
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=100000
 
-    python -m tracy -p -r -v -m pytest \\
+    python -m tracy --no-web-server -p -r -v -m pytest \\
         models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \\
         -k batch1-prefill_128-1x4 -v -s --timeout=1800
 

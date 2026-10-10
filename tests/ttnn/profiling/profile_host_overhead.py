@@ -323,7 +323,7 @@ def test_host_overhead(device, user_input):
     pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::ttnn.add
 
     Run with tracy:
-    python -m tracy -v -r -p -o host_overhead_profile --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
+    python -m tracy --no-web-server -v -r -p -o host_overhead_profile --no-device -m "pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile"
     """
 
     if "::" in user_input[0]:

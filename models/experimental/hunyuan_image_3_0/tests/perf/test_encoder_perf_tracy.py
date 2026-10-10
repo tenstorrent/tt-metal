@@ -11,14 +11,14 @@ sweep from the smallest to the largest VAE resolution in the model's
 signposts (default 1024²):
 
     HUNYUAN_MODEL_DIR=/path/to/HunyuanImage-3.0 \\
-    python_env/bin/python -m tracy -p -r -v --op-support-count 10000 -m pytest \\
+    python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 10000 -m pytest \\
       models/experimental/hunyuan_image_3_0/tests/perf/test_encoder_perf_tracy.py \\
       -k test_encoder_perf_tracy_one -s --timeout=0
 
 Multi-size sweep (all resolutions in one capture):
 
     HUNYUAN_MODEL_DIR=/path/to/HunyuanImage-3.0 \\
-    python_env/bin/python -m tracy -p -r -v --op-support-count 25000 -m pytest \\
+    python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 25000 -m pytest \\
       models/experimental/hunyuan_image_3_0/tests/perf/test_encoder_perf_tracy.py \\
       -k sweep -s --timeout=0
 
@@ -30,7 +30,7 @@ The test module also sets ``TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT`` if unset.
 Parametrized single-size (filter with ``-k 1024x1024`` etc.):
 
     HUNYUAN_MODEL_DIR=/path/to/HunyuanImage-3.0 \\
-    python_env/bin/python -m tracy -p -r -v --op-support-count 10000 -m pytest \\
+    python_env/bin/python -m tracy --no-web-server -p -r -v --op-support-count 10000 -m pytest \\
       models/experimental/hunyuan_image_3_0/tests/perf/test_encoder_perf_tracy.py \\
       -k "test_encoder_perf_tracy_single_size and 1024x1024" -s --timeout=0
 
