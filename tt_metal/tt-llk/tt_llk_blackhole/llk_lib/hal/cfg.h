@@ -4,5 +4,5 @@
 
 #pragma once
 
-// The only public include needed for Blackhole CFG field descriptors.
-#include "cfg/registers.h"
+// The only public include needed for typed Blackhole CFG access.
+#include "cfg/access.h"
