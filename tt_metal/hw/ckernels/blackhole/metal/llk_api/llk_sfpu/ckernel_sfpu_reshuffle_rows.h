@@ -35,13 +35,17 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
+ * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32] at idx_addr + 16, read
+ *                  as 32-bit words, so idx_addr is 4-byte aligned)
  */
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 namespace reshuffle_rows_detail {
 
 constexpr std::uint32_t output_tile_offset = 64;
+static_assert(output_tile_offset % 32 == 0, "the +2, +16 and +18 offsets are ORed into the output row address");
+constexpr std::uint32_t rows_per_group = 4;  // the rows of one SFPLOAD
+constexpr std::uint32_t num_groups = 32 / rows_per_group;
 
 // The 4-row group of a row; bits 0, 1 and 4 are clear, so the +2, +16 and +18 column and face offsets can be ORed in.
 constexpr std::uint32_t row_group_addr(const std::uint32_t row) { return (row & ~0x3u) + (row & 0x10u); }
@@ -72,7 +76,7 @@ inline __attribute__((always_inline)) void reshuffle_row(const std::uint32_t inp
     // TRANSPOSE #1: Rearrange loaded 4-row blocks to isolate target rows
     // SFPLOAD loads 4 consecutive rows (e.g., rows 4-7) into LREG0-3, but we only want one specific row (e.g., row
     // 5) This transpose shuffles the register contents so row 5 data becomes accessible via input_row_lreg[1]
-    TTI_SFPTRANSP(0, 0, 0, 0);  // Puts desired input row into LREG "input_row_lreg" and output row into "output_row_lreg"
+    TTI_SFPTRANSP(0, 0, 0, 0);  // Puts the input row into input_row_lreg and the output row into LREG4 + dst_row % 4
 
     // ACCUMULATION: Perform gradient accumulation for embedding backward pass
     // Implements: output[dst_row] += input[row] (scatter-add operation)
@@ -96,10 +100,10 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     // clr DEST tile 1
     // TODO (Radomir): Add optional clear that is more optimal using tile copy
     // for (uint row=0; row < 32; row+=4) {
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row + 2);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row + 32);
-    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row + 34);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 2);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 32);
+    //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, reshuffle_rows_detail::output_tile_offset + row + 34);
     // }
 
     // Skip tile header, hence + 16:
@@ -110,8 +114,9 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE
 
 #pragma GCC unroll 0
-    for (std::uint32_t group = 0; group < 8; group++) {
-        const std::uint32_t input_row_addr = reshuffle_rows_detail::row_group_addr(group * 4);
+    for (std::uint32_t group = 0; group < reshuffle_rows_detail::num_groups; group++) {
+        const std::uint32_t input_row_addr =
+            reshuffle_rows_detail::row_group_addr(group * reshuffle_rows_detail::rows_per_group);
         const std::uint32_t idx_word = idx_words[group];
         reshuffle_rows_detail::reshuffle_row<0>(input_row_addr, idx_word);
         reshuffle_rows_detail::reshuffle_row<1>(input_row_addr, idx_word);
