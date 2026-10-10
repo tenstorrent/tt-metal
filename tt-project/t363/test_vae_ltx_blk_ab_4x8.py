@@ -24,10 +24,10 @@ NF, H, W = 145, 1088, 1920
 
 
 def _latent():
-    lt, lh, lw = (NF - 1) // 8 + 1, H // 32, W // 32
-    return torch.load(os.environ["AB_LATENT"], map_location="cpu")["video"].float().reshape(1, lt, lh, lw, 128).permute(
-        0, 4, 1, 2, 3
-    )
+    # The diffvae/latents/seed*.pt files #349 decoded hold the BCTHW latent tensor itself.
+    lat = torch.load(os.environ["AB_LATENT"], map_location="cpu").float()
+    assert tuple(lat.shape) == (1, 128, (NF - 1) // 8 + 1, H // 32, W // 32), lat.shape
+    return lat
 
 
 def _decoder_blocks(path):
