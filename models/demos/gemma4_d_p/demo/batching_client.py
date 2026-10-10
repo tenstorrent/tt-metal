@@ -4,11 +4,11 @@
 """Client for demo/batching_server.py: fire short and long prompts at the prefill server and see how fast they
 return.
 
-    python batching_client.py compare                   # two bursts, batching off then on: many short prompts,
-                                                        # and a 64k prompt with short ones behind it
-    python batching_client.py compare 32k 2k 2k 4k      # your own prompts, off then on
+    python batching_client.py compare                   # two bursts, serial 8k / 4k / 2k chunks then batched: many
+                                                        # short prompts, and a 64k prompt with short ones behind it
+    python batching_client.py compare 32k 2k 2k 4k      # your own prompts
     python batching_client.py fire 2k 2k 32k 2k         # just fire them (--gap seconds apart, default 0)
-    python batching_client.py mode on|off               # switch the server's continuous batching
+    python batching_client.py mode batched|8k|4k|2k     # continuous batching, or serial at that chunk size
 
 Sizes take a k suffix (tokens, rounded up to whole 2k chunks).
 """
@@ -47,8 +47,11 @@ def _tokens(size):
     return int(float(size[:-1]) * 1024) if size.endswith("k") else int(size)
 
 
-def set_mode(url, on):
-    return _post(url, "/mode", {"batching": on})["batching"]
+BASELINES = ("serial 8k", "serial 4k", "serial 2k")  # one request at a time at a fixed chunk size (8k: today's default)
+
+
+def set_mode(url, mode):
+    return _post(url, "/mode", {"mode": mode})["mode"]
 
 
 def fire(url, sizes, gap):
@@ -97,32 +100,38 @@ def show(title, results, wall):
 SHORT_MAX = 4096  # prompts up to this many tokens count as short in the summaries
 
 
+def mean_latency_s(results, short):
+    """Mean latency in seconds of the short (<= SHORT_MAX tokens) or long prompts; None if there are none."""
+    picked = [r["latency_ms"] for r in results if (r["tokens"] <= SHORT_MAX) == short]
+    return sum(picked) / len(picked) / 1000 if picked else None
+
+
 def latency_change(off, on, short):
     """'a -> b s': mean latency of the short (or long) prompts with batching off, then on; None if there are none."""
-    means = []
-    for results in (off, on):
-        picked = [r["latency_ms"] for r in results if (r["tokens"] <= SHORT_MAX) == short]
-        if not picked:
-            return None
-        means.append(sum(picked) / len(picked) / 1000)
-    return f"{means[0]:.3f}s -> {means[1]:.3f}s"
+    means = [mean_latency_s(results, short) for results in (off, on)]
+    return None if None in means else f"{means[0]:.3f}s -> {means[1]:.3f}s"
 
 
 def compare(url, sizes, gap):
-    """The same prompts with batching off, then on; returns a one-line summary."""
-    runs = []
-    for on, name in ((False, "one request at a time"), (True, "continuous batching")):
-        set_mode(url, on)
-        console.print(f"[bold]{name}[/]: firing {' '.join(sizes)}")
-        runs.append(fire(url, sizes, gap))
-        show(name, *runs[-1])
-    (off, off_wall), (on, on_wall) = runs
+    """The same prompts serial at each baseline chunk size, then batched; returns one summary line per baseline."""
+    runs = {}
+    for mode in (*BASELINES, "batched"):
+        set_mode(url, mode)
+        console.print(f"[bold]{mode}[/]: firing {' '.join(sizes)}")
+        runs[mode] = fire(url, sizes, gap)
+        show(mode, *runs[mode])
+    on, on_wall = runs["batched"]
     tokens = sum(r["tokens"] for r in on)
-    line = f"whole mix {off_wall:.2f}s -> {on_wall:.2f}s ({tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f} tok/s)"
-    for short, name in ((True, "short (<= 4k)"), (False, "long")):
-        if change := latency_change(off, on, short):
-            line += f"; {name} mean latency {change}"
-    return line
+    lines = []
+    for mode in BASELINES:
+        off, off_wall = runs[mode]
+        line = f"vs {mode}: whole mix {off_wall:.2f}s -> {on_wall:.2f}s ({off_wall / on_wall:.2f}x, "
+        line += f"{tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f} tok/s)"
+        for short, name in ((True, "short (<= 4k)"), (False, "long")):
+            if change := latency_change(off, on, short):
+                line += f"; {name} mean latency {change}"
+        lines.append(line)
+    return lines
 
 
 def main():
@@ -133,19 +142,21 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fire").add_argument("sizes", nargs="+")
     sub.add_parser("compare").add_argument("sizes", nargs="*")
-    sub.add_parser("mode").add_argument("state", choices=["on", "off"])
+    sub.add_parser("mode").add_argument("state", choices=["batched", "8k", "4k", "2k"])
     args = parser.parse_args()
 
     if args.cmd == "mode":
-        console.print("continuous batching", "on" if set_mode(args.url, args.state == "on") else "off")
+        console.print("mode:", set_mode(args.url, args.state if args.state == "batched" else f"serial {args.state}"))
     elif args.cmd == "fire":
         show("results", *fire(args.url, args.sizes, args.gap))
     else:
         scenarios = {"your prompts": args.sizes} if args.sizes else SCENARIOS
         summary = {name: compare(args.url, sizes, args.gap) for name, sizes in scenarios.items()}
         console.print()
-        for name, line in summary.items():
-            console.print(f"[bold]{name}[/]: {line}")
+        for name, lines in summary.items():
+            console.print(f"[bold]{name}[/] (batched):")
+            for line in lines:
+                console.print(f"  {line}")
 
 
 if __name__ == "__main__":

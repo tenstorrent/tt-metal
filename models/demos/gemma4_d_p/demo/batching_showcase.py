@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Continuous-batching showcase: the interactive demo's scenarios as one standalone run, batching off vs on.
+"""Continuous-batching showcase: the interactive demo's scenarios as one standalone run, against serial baselines.
 
     pytest models/demos/gemma4_d_p/demo/batching_showcase.py -s
 
-Runs the demo server's scheduler in process (no HTTP) and plays each scenario twice, serial (one request at a time,
-8k chunks for prompts that are a multiple of 8k) and continuous batching, SHOWCASE_REPEATS times each (default 3; the
-median-wall run is reported). Scenarios: solo prompts (2k, 4k, 8k, 106k = 13 x 8k), bursts (everything arrives at
-once) and staggered arrivals at two loads. Prints every run's requests and a summary table of wall time,
-throughput and mean latency for short (<= 4k) and long prompts.
+Runs the demo server's scheduler in process (no HTTP) and plays each scenario in every mode: serial 8k, 4k and 2k
+(one request at a time at a fixed chunk size, the last chunk padded; serial 8k is today's default) and continuous
+batching, SHOWCASE_REPEATS times each (default 3; the median-wall run is reported). Scenarios: solo prompts (2k, 4k,
+8k, 106k = 13 x 8k), bursts (everything arrives at once) and staggered arrivals at two loads. Prints every run's
+requests, then wall time per mode with batching's speedup over each baseline, and mean latency of short (<= 4k) and
+long prompts per mode.
 
 Env as for batching_server.py (DEMO_SLOTS, DEMO_PACK); DEMO_CAPACITY defaults to 106496 here.
 """
@@ -21,12 +22,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
-from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from models.demos.gemma4_d_p.demo.batching_client import latency_change, show
-from models.demos.gemma4_d_p.demo.batching_server import BATCHED, SERIAL, TRACE_REGION_SIZE, start_scheduler
+from models.demos.gemma4_d_p.demo.batching_client import mean_latency_s, show
+from models.demos.gemma4_d_p.demo.batching_server import (
+    BATCHED,
+    MODES,
+    SERIAL_CHUNKS,
+    TRACE_REGION_SIZE,
+    start_scheduler,
+)
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 
 SIZES = {"2k": 2048, "4k": 4096, "8k": 8192, "32k": 32768, "64k": 65536, "106k": 106496}
@@ -75,12 +81,12 @@ def _play(scheduler, arrivals):
 
 
 def _drive(scheduler, repeats):
-    """Play every scenario in both modes; returns {scenario: {mode: (results, wall)}}, the median-wall run of each."""
+    """Play every scenario in every mode; returns {scenario: {mode: (results, wall)}}, the median-wall run of each."""
     summary = {}
     try:
         for name, arrivals in SCENARIOS.items():
             summary[name] = {}
-            for mode in (SERIAL, BATCHED):
+            for mode in MODES:
                 scheduler.mode = mode
                 played = sorted((_play(scheduler, arrivals) for _ in range(repeats)), key=lambda run: run[1])
                 summary[name][mode] = played[len(played) // 2]
@@ -91,26 +97,36 @@ def _drive(scheduler, repeats):
     return summary
 
 
-def _summary_table(summary):
-    table = Table(title="continuous batching: serial -> batched (median-wall run of each)")
-    for col in ("scenario", "requests", "wall", "speedup", "tok/s", "short mean latency", "long mean latency"):
-        table.add_column(col)
+def _seconds(value):
+    return "-" if value is None else f"{value:.3f}"
+
+
+def _summary_tables(summary):
+    """Wall time per mode with batching's speedup over each serial baseline, and mean latency per mode."""
+    walls = Table(title="wall time, first arrival to last completion (median-wall run); batched's speedup")
+    latencies = Table(title="mean latency (queue + prefill), short (<= 4k) / long prompts")
+    for table, cols in (
+        (walls, ("scenario", "requests", *MODES, *(f"vs {m}" for m in SERIAL_CHUNKS), "vs best serial")),
+        (latencies, ("scenario", *MODES)),
+    ):
+        for col in cols:
+            table.add_column(col)
     for name, runs in summary.items():
-        (off, off_wall), (on, on_wall) = runs[SERIAL], runs[BATCHED]
-        tokens = sum(r["tokens"] for r in on)
-        wall = f"{off_wall:.3f}s -> {on_wall:.3f}s"
-        short, long = (latency_change(off, on, s) or "-" for s in (True, False))
-        table.add_row(
+        wall = {mode: runs[mode][1] for mode in MODES}
+        best = min(SERIAL_CHUNKS, key=wall.get)
+        speedup = {mode: wall[mode] / wall[BATCHED] for mode in SERIAL_CHUNKS}
+        walls.add_row(
             name,
-            str(len(on)),
-            wall,
-            f"{off_wall / on_wall:.2f}x",
-            f"{tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f}",
-            short,
-            long,
+            str(len(runs[BATCHED][0])),
+            *(f"{wall[mode]:.3f}s" for mode in MODES),
+            *(f"{speedup[mode]:.2f}x" for mode in SERIAL_CHUNKS),
+            f"{speedup[best]:.2f}x ({best})",
         )
-        logger.info(f"[showcase] {name}: wall {wall} ({off_wall / on_wall:.2f}x) short {short} long {long}")
-    return table
+        latency = {
+            mode: " / ".join(_seconds(mean_latency_s(runs[mode][0], s)) for s in (True, False)) for mode in MODES
+        }
+        latencies.add_row(name, *(latency[mode] for mode in MODES))
+    return walls, latencies
 
 
 @torch.no_grad()
@@ -129,4 +145,6 @@ def test_batching_showcase(mesh_device, reset_seeds, monkeypatch):
             summary = driver.result()
     finally:
         runner.release()
-    Console(width=200).print(_summary_table(summary))
+    console = Console(width=200)
+    for table in _summary_tables(summary):
+        console.print(table)
