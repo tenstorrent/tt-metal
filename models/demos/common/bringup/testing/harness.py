@@ -135,6 +135,8 @@ def device_params(s) -> dict:
     import ttnn
 
     p = dict(s.get("box.device_params", {}))
+    if os.environ.get("BRINGUP_FABRIC"):  # e.g. FABRIC_2D_TORUS_X: the same mesh on a box with wrap links (Galaxy rows)
+        p["fabric_config"] = os.environ["BRINGUP_FABRIC"]
     if "fabric_config" in p:
         p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
     if "fabric_payload_bytes" in p:  # global fabric packet payload (router default 4352 B; Blackhole max 15232 B)
