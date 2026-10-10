@@ -72,6 +72,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
 
     for (uint32_t s = 0; s < num_steps; s++) {
+        DeviceZoneScopedN("CMB-RELEASE");  // ends as step s is released (profiling)
         invalidate_l1_cache();
 #ifdef CMBF2D_PROGRESS_SEM
         uint32_t done_mask = 0;

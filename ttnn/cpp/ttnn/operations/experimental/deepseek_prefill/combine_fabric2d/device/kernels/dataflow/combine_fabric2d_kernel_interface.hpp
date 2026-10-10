@@ -171,7 +171,7 @@ namespace cmbf2d {
 
 // Depth of the reader -> sender L1 ring, in tokens, and the half-ring batch slots move in. Both are
 // packed as compile-time args, so this is their one definition.
-constexpr uint32_t NUM_L1_SLOTS = 8;
+constexpr uint32_t NUM_L1_SLOTS = 16;
 constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 
 // Tokens whose routing metadata the reader prefetches in one batch, and the pad each record gets. 64 B

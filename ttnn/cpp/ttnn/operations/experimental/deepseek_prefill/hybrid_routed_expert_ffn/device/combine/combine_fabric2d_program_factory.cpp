@@ -476,6 +476,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
         add_combine_defines(rdr);
+        // The readers' read requests and local writes on VC 0, off the default (1) the routed expert's weight read
+        // requests share: flat_combine_overlap Kimi K2.7 / GLM 5.3 8x1 overlap -1..-6% (any of VC 0, 2, 3 alike).
+        // Perf probes (read at program build): CMBF2D_RD_VC / CMBF2D_WR_VC pick them.
+        for (const char* knob : {"CMBF2D_RD_VC", "CMBF2D_WR_VC"}) {
+            const char* v = std::getenv(knob);
+            rdr.defines.emplace_back(knob, v != nullptr ? v : "0");
+        }
         if (!sems.has_untilizers()) {
             // Row-major routed-expert output: no untilizers, the readers read its rows and wait on `ready` themselves.
             rdr.defines.emplace_back("CMBF2D_READY_SEM", std::to_string(sems.ready()));

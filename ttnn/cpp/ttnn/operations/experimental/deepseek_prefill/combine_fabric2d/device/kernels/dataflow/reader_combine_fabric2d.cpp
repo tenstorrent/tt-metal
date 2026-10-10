@@ -321,6 +321,7 @@ struct Reader {
     }
     void gate() {
         if (!step_ready) {
+            DeviceZoneScopedN("CMB-GATE");
             const uint32_t local =
                 ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
             ::cmbf2d::wait_for_ready(
@@ -606,7 +607,11 @@ struct Reader {
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
                 noc_async_read(token_source(base + pad), slot_addr, ct.token_size_bytes);
                 noc_async_read_barrier();
+#ifdef CMBF2D_WR_VC
+                noc_async_write(slot_addr, out_addr, ct.token_size_bytes, noc_index, CMBF2D_WR_VC);
+#else
                 noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
+#endif
                 // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
                 // has read it out. Overlapping these needs several buffers in flight, tracked separately
                 // from the sender's ring accounting.
@@ -664,10 +669,27 @@ struct Reader {
     }
 };
 
+#ifdef CMBF2D_RD_VC
+inline void set_read_vc(uint32_t vc) {
+    while (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+    }
+    NOC_CMD_BUF_WRITE_REG(
+        noc_index,
+        read_cmd_buf,
+        NOC_CTRL,
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc));
+}
+#endif
+
 void kernel_main() {
 #ifdef CMBF2D_IDLE
     // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
     return;
+#endif
+#ifdef CMBF2D_RD_VC
+    // The read requests' VC (perf probe): off the default (1) that the routed expert's weight reads share. The read
+    // command buffer's VC is fixed at init in dedicated NoC mode, so it is reprogrammed here and restored at exit.
+    set_read_vc(CMBF2D_RD_VC);
 #endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
@@ -686,11 +708,18 @@ void kernel_main() {
                 return kernel_compile_time_args[ct.assignment_base + k * ::cmbf2d::ASSIGNMENT_WORDS + 1];
             });
 #endif
+        DeviceZoneScopedN("CMB-STEP");
 #if !TILE && defined(CMBF2D_READY_SEM)
         reader.begin_step(local_expert);
 #endif
-        reader.run_schedule(local_expert);
-        reader.run_local_phase(local_expert);
+        {
+            DeviceZoneScopedN("CMB-FABRIC");
+            reader.run_schedule(local_expert);
+        }
+        {
+            DeviceZoneScopedN("CMB-LOCAL");
+            reader.run_local_phase(local_expert);
+        }
 #if TILE
         reader.untilized.finish_expert(reader.walk);
 #endif
@@ -713,4 +742,7 @@ void kernel_main() {
     noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
+#ifdef CMBF2D_RD_VC
+    set_read_vc(1);
+#endif
 }

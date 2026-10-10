@@ -137,7 +137,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         gids=gids,
         n_global=num_routed_experts,
         act="silu",
-        pin=1,
+        pin=int(os.environ.get("FLAT_CMB_PIN", "1")),
     )
     topology = per_axis_topology(device_params["fabric_config"])[0]
 
