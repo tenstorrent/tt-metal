@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Folds TILE_CNT tiles of 32 samples per column into the running mean and M2, then packs the mean and the population
-// variance from row 0 of DEST tiles 2 and 3. WELFORD_RECIP_SIZE 0 selects the no-table form.
+// Folds rows [WELFORD_START_ROW, WELFORD_START_ROW + WELFORD_NUM_ROWS) of TILE_CNT tiles of 32 samples per column into the
+// running mean and M2, then packs the mean and the population variance from row 0 of DEST tiles 2 and 3.
+// WELFORD_RECIP_SIZE 0 selects the no-table form.
 
 #include <array>
 #include <cstdint>
@@ -57,6 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_welfords_sfpu.h"
 #include "llk_math_welfords_sfpu_params.h"
+#include "welford_reciprocal_table.h"
 
 using namespace ckernel;
 
@@ -67,13 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    for (std::uint32_t i = 0; i < WELFORD_RECIP_SIZE; ++i)
-    {
-        const float reciprocal = 1.0f / static_cast<float>(i + 1);
-        std::uint32_t bits;
-        __builtin_memcpy(&bits, &reciprocal, sizeof(bits));
-        reciprocal_lut[i] = bits;
-    }
+    fill_welford_reciprocal_table(reciprocal_lut);
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
@@ -91,16 +87,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             WELFORD_INPUT_DST_INDEX, formats.math, formats.math);
 
-        // Fold the 32 rows of the tile into the running statistics; the sample count so far is tile * 32.
-        _llk_math_welfords_sfpu_params_(
-            ckernel::sfpu::_calculate_welfords_tile_<WELFORD_RECIP_SIZE>, WELFORD_INPUT_DST_INDEX, tile * 32, reciprocal_lut);
+        // Fold the selected rows of the tile into the running statistics; the sample count so far is tile * WELFORD_NUM_ROWS.
+        if constexpr (WELFORD_NUM_ROWS == TILE_R_DIM)
+        {
+            _llk_math_welfords_sfpu_params_(
+                ckernel::sfpu::_calculate_welfords_tile_<WELFORD_RECIP_SIZE>, WELFORD_INPUT_DST_INDEX, tile * TILE_R_DIM, reciprocal_lut);
+        }
+        else
+        {
+            _llk_math_welfords_sfpu_params_(
+                ckernel::sfpu::_calculate_welfords_partial_tile_<WELFORD_RECIP_SIZE>,
+                WELFORD_INPUT_DST_INDEX,
+                tile * WELFORD_NUM_ROWS,
+                WELFORD_START_ROW,
+                WELFORD_NUM_ROWS,
+                reciprocal_lut);
+        }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_store_mean_var_to_dst_row_<WELFORD_RECIP_SIZE>, WELFORD_MEAN_DST_INDEX, params.TILE_CNT * 32 - 1, reciprocal_lut);
+        ckernel::sfpu::_store_mean_var_to_dst_row_<WELFORD_RECIP_SIZE>, WELFORD_MEAN_DST_INDEX, params.TILE_CNT * WELFORD_NUM_ROWS - 1, reciprocal_lut);
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

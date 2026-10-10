@@ -82,9 +82,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_welfords_sfpu.h"
 #include "llk_math_welfords_sfpu_params.h"
+#include "welford_reciprocal_table.h"
 
 using namespace ckernel;
 
+static_assert(WELFORD_RECIP_SIZE == 0 || WELFORD_RECIP_SIZE >= 8 * TILE_R_DIM, "the table must cover the eight tiles of counts the loop cycles through");
 static std::array<std::uint32_t, WELFORD_RECIP_SIZE> reciprocal_lut;
 
 template <bool COPY>
@@ -96,19 +98,13 @@ inline void welford_tile(std::uint32_t tile)
             WELFORD_INPUT_DST_INDEX, formats.math, formats.math);
     }
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_calculate_welfords_tile_<WELFORD_RECIP_SIZE>, WELFORD_INPUT_DST_INDEX, (tile & 7) * 32, reciprocal_lut);
+        ckernel::sfpu::_calculate_welfords_tile_<WELFORD_RECIP_SIZE>, WELFORD_INPUT_DST_INDEX, (tile & 7) * TILE_R_DIM, reciprocal_lut);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     // The table is host work in the layernorm kernels, so it is filled outside the INIT marker.
-    for (std::uint32_t i = 0; i < WELFORD_RECIP_SIZE; ++i)
-    {
-        const float reciprocal = 1.0f / static_cast<float>(i + 1);
-        std::uint32_t bits;
-        __builtin_memcpy(&bits, &reciprocal, sizeof(bits));
-        reciprocal_lut[i] = bits;
-    }
+    fill_welford_reciprocal_table(reciprocal_lut);
     {
         START_PERF_MEASURE("INIT")
 

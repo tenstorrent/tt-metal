@@ -21,6 +21,8 @@ from helpers.test_variant_parameters import (
     WELFORD_RECIP_SIZE,
 )
 
+INPUT_DIMENSIONS = [128, 64]  # tile_cnt: 8
+
 
 def _dest_acc_modes(formats):
     # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
@@ -37,14 +39,10 @@ def _dest_acc_modes(formats):
     ],
     dest_acc=lambda formats: _dest_acc_modes(formats),
     recip_size=[256, 0],
-    loop_factor=[16],  # amortise profiler overhead
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_sfpu_welford(
-    perf_report, formats, dest_acc, recip_size, loop_factor, input_dimensions
-):
+def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size):
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        INPUT_DIMENSIONS, INPUT_DIMENSIONS, face_r_dim=16, num_faces=4
     )
 
     configuration = PerfConfig(
@@ -61,7 +59,7 @@ def test_perf_sfpu_welford(
             APPROX_MODE(ApproximationMode.No),
             WELFORD_RECIP_SIZE(recip_size),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
+            LOOP_FACTOR(16),  # amortise profiler overhead
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),

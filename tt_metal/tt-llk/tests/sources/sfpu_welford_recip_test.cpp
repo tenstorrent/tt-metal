@@ -49,6 +49,8 @@ using namespace ckernel;
 
 // Slab offsets of a 4-row group: even and odd columns of the left face, then of the right face.
 static constexpr std::uint32_t SLAB_OFFSET[4] = {0, 2, 16, 18};
+// Four rows by eight columns each, so 32 slabs fill a tile.
+static constexpr std::uint32_t SLABS_PER_TILE = 32;
 
 static const std::array<std::uint32_t, 0> no_lut {};
 
@@ -70,15 +72,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Welford init: the SFPU configuration and ADDR_MOD_7.
     _llk_math_welfords_sfpu_init_();
 
-    std::uint32_t idx = WELFORD_RECIP_BASE;
+    std::uint32_t idx = params.WELFORD_RECIP_BASE;
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
         _llk_math_eltwise_sfpu_start_(RECIP_DST_INDEX);
-        for (std::uint32_t slab = 0; slab < 32; ++slab)
+        for (std::uint32_t slab = 0; slab < SLABS_PER_TILE; ++slab)
         {
             // Slab s: face pair s / 16, 4-row group (s / 4) % 4, column half and face s % 4.
-            const std::uint32_t offset = 32 * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
+            const std::uint32_t offset = 2 * FACE_R_DIM * (slab >> 4) + 4 * ((slab >> 2) & 3) + SLAB_OFFSET[slab & 3];
             _load_recip_of_idx_<0>(idx, no_lut);
             TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, RECIP_STORE_ADDR_MOD, offset);
             ++idx;
