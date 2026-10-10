@@ -10,9 +10,7 @@ hood, so callers hold one `completion_channel` and never branch:
     channel = connect_layer_completion_channel(timeout_s)
     drain_layer_completions(channel, expected_layers)   # NUM_LAYERS per chunk
 
-  Both protocols share the ONE scheduler-facing shm name
-  (/tt_prefill_layer_acks_<service_id>); the protocol decides the segment's
-  layout:
+  Each protocol has its own scheduler-facing segment (scheduler_shm_name):
   protocol 1 (default): a counter channel — a bare count; the consumer
       correlates ticks with its own in-order chunk FIFO.
   protocol 2: a structured completion ring — self-describing messages
@@ -268,13 +266,20 @@ class LayerCompletionDrainer:
 # ---------------------------------------------------------------------------
 
 
+def scheduler_shm_name(service_id: str, protocol: int) -> str:
+    """The scheduler-facing segment for a protocol. Distinct per protocol: the v1 counter channel
+    validates nothing on attach, so sharing one name would let a v1 consumer corrupt a v2 ring."""
+    if protocol == 2:
+        return f"/tt_prefill_layer_completions_{service_id}"
+    return f"/tt_prefill_layer_acks_{service_id}"
+
+
 def _connect_layer_ack_channel(timeout_s: int):
-    """v1: attach (consumer side) to the scheduler-facing counter channel
-    (/tt_prefill_layer_acks_<service_id>). None if unavailable."""
+    """v1: attach (consumer side) to the scheduler-facing counter channel. None if unavailable."""
     import ttnn
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    shm_name = scheduler_shm_name(service_id, 1)
     try:
         channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
     except Exception as e:
@@ -285,12 +290,11 @@ def _connect_layer_ack_channel(timeout_s: int):
 
 
 def _connect_layer_completion_ring(timeout_s: int):
-    """v2: attach (consumer side) to the master router's structured completion ring
-    (/tt_prefill_layer_acks_<service_id> — one name for both protocols). None if unavailable."""
+    """v2: attach (consumer side) to the master router's structured completion ring. None if unavailable."""
     from ttnn._experimental.layer_completion import LayerCompletionQueueV2
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    shm_name = scheduler_shm_name(service_id, 2)
     try:
         ring = LayerCompletionQueueV2.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
     except Exception as e:

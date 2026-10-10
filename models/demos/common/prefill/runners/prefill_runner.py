@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.layer_completion_drainer import current_protocol
+from models.demos.common.prefill.runners.layer_completion_drainer import current_protocol, scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_sink import (
     build_layer_completion_sink,
     build_layer_completion_sink_v2,
@@ -159,14 +159,7 @@ def _handle_sigterm(signum, frame):
 # The sink implementations (polymorphic LayerCompletionSink: v1 count protocol and v2 structured
 # protocol) and the shared full-ring backpressure policy live in layer_completion_sink.py.
 
-# Completion protocol (issue #54632), selected once per job — never mixed within a run. Both
-# protocols use the SAME scheduler-facing shm name (/tt_prefill_layer_acks_<service_id>); the
-# protocol decides what the master router creates there:
-#   1 (default): a counter channel — the master reorders by seq and emits only a COUNT. The
-#       scheduler correlates ticks with its in-order chunk FIFO (per-request HoL blocking).
-#   2: a structured ring — every completion is self-describing (request/slot/position range/layer
-#       range); the master forwards as-arrived (no HoL). See layer_completion_sink.py.
-# Parsed and validated by the drainer, so the runner and the consumer cannot disagree.
+# Completion protocol (1: counted, 2: structured; see layer_completion_message.hpp), one per job.
 LAYER_COMPLETION_PROTOCOL = current_protocol()
 
 
@@ -700,7 +693,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         ttnn.distributed_context_barrier()
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    ack_shm_name = scheduler_shm_name(service_id, LAYER_COMPLETION_PROTOCOL)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     router = None
     d2h_service = None
@@ -724,7 +717,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     ring_shm_name = f"{ring_base}_{rank}"
     _unlink_stale_shm(ring_shm_name)
     if rank == master_rank:
-        _unlink_stale_shm(ack_shm_name)
+        for protocol in (1, 2):
+            _unlink_stale_shm(scheduler_shm_name(service_id, protocol))
     router = LayerCompletionRouter(
         rank=rank,
         world_size=num_ranks,

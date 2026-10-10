@@ -472,7 +472,7 @@ Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear sta
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
-rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /tmp/migration_done.sentinel*
+rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /dev/shm/tt_prefill_layer_completions_* /tmp/migration_done.sentinel*
 ```
 
 ```bash

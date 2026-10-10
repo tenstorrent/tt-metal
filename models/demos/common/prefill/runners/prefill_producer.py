@@ -67,6 +67,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     sd("PREFILL_TP", transport.get("tp"))
     sd("PREFILL_H2D_SERVICE_ID", transport.get("h2d_service_id"))
     sd("PREFILL_H2D_CONNECT_TIMEOUT", transport.get("connect_timeout_s"))
+    sd("PREFILL_LAYER_COMPLETION_PROTOCOL", transport.get("layer_completion_protocol"))
 
     workload = manifest.get("workload") or {}
     sd("PREFILL_NUM_USERS", workload.get("num_users"))

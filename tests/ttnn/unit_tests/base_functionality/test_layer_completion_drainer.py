@@ -17,6 +17,7 @@ from models.demos.common.prefill.runners.layer_completion_drainer import (
     Completion,
     LayerCompletionDrainer,
     current_protocol,
+    scheduler_shm_name,
 )
 
 NUM_LAYERS = 4  # small model for tests
@@ -226,3 +227,10 @@ def test_drain_layer_completions_none_channel_is_noop(monkeypatch):
 
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
     assert lcd.drain_layer_completions(None, NUM_LAYERS, timeout_s=1) == 0
+
+
+def test_scheduler_segment_names_are_protocol_specific():
+    """The v1 counter channel validates nothing on attach, so the two protocols must never share a name."""
+    assert scheduler_shm_name("svc", 1) == "/tt_prefill_layer_acks_svc"  # frozen: existing v1 consumers
+    assert scheduler_shm_name("svc", 2) != scheduler_shm_name("svc", 1)
+    assert scheduler_shm_name("svc", 2).startswith("/") and "/" not in scheduler_shm_name("svc", 2)[1:]

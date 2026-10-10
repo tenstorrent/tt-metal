@@ -77,9 +77,9 @@ struct LayerCompletionRouterConfig {
     int master_rank = 0;
     std::string ring_shm_name;
     LayerCompletionProtocol protocol = LayerCompletionProtocol::kCountOnlyV1;
-    // Master-only: name of the scheduler-facing shm segment. ONE name for both protocols — the
-    // protocol decides what the master creates there (v1: InterProcessCounterChannel to inject
-    // into; v2: structured completion ring to forward into), i.e. same name, different layout/size.
+    // Master-only: the scheduler-facing segment this router creates (v1: InterProcessCounterChannel,
+    // v2: LayerCompletionQueueV2). Give each protocol its own name: the counter channel does not
+    // validate what it attaches to.
     std::string scheduler_shm_name;
     int poll_idle_us = 100;
     // Master-only safety net: max time to wait at teardown for outstanding subordinate sentinels
