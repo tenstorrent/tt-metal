@@ -109,7 +109,7 @@ def _build_pow_zero_base(formats, base):
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
 
     configuration = TestConfig(
-        "sources/sfpu_binary_pow_zero_base_test.cpp",
+        "sources/sfpu_binary_pow_scalar_base_test.cpp",
         formats,
         templates=[
             generate_input_dim([32, 32], [32, 32]),

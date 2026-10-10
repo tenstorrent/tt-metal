@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Zero-base coverage for _sfpu_binary_power_.
+// Drives _sfpu_binary_power_ for test_sfpu_binary_pow_zero_base.py (zero bases) and
+// test_sfpu_binary_pow_fp32.py (fp32 accuracy, huge exponents, underflow).
 //
 // Driven through calculate_rpow rather than calculate_sfpu_binary_pow because rpow takes its
-// base as a scalar and its exponent from Dest. SFPU_UNARY_SCALAR pins the base at +-0.0 and
-// the input tile carries the exponent classes. Both entry points call _sfpu_binary_power_<is_fp32_dest_acc_en>.
+// base as a scalar and its exponent from Dest. SFPU_UNARY_SCALAR pins the base (+-0.0 in the
+// zero-base test) and the input tile carries the exponents. Both entry points call _sfpu_binary_power_<is_fp32_dest_acc_en>.
 //
 // Note: MathOperation.SfpuElwpow routes to BinaryOp::POW which is a separate implementation in ckernel_sfpu_binary.h
 // Also, sfpu_operations.h hardcodes rpow's base to 2.0f.
@@ -69,8 +70,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // The init sfpu_operations.h routes rpow to: it primes vConstFloatPrgm0/1/2, which the
-    // log2/exp2 pair in _sfpu_binary_power_ reads.
+    // sfpu_operations.h uses this init for rpow. It programs vConstFloatPrgm0/1, which only the
+    // bf16 body of _sfpu_binary_power_ reads; the fp32 body does not use them.
     llk_math_eltwise_unary_sfpu_init<SfpuType::rpow>(sfpu::sfpu_binary_pow_init<APPROX_MODE>);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
