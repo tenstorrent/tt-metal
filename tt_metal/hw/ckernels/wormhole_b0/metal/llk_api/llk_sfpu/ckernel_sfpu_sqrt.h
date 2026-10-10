@@ -10,6 +10,8 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
+#include "sfpu/dispatch.h"
+#include "tensor_shape.h"
 
 using namespace sfpi;
 
@@ -134,20 +136,6 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    int ITERATIONS = 8,
-    bool fp32_dest_acc_en,
-    bool FAST_APPROX,
-    bool legacy_compat = false>
-inline void calculate_sqrt() {
-    if constexpr (legacy_compat) {
-        _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);
-    } else {
-        _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
-    }
-}
-
 template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 void sqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -162,6 +150,37 @@ void sqrt_init() {
         }
     }
 }
+
+/// @ref UnaryDispatch op: tile = sqrt(tile).
+struct Sqrt : llk::sfpu::SfpuUnary {
+    static constexpr llk::sfpu::PaddingAgnostic padding_agnostic() { return llk::sfpu::PaddingAgnostic::Yes; }
+
+    struct Init : llk::sfpu::UnaryInit<Sqrt> {
+        /// Programs the constants _calculate_sqrt_body_ reads.
+        template <bool APPROXIMATION_MODE>
+        void run() const {
+            sqrt_init<APPROXIMATION_MODE>();
+        }
+    };
+
+    template <const TensorShape& SHAPE, llk::sfpu::PaddingAgnostic PADDING>
+    struct Execute : llk::sfpu::UnaryExecute<Sqrt> {
+        template <bool APPROXIMATION_MODE, bool fp32_dest_acc_en, bool FAST_APPROX>
+        void run() const {
+            llk::sfpu::unary<PADDING>(
+                llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->output),
+                llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->input),
+                [](const sfpi::vFloat value) {
+                    sfpi::vFloat result =
+                        _calculate_sqrt_body_<APPROXIMATION_MODE, false /* RECIPROCAL */, FAST_APPROX>(value);
+                    if constexpr (!fp32_dest_acc_en) {
+                        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+                    }
+                    return result;
+                });
+        }
+    };
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

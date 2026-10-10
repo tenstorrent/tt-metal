@@ -626,7 +626,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(sqrt_init<APPROX_MODE>);
+        llk::sfpu::UnaryDispatch<ckernel::sfpu::Sqrt>::init().run<APPROX_MODE>();
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
@@ -1079,7 +1079,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt, (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE), dst_index, vector_mode);
+        // UnaryDispatch covers the whole tile, which is what every caller of this helper asks for.
+        static_assert(ITERATIONS == 32, "sqrt runs through UnaryDispatch, which covers the whole tile");
+        LLK_ASSERT(vector_mode == VectorMode::None, "sqrt runs through UnaryDispatch, which covers the whole tile");
+        llk::sfpu::UnaryDispatch<ckernel::sfpu::Sqrt>::execute<DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(dst_index, dst_index)
+            .template run<APPROX_MODE, is_fp32_dest_acc_en, FAST_MODE>();
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
