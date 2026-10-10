@@ -96,13 +96,43 @@ def body():
 <tr><td><code>zone_reserve</code> +1 nop</td><td class="n">48</td><td class="n">14</td><td class="n">16.9%</td></tr>
 <tr><td>Any of the three</td><td class="n">95</td><td class="n">–</td><td class="n">–</td></tr></table></div>
 <p>The values jump between fixed states. Example: perf_reduce L1_CONGESTION[PACK] (Bfp8_b → Float16) goes from 83,095 to exactly 72,856 with the code move and with the release gap. None of the five commits addresses this. In these run types the threads really run, so the cure the isolate run types got (keep the idle threads quiet) does not apply.</p>
-<p><b>Options:</b> (a) accept and document it for L1_CONGESTION, which measures contention by design; (b) for L1_TO_L1, run each case at two or three start offsets and report each state; (c) a periodic packer resync (the REPRO_PACK_RESYNC proof in WH-01). A resync at the loop start only does not work: the trigger comes in tile 1, after it (WH-03). A resync every N tiles removed the effect in PACK_ISOLATE matmul, but it costs +1.8% to +6% at N = 32 and +57% at N = 1, and it was never tested on L1_CONGESTION or L1_TO_L1.</p></section>
+<p><b>Options:</b> (a) accept and document it for L1_CONGESTION, which measures contention by design; (b) for L1_TO_L1, run each case at two or three start offsets and report each state; (c) a periodic packer resync. Section 7 tests (c).</p></section>
+
+<section><h2><span class="n">7</span>Does a packer resync fix it? (10 October)</h2>
+<p><b>Test.</b> Switch <code>REPRO_PACK_RESYNC=N</code> (commit 15d74d27621 on <code>nstojictt/p58v2-versim</code>): every N pack calls, the pack thread waits until all four packers are idle (<code>STALLWAIT STALL_PACK</code>), so they start the next call together. It is in <code>_llk_pack_</code>, <code>_llk_pack_rows_</code>, <code>_llk_pack_untilize_</code> and <code>_llk_pack_fast_tilize_block_</code>. Card bgd-lab-17, the same 449 cases, L1_TO_L1 and L1_CONGESTION only (772 values). The rerun is exact (0 of 772 change), and the values are the same as on bgd-lab-08, to the cycle.</p>
+<div class="tw"><table><tr><th>Values that move &gt; 2% (of 772)</th><th class="n">No resync</th><th class="n">Resync every 32 calls</th><th class="n">Resync every call</th></tr>
+<tr><td>All code +4 B</td><td class="n">14 (max 12.3%)</td><td class="n">12 (max 5.5%)</td><td class="n">3 (max 4.4%)</td></tr>
+<tr><td>Release gap +1 nop</td><td class="n">16 (max 12.3%)</td><td class="n">9 (max 7.0%)</td><td class="n">15 (max 15.7%)</td></tr>
+<tr><td><code>zone_reserve</code> +1 nop</td><td class="n">14 (max 16.9%)</td><td class="n">3 (max 6.9%)</td><td class="n">13 (max 10.0%)</td></tr>
+<tr><td>Any of the three</td><td class="n">29</td><td class="n">19</td><td class="n">28</td></tr>
+<tr><td>… of them L1_TO_L1</td><td class="n">7</td><td class="n">6</td><td class="n"><b>0</b></td></tr></table></div>
+<div class="tw"><table><tr><th>Cost: change against no resync</th><th class="n">Every 32 calls</th><th class="n">Every call</th></tr>
+<tr><td>L1_TO_L1 (296): median / largest / values &gt; 2%</td><td class="n">0.0% / +11.1% / 25</td><td class="n">+0.8% / +41.6% / 126</td></tr>
+<tr><td>L1_CONGESTION[PACK] (238)</td><td class="n">+1.3% / +23.4% / 127</td><td class="n">+26.3% / +115.6% / 237</td></tr>
+<tr><td>L1_CONGESTION[UNPACK] (238)</td><td class="n">0.0% / +8.6% / 2</td><td class="n">0.0% / +5.1% / 32</td></tr></table></div>
+<p><b>Answer: no, a resync does not get everything under 2%.</b> Every 32 calls removes a third of the moves. Every call removes all L1_TO_L1 moves, but it makes 126 L1_TO_L1 values more than 2% slower (up to 41.6%), and L1_CONGESTION[PACK] gets 26% slower in the median. L1_CONGESTION still moves in all three settings.</p>
+<h3>Why: two different mechanisms, seen in Versim</h3>
+<p>Versim on two of the largest movers, the same ELF as the card. Every Versim value below is the same as the card value, to the cycle.</p>
+<div class="tw"><table><tr><th>L1_CONGESTION[PACK], cycles</th><th class="n">Base</th><th class="n">Release gap +1</th><th class="n">Resync every 32</th></tr>
+<tr><td>reduce (Bfp8_b → Float16, ReduceScalar Sum)</td><td class="n">83,095</td><td class="n">72,856</td><td class="n">69,821</td></tr>
+<tr><td>eltwise_binary (Float16 → Float16_b, Elwmul LoFi)</td><td class="n">17,320</td><td class="n">18,672</td><td class="n">18,125</td></tr></table></div>
+<div class="tw"><table><tr><th>Per tile, steady state (Versim)</th><th class="n">Tile lengths</th><th class="n">Packer 1–3 DEST refusals</th><th class="n">Packer 1 waits for L1</th></tr>
+<tr><td>reduce, base</td><td class="n">32 / 49 alternating</td><td class="n">2.0 / 4.0 / 7.0</td><td class="n">0.8</td></tr>
+<tr><td>reduce, release gap +1</td><td class="n">32 / 35, some 49</td><td class="n">1.3 / 1.8 / 2.7</td><td class="n">1.1</td></tr>
+<tr><td>reduce, resync every 32</td><td class="n">32 / 35</td><td class="n">1.1 / 1.2 / 1.3</td><td class="n">1.0</td></tr>
+<tr><td>eltwise_binary, base</td><td class="n">72 / 62 alternating</td><td class="n">5.5 / 22.3 / 29.4</td><td class="n">35.1</td></tr>
+<tr><td>eltwise_binary, release gap +1</td><td class="n">67 / 79 alternating</td><td class="n">5.0 / 15.2 / 22.5</td><td class="n">40.5</td></tr>
+<tr><td>eltwise_binary, resync every 32</td><td class="n">62–81, no fixed pattern</td><td class="n">4.8 / 15.7 / 25.7</td><td class="n">37.6</td></tr></table></div>
+<ol>
+<li><b>reduce: the packer rhythm (WH-01).</b> The slow state has a slow tile every second tile, with DEST refusals. The resync removes the refusals and the slow tile. Card: with the resync every 32 calls, the release gap moves this value by 0.8% (it was 12.3%).</li>
+<li><b>eltwise_binary: packer 1 against the L1 port.</b> Packer 1 waits 35–40 cycles per tile for L1. Its port is shared with unpacker 1 and the scrubber (WH-02), and in L1_CONGESTION the unpacker keeps reading L1. The start skew sets the phase between the unpacker's reads and packer 1's writes, and that phase sets the tile length. The tile length follows packer 1's L1 wait: in the resync run, 62-cycle tiles wait 31 cycles and 81-cycle tiles wait 46. A packer resync does not move the unpacker, so it cannot fix this phase.</li></ol>
+<p><b>So:</b> a resync can fix the WH-01 cases at a cost, but not the L1-port cases. For L1_CONGESTION, option (a) (document that it has two or more states) is the realistic choice. For L1_TO_L1, (b) (measure at more than one start offset) costs less than a resync on every call.</p></section>
 
 <section><h2>How to reproduce</h2><ul>
 <li>Branch <code>nstojictt/p58v2-versim</code> = #58068 head + Versim harness + switches: <code>LLK_NO_QUIET</code>, <code>LLK_RELEASE_GAP=N</code>, <code>LLK_SERVE_PRE=N</code>, <code>LLK_BRISC_FN_NOPS=N</code>, <code>LLK_FN_NOPS=N</code>, <code>LLK_FN_NOPS_THREADS</code> + <code>LLK_THREAD_FN_NOPS</code>, <code>LLK_ZONE_RESERVE_NOPS=N</code>, <code>LLK_NO_PADS</code>, <code>LLK_FORCE_PADS</code>, <code>LLK_ISO_SETTLE</code>, <code>LLK_TRISC_BP_OFF</code>.</li>
-<li>Card results (CSV and logs): <code>/proj_sw/user_dev/nstojic/v2c/</code>. Versim (logs, CSV, signals, VCD): <code>/proj_sw/user_dev/nstojic/versim-runs/q0 q1 q2 m0 m1</code>.</li>
+<li>Card results (CSV and logs): <code>/proj_sw/user_dev/nstojic/v2c/</code>. Versim (logs, CSV, signals, VCD): <code>/proj_sw/user_dev/nstojic/versim-runs/q0 q1 q2 m0 m1</code> (bgd). Section 7: card <code>/proj_sw/user_dev/nstojic/v2r/</code> (bgd); Versim <code>/proj_sw/user_dev/nstojic/versim-runs/ye_* yr_*</code> (yyz).</li>
 <li>Tests: <code>perf_math_matmul.py::test_perf_math_matmul[MathFidelity.HiFi2-matmul_config12601-5-1]</code> (PACK_ISOLATE), <code>[MathFidelity.LoFi-matmul_config936-0-1]</code> (MATH_ISOLATE).</li></ul></section>
-<p class="small">Status 10 October 2026. #58068 head {HEAD[:11]}. Card bgd-lab-08 (Wormhole n150), Versim versim-wormhole-b0.</p>
+<p class="small">Status 10 October 2026 (section 7: 10 October afternoon, card bgd-lab-17, Versim on yyzeon09). #58068 head {HEAD[:11]}. Card bgd-lab-08 (Wormhole n150), Versim versim-wormhole-b0.</p>
 </div>
 """
 
