@@ -10,7 +10,10 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+// Whether BF16 DEST runs the generated softsign kernel as one call over the whole tile.
+inline constexpr bool softsign_bf16_whole_tile = false;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_softsign() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -22,7 +25,7 @@ inline void calculate_softsign() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void init_softsign() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
