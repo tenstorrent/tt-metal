@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #endif
+#if defined(__linux__)
+#include <sched.h>
+#endif
 // Include LSan interface only when present
 // __has_feature(leak_sanitizer) / __has_feature(address_sanitizer) for clang
 // compile-time predicates; __SANITIZE_ADDRESS__ / __SANITIZE_LEAK__ for gcc.
@@ -27,7 +30,24 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+inline size_t get_executor_thread_count() {
+#if defined(__linux__)
+    cpu_set_t allowed_cpus;
+    CPU_ZERO(&allowed_cpus);
+    if (sched_getaffinity(0, sizeof(allowed_cpus), &allowed_cpus) == 0) {
+        const int allowed_cpu_count = CPU_COUNT(&allowed_cpus);
+        if (allowed_cpu_count > 0) {
+            return static_cast<size_t>(allowed_cpu_count);
+        }
+    }
+#endif
+    const size_t hardware_thread_count = std::thread::hardware_concurrency();
+    return hardware_thread_count > 0 ? hardware_thread_count : 1;
+}
+
+// hardware_concurrency() can ignore Linux CPU affinity. Respect the effective
+// CPU set to avoid oversubscribing restricted processes.
+inline static const size_t EXECUTOR_NTHREADS = get_executor_thread_count();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
