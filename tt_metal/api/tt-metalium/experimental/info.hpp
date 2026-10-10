@@ -21,8 +21,9 @@
  * every object that can answer a query (currently MeshDevice), so a property has one name and one meaning everywhere.
  *
  * @code
- * namespace exp = tt::tt_metal::experimental;
- * uint32_t alignment = exp::mesh_device::get_info<exp::info::l1_alignment>(*mesh_device);
+ * namespace info = tt::tt_metal::experimental::info;
+ * using tt::tt_metal::experimental::mesh_device::get_info;
+ * uint32_t alignment = get_info<info::l1_alignment>(*mesh_device);
  * @endcode
  *
  * To add a property, declare it with METALIUM_INFO here and implement it for each object that supports it.
