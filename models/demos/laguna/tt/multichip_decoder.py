@@ -321,6 +321,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._sh1 = self._moe1_kernels and _parse_binary_env("TT_LAGUNA_SH1", True)
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
+        self._cp32_short = _parse_binary_env("TT_LAGUNA_CP32_SHORT", True)  # also 2..31 rows (16-row DFlash verify)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
         self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
@@ -1315,10 +1316,11 @@ class MultichipDecoder(OptimizedDecoder):
             x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
             glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
             routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
-        elif T == TILE and not tile_sparse and getattr(self, "_cp32", False):
-            # 32 tokens: generic_ops over the active experts that read whole weight columns (colpage.py) -- gate|up
-            # matmul + SwiGLU + per-token routing weight, then down matmul + expert sum -- instead of two sparse
-            # matmuls reading single tiles, the SwiGLU and the expert-sum ops
+        elif (T == TILE or (1 < T < TILE and self._cp32_short)) and not tile_sparse and getattr(self, "_cp32", False):
+            # up to 32 tokens (one row tile; rows past T only feed discarded output rows): generic_ops over the
+            # active experts that read whole weight columns (colpage.py) -- gate|up matmul + SwiGLU + per-token
+            # routing weight, then down matmul + expert sum -- instead of two sparse matmuls reading single tiles,
+            # the SwiGLU and the expert-sum ops. Also the 16-row DFlash verify (it fell to the sparse path).
             x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
             wv = ttnn.reshape(dense_local, (1, T, LE))
             wv = ttnn.permute(wv, (0, 2, 1))

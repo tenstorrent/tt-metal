@@ -178,6 +178,9 @@ class LagunaForCausalLM:
     # TT_LAGUNA_DFLASH_TRACE=0 keeps the eager 16-row target verify (A/B and bisection).
     _DFLASH_VERIFY_TRACE = _DFLASH_SERVING_ENABLED and os.environ.get("TT_LAGUNA_DFLASH_TRACE", "1") == "1"
     _DFLASH_VERIFY_ROWS = 16
+    # traced DFlash verify picks each row's greedy token on device (logits padded to one 32-row tile, the batch-32
+    # sampler) and reads back 16 ids instead of 16 x vocab logits (~3.2 MB) + a host argmax
+    _DFLASH_DEVICE_ARGMAX = os.environ.get("TT_LAGUNA_DFLASH_DEVICE_ARGMAX", "1") == "1"
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -381,13 +384,26 @@ class LagunaForCausalLM:
             )
             self._dflash_controller = controller
             self._dflash_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
+            # draft proposal's greedy tokens picked on device (allocated before any trace capture)
+            self._dflash_draft_tok32 = self.gen._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
         except Exception:
             self.close_dflash()
             raise
 
     def _dflash_draft_argmax(self, proposal):
-        rows = self.model.logits_to_host(proposal.logits_shards).reshape(-1, int(self.vocab))
         expected = int(self._dflash_core.config.max_speculative_tokens)
+        if self._DFLASH_DEVICE_ARGMAX and getattr(self, "_dflash_draft_tok32", None) is not None:
+            # the 15 draft rows' greedy tokens on device (rows padded to one 32-row tile, the batch-32 sampler):
+            # reads 15 ids instead of 15 x vocab logits (~3 MB) + a host argmax
+            shards = proposal.logits_shards
+            n, width = int(shards.shape[-2]), int(shards.shape[-1])
+            if n != expected:
+                raise RuntimeError(f"DFlash proposal produced {n} logit rows, expected {expected}")
+            padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, width)), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
+            self.gen._greedy_sample(padded, 32, self._dflash_draft_tok32)
+            ttnn.deallocate(padded)
+            return [int(t) for t in self.gen._read_token(self._dflash_draft_tok32, n)]
+        rows = self.model.logits_to_host(proposal.logits_shards).reshape(-1, int(self.vocab))
         if int(rows.shape[0]) != expected:
             raise RuntimeError(f"DFlash proposal produced {rows.shape[0]} logit rows, expected {expected}")
         return torch.argmax(rows, dim=-1).to(torch.int32).tolist()
@@ -2746,6 +2762,8 @@ class LagunaForCausalLM:
             pt_groups=pt_groups,
             last_pt_host_groups={},
         )
+        if self._DFLASH_DEVICE_ARGMAX:
+            st["tok32"] = g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
 
         def step():
             hidden = self.model.embed_decode(ttnn.reshape(tok, (1, R)))
@@ -2760,6 +2778,10 @@ class LagunaForCausalLM:
                 enable_experimental=True,
             )
             st["logits"] = self.model.lm_head_shards_decode(hidden)
+            if self._DFLASH_DEVICE_ARGMAX:
+                # the sampler's argmax is exact only over a full 32-row tile: pad the R rows, sample, read R ids
+                padded = ttnn.pad(st["logits"], [(0, 0), (0, 0), (0, 32 - R), (0, 0)], 0.0)
+                g._greedy_sample(padded, 32, st["tok32"])
             st["aux"] = capture.hidden_states
 
         step()  # compile; no trace resident, so these allocations are safe
@@ -2903,8 +2925,11 @@ class LagunaForCausalLM:
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
-        logits = self.model.logits_to_host(st["logits"]).reshape(B, int(self.vocab))
-        greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
+        if "tok32" in st:
+            greedy = [int(t) for t in self.gen._read_token(st["tok32"], B)]
+        else:
+            logits = self.model.logits_to_host(st["logits"]).reshape(B, int(self.vocab))
+            greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
         # st["aux"] is the trace's output buffer: valid until the next replay. The controller copies the
         # committed rows into the fixed context before that.
         return greedy, DFlashTargetAuxCapture(
