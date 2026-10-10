@@ -95,3 +95,12 @@ copy mp4s as reference, ffmpeg a still, copy stills+logs to tt-project/baselines
    still, copy stills+logs to tt-project/baselines/fasth3/, keep one mp4 under /var/tmp/fasth3/t286.
 4. Cleanup: delete models/MiniMax-H3 (136G) + caches dit-h3hf/tt-metal-cache-h3hf unless #288
    needs them; remove ~/fasth3/t286 build after.
+
+## 2026-10-10 02:45 UTC (run 1243): first enqueue failed at submit, re-queued as -r2
+- t286-fill1/t10/t5 all failed before the device: broker run-bg looked for python_env under
+  WORKDIR (/var/tmp/fasth3/t286/tt-metal/python_env). No device time used, no drop.
+- Fix: specs now carry ENV=/home/smarton/fasth3/runner/env.yaml (PYTHON_ENV_DIR); run286.sh still
+  sets TT_METAL_HOME/PYTHONPATH/caches itself. Re-queued as t286-{fill1,t10,t5}-r2.
+- fill1-r2 submitted as blx03 broker job 794 (02:44:54 UTC).
+## Next step
+Wait on g14blx03:/var/tmp/fasth3/runner/done/t286-t5-r2.done, then steps 3-4 above.

@@ -1,6 +1,7 @@
-ID=t286-t10
+ID=t286-t10-r2
 TASK=t286
 WORKDIR=/var/tmp/fasth3/t286
+ENV=/home/smarton/fasth3/runner/env.yaml
 CONFIG=h3turbo-10s
 TIMEOUT=600
 CMD=env T286_ROOT_MAX=85 T286_W=/home/smarton/fasth3/t286 T286_VENV=/home/smarton/fasth3/tt-metal/python_env bash /var/tmp/fasth3/t286/run286.sh t10 10
