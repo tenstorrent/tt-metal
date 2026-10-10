@@ -167,6 +167,7 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
     // keep H_16; MM2 reads only rows 0..7, so the residue is harmless.
     TTI_MOVD2B(0, 0, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 16);
     TTI_MOVD2B(0, 4, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 20);
+    // MOVD2B.md: the FPU takes no other instruction for three cycles after a MOVD2B, so MM2 waits without a drain.
 
     // MM2: dst.face0[0..7] = srcB * srcA = (H_16 X_pad)[0..7] * H_16
     //                = H_128 x reshape (8, 16). srcA = H_16 (bank 1),
