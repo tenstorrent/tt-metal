@@ -69,7 +69,10 @@ namespace detail {
 struct KernelMeta;
 // Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
 // Note: device is nullable
-std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
+[[deprecated(
+    "Use experimental::collect_kernel_meta from <tt-metalium/experimental/op_profiler_support.hpp> instead. This "
+    "overload will be removed after 2026-11-09.")]]
+std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, IDevice* device);
 }; //namespace detail
 
 }  // namespace tt::tt_metal

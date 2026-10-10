@@ -61,19 +61,21 @@ After instrumenting your kernels, the profiling data is automatically collected 
 
 .. code-block:: c++
 
-    // Run the program
-    tt::tt_metal::EnqueueProgram(cq, program, false);
-    tt::tt_metal::Finish(cq);
+    // Run the workload
+    auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(/*device_id=*/0);
+    auto& cq = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(cq);
 
     // Also reads profiler results from the device
-    tt::tt_metal::CloseDevice(device);
+    mesh_device->close();
 
-If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call ``ReadDeviceProfilerResults``:
+If for any reason you need to manually trigger the reading of profiling results (for example, more than 1000 kernel runs before device close), you can call ``ReadMeshDeviceProfilerResults``:
 
 .. code-block:: c++
 
     // Manually read profiler results from the device (if needed)
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
 
 This call should be placed after you have finished running the program of interest. It signals the device to sync the profiling results, which can then be viewed in the Tracy client or analyzed from the generated CSV file.
 
@@ -82,7 +84,7 @@ Example Walkthrough: ``test_full_buffer``
 
 The ``full_buffer`` programming example, located in ``tt_metal/programming_examples/profiler/test_full_buffer``, demonstrates how to use the device profiler and will be used throughout this guide to illustrate the concepts.
 
-The host code in ``test_full_buffer.cpp`` sets up and runs a simple kernel, defines compile-time arguments like ``LOOP_COUNT``, and calls ``ReadDeviceProfilerResults`` to collect the data.
+The host code in ``test_full_buffer.cpp`` sets up and runs a simple kernel, defines compile-time arguments like ``LOOP_COUNT``, and calls ``ReadMeshDeviceProfilerResults`` to collect the data.
 
 The kernel code in ``kernels/full_buffer.cpp`` uses ``DeviceZoneScopedN`` to profile a loop of ``nop`` instructions:
 

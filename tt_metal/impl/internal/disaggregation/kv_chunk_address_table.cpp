@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -23,9 +24,9 @@ namespace {
 tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto chip_id = cp.get_physical_chip_id_from_fabric_node_id(node_id);
-    auto* dev = tt::tt_metal::detail::GetActiveDevice(chip_id);
-    TT_FATAL(dev != nullptr, "GetActiveDevice({}) returned null for {}", chip_id, node_id);
-    return dev;
+    const auto& device_manager = tt::tt_metal::MetalContext::instance().device_manager();
+    TT_FATAL(device_manager->is_device_active(chip_id), "Device {} for {} is not active", chip_id, node_id);
+    return device_manager->get_active_device(chip_id);
 }
 
 }  // namespace
