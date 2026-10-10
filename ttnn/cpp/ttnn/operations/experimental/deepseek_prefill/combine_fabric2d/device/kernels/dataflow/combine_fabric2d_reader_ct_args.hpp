@@ -80,10 +80,10 @@ struct ReaderCtArgs {
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
         const op::ReaderUntilizers& untilizers) :
-        num_l1_slots(NUM_L1_SLOTS),
+        num_l1_slots(::cmbf2d::num_l1_slots()),
         token_size_bytes(op::token_size_bytes(tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
-        batch(BATCH),
+        batch(::cmbf2d::batch_slots()),
         ring_addr(l1.ring),
         filled_slot(plan.ring_filled_slot),
         freed_slot(plan.ring_freed_slot),

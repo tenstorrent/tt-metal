@@ -51,6 +51,17 @@
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
+#ifdef CMBF2D_WAIT_STATS
+// (perf probe) wall-clock cycles spent in each wait, printed once at the end (DPRINT)
+#include "api/debug/dprint.h"
+inline uint32_t st_clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+#define ST_BEGIN(v) const uint32_t st_t0_##v = st_clk();
+#define ST_END(v) v += st_clk() - st_t0_##v;
+#else
+#define ST_BEGIN(v)
+#define ST_END(v)
+#endif
+uint32_t st_slot = 0, st_fwd = 0, st_rbar = 0, st_gate = 0;
 #ifdef CMBF2D_FLAT_ORDER
 // The flat routed expert's dynamic schedule (built with its defines, which the host passes along): every chip's walk
 // order is rebuilt from the replicated counts.
@@ -351,7 +362,9 @@ struct Reader {
         return untilized.take(walk, p);
 #else
 #ifdef CMBF2D_READY_SEM
+        ST_BEGIN(st_gate)
         gate(p);
+        ST_END(st_gate)
 #endif
 #ifdef CMBF2D_NO_DRAM_READ  // (perf probe: payload from local L1 scratch)
         (void)p;
@@ -386,6 +399,7 @@ struct Reader {
             volatile tt_l1_ptr uint32_t* progress =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_PROGRESS_SEM));
             invalidate_l1_cache();
+            bool retired = false;
             while (true) {
                 if (*ready >= step + 1) {
                     step_ready = true;
@@ -397,6 +411,11 @@ struct Reader {
                 if ((pr >> 24) > step || ((pr >> 24) == step && (pr & (1u << c)) != 0)) {
                     return;
                 }
+                if (!retired) {  // about to spin: announce what is already read first
+                    retire_pending();
+                    flush_publish();
+                    retired = true;
+                }
                 invalidate_l1_cache();
             }
         }
@@ -405,6 +424,15 @@ struct Reader {
         if (!step_ready) {
             DeviceZoneScopedN("CMB-GATE");
 #ifdef CMBF2D_FLAT_ORDER
+            {
+                volatile tt_l1_ptr uint32_t* ready =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_READY_SEM));
+                invalidate_l1_cache();
+                if (*ready < step + 1) {  // about to spin: announce what is already read first
+                    retire_pending();
+                    flush_publish();
+                }
+            }
             ::cmbf2d::wait_for_ready(CMBF2D_READY_SEM, step + 1);  // the writers report steps in the walk's order
 #else
             const uint32_t local =
@@ -438,10 +466,78 @@ struct Reader {
 
     // Claim one ring slot, blocking until the sender frees one. Publishes anything pending FIRST: never
     // make the sender wait on slots we are holding back, which would deadlock us against each other.
+    // Read batches. A batch's reads go out on one transaction id; with CMBF2D_PIPE it is announced only after the
+    // NEXT batch has been issued, so two batches are in flight (the host halves the batch for it: at most two batches,
+    // <= num_l1_slots / 2, are ever unannounced). Metadata prefetches use their own id.
+    //
+    // A forwarded page's read (token + 16 B) lands L1 in whole 64 B granules, i.e. over the slot's entire metadata
+    // block, so its cmd / this_addr are written when the batch retires, after the data. What they say is decided at
+    // issue (the chunk's descriptor gives re-forward or final; the downstream pages are reserved in order), so the
+    // retire only needs the batch's first slot and page.
+    struct Batch {
+        uint32_t k = 0, trid = 0, first_slot = 0;
+        bool fwd = false, reforward = false;
+        uint32_t page0 = 0, chunk_end = 0;
+    };
+    static constexpr uint32_t META_TRID = 1;
+    Batch pend;
+    uint32_t next_trid = 2;
+    uint32_t take_trid() {
+        const uint32_t t = next_trid;
+        next_trid = next_trid == 2 ? 3 : 2;
+        noc_async_read_set_trid(t);
+        return t;
+    }
+    void finish(const Batch& b) {
+        ST_BEGIN(st_rbar)
+#ifdef CMBF2D_NO_TRID
+        noc_async_read_barrier();
+#else
+        // the id's outstanding count only covers requests the NIU has taken: let the read command buffer drain first
+        while (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+        }
+        noc_async_read_barrier_with_trid(b.trid);
+#endif
+        ST_END(st_rbar)
+        if (b.fwd) {
+            for (uint32_t j = 0; j < b.k; j++) {
+                volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata =
+                    slot_metadata((b.first_slot + j) % ct.num_l1_slots);
+                if (b.reforward) {
+                    const uint32_t page = b.page0 + j;
+                    metadata->cmd =
+                        (page + 1 == b.chunk_end) ? ::cmbf2d::CMD_FORWARD_END : ::cmbf2d::CMD_FORWARD;
+                    metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(page));
+                } else {
+                    // the sender takes a final write's address from final_addr, which the read brought
+                    metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
+                }
+            }
+        }
+        publish_n(b.k);
+    }
+    void retire_pending() {
+        if (pend.k != 0) {
+            const Batch b = pend;
+            pend.k = 0;
+            finish(b);
+        }
+    }
+    void push_batch(const Batch& b) {
+#ifdef CMBF2D_PIPE
+        retire_pending();
+        pend = b;
+#else
+        finish(b);
+#endif
+    }
+
     uint32_t claim_slot() {
         volatile tt_l1_ptr uint32_t* freed = ct.freed_ptr();
         invalidate_l1_cache();
         if (claimed - *freed >= ct.num_l1_slots) {
+            ST_BEGIN(st_slot)
+            retire_pending();
             flush_publish();
             while (true) {
                 invalidate_l1_cache();
@@ -449,6 +545,7 @@ struct Reader {
                     break;
                 }
             }
+            ST_END(st_slot)
         }
         return claimed++ % ct.num_l1_slots;
     }
@@ -464,12 +561,19 @@ struct Reader {
 
     // Read the metadata for pages [lo, hi) into the pads, one page read each, awaited together: pad k then
     // holds page lo + k's record.
-    void prefetch_metadata(uint32_t lo, uint32_t hi) const {
+    void prefetch_metadata(uint32_t lo, uint32_t hi) {
+        noc_async_read_set_trid(META_TRID);
         for (uint32_t p = lo; p < hi; p++) {
             noc_async_read(
                 dram.meta.get_noc_addr(p), meta_pads_addr + (p - lo) * ::cmbf2d::META_PAD_STRIDE, META_READ_BYTES);
         }
+#ifdef CMBF2D_NO_TRID
         noc_async_read_barrier();
+#else
+        while (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
+        }
+        noc_async_read_barrier_with_trid(META_TRID);
+#endif
     }
 
     // The token count of one forwarding chunk: the destination chip's tokens sitting under one of the origin
@@ -510,6 +614,7 @@ struct Reader {
         const uint64_t final_addr = dram.out.get_noc_addr(token_out_page);
         if (is_direct(dst_chip_id)) {
             metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
+            metadata->final_addr = final_addr;
             metadata->this_addr = final_addr;
         } else {
             metadata->final_addr = final_addr;
@@ -537,11 +642,13 @@ struct Reader {
             // `batch` tokens' reads in flight at a time, then one barrier and one announcement.
             for (uint32_t q = 0; q < n;) {
                 const uint32_t k = (n - q) > ct.batch ? ct.batch : (n - q);
+                Batch b;
+                b.k = k;
+                b.trid = take_trid();
                 for (uint32_t j = 0; j < k; j++) {
                     issue_token(dst_chip_id, base + pad_at(n, q + j), pad_at(n, q + j));
                 }
-                noc_async_read_barrier();  // every token of the ct.batch is in L1 before any is announced
-                publish_n(k);
+                push_batch(b);  // every token of a batch is in L1 before any is announced
                 q += k;
             }
         });
@@ -578,47 +685,45 @@ struct Reader {
     // speculative about them: `batch` pages at a time, capped by what is left of the chunk and by what
     // upstream says has arrived. An EMPTY chunk occupies no pages at all and so is simply not there.
     void do_forward_chunk(uint32_t chunk, uint32_t local_expert) {
-        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk), local_expert);
+        const ::cmbf2d::ChunkDescriptor desc = forwarding_chunk(chunk);
+        uint32_t remaining = chunk_tokens(desc, local_expert);
         if (remaining == 0) {
             return;
         }
         out_chunk_end = out_page + remaining;  // where the marker goes, should this chunk be re-forwarded
 
-        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip, expert) term),
-        // so the first page decides for the whole chunk whether this hop is the last one.
-        bool reforward = false;
-        bool decided = false;
+        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip, expert) term), so its
+        // descriptor decides for the whole chunk whether this hop is the last one, before the read lands.
+        constexpr uint32_t nbr_dg_index = ::cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, 1, ct.dispatch_group_size);
+        const bool reforward = desc.dst_dg_index != nbr_dg_index;
         while (remaining > 0) {
-            const uint32_t k = read_arrived_pages(remaining);
-            const uint32_t first_slot = claimed - k;
-            for (uint32_t j = 0; j < k; j++) {
-                volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
-                if (!decided) {
-                    reforward = (metadata->dst_chip != (uint64_t)ct.nbr_chip_id);
-                    decided = true;
-                }
-                if (reforward) {
-                    aim_at_downstream(metadata, out_page++);
-                } else {
-                    metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
-                    metadata->this_addr = metadata->final_addr;
-                }
+            Batch b;
+            b.fwd = true;
+            b.reforward = reforward;
+            b.k = read_arrived_pages(remaining, b.trid);
+            b.first_slot = claimed - b.k;
+            b.page0 = out_page;
+            b.chunk_end = out_chunk_end;
+            if (reforward) {
+                out_page += b.k;  // the downstream pages are reserved in order now, written at retire
             }
-            publish_n(k);
-            consumed += k;
-            remaining -= k;
+            consumed += b.k;
+            remaining -= b.k;
+            push_batch(b);
         }
     }
 
     // Wait for upstream to have written past `consumed`, then read as many of the chunk in progress as are
     // both available and still inside it — `remaining` is what is left of it. Returns how many slots were
     // claimed, all of which belong to the chunk.
-    uint32_t read_arrived_pages(uint32_t remaining) {
+    uint32_t read_arrived_pages(uint32_t remaining, uint32_t& trid) {
         volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
         // Do not outpace the upstream sender. It bumps this counter every fwd_bump_every pages and ALWAYS on
         // the last page of a chunk, so a chunk boundary is never left unreachable.
         invalidate_l1_cache();
         if (*fwd_arrived <= consumed) {
+            ST_BEGIN(st_fwd)
+            retire_pending();
             flush_publish();  // let the sender work while we wait on upstream
             while (true) {
                 invalidate_l1_cache();
@@ -626,6 +731,7 @@ struct Reader {
                     break;
                 }
             }
+            ST_END(st_fwd)
         }
         uint32_t k = *fwd_arrived - consumed;
         if (k > ct.batch) {
@@ -635,6 +741,7 @@ struct Reader {
             k = remaining;
         }
 
+        trid = take_trid();
         for (uint32_t j = 0; j < k; j++) {
             const uint32_t slot = claim_slot();
             // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
@@ -649,7 +756,7 @@ struct Reader {
             noc_async_read(dram.fwd.get_noc_addr(fwd_page(consumed + j)), slot_addr_of(slot), fwd_read_bytes);
 #endif
         }
-        noc_async_read_barrier();
+        
         return k;
     }
 
@@ -669,6 +776,7 @@ struct Reader {
                 do_own_assignment(entry, local_expert);
             }
         }
+        retire_pending();
         flush_publish();
     }
 
@@ -785,6 +893,9 @@ void kernel_main() {
     // command buffer's VC is fixed at init in dedicated NoC mode, so it is reprogrammed here and restored at exit.
     set_read_vc(CMBF2D_RD_VC);
 #endif
+#ifdef CMBF2D_WAIT_STATS
+    const uint32_t st_start = st_clk();
+#endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 #ifdef CMBF2D_FLAT_ORDER
@@ -822,6 +933,17 @@ void kernel_main() {
 #endif
     }
     reader.end_stream();
+#ifdef CMBF2D_WAIT_STATS
+    DPRINT(
+        "CMBST RDR s{} total {} slot {} fwd {} rbar {} gate {} consumed {}\n",
+        (uint32_t)ct.my_stream,
+        st_clk() - st_start,
+        st_slot,
+        st_fwd,
+        st_rbar,
+        st_gate,
+        reader.consumed);
+#endif
 #if TILE
     reader.untilized.reset_counters();
 #endif
@@ -836,6 +958,7 @@ void kernel_main() {
     //
     // This keeps the count right, nothing more. The upstream chip never waits for us to read a page before
     // writing that page again, so a chip far enough ahead can still overwrite pages we have not read.
+    noc_async_read_set_trid(0);  // the next program's plain reads carry ID 0
     noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();

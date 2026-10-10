@@ -215,6 +215,12 @@ writes take a VC argument. Default now VC 0 for both (`CMBF2D_RD_VC` / `CMBF2D_W
 | pin 1: Kimi bal / hot / GLM bal / hot | 1295.5 / 2198.1 / 933.0 / 1798.8 | 1222.4 / 2182.3 / 897.2 / 1763.8 |
 | pin 0: Kimi bal / GLM bal | 1221.7 / 881.3 | 1147.4 / 824.0 |
 
+**Correction (found 2026-10-10 evening):** a probe edit raising combine's reader -> sender ring from 8 to 16 slots
+(batch 4 -> 8), which the user had stopped before it ran, still landed in the file and went in with this commit. So
+every number from 6.4 on ran with 16 slots. The pin 0 rows above compare VC 1 and VC 0 both at 16 slots (VC effect
+real, -6%); the pin 1 VC 1 row is from 6.2 at 8 slots, so the pin 1 gain mixes VC and ring depth. The ring depth is
+now a probe (`CMBF2D_SLOTS`) and measured on its own in 6.11.
+
 ### 6.5 64 gate/up cores next to combine (`94f108ef9b9`)
 - `MIMO_FL_RD_SAMECOL` (planner probe): a bank's second reader in its first reader's column, so columns 1 and 7 join
   the gate/up rectangles: 64 gate/up cores on rows 1-9, but only 15 down cores.
@@ -403,6 +409,66 @@ Worked, modestly, and only where expected (hot: -1..-4%; balanced has no multi-e
 time combine reaches the pinned expert's step (it finishes last among the small ones) most of its entries are
 already out, so per-entry release only overlaps its last entry; and a reader blocks on the first unreleased page
 in its schedule order, holding up the forwarded chunks behind it.
+
+### 6.11 Combine ring depth (`CMBF2D_SLOTS`, idea 2 part 1): no effect
+Hypothesis: the reader is DRAM-latency bound with only `batch` = slots / 2 reads in flight per round trip (4 x 14 KB
+per ~3 us ~ 19 GB/s, the measured ~18.6 GB/s per link direction). 64 gu + 19 down, pin 1, progressive:
+
+| slots (batch) | combine alone Kimi bal / hot / GLM bal / hot | overlap Kimi bal / hot / GLM bal / hot |
+|---|---|---|
+| 8 (4), PR value | 508.0 / 706.1 / 370.4 / 598.7 | 1351.5 / 1705.7 / 880.7 / 1487.0 |
+| 16 (8), current | 495.3 / 691.6 / 356.7 / 583.1 | 1354.1 / 1698.7 / 885.3 / 1474.3 |
+| 24 (12) | 508.4 / 711.0 / 352.1 / 588.1 | 1345.2 / 1711.2 / 884.1 / 1485.7 |
+| 32 (16) | 502.3 / 708.4 / 359.8 / 582.2 | 1348.2 / 1703.4 / 887.6 / 1467.5 |
+
+Did not work: combine alone -2.5% from 8 to 16, nothing beyond; the overlap is flat (+-0.5%). The batch ends in a
+full read barrier however deep the ring is, so more slots do not put more reads in flight per wait. Kept 16.
+
+### 6.12 Where combine's reader and sender wait (`CMBF2D_WAIT_STATS`: wall-clock totals per wait, DPRINT)
+Kimi balanced, 64 gu + 19 down, chip 0 streams (cycles at 1.35 GHz; typical core):
+
+| | total | upstream (fwd) | read barriers | free slots | gate | sender: wait for reader | sender: router slot |
+|---|---|---|---|---|---|---|---|
+| combine alone | 662k (490 us) | 29% | 26% | 5% | - | 54% | 17% |
+| overlapped | 1716k | 8-32% | 14% | 2% | 30-51% | 83% | 6% |
+
+- Alone, the reader is the bottleneck (the sender idles half the time): it waits on upstream chunks (ring coupling)
+  and on read barriers; ~40% is other work, including the local-token phase (read, barrier, write, barrier per token).
+- Overlapped, the reader sits at the gate (flat not done) for a third to half of the time, and the forwarded
+  chunks behind its own work in the fixed schedule wait too. Reordering relays before own work would deadlock the
+  ring (every chip waits for upstream relays first); a lagged order (relays of step i - 1, then own of step i) is
+  deadlock free and order-consistent downstream but reproduces almost the same sequence, so not pursued.
+
+### 6.13 Flat's y / weight-forward VCs off the fabric's VC 2 / 3: no gain
+The fabric lands received packets on NoC 1 VC 2 + link % 2, i.e. flat's y (VC 2) and weight-forward (VC 3) classes.
+Moving flat off them (64 gu + 19 down, pin 1): `MIMO_FL_YRM_VC=1` makes flat itself 1-4% slower and the overlap
+follows (Kimi bal 1354 -> 1378, GLM hot 1474 -> 1510); `MIMO_FL_FWD_VC=1` neutral (1354 / 1706 / 886 / 1474);
+both moved (y 1, forward 0) like y alone. Did not work: the shared VCs are not what limits the overlap.
+
+### 6.14 Pipelined combine reads (`CMBF2D_PIPE`, idea 2 part 2)
+- Each read batch on its own transaction id (2 / 3 alternating, metadata prefetch on 1); with `CMBF2D_PIPE` a
+  batch is announced only after the next one is issued (two in flight; batch = slots / 4 to keep the ring's
+  deadlock rule). Any pending batch is retired before every wait (slots, upstream, gate) and before the local phase.
+- Re-forward / final is now decided from the chunk descriptor (destination == downstream neighbour) instead of the
+  first page's data, and the sender takes a final write's address from `final_addr`; forwarded slots' cmd /
+  this_addr are still written at retire, after the data: a forwarded page's read (token + 16 B) lands the slot's
+  whole 64 B metadata block (first attempt wrote them at issue: wrong slots).
+- **Race found:** `noc_async_read_barrier_with_trid` polls the id's outstanding-request count, which only covers
+  requests the NIU has taken; right after issuing, the last read can still sit in the read command buffer, so the
+  barrier returned early and the sender sent partly landed tokens (1-3 wrong slots per failing case, even without
+  pipelining; `CMBF2D_NO_TRID` = global barriers fixed it). Fix: wait for the read command buffer to drain before
+  polling the id.
+- Results (64 gu + 19 down, pin 1, completion order + progressive; bit-identical, both calls):
+
+| | combine alone Kimi bal / hot / GLM bal / hot | overlap Kimi bal / hot / GLM bal / hot |
+|---|---|---|
+| one batch in flight, 16 slots | 499.1 / 693.9 / 357.7 / 582.2 | 1349.4 / 1707.5 / 885.9 / 1477.0 |
+| two batches, 32 slots (batch 8) | 454.8 / 650.8 / 333.3 / 549.3 | 1340.6 / 1683.4 / 883.0 / 1447.1 |
+| **two batches, 16 slots (batch 4), now default** | **444.9 / 630.3 / 319.0 / 540.7** | **1341.5 / 1691.2 / 880.4 / 1454.9** |
+
+  Worked for combine itself (-7..-11% alone: the batch barrier no longer stalls the next batch's reads), barely
+  for the overlap (-0.6..-1.5%): there the reader mostly waits at the gate for the flat expert, not on reads (6.12).
+  Vs the row-major baseline (1426 / 1748 / 1001 / 1636): -5.9% / -3.3% / -12.0% / -11.1%.
 
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.

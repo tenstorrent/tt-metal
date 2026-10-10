@@ -21,6 +21,17 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
+#ifdef CMBF2D_WAIT_STATS
+// (perf probe) wall-clock cycles spent in each wait, printed once at the end (DPRINT)
+#include "api/debug/dprint.h"
+inline uint32_t st_clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+#define ST_BEGIN(v) const uint32_t st_t0_##v = st_clk();
+#define ST_END(v) v += st_clk() - st_t0_##v;
+#else
+#define ST_BEGIN(v)
+#define ST_END(v)
+#endif
+uint32_t st_fill = 0, st_edm = 0, st_flush = 0, st_sent = 0;
 #include "combine_fabric2d_sender_ct_args.hpp"
 
 // Guard genuinely different BEHAVIOUR with CMBF2D_OVERLAPPED; anything that differs only in where a value
@@ -117,9 +128,14 @@ uint64_t send_slot(
 #else
     // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
     // reversing the two costs ~8% of the bandwidth.
-    hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
+    // a final write goes to final_addr (filled by the reader, or by the read that brought a forwarded token)
+    hdr->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{cmd == ::cmbf2d::CMD_FINAL_WRITE ? metadata->final_addr : metadata->this_addr},
+        payload_bytes);
 #endif
+    ST_BEGIN(st_edm)
     fabric.wait_for_empty_write_slot();
+    ST_END(st_edm)
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
     // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
@@ -155,7 +171,9 @@ uint32_t pump_stream(FabricSender& fabric) {
     uint32_t fwd_since_bump = 0;
     uint32_t final_since_bump = 0;
     while (!end_of_stream) {
+        ST_BEGIN(st_fill)
         const uint32_t avail = wait_for_filled(sent);
+        ST_END(st_fill)
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
@@ -168,7 +186,9 @@ uint32_t pump_stream(FabricSender& fabric) {
             }
         }
         // The batch's payload reads have drained out of L1, so these slots are safe to refill.
+        ST_BEGIN(st_flush)
         noc_async_writes_flushed();
+        ST_END(st_flush)
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
     }
@@ -220,7 +240,14 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
+#ifdef CMBF2D_WAIT_STATS
+    const uint32_t st_start = st_clk();
+#endif
     const uint32_t sent = pump_stream(fabric);
+#ifdef CMBF2D_WAIT_STATS
+    DPRINT(
+        "CMBST SND total {} fill {} edm {} flush {} sent {}\n", st_clk() - st_start, st_fill, st_edm, st_flush, sent);
+#endif
     if (sent > 0) {
         drain_fabric(fabric);
     }

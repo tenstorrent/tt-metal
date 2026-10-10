@@ -4,6 +4,10 @@
 
 #pragma once
 
+#ifndef KERNEL_BUILD
+#include <cstdlib>
+#endif
+
 #include "combine_fabric2d_chunk.hpp"
 
 // What both kernel roles and the host agree on: the wire format of a ring slot's forwarding metadata, the
@@ -173,9 +177,24 @@ namespace op = ttnn::operations::experimental::deepseek_prefill::combine_fabric2
 namespace cmbf2d {
 
 // Depth of the reader -> sender L1 ring, in tokens, and the half-ring batch slots move in. Both are
-// packed as compile-time args, so this is their one definition.
+// packed as compile-time args, so this is their one definition. (PR #58093 shipped 8.)
 constexpr uint32_t NUM_L1_SLOTS = 16;
 constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
+#ifndef KERNEL_BUILD
+// Host side: CMBF2D_SLOTS=n (perf probe, read at program build) overrides the ring depth; the batch stays half of it,
+// which is what rules out the reader / sender deadlock (batch <= slots / 2).
+inline uint32_t num_l1_slots() {
+    const char* v = std::getenv("CMBF2D_SLOTS");
+    return v != nullptr ? static_cast<uint32_t>(std::atoi(v)) : NUM_L1_SLOTS;
+}
+// The reader keeps two read batches in flight (CMBF2D_PIPE, default on; CMBF2D_PIPE=0 probe: one), so a batch is a
+// quarter of the ring: combine alone -7..-11% (16 slots, LoudBox 8x1 Kimi K2.7 / GLM 5.3).
+inline bool pipelined_reads() {
+    const char* v = std::getenv("CMBF2D_PIPE");
+    return v == nullptr || std::atoi(v) != 0;
+}
+inline uint32_t batch_slots() { return num_l1_slots() / (pipelined_reads() ? 4 : 2); }
+#endif
 
 // Tokens whose routing metadata the reader prefetches in one batch, and the pad each record gets. 64 B
 // because a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, which a 12-byte record would not

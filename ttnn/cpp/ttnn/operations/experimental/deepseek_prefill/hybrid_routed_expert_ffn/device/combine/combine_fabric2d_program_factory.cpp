@@ -469,6 +469,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             snd.defines.emplace_back("CMBF2D_NO_DRAM_WRITE", "1");
             snd.defines.emplace_back("CMBF2D_PROBE_SINK", std::to_string(l1.probe_sink));
         }
+        if (std::getenv("CMBF2D_WAIT_STATS")) {
+            snd.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
+        }
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -530,6 +533,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
               dram.expert_offsets,
               dram.expert_table}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
+        }
+        if (std::getenv("CMBF2D_WAIT_STATS")) {  // (perf probe: wait-time totals, DPRINT)
+            rdr.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
+        }
+        if (std::getenv("CMBF2D_NO_TRID")) {  // (debug: global read barriers)
+            rdr.defines.emplace_back("CMBF2D_NO_TRID", "1");
+        }
+        if (cmbf2d::pipelined_reads()) {  // two read batches in flight
+            rdr.defines.emplace_back("CMBF2D_PIPE", "1");
         }
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -711,7 +723,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
-        cmbf2d::NUM_L1_SLOTS,
+        cmbf2d::num_l1_slots(),
         token_size_bytes(tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address(),

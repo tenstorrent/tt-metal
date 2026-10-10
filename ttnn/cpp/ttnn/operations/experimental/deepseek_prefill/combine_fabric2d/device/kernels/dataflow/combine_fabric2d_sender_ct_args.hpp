@@ -41,7 +41,7 @@ struct SenderCtArgs {
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
-        num_l1_slots(NUM_L1_SLOTS),
+        num_l1_slots(::cmbf2d::num_l1_slots()),
         token_size_bytes(op::token_size_bytes(tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
@@ -50,7 +50,7 @@ struct SenderCtArgs {
         pkt_hdr_ring_addr(l1.pkt_hdr_ring),
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
         drain_sink_addr(l1.drain_sink),
-        batch(BATCH),
+        batch(::cmbf2d::batch_slots()),
         filled_slot(plan.ring_filled_slot),
         freed_slot(plan.ring_freed_slot),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
