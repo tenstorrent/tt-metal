@@ -232,7 +232,10 @@ class DSV41PagedCompressedAttention(_PagedMixin, DSV41CompressedAttention):
         ):  # index-source layer: (owners: append this step's key,) then refresh the selection shared by the next layers
             if self.source is None:
                 self.indexer.append_key(self._lat_pre, st)
-            st["topk_ids"] = self.indexer.forward(x, self._last_qr, st)
+            if not getattr(
+                self.indexer, "dense", False
+            ):  # (dense position bucket: no ids, the attention op selects every valid entry)
+                st["topk_ids"] = self.indexer.forward(x, self._last_qr, st)
         o = self._paged_attend(
             q, lat if self.source is None else None, st, self.ratio, P.SRC_OFF[self.src_layer], P.WINDOW + TOPK_COMP
         )

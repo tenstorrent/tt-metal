@@ -47,3 +47,16 @@ def test_scored_length_covers_the_bucket(ratio, ctx):
     assert s.set_pos_bucket(10**9) == n_alloc and s.nb is None  # a bucket past the slab = the slab
     f = _Stub(ratio, n_alloc, backend="fused")
     assert f.set_pos_bucket(2048) == n_alloc and f.nb is None  # the fused backend scores the whole slab
+
+
+@pytest.mark.parametrize("ratio,n_alloc", [(2, 65568), (1, 131104)])
+def test_dense_bucket(ratio, n_alloc):
+    """a bucket with at most topk valid entries per position (pos + 1 <= topk * ratio) selects EVERY entry: dense (no indexer), exact"""
+    s = _Stub(ratio, n_alloc)
+    s.dense = False
+    assert s.set_pos_bucket(512) == n_alloc and s.dense and s.nb is None
+    assert s.set_pos_bucket(2048) < n_alloc and not s.dense
+    assert s.set_pos_bucket(None) == n_alloc and not s.dense
+    f = _Stub(ratio, n_alloc, backend="fused")
+    f.set_pos_bucket(512)
+    assert not f.dense  # (only the matmul backend runs bucketed)

@@ -67,8 +67,8 @@ def default_backend(n_entries: int) -> str:
 
 
 def pos_buckets(max_pos):
-    """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='2048,8192,32768' (default; '0' = none)."""
-    raw = os.environ.get("DSV41_POS_BUCKETS", "2048,8192,32768")
+    """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='512,2048,8192,32768' (default; '0' = none; a bucket <= topk * ratio, e.g. 512, runs dense, without the indexer)."""
+    raw = os.environ.get("DSV41_POS_BUCKETS", "512,2048,8192,32768")
     if raw.strip() in ("", "0"):
         return []
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
@@ -133,6 +133,7 @@ class DSV41DecodeIndexer:
             q_chunk_size=32, k_chunk_size=min(k_chunk, n_alloc), head_group_size=head_group
         )
         self.k_cache = None
+        self.dense = False  # positions so small that every valid entry is selected: the attention reads all entries and the indexer only keeps appending keys (``set_pos_bucket``)
         self.nb = None  # scored key length of the traces being captured (position bucket, see ``set_pos_bucket``); None = the whole slab
 
     def set_pos_bucket(self, pos_bucket):
@@ -140,9 +141,16 @@ class DSV41DecodeIndexer:
         progress). A trace captured with a bucket is replayed only while every user's position (+ the verify block) stays below it, so the per-step cost follows the positions, not the
         allocated maximum (the score matmuls, the validity mask and the top-k all scale with ``nb``). ``None`` / a bucket >= the slab: the whole slab.
         """
+        # dense: every position of the bucket has <= topk valid entries (pos + 1 <= topk * ratio), so the top-k keeps ALL of them: the attention op builds the same indices itself (no ids, the path of a
+        # context <= 512 build) and the indexer's project / score / select are skipped. The keys keep being appended (later buckets rank them).
+        self.dense = pos_bucket is not None and int(pos_bucket) <= self.topk * self.ratio
         if pos_bucket is None or self.backend != "matmul":
             self.nb = None
+            self.dense = False
             self._arange_for(self.n_alloc)
+            return self.n_alloc
+        if self.dense:
+            self.nb = None
             return self.n_alloc
         nb = -(-(int(pos_bucket) // self.ratio + 32) // 32) * 32
         nb = max(nb, -(-(self.topk + 32) // 32) * 32)
