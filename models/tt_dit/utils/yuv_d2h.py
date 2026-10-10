@@ -18,6 +18,7 @@ import torch
 
 import ttnn
 
+from . import timing_tree
 from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
@@ -141,10 +142,11 @@ def _yuv_planar_d2h(
     out_W = W if out_W is None else out_W
 
     # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
-    host_Y = tt_Y.cpu(blocking=False)
-    host_Cb = tt_Cb.cpu(blocking=False)
-    host_Cr = tt_Cr.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    with timing_tree.span(mesh_device, "yuv readback (3 planes)", category=timing_tree.HOST_XFER):
+        host_Y = tt_Y.cpu(blocking=False)
+        host_Cb = tt_Cb.cpu(blocking=False)
+        host_Cr = tt_Cr.cpu(blocking=False)
+        ttnn.synchronize_device(mesh_device)
     keep_alive = [host_Y, host_Cb, host_Cr]
 
     if view is not None:
@@ -231,7 +233,9 @@ def _yuv_planar_d2h(
 
     if defer:
         return DeferredYuvPlanar(_assemble, (T, out_row))
-    return _assemble()
+    path = "C++ planar concat" if HAS_CPP_PLANAR_CONCAT else "torch fallback"
+    with timing_tree.span(mesh_device, f"yuv host assemble ({path})", category=timing_tree.HOST_COMPUTE):
+        return _assemble()
 
 
 class DeferredYuvPlanar:

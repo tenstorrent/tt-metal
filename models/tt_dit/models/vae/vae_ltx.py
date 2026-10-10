@@ -24,6 +24,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils import timing_tree
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
@@ -1058,6 +1059,7 @@ class LTXVideoDecoder(Module):
         chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
         return rgb_chwt_to_yuv_device(chwt)
 
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)
     def forward(
         self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False, defer_yuv: bool = False
     ) -> torch.Tensor:
@@ -1076,25 +1078,27 @@ class LTXVideoDecoder(Module):
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
-        sample_tt = typed_tensor_2dshard(
-            sample,
-            self.mesh_device,
-            shard_mapping={
-                self.parallel_config.height_parallel.mesh_axis: 2,
-                self.parallel_config.width_parallel.mesh_axis: 3,
-            },
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
+        with timing_tree.span(self.mesh_device, "latent upload", category=timing_tree.HOST_XFER):
+            sample_tt = typed_tensor_2dshard(
+                sample,
+                self.mesh_device,
+                shard_mapping={
+                    self.parallel_config.height_parallel.mesh_axis: 2,
+                    self.parallel_config.width_parallel.mesh_axis: 3,
+                },
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
 
-        if traced:
-            if self._decode_tracer is None:
-                self._decode_tracer = Tracer(
-                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
-                )
-            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
-        else:
-            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        with timing_tree.span(self.mesh_device, "decode (device)"):
+            if traced:
+                if self._decode_tracer is None:
+                    self._decode_tracer = Tracer(
+                        self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
+                    )
+                sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
+            else:
+                sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
 
@@ -1106,14 +1110,15 @@ class LTXVideoDecoder(Module):
             and self.parallel_config.width_parallel.mesh_axis == 1
             and sample_tt.shape[0] == 1
         ):
-            if self.trace_yuv_output:
-                if self._yuv_output_tracer is None:
-                    self._yuv_output_tracer = Tracer(
-                        self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
-                    )
-                planes = self._yuv_output_tracer(sample_tt)
-            else:
-                planes = self._unpatch_yuv_device(sample_tt)
+            with timing_tree.span(self.mesh_device, "unpatch + rgb->yuv (device)"):
+                if self.trace_yuv_output:
+                    if self._yuv_output_tracer is None:
+                        self._yuv_output_tracer = Tracer(
+                            self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
+                        )
+                    planes = self._yuv_output_tracer(sample_tt)
+                else:
+                    planes = self._unpatch_yuv_device(sample_tt)
             h_out, w_out = logical_h * self.patch_size, logical_w * self.patch_size
             planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out)
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
