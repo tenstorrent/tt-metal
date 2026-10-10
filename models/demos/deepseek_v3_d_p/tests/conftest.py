@@ -216,8 +216,12 @@ def pytest_collection_modifyitems(config, items):
             (8, 1): [FC.FABRIC_2D_TORUS_Y],
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
-            (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
+            # TORUS_X: the 8x4 opened to be carved into its top/bottom 4x4 halves (two pipeline
+            # stages per galaxy); a half wraps only its in-tray axis, so TORUS_XY would ask Ring on
+            # the half's unwrapped rows.
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_XY],
+            # FABRIC_2D: a top/bottom half run all-Linear, the reference for its line x ring configs.
+            (4, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
             (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
