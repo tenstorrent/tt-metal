@@ -132,10 +132,13 @@ sfpi_inline void apply_zero_comp<SfpuType::not_equal_zero>(sfpi::vFloat& v, std:
     v_endif;
 }
 
+// ltz and gez share the predicate -v <= 0, i.e. v >= -0.0. A bare `v >= 0.0f` lowers to SFPLE, whose order
+// puts -0.0 below +0.0, so it counted -0.0 as negative (ltz(-0) = 1, gez(-0) = 0). Negating first turns
+// -0.0 into +0.0, which compares equal to the 0.0 constant. Costs one SFPMOV per row.
 template <>
 sfpi_inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
-    v_if (v >= 0.0f)
+    v_if (-v <= 0.0f)
     {
         v = 0.0f;
     }
@@ -149,7 +152,7 @@ sfpi_inline void apply_zero_comp<SfpuType::less_than_zero>(sfpi::vFloat& v, std:
 template <>
 sfpi_inline void apply_zero_comp<SfpuType::greater_than_equal_zero>(sfpi::vFloat& v, std::uint32_t /*unused*/)
 {
-    v_if (v >= 0.0f)
+    v_if (-v <= 0.0f)
     {
         v = 1.0f;
     }
