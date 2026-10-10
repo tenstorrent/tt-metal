@@ -35,8 +35,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_A            = params.buffer_A;
+    const auto& buffer_B            = params.buffer_B;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -48,18 +52,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
         {
             _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                0, 0, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+                0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
             for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
             {
                 _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                    L1_ADDRESS(buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
             }
             for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
             {
                 _llk_unpack_A_rmsnorm_init_<1, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    0, 0, FACE_R_DIM, 4, 0, 0, tile > 0 && RMSNORM_WHOLE_TILE);
+                    0 /* transpose_of_faces */,
+                    0 /* within_face_16x16_transpose */,
+                    FACE_R_DIM,
+                    TILE_NUM_FACES,
+                    0 /* unpack_src_format */,
+                    0 /* unpack_dst_format */,
+                    tile > 0 && RMSNORM_WHOLE_TILE);
                 _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
+                    L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
             }
         }
         PROFILER_SYNC();
@@ -86,8 +96,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -106,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                     tile, formats.math, formats.math);
             }
-            _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWSUB, 1, MathFidelity::LoFi>(4, 0);
+            _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWSUB, 1, MathFidelity::LoFi>(TILE_NUM_FACES, 0 /* acc_to_dest */);
             _llk_math_rmsnorm_bcast_scalar_dest_reuse_<EltwiseBinaryType::ELWSUB, 1, DST_SYNC, is_fp32_dest_acc_en, MathFidelity::LoFi, false>(0, 0);
             if constexpr (RMSNORM_SHADOW_SFPU)
             {
@@ -121,7 +133,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::recip_init<false, is_fp32_dest_acc_en>);
                     SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reciprocal, (false, is_fp32_dest_acc_en, 1), tile, VectorMode::RC_custom);
                 }
-                _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWMUL, 1, MATH_FIDELITY>(4, 0, RMSNORM_WHOLE_TILE);
+                _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWMUL, 1, MATH_FIDELITY>(
+                    TILE_NUM_FACES, 0 /* acc_to_dest */, RMSNORM_WHOLE_TILE);
                 _llk_math_rmsnorm_bcast_scalar_dest_reuse_<EltwiseBinaryType::ELWMUL, 1, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, false>(tile, tile);
             }
             _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -142,8 +155,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_Res          = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
@@ -158,7 +174,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_packer_wait_for_math_done_();
             for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
             {
-                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
             }
             _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
         }
