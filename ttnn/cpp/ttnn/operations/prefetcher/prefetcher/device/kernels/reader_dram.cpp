@@ -114,6 +114,10 @@ void kernel_main() {
     cb_wait_front(sync_cb_id, 1);
     cb_pop_front(sync_cb_id, 1);
 
+    // Restore the NCRISC read cmd buf's NOC_CTRL VC to the firmware default (1);
+    // this kernel programmed a custom static VC (2 or 3) that persists per-core otherwise.
+    noc_async_read_one_packet_set_state<true>(get_noc_addr_from_bank_id<true>(bank_id, 0), page_sizes[0], 1);
+
     // reset noc counters here because we didn't properly update ptrs for better perf.
     if (noc_mode == DM_DEDICATED_NOC) {
         ncrisc_noc_counters_init();
