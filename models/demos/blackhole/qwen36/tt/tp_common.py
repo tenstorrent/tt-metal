@@ -934,6 +934,9 @@ def get_decode_allreduce(args, tt_ccl):
         reason = None
         if len(shape) != 2 or shape[0] != 1 or shape[1] < 2 or shape[1] % 2:
             reason = f"needs a (1, even N>=2) mesh, got {shape}"  # all_reduce_async: cluster_axis=1, even ring
+        elif shape[1] > 4:
+            # Validated at TP<=4 only: at TP=8 (1x8, ring topology) the first decode step hangs on device.
+            reason = f"not validated beyond TP=4 (got TP={shape[1]}; hangs at TP=8)"
         elif args.dim % (ncores * TILE_SIZE):
             reason = f"hidden dim {args.dim} is not tile-shardable over {ncores} cores"
         elif getattr(args, "tile_padded_batch_rows", TILE_SIZE) != TILE_SIZE:
