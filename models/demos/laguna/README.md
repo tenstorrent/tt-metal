@@ -22,8 +22,8 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
 - Not met: batch-1 decode (83-88 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding: about 6x faster than on 2026-10-09 (25 -> 144-161 tok/s on AIME24 across runs,
-  21-25 -> 114-121 tok/s on real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
+- DFlash speculative decoding: about 6x faster than on 2026-10-09 (25 -> 144-164 tok/s on AIME24 across runs,
+  21-25 -> 118-126 tok/s on real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
   input tokens.
 
 ## Results
@@ -70,24 +70,24 @@ Time to first token (measured / target):
 | 8,192 | 714 ms / 103 ms | 23.4 s / 3.31 s |
 
 DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 83-88 tok/s at these lengths). A round
-drafts 15 tokens, then checks up to the first 5 in Laguna in one step and keeps the matching ones plus one of
+drafts 15 tokens, then checks up to the first 5 in Laguna in one step (a 3-row check when 2 or fewer are checked) and keeps the matching ones plus one of
 Laguna's own. It checks fewer when the draft is unsure (once the product of its top-1 probabilities drops below 0.2),
-which reads fewer expert weights. 19-21 ms per round (draft 2.8 ms, check 16.4-18.2 ms) vs 11.3-12.0 ms per token
+which reads fewer expert weights. 19-21 ms per round (draft 2.8 ms, check 15.9-17.5 ms) vs 11.3-12.0 ms per token
 for normal decode, so DFlash wins when more than ~0.9 drafts per round are accepted:
 
 | Prompt | Input tokens | Decode, tok/s | Drafts accepted per round |
 |---|---:|---:|---:|
-| AIME24 | 235 | 155.7 | 2.2 |
-| Real text | 128 | 120.2 | 1.3 |
-| Real text | 1,024 | 115.3 | 1.4 |
-| Real text | 2,048 | 121.3 | 1.5 |
-| Real text | 4,096 | 114.2 | 1.4 |
-| Real text | 8,192 | 116.2 | 1.5 |
+| AIME24 | 235 | 164.3 | 2.4 |
+| Real text | 128 | 120.0 | 1.3 |
+| Real text | 1,024 | 119.1 | 1.4 |
+| Real text | 2,048 | 126.0 | 1.6 |
+| Real text | 4,096 | 118.0 | 1.4 |
+| Real text | 8,192 | 121.1 | 1.5 |
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
 model's own. Single runs vary by about +-10%, since the output (and so the acceptance) shifts with near-tie tokens
-(AIME24: 144-161 tok/s at 2.1-2.6 drafts per round across the 2026-10-10 runs).
+(AIME24: 144-164 tok/s at 2.1-2.6 drafts per round across the 2026-10-10 runs).
 
 ## Quick start
 
