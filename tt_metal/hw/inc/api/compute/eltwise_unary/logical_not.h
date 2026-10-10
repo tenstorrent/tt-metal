@@ -43,6 +43,16 @@ ALWI void logical_not_tile(uint32_t idst) {
         : (DATA_FORMAT == DataFormat::UInt16)                                 ? InstrModLoadStore::LO16
         : (DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT)) ? InstrModLoadStore::INT32
                                                                               : InstrModLoadStore::DEFAULT;
+#ifdef ARCH_BLACKHOLE
+    // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_logical_not,
+        (APPROX, INSTRUCTION_MODE, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -50,6 +60,7 @@ ALWI void logical_not_tile(uint32_t idst) {
         (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC));
+#endif
 }
 
 /**
