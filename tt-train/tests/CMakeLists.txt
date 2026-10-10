@@ -86,6 +86,7 @@ set(SOURCES
     utils/training_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
     ops/gumbel_sample_op_test.cpp
+    metal/program_utils_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

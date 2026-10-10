@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <bit>
 #include <cstdint>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -19,9 +18,8 @@ inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size
 }
 
 inline uint32_t pack_two_bfloat16_to_uint32(float value) {
-    uint32_t uint32_data = std::bit_cast<uint32_t>(value);
-    uint32_t casted_uint16_data = uint32_data >> 16U;
-    return casted_uint16_data | (casted_uint16_data << 16U);
+    const auto rounded = bfloat16(value);
+    return pack_two_bfloat16_into_uint32({rounded, rounded});
 }
 
 /**
