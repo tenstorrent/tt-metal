@@ -127,6 +127,9 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
 }
 
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP()
             << "Enable this test on BH when base FW updated to flush data cache and invalidate instruction cache";
