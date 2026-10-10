@@ -145,7 +145,9 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "Expect batch in input tensor match the batch in cache tensor");
         }
     } else {
-        TT_FATAL(!operation_attributes.share_cache, "share_cache not supported with paged cache");
+        // share_cache on a paged cache: each row still addresses its own page-table row; the flag only chains the row
+        // cores (core i waits for core i - 1's flushed write before reading the cache tile), which serializes rows that
+        // land in the same tile (several positions of one user, e.g. a speculative-decode verify).
         TT_FATAL(update_idxs_tensor.has_value(), "Paged cache requires update_idxs tensor");
 
         auto page_table_val = page_table.value();

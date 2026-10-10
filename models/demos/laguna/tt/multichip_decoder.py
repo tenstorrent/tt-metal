@@ -322,6 +322,7 @@ class MultichipDecoder(OptimizedDecoder):
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._cp32_short = _parse_binary_env("TT_LAGUNA_CP32_SHORT", True)  # also 2..31 rows (16-row DFlash verify)
+        self._seq_kv_chain = _parse_binary_env("TT_LAGUNA_SEQ_KV_CHAIN", True)  # verify KV rows in one chained op
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
         self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
@@ -1978,8 +1979,19 @@ class MultichipDecoder(OptimizedDecoder):
             # consecutive positions land in the same tile, so a batched paged_update_cache RMW-races and
             # corrupts KV. Serialize the tiny per-row writes (matmuls + SDPA above/below still run batched,
             # so the verify stays fast). Mirrors gemma4/tt/attention/decode.py:147.
-            self._seq_kv_write(kv_cache["k"], k_sh, cur_pos, page_table, B)
-            self._seq_kv_write(kv_cache["v"], v_sh, cur_pos, page_table, B)
+            if self._seq_kv_chain:
+                # one op per K / V: share_cache chains the row cores (core i starts after core i - 1 finished its
+                # tile read-modify-write), the same serial order as the per-row writes without B x (3 slices +
+                # reshard + update) ops per layer (~4 ms of a 6-row DFlash verify)
+                ttnn.experimental.paged_update_cache(
+                    kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+                )
+                ttnn.experimental.paged_update_cache(
+                    kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+                )
+            else:
+                self._seq_kv_write(kv_cache["k"], k_sh, cur_pos, page_table, B)
+                self._seq_kv_write(kv_cache["v"], v_sh, cur_pos, page_table, B)
         else:
             ttnn.experimental.paged_update_cache(kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table)
             ttnn.experimental.paged_update_cache(kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table)
