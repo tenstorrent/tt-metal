@@ -177,9 +177,11 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
-    // Both paths run a MOVD2B/MOVB2D/MOVA2D transpose sequence that flushes any datum with a zero low
-    // byte (e.g. bf16 0x4400 = 768.0) when the Src zero-substitution flag is at the operand DEFAULT,
-    // corrupting ordinary finite values (same hazard as reduce_row_perform_transpose). transpose_dest
+    // Both paths run a MOVD2B/MOVB2D/MOVA2D transpose sequence that flushes any datum whose Src low byte
+    // is zero when the Src zero-substitution flag is at the operand DEFAULT. The exposure is the 32-bit
+    // path: it moves the hi16/lo16 halves of each Float32/Int32/UInt32 datum as raw 16-bit patterns, and
+    // those operand formats default to flush, so a half with a zero low byte would be zeroed. (UInt16
+    // already defaults to keep.) On the 16-bit path it is a zero-exponent float. transpose_dest
     // owns the PRESERVE policy here — asserted in execute (not init) so it survives any
     // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
     math::_configure_preserve_zero_flag_state_();
