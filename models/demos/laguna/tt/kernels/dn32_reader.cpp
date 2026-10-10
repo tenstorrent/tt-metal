@@ -25,6 +25,7 @@ void kernel_main() {
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t x_rows = get_common_arg_val<uint32_t>(4);  // rows of the activation tiles that are read
     const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const uint32_t c0 = (core / EG) * CPC, eg = core % EG;
     const auto x = TensorAccessor(x_args, x_addr, x_page);
@@ -72,7 +73,15 @@ void kernel_main() {
         cb_reserve_back(cb_x, Kt);
         const uint32_t x_l1 = get_write_ptr(cb_x);
         for (uint32_t k = 0; k < Kt; ++k) {
-            noc_async_read_tile(e * Kt + k, x, x_l1 + k * x_page);
+            if (x_rows < 16) {
+                // only rows 0..x_rows-1 are real: their 32-byte rows of face 0 and face 1 (other rows keep stale
+                // data; matmul rows are independent, so they only reach output rows the caller never reads)
+                const uint64_t src = x.get_noc_addr(e * Kt + k);
+                noc_async_read(src, x_l1 + k * x_page, x_rows * 32);
+                noc_async_read(src + 512, x_l1 + k * x_page + 512, x_rows * 32);
+            } else {
+                noc_async_read_tile(e * Kt + k, x, x_l1 + k * x_page);
+            }
         }
         noc_async_read_barrier();
         cb_push_back(cb_x, Kt);

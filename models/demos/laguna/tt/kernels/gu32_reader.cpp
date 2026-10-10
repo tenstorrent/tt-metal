@@ -68,15 +68,44 @@ void kernel_main() {
     cb_reserve_back(cb_meta, 1);
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = units;
     cb_push_back(cb_meta, 1);
+    // x multicast (n_rects > 0): core 0 reads the Kt activation tiles once and multicasts them into every core's
+    // cb_x (same L1 address on each core: the CB is empty at program start), then sets each core's x-ready
+    // semaphore; the other cores wait for it instead of each reading all of x (96 cores x 192 KB of NoC reads cost
+    // ~60 of ~190 us at 13 active experts). Rectangles: common args 6.. as (x0, y0, x1, y1, dests) in NOC coords.
+    const uint32_t n_rects = get_common_arg_val<uint32_t>(5);
+    const uint32_t x_l1 = get_write_ptr(cb_x);
+    if (n_rects > 0 && core == 0) {
+        for (uint32_t k = 0; k < Kt; ++k) {
+            noc_async_read_tile(k, x, x_l1 + k * x_page);
+        }
+        noc_async_read_barrier();
+        const uint32_t sem = get_semaphore(0);
+        // the semaphore multicast sends this core's own semaphore value: set it first
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem)[0] = 1;
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            const uint32_t a = 6 + r * 5;
+            const uint32_t x0 = get_common_arg_val<uint32_t>(a), y0 = get_common_arg_val<uint32_t>(a + 1);
+            const uint32_t x1 = get_common_arg_val<uint32_t>(a + 2), y1 = get_common_arg_val<uint32_t>(a + 3);
+            const uint32_t dests = get_common_arg_val<uint32_t>(a + 4);
+            noc_async_write_multicast(x_l1, get_noc_multicast_addr(x0, y0, x1, y1, x_l1), Kt * x_page, dests);
+            noc_semaphore_set_multicast(sem, get_noc_multicast_addr(x0, y0, x1, y1, sem), dests);
+        }
+        noc_async_write_barrier();
+    }
     if (units == 0) {
         return;
     }
     cb_reserve_back(cb_x, Kt);
-    const uint32_t x_l1 = get_write_ptr(cb_x);
-    for (uint32_t k = 0; k < Kt; ++k) {
-        noc_async_read_tile(k, x, x_l1 + k * x_page);
+    if (n_rects > 0) {
+        if (core != 0) {
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), 1);
+        }
+    } else {
+        for (uint32_t k = 0; k < Kt; ++k) {
+            noc_async_read_tile(k, x, x_l1 + k * x_page);
+        }
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
     cb_push_back(cb_x, Kt);
 
     seen = 0;

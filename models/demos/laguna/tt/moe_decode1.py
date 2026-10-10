@@ -276,6 +276,23 @@ def expert_sum32(x, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
     return out
 
 
+_GU32_X_MCAST = os.environ.get("TT_LAGUNA_GU32_X_MCAST", "1") == "1"
+_DN32_ROW_READS = os.environ.get("TT_LAGUNA_DN32_ROW_READS", "1") == "1"
+
+
+def _mcast_rects(device, grid):
+    """(x0, y0, x1, y1, dests) per rectangle of ``grid`` in NOC coordinates for a multicast from logical core (0, 0)
+    (which belongs to the first rectangle and is not counted there)."""
+    rects = []
+    for i, r in enumerate(grid.ranges()):
+        a = device.worker_core_from_logical_core(r.start)
+        b = device.worker_core_from_logical_core(r.end)
+        n = (r.end.x - r.start.x + 1) * (r.end.y - r.start.y + 1)
+        own = r.start.x == 0 and r.start.y == 0
+        rects.append((a.x, a.y, b.x, b.y, n - 1 if own else n))
+    return rects
+
+
 def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L1_MEMORY_CONFIG):
     """32-token routed gate/up + SwiGLU + routing weight over column-page weights (see colpage.py).
     x [1, 1, 32, H] bf16 TILE interleaved; gu_cols: ColumnPages of the packed [E, H, 2I] weight (Ct = 2 * I/32);
@@ -306,6 +323,7 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 16, ttnn.bfloat16, page, 2),
     ]
+    rects = _mcast_rects(device, grid) if _GU32_X_MCAST else []
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "gu32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -313,7 +331,7 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups]
         + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
         common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
-                             sparsity.buffer_address(), sp_rows],
+                             sparsity.buffer_address(), sp_rows, len(rects)] + [v for r in rects for v in r],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -336,7 +354,8 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         config=cfg,
     )
     ins = [x, gu_cols.buf, sparsity, out] if wv is None else [x, gu_cols.buf, wv, sparsity, out]
-    ttnn.generic_op(ins, ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs))
+    sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=grid, initial_value=0)]
+    ttnn.generic_op(ins, ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs))
     return out
 
 
@@ -355,6 +374,8 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
     page, wt, sp_page = 2048, 576, max(E * 2, 64)
     sp_rows = int(sparsity.shape[-2])
+    T = int(glu.shape[-2])
+    x_rows = T if T <= 8 and _DN32_ROW_READS else 32  # <= 8: the packed-rows all-reduce reads rows < T only
     cbs = [
         _cb(grid, 0, ttnn.bfloat16, page, 2 * Kt),
         _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * cols_per_core * Kt),
@@ -370,7 +391,10 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         core_ranges=grid,
         compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups]
         + _accessor_args(glu, d_cols.buf, sparsity),
-        common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address(), sp_rows],
+        # up to 8 token rows (DFlash verify): read only those rows of each activation tile; the output rows past them
+        # are not used (the packed-rows all-reduce reads rows < T)
+        common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address(), sp_rows,
+                             x_rows],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
