@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import time
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -42,6 +43,16 @@ class V41PrefillRuntime:
     ):
         assert num_users == 1, "the V4.1 prefill runtime is single-slot (one V41Prefill state set)"
         self.mesh_device, self.cfg = mesh_device, cfg
+        # what the generic runner reads (prefill_runner.py: is_first_rank / is_last_rank / use_trace): one untraced rank
+        self.config = SimpleNamespace(
+            is_first_rank=True,
+            is_last_rank=True,
+            use_trace=False,
+            num_users=num_users,
+            chunk_size=int(chunk_size),
+            max_seq_len=int(max_seq_len),
+            mesh_shape=tuple(mesh_device.shape),
+        )
         self.chunk_size, self.max_seq_len, self.num_users = int(chunk_size), int(max_seq_len), int(num_users)
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.mesh_shape = tuple(mesh_device.shape)

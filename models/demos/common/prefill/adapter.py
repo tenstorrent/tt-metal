@@ -274,6 +274,8 @@ ADAPTER_PATHS = {
     # DeepSeek-V4-Flash: mHC hyper-connections + SWA / CSA(indexer) / HCA attention + V4 MoE (adapters/deepseek_v4_flash.py).
     # Config + KV geometry + caches today; the block / transformer / runtime land per the plan (M2..M6).
     "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4_flash:DeepSeekV4FlashAdapter",
+    # DeepSeek-V4.1-Flash: the ENCODER half of the disaggregated split (layers 0..19 + layer 20 KV-only), tt-blaze DS41F-0037.
+    "deepseek_v4_1_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4_1_flash:DeepSeekV41FlashAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
 }
