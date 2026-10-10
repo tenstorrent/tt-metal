@@ -1008,7 +1008,8 @@ def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, exp
     tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=True
     )
-    assert len(pipes) > len({p.sender_core().x for p in pipes}), "this case needs a bank with two senders"
+    if len(pipes) == len({p.sender_core().x for p in pipes}):
+        pytest.skip("this case needs a bank with two senders; a DRAM-harvested Blackhole has one per bank")
     # A second set on its own receiver rows, so its pipes clash with the first set's only over
     # slabs -- their receivers are disjoint.
     _tt_weight_b, pipes_b, _bank_to_receivers_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(

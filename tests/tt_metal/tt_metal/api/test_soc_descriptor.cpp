@@ -20,9 +20,17 @@
 #include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/soc_arch_descriptor.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/core_assignment.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/rtoptions.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <filesystem>
+#include <memory>
+#include <set>
+#include <tuple>
+#include <vector>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -54,6 +62,38 @@ std::unordered_set<int> get_harvested_rows(ChipId device_id) {
         harvested_row_str);
     return harvested_rows;
 }
+
+// A Blackhole SOC descriptor built from the checked-in YAML, with NOC translation on as on silicon.
+metal_SocDescriptor make_blackhole_soc_desc(size_t dram_harvesting_mask) {
+    // Silicon with all 14 ETH channels always harvests two of them, one of 4-6 and one of 7-9 (UMD
+    // rejects any other count). Which two doesn't move any DRAM core.
+    constexpr size_t eth_harvesting_mask = (1u << 6) | (1u << 9);
+    const tt::llrt::RunTimeOptions rtoptions;
+    const std::string soc_yaml =
+        (std::filesystem::path(rtoptions.get_root_dir()) / "tt_metal/soc_descriptors/blackhole_140_arch.yaml").string();
+    tt::umd::SocDescriptor umd_soc(
+        std::make_shared<tt::umd::SocArchDescriptor>(soc_yaml),
+        {.noc_translation_enabled = true,
+         .harvesting_masks = {.dram_harvesting_mask = dram_harvesting_mask, .eth_harvesting_mask = eth_harvesting_mask},
+         .board_type = tt::BoardType::P100});
+    umd_soc.device_descriptor_file_path = soc_yaml;
+    return metal_SocDescriptor(umd_soc, tt::BoardType::P100);
+}
+
+// Every translated core a DRAM view names: per view, its worker and eth endpoints on each NOC, then
+// the cores its logical DRAM coords resolve to.
+std::vector<tt::tt_metal::CoreCoord> dram_view_cores(const metal_SocDescriptor& soc) {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    for (int view = 0; view < static_cast<int>(soc.get_num_dram_views()); ++view) {
+        for (uint8_t noc = 0; noc < 2; ++noc) {
+            cores.push_back(soc.get_preferred_worker_core_for_dram_view(view, noc));
+            cores.push_back(soc.get_preferred_eth_core_for_dram_view(view, noc));
+        }
+        const auto& bank_cores = soc.dram_bank_endpoint_coords.at(view);
+        cores.insert(cores.end(), bank_cores.begin(), bank_cores.end());
+    }
+    return cores;
+}
 }  // namespace unit_tests::basic::soc_desc
 
 namespace tt::tt_metal {
@@ -78,6 +118,100 @@ TEST_F(AnyDispatchMeshDeviceFixture, TensixValidateLogicalToPhysicalCoreCoordHos
                 EXPECT_TRUE(!harvested_rows.contains(
                     tensix_harvest_axis == HalTensixHarvestAxis::ROW ? physical_core_coord.y : physical_core_coord.x));
             }
+        }
+    }
+}
+
+// Without harvesting, view k is channel k with the endpoints dram_views gives it: NOC0 on subchannel 0
+// for channels 1-3 and 2 for the rest, NOC1 on subchannel 1, both on that channel's translated column.
+TEST(DramViewMapping, BlackholeUnharvestedViewsFollowDramViews) {
+    const metal_SocDescriptor soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0);
+    const uint32_t num_channels = soc.get_grid_size(CoreType::DRAM).x;
+    ASSERT_EQ(soc.get_num_dram_views(), num_channels);
+    for (uint32_t channel = 0; channel < num_channels; ++channel) {
+        EXPECT_EQ(soc.get_channel_for_dram_view(channel), channel);
+        const auto first = soc.get_dram_core_for_channel(channel, 0, CoordSystem::TRANSLATED);
+        const uint32_t noc0_subchannel = (channel >= 1 && channel <= 3) ? 0 : 2;
+        EXPECT_EQ(
+            soc.get_preferred_worker_core_for_dram_view(channel, 0), CoreCoord(first.x, first.y + noc0_subchannel))
+            << "channel " << channel;
+        EXPECT_EQ(soc.get_preferred_worker_core_for_dram_view(channel, 1), CoreCoord(first.x, first.y + 1))
+            << "channel " << channel;
+    }
+}
+
+// With one DRAM channel harvested, the views follow harvested_dram_views in translated order, so
+// view k names the same translated cores whichever channel is harvested.
+TEST(DramViewMapping, BlackholeHarvestedViewsNameTheSameCoresWhicheverChannelIsHarvested) {
+    const uint32_t num_channels = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0).get_num_dram_views();
+    const metal_SocDescriptor reference_soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0b1);
+    ASSERT_EQ(reference_soc.get_num_dram_views(), num_channels - 1);
+    for (uint32_t view = 1; view < reference_soc.get_num_dram_views(); ++view) {
+        const CoreCoord prev = reference_soc.get_preferred_worker_core_for_dram_view(view - 1, 0);
+        const CoreCoord cur = reference_soc.get_preferred_worker_core_for_dram_view(view, 0);
+        EXPECT_LT(std::tie(prev.x, prev.y), std::tie(cur.x, cur.y)) << "views out of translated order at " << view;
+    }
+
+    const auto reference = unit_tests::basic::soc_desc::dram_view_cores(reference_soc);
+    for (uint32_t harvested = 1; harvested < num_channels; ++harvested) {
+        EXPECT_EQ(
+            unit_tests::basic::soc_desc::dram_view_cores(
+                unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested)),
+            reference)
+            << "harvested channel " << harvested;
+    }
+}
+
+// The syseng firmware never runs on subchannel 1, and harvested_dram_views makes the other two
+// subchannels the endpoints, so on a DRAM-harvested chip Metal's DRAM cores are exactly each view's
+// subchannel 1 -- the one core per bank DRISC firmware may use whichever channel is harvested.
+TEST(DramViewMapping, BlackholeHarvestedViewsLeaveOnlySubchannelOneToMetal) {
+    const uint32_t num_channels = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0).get_num_dram_views();
+    for (uint32_t harvested = 0; harvested < num_channels; ++harvested) {
+        const metal_SocDescriptor soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested);
+        std::set<CoreCoord> expected;
+        for (int view = 0; view < static_cast<int>(soc.get_num_dram_views()); ++view) {
+            const auto free_core =
+                soc.get_dram_core_for_channel(soc.get_channel_for_dram_view(view), 1, CoordSystem::TRANSLATED);
+            expected.insert({free_core.x, free_core.y});
+        }
+        const std::vector<CoreCoord> metal_cores = soc.get_metal_dram_cores(CoordSystem::TRANSLATED);
+        EXPECT_EQ(metal_cores.size(), soc.get_num_dram_views()) << "harvested channel " << harvested;
+        EXPECT_EQ(std::set<CoreCoord>(metal_cores.begin(), metal_cores.end()), expected)
+            << "harvested channel " << harvested;
+    }
+}
+
+// The nearest worker of each view's endpoint stays distinct on both NOCs whichever channel is
+// harvested. Using subchannel 0 on one NOC for every view would put a column's GDDR rows 0 and 1 on
+// one worker; harvested_dram_views alternates its endpoints by row to avoid that.
+TEST(DramViewMapping, BlackholeHarvestedViewsKeepNearestWorkersDistinct) {
+    const uint32_t num_channels = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0).get_num_dram_views();
+    for (uint32_t harvested = 0; harvested < num_channels; ++harvested) {
+        const metal_SocDescriptor soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested);
+        std::set<uint32_t> worker_x;
+        std::set<uint32_t> worker_y;
+        for (const auto& core : soc.get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
+            worker_x.insert(core.x);
+            worker_y.insert(core.y);
+        }
+        for (uint8_t noc = 0; noc < 2; ++noc) {
+            std::vector<CoreCoord> dram_noc0_coords;
+            for (int view = 0; view < static_cast<int>(soc.get_num_dram_views()); ++view) {
+                const CoreCoord endpoint = soc.get_preferred_worker_core_for_dram_view(view, noc);
+                const auto noc0 = soc.translate_coord_to(
+                    tt_xy_pair(endpoint.x, endpoint.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                dram_noc0_coords.push_back({noc0.x, noc0.y});
+            }
+            const std::vector<CoreCoord> workers = get_optimal_dram_to_physical_worker_assignment(
+                ARCH::BLACKHOLE,
+                dram_noc0_coords,
+                soc.grid_size.x,
+                soc.grid_size.y,
+                std::vector<uint32_t>(worker_x.begin(), worker_x.end()),
+                std::vector<uint32_t>(worker_y.begin(), worker_y.end()));
+            EXPECT_EQ(std::set<CoreCoord>(workers.begin(), workers.end()).size(), workers.size())
+                << "harvested channel " << harvested << ", NOC " << static_cast<int>(noc);
         }
     }
 }

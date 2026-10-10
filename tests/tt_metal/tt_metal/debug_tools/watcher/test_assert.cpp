@@ -19,6 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
+#include "drisc_test_utils.hpp"
 #include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -174,8 +175,7 @@ static void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-            logical_core = {0, 1};
+            logical_core = first_drisc_core(*mesh_device);
             virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "drisc";

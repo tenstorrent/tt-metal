@@ -17,6 +17,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+namespace YAML {
+class Node;
+}
+
 //! SocDescriptor contains information regarding the SOC configuration targeted.
 /*!
     Should only contain relevant configuration for SOC
@@ -58,7 +62,9 @@ public:
     // usable set is defined in one place. On Blackhole it excludes each DRAM view's NOC0 worker
     // endpoint, which is owned by the syseng firmware (CMFW DRAM telemetry, SYS-1419) and runs no
     // DRISC firmware. Hardware without that restriction returns all DRAM cores -- callers never need
-    // to special-case it.
+    // to special-case it. A DRAM-harvested Blackhole takes its views from harvested_dram_views,
+    // where the syseng firmware may sit on either endpoint, so this returns only each view's free
+    // subchannel there.
     // A LOGICAL request returns Metal logical DRAM coords ({dram_view, dram_bank_endpoint_coords
     // index}, the space get_physical_dram_core_from_logical and CreateKernel(DramConfig) use), not
     // UMD's {channel, raw subchannel}.
@@ -102,13 +108,27 @@ private:
     // index get_dram_core_for_channel expects; callers want the logical one.
     size_t get_physical_channel_for_dram_view(int dram_view) const;
 
-    // True if `translated_coord` is any DRAM view's NOC0 endpoint (the subchannel a NOC0 DRAM access
-    // routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole. The NOC0
-    // bit of get_dram_endpoint_noc_mask, named for its one caller.
+    // True if `translated_coord` is a DRAM view endpoint the syseng firmware may run on (see
+    // syseng_dram_endpoint_noc_mask) -- the cores get_metal_dram_cores excludes on Blackhole.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
-    bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
+    bool is_syseng_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
     void load_dram_metadata_from_device_descriptor();
+    // Appends a DRAM view on `channel` (device-descriptor numbering, with harvested-channel gaps)
+    // whose endpoints and address offset come from `dram_view`, a dram_views or
+    // harvested_dram_views entry.
+    void add_dram_view(size_t channel, const YAML::Node& dram_view);
+    // Unharvested DRAM channels (device-descriptor numbering) sorted by the translated coord of
+    // their subchannel 0: by x, then y. Empty when NOC translation is off or a channel's
+    // subchannels are not one translated column with subchannel s at s rows below subchannel 0,
+    // since then a view placed by translated position would not reach the same cores whichever
+    // channel is harvested.
+    std::vector<size_t> get_unharvested_dram_channels_in_translated_order() const;
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
+
+    // NOCs whose DRAM view endpoints the syseng firmware may run on, as a get_dram_endpoint_noc_mask
+    // mask: the NOC0 endpoint under dram_views, and either endpoint under harvested_dram_views,
+    // depending on which channel a view lands on.
+    uint8_t syseng_dram_endpoint_noc_mask = 0b01;
 };

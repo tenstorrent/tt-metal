@@ -45,7 +45,8 @@ struct BlackholeTensorPrefetcherConfig {
     // DRAM tile names D0/D1/D2, respectively. These config fields name traffic roles rather
     // than fixed D tiles because each DRAM bank's SoC descriptor assigns those roles:
     //   - free_sender_mpfe_weight: the unreserved D tile selected for the first prefetch sender.
-    //   - noc1_sender_mpfe_weight: the D tile named by worker_endpoint[1].
+    //   - noc1_sender_mpfe_weight: the D tile named by worker_endpoint[1]. Unused on a
+    //     DRAM-harvested Blackhole, which has no prefetch sender there.
     //   - ordinary_mpfe_weight: the D tile named by worker_endpoint[0].
     uint32_t free_sender_mpfe_weight = 0;
     uint32_t noc1_sender_mpfe_weight = 1;
