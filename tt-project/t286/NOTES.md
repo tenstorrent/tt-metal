@@ -165,3 +165,23 @@ log_pipeline_perf table + "[t286] construction warmup done" from out_{t5,t10}/ru
 ffmpeg still; copy stills+logs to tt-project/baselines/fasth3/. If no PASS: read how far warmup got
 in the last job (it should advance each job) and queue more dl jobs, or trim warmups if a fully warm
 warmup alone exceeds ~330 s.
+
+## 2026-10-10 ~05:45 UTC (#314, run 1290): dl jobs all stopped at the warm deadline; trim to the clip's rungs
+- t5-dl{a,b,c,d} = blx03 jobs 836/839/841/843, t10-dl{a,b} = 845/847: all exit 1 on the plugin's
+  own "[t286] warm deadline 400 s passed in ..." (clean, no drops, no cap kills). JIT advanced each job.
+- Warm-path timing (job 847, JIT mostly warm): startup 30 s, VAE 4 s, audio 47 s, prompt-encoder 28
+  layouts 232 s (~8 s each warm: not JIT), vision merge 7 s, then denoise rungs ~8 s each warm (27 s
+  cold) for 26 rungs, then 26 trace captures and audio capture. A fully warm server warmup is ~550 s+:
+  it cannot fit one 600 s job, however many fill jobs run.
+- Fix (plugin, T286_RUNGS): warm/capture only the listed rungs + the top rung (ladder swapped only
+  inside the walk, so buffer sizes = served config), filter prompt-encoder layouts to this canvas's
+  vision-tower program keys (3 of 28, checked host-side on blx03), guard: a non-warmup generation that
+  selects an unwarmed rung raises; each generation prints "[t286] generation compiled +N programs"
+  (expect +0 on the timed call). Rung window from the packed-length formula: 5 s (124 f, 37 latent
+  frames x 1008 rows + 414 audio + 1008 cond + text <=5120) -> 38912..45312; 10 s (243 f, 72 latent)
+  -> 76800..82688.
+- Queued: t286-t5-rt (config h3turbo-5s-rt) then t286-t10-rt (h3turbo-10s-rt).
+## Next step
+Wait on probe.sh t286-t10-rt. Then: grep "[t286]" lines, log_pipeline_perf table, AICLK clamp lines
+from both broker logs; ffmpeg still from out_{t5,t10}/*.mp4; copy stills+logs to
+tt-project/baselines/fasth3/. If a rung guard fires, set T286_RUNGS to the printed rung and requeue.
