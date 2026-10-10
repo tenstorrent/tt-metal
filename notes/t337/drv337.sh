@@ -4,7 +4,7 @@
 # only when the broker shows no upgrade/hold/health/reset/fabric-check job and no other smarton job. A job without its
 # T337_EXIT line counts as a drop and is rerun once. Logs: t337/run_<arm>_job<id>.log. Marker: t337/drv337.done.
 set -o pipefail
-F=/var/tmp/fasth3; A=$F/t48; D=$F/t337; B=$D/b; M=$D/drv337.done; L=$D/drv337.log
+F=/var/tmp/fasth3; A=$F/t48; D=$F/t337; B=$D/b; M=$D/drv337b.done; L=$D/drv337b.log
 REV=63e54d98036e3e954f3292a7d70dd0fef575fafd
 trap 'rc=$?; echo "exit=$rc $(date -u +%T)" >> $L; [ -e $M ] || echo "DRIVER_EXIT rc=$rc" > $M' EXIT
 log() { echo "$(date -u '+%F %T') $*" >> $L; }
@@ -24,8 +24,11 @@ build() {
   TT_METAL_HOME=$B PYTHONPATH=$B:$B/ttnn:$B/tools python -c "import ttnn, models.tt_dit.pipelines.ltx.pipeline_ltx25_distilled as p; from models.tt_dit.models.vae.vae_ltx import vae_key_map; print('IMPORT_OK', p.__file__)" || return 20
 }
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 60 ] || { echo "DISK / $use%" > $M; exit 1; }
-build > $D/build.log 2>&1; brc=$?; log "build rc=$brc"
-[ $brc = 0 ] || { echo "BUILD_FAILED rc=$brc" > $M; exit 1; }
+# rerun (b): build already done; both arms of run 1 hit the 540 s pytest timeout on cold JIT (audio warmup 262 s).
+[ "$(git -C $B rev-parse HEAD)" = $REV ] && [ -f $B/ttnn/ttnn/_ttnn.so ] || { echo "BUILD_MISSING" > $M; exit 1; }
+V=$F/ltx25_vae/ltx-2.5-video-vae-conv-bf16.safetensors
+vs=$(stat -c %s $V); vh=$(sha256sum < $V | cut -c1-64); log "vae25 size=$vs sha256=$vh"
+[ "$vs" = 1452269922 ] && [ "$vh" = 685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d ] || { echo "VAE_MISMATCH $vs $vh" > $M; exit 1; }
 st() { tt-device-mcp status -j $1 2>&1 | awk '/^Status:/{print $2}'; }
 waitjob() { for i in $(seq 1 120); do s=$(st $1); case $s in running|queued|pending|"") sleep 30;; *) echo $s; return;; esac; done; echo stillrunning; }
 submit() {

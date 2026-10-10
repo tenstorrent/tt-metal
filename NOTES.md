@@ -10,11 +10,18 @@ Done
 - Code 63e54d98036 (vae_key_map + LTX25_VIDEO_VAE resolution, 2.3 fallback only via LTX25_VAE_FALLBACK_23=1, unit test
   models/tt_dit/tests/unit/test_ltx25_conv_vae.py 5 passed 1 skipped) landed on origin/ttp/t48-ltx25-integrated with ttp push.
 
-Running (2026-10-10 06:38 UTC)
-- blx01 driver /var/tmp/fasth3/t337/drv337.sh (ttp detach, pid 2908428): builds t337/b at 63e54d98036, then broker jobs
-  (-t 570, one at a time) conv25 then conv23 (md5 check). Log drv337.log; marker drv337.done; job logs run_<arm>_job<id>.log;
-  videos out_<arm>/ltx_av_fast_*.mp4 + _t3s.png.
-- Probe: ttp detach --check --host blx01 /var/tmp/fasth3/t337/drv337
+Run 1 (drv337, done 07:03 UTC): both arms FAILED on the script's own pytest --timeout=540 (no drop).
+- conv25 job 382: cold JIT (0/2929 hits) + cold weight load (236 s, no TT_DIT_CACHE_DIR); timed out in warmup. The 2.5
+  conv VAE config loaded fine from the split file (no key error).
+- conv23 job 384: warmup 391 s, of it the audio-decode warmup 262 s (vocoder kernels still cold). gen#0 finished
+  (table: VAE decode 1.80 s, Total 34.90 s, clamp) and the gen#1 replay was cut off. gen#0 video kept at
+  out_conv23_r1/ltx_av_fast_1920x1088_0.mp4 md5 1340be4d394e1a37575d6cc275a4a113.
+- No leftover processes after either job. blx01 /var/tmp/fasth3 footprint 137 G (no room for a DiT cache).
+
+Running (2026-10-10 07:07 UTC)
+- drv337b on blx01 (ttp detach --remote, pid 3141740): verified the user's copy /var/tmp/fasth3/ltx25_vae/... (size+sha OK,
+  07:07:42), then conv25 (LTX25_VIDEO_VAE = that copy) and conv23, -t 570, now with a warm JIT. Waits behind #333 job 386.
+  Marker drv337b.done. Probe: ttp detach --check --host blx01 /var/tmp/fasth3/t337/drv337b
 
 Left
 - Quote conv25 timing table verbatim (+ commit, command, job id), video + still, compare conv25 vs conv23 md5/decode time.

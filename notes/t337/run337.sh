@@ -1,8 +1,8 @@
 #!/bin/bash
 # t337: the repo's standard LTX e2e test, unmodified, on ttp/t48-ltx25-integrated 63e54d98036 (own Release build), blx01
 # 4x8, LTX_VERSION=2.5 LTX25_DIFFVAE=0, defaults otherwise (8+3, 1088x1920, 24 fps, 145 frames, seed 10, test prompt,
-# bh_4x8sp1tp0_ring, traced). Usage: run337.sh <arm>: conv25 = the 2.5 conv VAE found under LTX25_ROOT (default path,
-# LTX25_VIDEO_VAE unset); conv23 = LTX25_VIDEO_VAE set to the 2.3 monolith (same weights, md5 check). Own JIT t337/jit.
+# bh_4x8sp1tp0_ring, traced). Usage: run337.sh <arm>: conv25 = the user's verified 2.5 conv VAE copy (#243) via
+# LTX25_VIDEO_VAE; conv23 = LTX25_VIDEO_VAE set to the 2.3 monolith (same weights, md5 check). Own JIT t337/jit.
 if [ -z "$INNER" ]; then
   INNER=1 setsid bash "$0" "$@" & PG=$!
   trap 'kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null' EXIT
@@ -22,7 +22,7 @@ export LTX_CHECKPOINT=$F/models/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safete
 export GEMMA_PATH=$F/models/gemma-3-12b-it-qat-q4_0-unquantized
 export LTX_VERSION=2.5 LTX25_ROOT=$M LTX25_DIFFVAE=0
 unset LTX25_VIDEO_VAE LTX25_VAE_FALLBACK_23
-case $ARM in conv25) ;; conv23) export LTX25_VIDEO_VAE=$LTX_CHECKPOINT;; *) echo "[t337] bad arm $ARM"; exit 3;; esac
+case $ARM in conv25) export LTX25_VIDEO_VAE=$F/ltx25_vae/ltx-2.5-video-vae-conv-bf16.safetensors;; conv23) export LTX25_VIDEO_VAE=$LTX_CHECKPOINT;; *) echo "[t337] bad arm $ARM"; exit 3;; esac
 export RUN_VBENCH=0 RUN_CLIP=0 LTX_OUT_DIR=$OUT
 unset TT_DIT_CACHE_DIR LTX_FUSE_GATE_ON_DEVICE LTX_FUSE_NORM_ADALN LTX_QUANT LTX_QUANT_ACTIVATIONS LTX_QUALITY LTX_FAST \
   LTX_S1_SIGMAS LTX_S2_SIGMAS LTX_TRACED LTX_ITER_ENV NO_PROMPT SEED RUN_WARMUP PROMPT OUTPUT_PATH LTX25_TEXT_STACK \
