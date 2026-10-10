@@ -128,11 +128,12 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  // clang-format on
 ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
 #ifdef ARCH_BLACKHOLE
+    // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_softshrink,
-        (APPROX, 32 /* ITERATIONS */),
+        (APPROX, 32 /*ITERATIONS*/),
         idst,
         VectorMode::None,
         param0));
