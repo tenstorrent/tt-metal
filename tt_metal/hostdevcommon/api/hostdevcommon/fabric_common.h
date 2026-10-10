@@ -893,7 +893,8 @@ constexpr RoutingFieldsConstants::LowLatencyHopAction get_current_1d_hop_action(
 // value is the live route word with the current hop already shifted out. read_ext(i) returns extension word i.
 // write_ext(i, word) stores the new extension word i, shifted down one word on a refill and unchanged otherwise.
 template <uint32_t NUM_EXT_WORDS, typename ReadExt, typename WriteExt>
-__attribute__((always_inline)) constexpr uint32_t refill_1d_route(uint32_t value, ReadExt read_ext, WriteExt write_ext) {
+__attribute__((always_inline)) constexpr uint32_t refill_1d_route(
+    uint32_t value, ReadExt read_ext, WriteExt write_ext) {
     static_assert(NUM_EXT_WORDS > 0, "a route without extension words has nothing to refill from");
     if (value == 0) [[unlikely]] {
         // Refill from buffer[0]

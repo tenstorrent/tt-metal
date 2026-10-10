@@ -404,13 +404,13 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     // Refill logic - only included when route_buffer exists. Without the define, the header type falls back to one
     // extension word (fabric_edm_packet_header.hpp), and so does FabricHeaderConfig.
 #if !defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) || (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
-    new_value =
-        tt::tt_fabric::routing_encoding::refill_1d_route<tt::tt_fabric::FabricHeaderConfig::LOW_LATENCY_EXTENSION_WORDS>(
-            new_value,
-            [&](uint32_t i) { return cached_routing_fields.route_buffer[i]; },
-            [&](uint32_t i, uint32_t word) {
-                const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] = word;
-            });
+    new_value = tt::tt_fabric::routing_encoding::refill_1d_route<
+        tt::tt_fabric::FabricHeaderConfig::LOW_LATENCY_EXTENSION_WORDS>(
+        new_value,
+        [&](uint32_t i) { return cached_routing_fields.route_buffer[i]; },
+        [&](uint32_t i, uint32_t word) {
+            const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] = word;
+        });
 #endif
 
     // Write new value (always happens)
