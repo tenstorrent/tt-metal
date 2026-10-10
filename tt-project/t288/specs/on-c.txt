@@ -1,0 +1,8 @@
+ID=t288-on-c
+TASK=t288
+WORKDIR=/var/tmp/fasth3/t288
+ENV=/home/smarton/fasth3/runner/env.yaml
+CONFIG=h3hf-adaln-on
+TIMEOUT=600
+CMD=env T288_ONCE=1 T286_WARM_DEADLINE_S=400 T286_WARM_LATE_S=330 T286_SKIP_VAE_WARM=1 bash /var/tmp/fasth3/t288/run288.sh on on
+NEEDS=/var/tmp/fasth3/models/MiniMax-H3/READ_OK,/var/tmp/fasth3/models/hyperflow/READ_OK,/home/smarton/fasth3/t286/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t209/kf_first.png,/var/tmp/fasth3/t286/t286_skipvaewarm.py
