@@ -70,9 +70,9 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in(dfb::in);
-    // On Quasar the metadata buffers are node-local scratchpads (Gen2 forbids self-loop DFBs on DM
-    // kernels — the writer NoC-reads each stick and reads it straight back, never pushing). Elsewhere
-    // they stay self-loop DFBs. Same accessor names, so this selects scratch::… vs dfb::….
+    // On Quasar the metadata buffers are node-local scratchpads, because Gen2 forbids self-loop
+    // DFBs on DM kernels. Elsewhere they stay self-loop DFBs. Same accessor names, so this selects
+    // scratch::… vs dfb::….
 #ifdef ARCH_QUASAR
     Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
 #ifdef USE_BATCH_IDX_TENSOR
@@ -287,4 +287,17 @@ void kernel_main() {
             dfb_in.pop_front(Wt);
         }
     }
+
+    // Each of these is reserved once purely as a staging slot for a NOC read that this kernel then
+    // reads through a raw pointer; there is no downstream consumer, so push the reserved pages to
+    // leave the buffers balanced. Quasar stages through scratchpads instead, which reserve nothing.
+#ifndef ARCH_QUASAR
+#ifdef USE_BATCH_IDX_TENSOR
+    dfb_batch_idx.push_back(1);
+#endif
+#ifdef USE_VALID_SEQ_LEN
+    dfb_valid_seq_len.push_back(1);
+#endif
+    dfb_page_table.push_back(1);
+#endif
 }
