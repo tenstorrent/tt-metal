@@ -661,8 +661,96 @@ inline void read_last_zone()
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
-// One measured scope: the zone's timing and, counters on, its counter window. Without the profiler there is no zone.
-#if defined(LLK_PROFILER)
+// INIT measurement build (LLK_PERF_INIT_ONLY, launched by perf/core.py): times INIT's body from fixed sections ahead of
+// main; the spin after the end read and the closing rendezvous keep every thread's epilogue out of the other INITs.
+#if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+namespace llk_perf
+{
+#if defined(LLK_TRISC_MATH)
+extern "C" char __llk_init_body_end[]; // sections.ld
+#endif
+
+template <PerfRunType RUN_TYPE, typename F>
+__attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
+{
+#if defined(LLK_TRISC_MATH)
+    // math's prefetch stops one line past INIT's body, so the wrong-path fetches after its ret do not hold both MSHRs
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = reinterpret_cast<std::uint32_t>(__llk_init_body_end) + 15;
+#endif
+    const bool opened = !llk_profiler::is_buffer_full();
+    if (opened)
+    {
+        llk_profiler::zone_reserve();
+    }
+    std::uint32_t end_lo, end_hi;
+    // the id and its profiler_meta entry on one line: MARKER_ID hashes the file name and line
+    PROFILER_META(MARKER_FULL("INIT")) constexpr std::uint16_t init_id = MARKER_ID("INIT");
+    {
+        const perf_counter_scoped<RUN_TYPE, false> counters(LLK_PERF_ZONE_ID_("INIT"));
+        body();
+        asm volatile(
+            ".balign 16\n\tlui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])\n\t"
+            "li t0, 2048\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b"
+            : [l] "=&r"(end_lo), [h] "=&r"(end_hi)
+            : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
+            : "t0", "memory");
+        if (opened)
+        {
+            std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
+            asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(init_id));
+            llk_profiler::zone_record(
+                static_cast<std::uint16_t>(id),
+                (static_cast<std::uint64_t>(llk_barrier::init_start_ts[1]) << 32) | llk_barrier::init_start_ts[0],
+                (static_cast<std::uint64_t>(end_hi) << 32) | end_lo);
+        }
+    }
+    if constexpr (!exit_barrier_for(RUN_TYPE)) // no INIT exit rendezvous: hold here until every INIT has ended
+    {
+        llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
+    }
+    ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
+#if defined(LLK_TRISC_MATH)
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = 0;
+#endif
+}
+} // namespace llk_perf
+
+namespace llk_perf
+{
+struct init_measurement_second_object // START_PERF_MEASURE("INIT")'s second object: math's head start runs once
+{
+    init_measurement_second_object()
+    {
+    }
+};
+
+struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measurement build: the trampoline opens the zone
+{
+    explicit init_measurement_no_zone(std::uint32_t) // the top of INIT's body, where math's init starts as in trisck.cc
+    {
+#if defined(LLK_TRISC_MATH)
+        ckernel::icache_prefetch_head_start();
+#endif
+    }
+
+    init_measurement_no_zone()
+    {
+    }
+};
+} // namespace llk_perf
+
+// The rest of the kernel runs as in the TILE_LOOP build (its TILE_LOOP zone is recorded but not reported), so every
+// peer's work that INIT starts or waits for (data INIT unpacks or computes, semaphores a loop posts) completes.
+#define START_PERF_MEASURE(zone_name)                                                                                                              \
+    const std::conditional_t<LLK_IS_TILE_LOOP_(zone_name), llk_perf::perf_counter_scoped<PERF_RUN_TYPE, true>, llk_perf::init_measurement_no_zone> \
+        PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));                                                                                 \
+    PROFILER_META(MARKER_FULL(zone_name))                                                                                                          \
+    const std::conditional_t<                                                                                                                      \
+        LLK_IS_TILE_LOOP_(zone_name),                                                                                                              \
+        llk_profiler::zone_scoped<MARKER_ID(zone_name), true, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name))>,                 \
+        llk_perf::init_measurement_second_object>                                                                                                  \
+        _zone_scoped_;
+#elif defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED_Q(zone_name, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)))
