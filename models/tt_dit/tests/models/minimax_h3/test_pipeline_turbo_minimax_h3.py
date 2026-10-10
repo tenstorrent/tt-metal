@@ -192,7 +192,9 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         assert (
             len(handle) == DEVICE_BOUND_TARGETS
         ), f"bound {len(handle)} device targets, expected {DEVICE_BOUND_TARGETS}"
-        _assert_two_time_temb_matches_host(pipeline, mesh_device)
+        # The precomputed table folds the blend on host, so there is no endpoint embedder to check.
+        if not pipeline._precomputed_adaln():
+            _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
     log_pipeline_perf(
         benchmark_profiler,

@@ -258,7 +258,9 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
     def _precomputed_adaln(self) -> bool:
         # A HyperFlow contract fixes the schedule before the first request, which is what makes the
         # table finite. A Turbo file leaves the step count to the caller, so it keeps the on-device
-        # projections.
+        # projections. MINIMAX_H3_ADALN_PRECOMPUTE=0 keeps them on device under HyperFlow too, for A/Bs.
+        if os.environ.get("MINIMAX_H3_ADALN_PRECOMPUTE", "1") == "0":
+            return False
         return self.hyperflow is not None
 
     def _prepare_adaln(self, slot_roles: tuple[str, ...]) -> tuple[MiniMaxH3AdalnCache, list[torch.Tensor]]:
