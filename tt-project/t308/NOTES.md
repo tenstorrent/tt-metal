@@ -1,12 +1,9 @@
 # t308: open the #194 draft PR
 
-State (2026-10-10 04:50 UTC):
-- #305 confirms the gain: main 6.41/6.19 s (jobs 210/214) vs PR 6.24 s (job 213), ~-0.2 s, all in S1+S2. Quality: t301 cmp PCC 0.9983-0.9988, PSNR 38-39.6 dB, stills identical.
-- Revert of 05401286709 (mel-VAE trace) committed on local ttp/ltx23-main-pr as ae3469d0a26 (worktree tt-project/worktrees/t308-mainpr). NOT pushed yet. Revert (not drop) so the push stays a fast-forward.
-- PR body ready: tt-project/t308/PR_BODY.md (this branch).
-- Blocker: project push_checks (harness/project.json) run ltx-rt-only test files (test_vae_ltx_*_ref.py, test_conv3d_sweep_halo_cpu.py, test_denoise_trims.py). None exist on a main-based branch, so `ttp checks` fails on ae3469d0a26 and gh/ttp push --own refuse. Needs a harness fix (skip missing files).
-- Branch conflicts with current origin/main (13 hunks: dit_fused_distributed_rmsnorm op, normalization.py, rotary_embedding_llama factory; main #59195, #58676). Noted in the PR body.
+Done (2026-10-10 07:35 UTC):
+- Draft PR https://github.com/tenstorrent/tt-metal/pull/60209, head ae3469d0a26 (ttp/ltx23-main-pr, fast-forward from df9e5ecaac6), base main. Draft, no reviewers. GitHub says CONFLICTING (fused RMSNorm op + rotary_embedding_llama factory vs main #59195/#58676); the body says a rebase and a rerun of the A/B come before review.
+- Unblocked checks: harness commit a794f64 adds checks/ltx-ref-tests.sh (runs the ltx-rt-only CPU ref tests only where present); project.json push_checks points at it (uncommitted in harness, next to the coordinator's own uncommitted home_timezone line). On ltx-rt trees it still runs all 80 tests.
+- `ttp checks` passed on ae3469d0a26 (3 checks).
+- PR body: tt-project/t308/PR_BODY.md; summary corrected to the tables (S2 -0.14..-0.15 s, S1 -0.03..-0.06 s, Total -0.17 vs job 210 / +0.05 vs job 214 due to Encoder noise).
 
-Next, once checks are fixed:
-1. cd tt-project/worktrees/t308-mainpr; ttp checks -- (CPU tests, see PR_BODY Checks); ttp push --own --detach (fast-forward df9e5ecaac6 -> ae3469d0a26).
-2. gh pr create --draft --repo tenstorrent/tt-metal --base main --head ttp/ltx23-main-pr --title "LTX-2.3 distilled: turn on bit-identical speed gains and a faster mp4 export by default" --body-file <PR_BODY.md>
+Next (not this task): rebase ttp/ltx23-main-pr on current main, resolve the 13 hunks, rebuild, rerun the 8+3 A/B, update the PR. Never gh pr ready without the user's yes.
