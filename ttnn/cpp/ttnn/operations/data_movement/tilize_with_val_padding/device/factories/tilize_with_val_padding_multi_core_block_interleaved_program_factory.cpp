@@ -72,8 +72,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest skipped for UInt8 below (int-FPU path).
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     MeshDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -296,7 +298,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
         // only the bound set's input keeps the validator from rejecting an entry for a DFB the kernel
         // does not bind (the other set's input, which may not exist on any core).
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_llk_acc};
-        if (fp32_llk_acc) {
+        if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 

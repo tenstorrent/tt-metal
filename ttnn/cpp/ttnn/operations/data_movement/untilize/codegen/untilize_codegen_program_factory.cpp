@@ -41,7 +41,9 @@ std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/"
 // pack_untilize. Always false for this port's supported_by_codegen scope (bf16/bf8_b only);
 // kept general to stay a faithful transliteration of the source builder.
 bool needs_dst_accum(DataType dtype) {
-    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+    // UInt8 would need 32-bit Dest here too; today supported_by_codegen rejects it.
+    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32 ||
+           dtype == DataType::UINT8;
 }
 
 using untilize_codegen_detail::CbPlan;

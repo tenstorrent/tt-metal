@@ -80,8 +80,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     // consumer view sizes an output tile in the input format, not the output format.
     const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_data_format);
 
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest skipped for UInt8 below (int-FPU path).
     const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                              output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                              output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                              a.dtype() == DataType::UINT8;
 
     TT_FATAL(a.buffer() != nullptr, "Input buffer should be allocated on device!");
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
@@ -227,7 +229,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     // cursor is hand-driven, it has no FIFO producer).
     ComputeHardwareConfig compute_cfg;
     compute_cfg.enable_32_bit_dest = fp32_llk_acc;
-    if (fp32_llk_acc) {
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
         compute_cfg.unpack_modes.emplace(MID_DFB, UnpackMode::UnpackToDest);
         compute_cfg.unpack_modes.emplace(MID_VIEW_DFB, UnpackMode::UnpackToDest);

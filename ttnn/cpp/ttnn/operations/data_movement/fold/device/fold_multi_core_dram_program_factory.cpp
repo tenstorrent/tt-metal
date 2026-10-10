@@ -164,10 +164,12 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     };
 
     // fp32 needs `UnpackToDest` — packer truncates mantissa otherwise and `torch.equal` fails vs the RM path.
-    const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
+    // UInt8 also needs 32-bit Dest on WH/BH, but on the int-FPU path (no UnpackToDest).
+    const bool fp32_dest_acc_en =
+        dfb_data_format == tt::DataFormat::Float32 || dfb_data_format == tt::DataFormat::UInt8;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (dfb_data_format == tt::DataFormat::Float32) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
         return KernelSpec{

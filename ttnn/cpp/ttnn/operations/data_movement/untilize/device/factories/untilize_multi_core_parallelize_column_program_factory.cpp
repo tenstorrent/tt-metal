@@ -135,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     // block-count multiplicity across disjoint WorkUnitSpecs.
     auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
         return KernelSpec{

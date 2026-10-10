@@ -33,6 +33,8 @@ ttnn::Tensor permute_impl(
     float pad_value = 0.0f) {
     uint32_t rank = a.logical_shape().rank();
 
+    // BH UInt8 RM workaround (issue #58106) handled centrally in ttnn::prim::permute.
+
     // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
     // Input-side guard only; irregular output shapes are safe (writers emit full rows, compute_output_specs synthesises
     // a valid spec).
