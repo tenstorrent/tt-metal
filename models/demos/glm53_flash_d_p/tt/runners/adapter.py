@@ -35,7 +35,9 @@ from typing import Optional
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 
 MODEL_NAME = "glm53_flash_d_p"
-MESH_SHAPE = (2, 2)
+# the bring-up specs this adapter serves (BRINGUP_SPEC's model) and the mesh each is built for: the prior 2x2 bring-up
+# and the LoudBox 2x4 one (models/demos/glm53_flash_d_p_lb, the same model code; Glm53FlashLbPrefillAdapter)
+MESH_SHAPES = {"glm53_flash_d_p": (2, 2), "glm53_flash_d_p_lb": (2, 4)}
 PAD_ID = 0xFFFFFFFF
 
 
@@ -58,13 +60,24 @@ class Glm53FlashConfig:
     HF_ID = "zai-org/GLM-5.3-Flash"
 
 
-def _bringup_spec():
-    if not os.environ.get("BRINGUP_SPEC"):
-        return None
+SPEC_PATHS = {
+    (2, 2): Path(__file__).resolve().parents[2] / "bringup" / "spec.yaml",
+    (2, 4): Path(__file__).resolve().parents[3] / "glm53_flash_d_p_lb" / "bringup" / "spec.yaml",
+}
+
+
+def _bringup_spec(mesh_shape=None):
+    """BRINGUP_SPEC when it is one of this adapter's specs (and, given a mesh shape, built for it), else (given a mesh
+    shape) the bring-up spec of that mesh (SPEC_PATHS): the device settings and the served layers come from it."""
     from models.demos.common.bringup.reference.golden import load_spec
 
-    s = load_spec()
-    return s if s.model == MODEL_NAME else None
+    if os.environ.get("BRINGUP_SPEC"):
+        s = load_spec()
+        if s.model in MESH_SHAPES and (mesh_shape is None or MESH_SHAPES[s.model] == tuple(mesh_shape)):
+            return s
+    if mesh_shape is None or tuple(mesh_shape) not in SPEC_PATHS:
+        return None
+    return load_spec(str(SPEC_PATHS[tuple(mesh_shape)]))
 
 
 def resolve_model_path() -> str:
@@ -72,7 +85,7 @@ def resolve_model_path() -> str:
     env = os.environ.get("PREFILL_HF_MODEL")
     if env:
         return env
-    s = _bringup_spec()
+    s = _bringup_spec(_env_mesh())
     if s is not None:
         from models.demos.common.bringup.reference.golden import hf_path
 
@@ -82,12 +95,17 @@ def resolve_model_path() -> str:
     return snapshot_download(Glm53FlashConfig.HF_ID, local_files_only=True)
 
 
-def served_layers(first_layer_idx: int, num_layers: int) -> list[int]:
+def _env_mesh():
+    sp, tp = os.environ.get("PREFILL_SP"), os.environ.get("PREFILL_TP")
+    return (int(sp), int(tp)) if sp and tp else None
+
+
+def served_layers(first_layer_idx: int, num_layers: int, mesh_shape=None) -> list[int]:
     """Global indices of the layers this rank builds (see module docstring)."""
     from models.demos.common.bringup.core.spec import parse_layers
 
     env = os.environ.get("PREFILL_GLM_LAYERS")
-    s = _bringup_spec()
+    s = _bringup_spec(mesh_shape or _env_mesh())
     if env:
         layers = parse_layers(env, Glm53FlashConfig.NUM_LAYERS)
     elif s is not None:
@@ -132,6 +150,11 @@ class GlmKvCaches(KvCaches):
     layers: list = field(default_factory=list)
     dsa_layers: list = field(default_factory=list)
     slots: list = field(default_factory=list)  # per slot: {layer: new_block_state(...)}
+    # Decode via prefill: per slot the KDA carries at its last chunk boundary ({layer: KdaState}) and where the slot is
+    # ({"pos": end of the last chunk run, "snap_at": the boundary of the snapshot}); a chunk at snap_at re-prefills
+    # from the snapshot (the chunk holding the newest token, run again with one more token)
+    snaps: list = field(default_factory=list)
+    marks: list = field(default_factory=list)
 
 
 class Glm53FlashPrefillRuntime:
@@ -142,20 +165,30 @@ class Glm53FlashPrefillRuntime:
         from models.demos.glm53_flash_d_p.tt.model import TtGlmModel
 
         assert params.is_first_rank and params.is_last_rank, "single-rank only"
-        assert tuple(params.mesh_shape) == MESH_SHAPE, f"built for a 2x2 mesh, got {params.mesh_shape}"
+        assert tuple(params.mesh_shape) in MESH_SHAPES.values(), f"built for a 2x2 or 2x4 mesh, got {params.mesh_shape}"
         sp = params.mesh_shape[0]
         assert params.chunk_size % (128 * sp) == 0 and params.max_seq_len % params.chunk_size == 0, (
             params.chunk_size,
             params.max_seq_len,
         )
         self.mesh_device, self.config = mesh_device, params
-        self.layers = served_layers(params.first_layer_idx, params.num_layers)
+        self.layers = served_layers(params.first_layer_idx, params.num_layers, params.mesh_shape)
+        # the bring-up spec's device settings (expert dtype / fidelities / MoE links), as its device model applies them
+        # (the LoudBox's 45 layers fit only with bfp4 experts)
+        spec = _bringup_spec(params.mesh_shape)
+        kw = {}
+        if spec is not None:
+            from models.demos.glm53_flash_d_p.bringup import hooks
+
+            hooks.apply_device_settings(spec)
+            kw["experts_dtype"] = hooks.experts_dtype(spec)
         self.model = TtGlmModel(
             mesh_device,
             resolve_model_path(),
             max_seq=params.max_seq_len,
             chunks=[params.chunk_size],
             layers=self.layers,
+            **kw,
         )
         self.cfg = self.model.cfg
         self.dsa_layers = dsa_layers_of(self.cfg, self.layers)
@@ -164,6 +197,9 @@ class Glm53FlashPrefillRuntime:
         self.vocab = int(self.cfg.vocab_size)
         self._ttnn = ttnn
         self._sink = None
+        # Opt-in (decode via prefill): called as hidden_sink(h, slot, start, end) with the last layer's output (the
+        # model's residual layout) of every served chunk, after its acks, before h is freed. None for the runner tests.
+        self.hidden_sink = None
 
     def set_layer_completion_sink(self, sink) -> None:
         self._sink = sink
@@ -209,11 +245,32 @@ class Glm53FlashPrefillRuntime:
         for layer in self.layers:
             self.blocks[layer].bind_state(kv_cache.slots[slot][layer])
 
+    def _kda_copy(self, src: dict, dst: dict) -> None:
+        for i in self.layers:
+            if self.cfg.is_kda(i):
+                self._ttnn.copy(src[i]["kda"].recurrent, dst[i]["kda"].recurrent)
+                self._ttnn.copy(src[i]["kda"].convolution, dst[i]["kda"].convolution)
+
+    def _position(self, kv_cache, slot: int, start: int) -> None:
+        """Put the slot's KDA carries at ``start``: a chunk at 0 starts from zero (the KDA module's own), one where the
+        slot left off continues, one at the slot's last chunk boundary restores that boundary's snapshot (decode via
+        prefill re-runs the chunk holding the newest token); anything else has no state to start from."""
+        m = kv_cache.marks[slot]
+        if start == 0 or start == m["pos"]:
+            return
+        if start != m["snap_at"]:
+            raise ValueError(
+                f"slot {slot}: a chunk at {start} needs the KDA state there; the slot is at {m['pos']} with a "
+                f"snapshot at {m['snap_at']}"
+            )
+        self._kda_copy(kv_cache.snaps[slot], kv_cache.slots[slot])
+
     def _run(self, ids, kv_cache, slot, start, end, request_id, acks: bool):
         ttnn = self._ttnn
         sink = self._sink if acks else None
         mesh, c = self.mesh_device, self.config.chunk_size
         state = kv_cache.slots[slot]
+        self._position(kv_cache, slot, start)
 
         def on_layer(i, request_id=request_id):
             k = self.slot_of.get(i)
@@ -228,8 +285,21 @@ class Glm53FlashPrefillRuntime:
 
         self._bind(kv_cache, slot)
         clean = self._device_ids(ids)
-        h = self.model.prefill_chunk(clean, start, on_layer=on_layer, end=end)
+        # KDA bounds its scan at a 32-aligned end: the rows up to it past ``end`` are pad tokens (the engine's tail,
+        # clamped into the vocab), after every real token, so causality keeps them out of every real row; the carries
+        # they leave are only ever continued from at a chunk boundary, where the chunk was full (see _position)
+        end32 = min(start + c, (end + 31) // 32 * 32)
+        h = self.model.prefill_chunk(clean, start, on_layer=on_layer, end=end32)
         ttnn.deallocate(clean)
+        m = kv_cache.marks[slot]
+        m["pos"] = end
+        if start == 0:
+            m["snap_at"] = 0
+        if end == start + c:  # a full chunk: its end is the next boundary, snapshot the carries there
+            self._kda_copy(state, kv_cache.snaps[slot])
+            m["snap_at"] = end
+        if acks and self.hidden_sink is not None:
+            self.hidden_sink(h, slot, start, end)
         ttnn.deallocate(h)
 
     def compile(self, kv_cache: GlmKvCaches) -> None:
@@ -258,7 +328,6 @@ class Glm53FlashPrefillRuntime:
         c = self.config.chunk_size
         assert actual_start % c == 0, "chunk write offset must be chunk-aligned"
         assert actual_start < actual_end <= actual_start + c, (actual_start, actual_end, c)
-        assert actual_end % 32 == 0, f"actual_end {actual_end} must be 32-aligned (KDA's runtime end bound)"
         assert actual_start + c <= self.config.max_seq_len, "chunk overruns the user slot"
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
         self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, request_id, acks=True)
@@ -321,8 +390,8 @@ class Glm53FlashPrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         from models.demos.glm53_flash_d_p.tt.runners.kv_contract import GlmContractKV
 
-        assert tuple(params.mesh_shape) == MESH_SHAPE, f"built for a 2x2 mesh, got {params.mesh_shape}"
-        layers = served_layers(params.first_layer_idx, params.num_layers)
+        assert tuple(params.mesh_shape) in MESH_SHAPES.values(), f"built for a 2x2 or 2x4 mesh, got {params.mesh_shape}"
+        layers = served_layers(params.first_layer_idx, params.num_layers, params.mesh_shape)
         dsa = dsa_layers_of(hf_config, layers)
         assert dsa, f"served layers {layers} hold no DSA layer: nothing to migrate"
         contract = GlmContractKV(
@@ -332,7 +401,10 @@ class Glm53FlashPrefillAdapter(PrefillModelAdapter):
             {i: new_block_state(mesh_device, hf_config, i, params.max_seq_len) for i in layers}
             for _ in range(params.num_users)
         ]
-        return GlmKvCaches(contract=contract, layers=layers, dsa_layers=dsa, slots=slots)
+        kda = [i for i in layers if hf_config.is_kda(i)]
+        snaps = [{i: new_block_state(mesh_device, hf_config, i, params.max_seq_len) for i in kda} for _ in slots]
+        marks = [{"pos": 0, "snap_at": 0} for _ in slots]
+        return GlmKvCaches(contract=contract, layers=layers, dsa_layers=dsa, slots=slots, snaps=snaps, marks=marks)
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         return Glm53FlashPrefillRuntime(mesh_device=mesh_device, hf_config=hf_config, params=params)
@@ -362,3 +434,16 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
             out[name] = min(out.get(name, 1.0), p)
             logger.info(f"  layer {layer:>2} {name} at {length}: PCC {p:.6f}")
     return out
+
+
+class Glm53FlashLbConfig(Glm53FlashConfig):
+    # the LoudBox spec's fabric packet payload (box.device_params.fabric_payload_bytes): one bf16 token row
+    FABRIC_PAYLOAD_SIZE = 8192
+
+
+class Glm53FlashLbPrefillAdapter(Glm53FlashPrefillAdapter):
+    """The same adapter on the 8-chip LoudBox (2x4 mesh: KDA SP 2 x TP 4, routed experts EP 8 at bfp4; bring-up
+    models/demos/glm53_flash_d_p_lb, all 45 text layers)."""
+
+    name = "glm53_flash_d_p_lb"
+    model_config = Glm53FlashLbConfig

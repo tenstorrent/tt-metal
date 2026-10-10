@@ -319,6 +319,8 @@ ADAPTER_PATHS = {
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GLM-5.3-Flash: KDA linear attention + DSA sparse MLA (NoPE, pooled-key indexer), mHC; 2x2 BH mesh.
     "glm53_flash_d_p": "models.demos.glm53_flash_d_p.tt.runners.adapter:Glm53FlashPrefillAdapter",
+    # the same on the 8-chip LoudBox (2x4: KDA SP 2 x TP 4, EP 8, bfp4 experts), all 45 text layers.
+    "glm53_flash_d_p_lb": "models.demos.glm53_flash_d_p.tt.runners.adapter:Glm53FlashLbPrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Hy4 Preview (layers subset): gated DSA sparse MLA + sinks + indexer sharing, iHC, 256-expert MoE; 2x2 BH mesh.
