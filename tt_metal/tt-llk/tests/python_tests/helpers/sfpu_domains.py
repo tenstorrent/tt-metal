@@ -2243,7 +2243,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwNe,  # its default result is 1, so ne(NaN, x) = 1
         MathOperation.SfpuElwLt,  # strict_ordered pre-stores 0, so lt(NaN, x) = 0
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
-        MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
+        MathOperation.SfpuElwLe,  # le(NaN, x) = 0: a NaN operand never takes the ordered result
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
     }
 )
