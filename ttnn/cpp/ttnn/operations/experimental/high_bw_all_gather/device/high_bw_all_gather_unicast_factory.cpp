@@ -362,14 +362,10 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Keep the startup-readiness and relay/completion semaphores in L1_SMALL when the device reserves it.
-    const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
-    auto sem_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     const bool uses_external_semaphores = operation_attributes.ready_semaphore.has_value();
-    if (!uses_external_semaphores && sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Configure an L1_SMALL region to mitigate this.");
+    if (!uses_external_semaphores) {
+        ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
     }
     auto ready_sem = uses_external_semaphores ? *operation_attributes.ready_semaphore
                                               : ttnn::global_semaphore::create_global_semaphore(
