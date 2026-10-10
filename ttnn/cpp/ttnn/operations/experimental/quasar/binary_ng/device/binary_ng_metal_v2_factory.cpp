@@ -111,6 +111,13 @@ constexpr const char* kComputeFpuScalarDfb =
 constexpr const char* kComputeSfpuScalarDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/"
     "eltwise_binary_sfpu_scalar_dfb.cpp";  // added in a later task; only the FPU path runs here
+// Multi-thread (4 reader / 2 writer threads), implicit-sync DFB kernels for bf16 SFPU ops.
+constexpr const char* kReaderMtDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/reader_mt_dfb.cpp";
+constexpr const char* kWriterMtDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/writer_mt_dfb.cpp";
+constexpr const char* kComputeSfpuMtDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/eltwise_binary_sfpu_mt_dfb.cpp";
 // Subtile-broadcast DFB kernels. The bcast reader delivers the partial tile (BCAST_LLK path, no fill);
 // the row-bcast compute expands it via unary_bcast<ROW> through the intermediate llk_post DFB.
 constexpr const char* kReaderBcastDfb =
@@ -503,6 +510,232 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+
+    // --- Multi-thread path: 4 reader threads and 2 writer threads, all with implicit sync, for a bf16
+    // SFPU op with no activations on NoC-read operands. Readers send one in0 and one in1 entry per
+    // output tile, expanding a broadcast or scalar operand into a full tile in L1 scratch first; compute
+    // runs one tile at a time. Each core gets at least 4 tiles so every reader thread has work (the
+    // DFB's final-credit barrier waits for all of a kernel's threads). ---
+    {
+        constexpr uint32_t kReaderThreads = 4;
+        constexpr uint32_t kWriterThreads = 2;
+        const bool has_post_act =
+            !compute_defines["PROCESS_POST_ACTIVATIONS(i)"].empty() || compute_defines.contains("PACK_RELU");
+        const bool bf16 =
+            a_df == tt::DataFormat::Float16_b && b_df == tt::DataFormat::Float16_b && c_df == tt::DataFormat::Float16_b;
+        const uint32_t tile_hw = c_tile.get_height() * c_tile.get_width();
+        const uint32_t total_tiles = c.physical_volume() / tile_hw;
+        // Expansion of each operand: 0 none, 1 first element, 2 first row, 3 first column.
+        uint32_t a_fill = 0;
+        uint32_t b_fill = 0;
+        switch (op.subtile_broadcast_type) {
+            case SubtileBroadcastType::NONE: break;
+            case SubtileBroadcastType::SCALAR_A: a_fill = 1; break;
+            case SubtileBroadcastType::SCALAR_B: b_fill = 1; break;
+            case SubtileBroadcastType::ROW_A: a_fill = 2; break;
+            case SubtileBroadcastType::ROW_B: b_fill = 2; break;
+            case SubtileBroadcastType::COL_A: a_fill = 3; break;
+            case SubtileBroadcastType::COL_B: b_fill = 3; break;
+            case SubtileBroadcastType::ROW_A_COL_B:
+                a_fill = 2;
+                b_fill = 3;
+                break;
+            case SubtileBroadcastType::ROW_B_COL_A:
+                a_fill = 3;
+                b_fill = 2;
+                break;
+        }
+        const bool use_mt = is_sfpu && !borrow_shards && bf16 && !has_lhs_act && !has_rhs_act && !has_post_act &&
+                            op_type != BinaryOpType::ISCLOSE && c_tile.get_height() == 32 && c_tile.get_width() == 32 &&
+                            total_tiles >= kReaderThreads;
+        if (use_mt) {
+            const int out_rank = c.logical_shape().rank();
+            const uint32_t aND = extract_nD_dims(a, out_rank);
+            const uint32_t bND = is_scalar ? 1u : extract_nD_dims(*b_opt, out_rank);
+            const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
+            uint32_t bD = 1, bN = 1, bC = 1, bHt = 1, bWt = 1;
+            if (!is_scalar) {
+                std::tie(bD, bN, bC, bHt, bWt) = get_shape_dims(*b_opt);
+            }
+            const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
+
+            const m2::TensorParamName T_A{"binary_ng_a"};
+            const m2::TensorParamName T_B{"binary_ng_b"};
+            const m2::TensorParamName T_C{"binary_ng_c"};
+            const m2::DFBSpecName IN0{"binary_ng_in0_dfb"};
+            const m2::DFBSpecName IN1{"binary_ng_in1_dfb"};
+            const m2::DFBSpecName OUT{"binary_ng_out_dfb"};
+            const m2::ScratchpadSpecName SCRATCH{"binary_ng_scratch"};
+            const m2::KernelSpecName READER{"binary_ng_reader"};
+            const m2::KernelSpecName WRITER{"binary_ng_writer"};
+            const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
+            const bool needs_scratch = a_fill != 0 || b_fill != 0 || is_scalar;
+
+            // Two entries per reader thread in, two per writer thread out.
+            std::vector<m2::DataflowBufferSpec> dfbs = {
+                make_dfb(IN0, a_tile_bytes, 2 * kReaderThreads, a_df, a_tile, std::nullopt),
+                make_dfb(IN1, b_tile_bytes, 2 * kReaderThreads, b_df, b_tile, std::nullopt),
+                make_dfb(OUT, c_tile_bytes, 2 * kReaderThreads, c_df, c_tile, std::nullopt),
+            };
+
+            m2::KernelSpec::CompilerOptions::Defines reader_defines_tbl;
+            reader_defines_tbl.emplace("A_FILL", std::to_string(a_fill));
+            reader_defines_tbl.emplace("B_FILL", std::to_string(b_fill));
+            reader_defines_tbl.emplace("B_SCALAR", is_scalar ? "1" : "0");
+            m2::Group<m2::TensorBinding> reader_tensor_bindings = {m2::TensorBinding{T_A, "in0"}};
+            if (!is_scalar) {
+                reader_tensor_bindings.push_back(m2::TensorBinding{T_B, "in1"});
+            }
+            m2::Group<std::string> reader_rt_names = {
+                "start_tile_id",
+                "num_tiles",
+                "num_padded_tiles",
+                "D",
+                "N",
+                "C",
+                "Ht",
+                "Wt",
+                "nD_stride",
+                "d_stride",
+                "n_stride",
+                "c_stride",
+                "a_Ht",
+                "a_Wt"};
+            if (is_scalar) {
+                reader_rt_names.push_back("packed_scalar");
+            } else {
+                for (const char* name : {"nD_stride_b", "d_stride_b", "n_stride_b", "c_stride_b", "b_Ht", "b_Wt"}) {
+                    reader_rt_names.push_back(name);
+                }
+            }
+            m2::KernelSpec reader_spec{
+                .unique_id = READER,
+                .source = std::filesystem::path(kReaderMtDfb),
+                .num_threads = kReaderThreads,
+                .compiler_options = {.defines = reader_defines_tbl},
+                .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
+                .tensor_bindings = reader_tensor_bindings,
+                .runtime_arg_schema = {.runtime_arg_names = reader_rt_names},
+                .hw_config = ttnn::create_reader_datamovement_config(),
+            };
+            if (needs_scratch) {
+                reader_spec.scratchpad_bindings = {
+                    m2::ScratchpadBinding{.scratchpad_spec_name = SCRATCH, .accessor_name = "pad"}};
+            }
+            m2::KernelSpec writer_spec{
+                .unique_id = WRITER,
+                .source = std::filesystem::path(kWriterMtDfb),
+                .num_threads = kWriterThreads,
+                .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
+                .tensor_bindings = {m2::TensorBinding{T_C, "out"}},
+                .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_tiles"}},
+                .hw_config = ttnn::create_writer_datamovement_config(),
+            };
+            m2::KernelSpec::CompilerOptions::Defines compute_defines_tbl;
+            for (const auto& [k, v] : compute_defines) {
+                compute_defines_tbl.emplace(k, v);
+            }
+            m2::KernelSpec compute_spec{
+                .unique_id = COMPUTE,
+                .source = std::filesystem::path(kComputeSfpuMtDfb),
+                .num_threads = 1,
+                .compiler_options =
+                    {.include_paths =
+                         {std::filesystem::path(kComputeIncludeCommon), std::filesystem::path(kComputeIncludeDfb)},
+                     .defines = compute_defines_tbl},
+                .dfb_bindings =
+                    {m2::ConsumerOf(IN0, "pre_lhs"), m2::ConsumerOf(IN1, "pre_rhs"), m2::ProducerOf(OUT, "out")},
+                .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "num_padded_tiles"}},
+                .hw_config = ttnn::to_compute_hardware_config(
+                    ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
+            };
+
+            // At most total_tiles / 4 cores, so each core gets at least 4 tiles.
+            const uint32_t max_cores = std::min<uint32_t>(op.worker_grid.num_cores(), total_tiles / kReaderThreads);
+            const auto used = corerange_to_cores(op.worker_grid, max_cores, true);
+            const auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
+                tt::tt_metal::split_work_to_cores(CoreRangeSet(ttsl::Span<const CoreCoord>(used)), total_tiles, true);
+            const uint32_t packed_scalar =
+                is_scalar ? pack_scalar_runtime_arg(*op.scalar, a.dtype(), /*is_quant*/ false) : 0u;
+
+            m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
+            uint32_t start_tile_id = 0;
+            std::set<CoreRange> target_ranges;
+            for (const auto& core : corerange_to_cores(all_cores, std::nullopt, true)) {
+                target_ranges.insert(CoreRange(core, core));
+                const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
+                const uint32_t num_tiles = group_1.contains(core) ? tiles_1 : tiles_2;
+                const uint32_t num_padded_tiles = tt::round_up(num_tiles, kReaderThreads);
+                const std::vector<std::pair<const char*, uint32_t>> common = {
+                    {"start_tile_id", start_tile_id},
+                    {"num_tiles", num_tiles},
+                    {"num_padded_tiles", num_padded_tiles},
+                    {"D", cD},
+                    {"N", cN},
+                    {"C", cC},
+                    {"Ht", cHt},
+                    {"Wt", cWt},
+                    {"nD_stride", aHt * aWt * aC * aN * aD * (aND > 1)},
+                    {"d_stride", aHt * aWt * aC * aN * (aD > 1)},
+                    {"n_stride", aHt * aWt * aC * (aN > 1)},
+                    {"c_stride", aHt * aWt * (aC > 1)},
+                    {"a_Ht", aHt},
+                    {"a_Wt", aWt}};
+                for (const auto& [name, value] : common) {
+                    reader_args[name][node] = value;
+                }
+                if (is_scalar) {
+                    reader_args["packed_scalar"][node] = packed_scalar;
+                } else {
+                    reader_args["nD_stride_b"][node] = bHt * bWt * bC * bN * bD * (bND > 1);
+                    reader_args["d_stride_b"][node] = bHt * bWt * bC * bN * (bD > 1);
+                    reader_args["n_stride_b"][node] = bHt * bWt * bC * (bN > 1);
+                    reader_args["c_stride_b"][node] = bHt * bWt * (bC > 1);
+                    reader_args["b_Ht"][node] = bHt;
+                    reader_args["b_Wt"][node] = bWt;
+                }
+                writer_args["start_tile_id"][node] = start_tile_id;
+                writer_args["num_tiles"][node] = num_tiles;
+                compute_args["num_tiles"][node] = num_tiles;
+                compute_args["num_padded_tiles"][node] = num_padded_tiles;
+                start_tile_id += num_tiles;
+            }
+
+            m2::Group<m2::TensorParameter> tensor_params = {{.unique_id = T_A, .spec = a.tensor_spec()}};
+            if (!is_scalar) {
+                tensor_params.push_back({.unique_id = T_B, .spec = b_opt->tensor_spec()});
+            }
+            tensor_params.push_back({.unique_id = T_C, .spec = c.tensor_spec()});
+            m2::ProgramSpec spec{
+                .name = "binary_ng_metal_v2_multi_thread",
+                .kernels = {reader_spec, writer_spec, compute_spec},
+                .dataflow_buffers = dfbs,
+                .tensor_parameters = tensor_params,
+                .work_units = {m2::WorkUnitSpec{
+                    .name = "binary_ng_metal_v2_multi_thread",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = m2::NodeRangeSet(target_ranges)}},
+            };
+            if (needs_scratch) {
+                // Two scratch tiles (a and b) per reader thread.
+                spec.scratchpads = {
+                    m2::ScratchpadSpec{.unique_id = SCRATCH, .size_per_node = kReaderThreads * 2 * a_tile_bytes}};
+            }
+            m2::ProgramRunArgs run_params;
+            run_params.kernel_run_args = {
+                m2::ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+                m2::ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+                m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)},
+            };
+            run_params.tensor_args.emplace(T_A, m2::ProgramRunArgs::TensorArgument{a.mesh_tensor()});
+            if (!is_scalar) {
+                run_params.tensor_args.emplace(T_B, m2::ProgramRunArgs::TensorArgument{b_opt->mesh_tensor()});
+            }
+            run_params.tensor_args.emplace(T_C, m2::ProgramRunArgs::TensorArgument{c.mesh_tensor()});
+            return ProgramArtifacts{
+                .spec = std::move(spec), .run_params = std::move(run_params), .op_owned_tensors = {}};
+        }
+    }
 
     // --- num_tiles_per_cycle: DST register capacity per tile_regs_acquire (mirrors the descriptor
     // factory + the shipped factory's min(.,shard_tiles) cap). Multi-tile only when EVERY operand is borrowed
