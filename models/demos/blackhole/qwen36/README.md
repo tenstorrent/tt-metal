@@ -82,6 +82,23 @@ run to the eight devices that form the mesh:
 TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
 ```
 
+**Galaxy (Glx) — 8-way TP x 4-way DP:**
+
+`test_demo_text_dp` opens the whole 32-chip Galaxy as a (4, 8) mesh
+(`FABRIC_1D_RING`), splits it into four (1, 8) TP=8 submeshes, and runs one model
+replica per submesh (one user each); decode trace replays are enqueued across the
+groups in lockstep.
+
+```bash
+export MESH_DEVICE=BHGLX
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "dp4_traced_128"      # same prompt on all 4 groups (outputs must match)
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "dp4_distinct_128"    # a different prompt per group
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "tp8_glx_traced_128"  # a single TP=8 replica on one (1, 8) row
+```
+
+Measured on a Blackhole Galaxy (Qwen3.8-27B, 128-token prompt): 41.7 tok/s/user at
+TP=8, 166.6 tok/s aggregate at TP=8 x DP=4, TTFT ~0.06 s.
+
 **Other checkpoints:**
 
 ```bash

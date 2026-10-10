@@ -61,7 +61,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# BHGLX: 32-chip Blackhole Galaxy, used by the data-parallel test (test_demo_text_dp) only. Opened directly in the 4x8 row view so create_submeshes splits it without a reshape (a reshape after open leaves the parent's real-time-profiler sockets with stale 8x4 coordinates, which fail their barrier at teardown).
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8), "BHGLX": (4, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, 4)
+)
 _MULTI = _MESH_SHAPE != (1, 1)
 
 
@@ -74,18 +77,19 @@ def _spec_requested():
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
+# BHGLX: each (1, 8) DP submesh is one Galaxy column; its Ring CCLs need the column's wrap link, which only the ring (torus) fabric routes — FABRIC_1D has no route from the column's first chip to its last.
+_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D_RING if _MESH_SHAPE == (4, 8) else ttnn.FabricConfig.FABRIC_1D
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
         "num_command_queues": 2,
-        **(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
-        ),
+        **({"fabric_config": _FABRIC_CONFIG, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}),
     }
 ]
 
 SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen36/demo/sample_prompts"
 SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
+TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
 
 
 _FRANKENSTEIN_CONFIGS = {
@@ -272,6 +276,8 @@ def test_demo_text(
     repeat_batches,
 ):
     """E2e text generation: prefill + decode."""
+    if _MESH_SHAPE[0] != 1:
+        pytest.skip("single-model demo needs a (1, N) mesh; use test_demo_text_dp on BHGLX")
     from transformers import AutoTokenizer
 
     device = mesh_device
@@ -409,6 +415,102 @@ def test_demo_text(
 @run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize(
+    "data_parallel, active_groups, seqlen, max_generated_tokens, distinct_prompts",
+    [
+        pytest.param(4, 1, 128, 50, False, id="tp8_glx_traced_128"),
+        pytest.param(4, 4, 128, 50, False, id="dp4_traced_128"),
+        pytest.param(4, 4, 128, 128, True, id="dp4_distinct_128"),
+    ],
+)
+def test_demo_text_dp(mesh_device, data_parallel, active_groups, seqlen, max_generated_tokens, distinct_prompts):
+    """Data-parallel text generation: the mesh is split into ``data_parallel`` TP submeshes, each running its own
+    model replica on one user (e.g. a (4, 8) BHGLX mesh -> four (1, 8) TP=8 groups).
+    Only the first ``active_groups`` submeshes get a model (active_groups=1 -> a single TP=8 model on the full Galaxy).
+    """
+    from transformers import AutoTokenizer
+
+    from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+    from models.tt_transformers.tt.generator import create_submeshes
+
+    if mesh_device.get_num_devices() < 2 * data_parallel or mesh_device.get_num_devices() % data_parallel:
+        pytest.skip(
+            "data-parallel demo needs a multi-device mesh divisible by data_parallel; run with MESH_DEVICE=BHGLX"
+        )
+    mesh_device.enable_program_cache()
+    submeshes = create_submeshes(mesh_device, data_parallel)
+    tp = mesh_device.get_num_devices() // data_parallel
+    for g, sm in enumerate(submeshes):
+        assert tuple(sm.shape) == (1, tp), f"submesh {g} has shape {tuple(sm.shape)}, expected (1, {tp})"
+        logger.info(f"[DP {g}] submesh shape {tuple(sm.shape)}, device ids {sm.get_device_ids()}")
+    # Build replicas on the first active_groups submeshes; the rest stay idle (fabric still spans the whole mesh).
+    submeshes = submeshes[:active_groups]
+
+    num_blocks = _blocks_for(seqlen, max_generated_tokens)
+    max_seq_len = num_blocks * BLOCK_SIZE
+
+    # One host state dict shared by every replica; the first build may populate the TT weight cache, later ones read it.
+    t0 = time.time()
+    shared_sd = Qwen36ModelArgs(
+        mesh_device=submeshes[0], max_batch_size=1, max_seq_len=max_seq_len, enable_mtp=False
+    ).load_state_dict()
+    logger.info(f"Host state dict load: {time.time() - t0:.1f}s")
+    models = []
+    for g, sm in enumerate(submeshes):
+        sm.enable_program_cache()
+        t0 = time.time()
+        models.append(
+            Qwen36Model.from_pretrained(
+                sm, max_batch_size=1, max_seq_len=max_seq_len, enable_mtp=False, state_dict=shared_sd
+            )
+        )
+        logger.info(f"[DP {g}] model load: {time.time() - t0:.1f}s")
+    del shared_sd
+    tokenizer = AutoTokenizer.from_pretrained(models[0].args.CKPT_DIR, trust_remote_code=True)
+
+    # Reserve generation budget; trim context from the middle via max_prompt_len
+    max_prompt_len = ((max_seq_len - max_generated_tokens) // 128) * 128
+    if not distinct_prompts:
+        ids = _get_prompt(seqlen, tokenizer, max_prompt_len=max_prompt_len)
+        prompts = [ids] * active_groups
+        texts = [None] * active_groups
+    else:
+        # The llama3_70b_galaxy copy of this file repeats one prompt 32 times; the tt_transformers copy has 31 distinct ones.
+        with open(f"{TT_TRANSFORMERS_PROMPTS_DIR}/input_data_questions_prefill_128.json") as f:
+            data = json.load(f)
+        cap = min(seqlen, max_prompt_len)
+        texts = list(dict.fromkeys(entry["prompt"] for entry in data))[:active_groups]
+        assert len(texts) == active_groups, f"need {active_groups} distinct prompts, found {len(texts)}"
+        prompts = [tokenizer(text, return_tensors="pt")["input_ids"][:, :cap] for text in texts]
+    for g, ids in enumerate(prompts):
+        logger.info(f"[DP {g}] prompt length {ids.shape[1]} tokens: {(texts[g] or tokenizer.decode(ids[0]))[:120]!r}")
+
+    per_group, info = _run_tp_generation_dp(models, prompts, max_generated_tokens, num_blocks)
+
+    for g, res in enumerate(per_group):
+        text = tokenizer.decode(res["tokens"], skip_special_tokens=True)
+        logger.info(f"[DP {g}/{active_groups}] ttft={res['ttft_s']:.3f}s")
+        logger.info(f"[DP {g}] GENERATED: {text!r}")
+    logger.info(
+        f"[DP] {info['steady_tok_s']:.2f} tok/s per user, {info['agg_tok_s']:.1f} tok/s aggregate "
+        f"(data_parallel={active_groups}, TP={tp})"
+    )
+
+    for g, res in enumerate(per_group):
+        tokens = res["tokens"]
+        assert (
+            len(tokens) == max_generated_tokens
+        ), f"[DP {g}] generated {len(tokens)} tokens, expected {max_generated_tokens}"
+        assert len(set(tokens)) > 1, f"[DP {g}] degenerate output: {tokens[:16]}"
+        if not distinct_prompts:
+            assert (
+                tokens == per_group[0]["tokens"]
+            ), f"[DP {g}] identical prompts on identical TP groups must decode identically"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("max_generated_tokens", [512, 1536], ids=["accuracy_512", "accuracy_1536"])
 def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     """Top-1 / top-5 token accuracy against the committed HF reference (teacher forcing).
@@ -417,6 +519,8 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     one is the only case that compares it against HF, and it is what the ``accuracy`` block of
     ``models/model_targets.yaml`` gates on.
     """
+    if _MESH_SHAPE[0] != 1:
+        pytest.skip("single-model demo needs a (1, N) mesh; use test_demo_text_dp on BHGLX")
     from transformers import AutoTokenizer
 
     # The scorer and the threshold resolver are shared with tt_transformers' token-matching demo
@@ -984,30 +1088,49 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0, "profiler": profiler}
 
 
-def _run_tp_decode_device_loop(
+def _gdn_snapshot_restore(model):
+    """(snapshot_gdn, restore_gdn) closures over one model's Gated-DeltaNet state (all TP ranks of its mesh)."""
+    mesh = model.mesh_device
+    _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
+
+    def snapshot_gdn():
+        comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+        return [
+            (
+                ttnn.to_torch(dn.rec_state, mesh_composer=comp),
+                [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                # Fused single-user decode keeps its conv history outside conv_states (None when the fused path is off).
+                dn.snapshot_fused_decode_state(),
+            )
+            for dn in _gdn
+        ]
+
+    def restore_gdn(snap):
+        mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
+
+        def _back(t, dtype):
+            # Match target buffer dtype on restore
+            return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+
+        for dn, (rec, convs, hist) in zip(_gdn, snap):
+            r = _back(rec, dn.rec_state.dtype)
+            ttnn.copy(r, dn.rec_state)
+            ttnn.deallocate(r)
+            for j, c in enumerate(convs):
+                cc = _back(c, dn.conv_states[j].dtype)
+                ttnn.copy(cc, dn.conv_states[j])
+                ttnn.deallocate(cc)
+            dn.restore_fused_decode_state(hist)  # no-op when hist is None (fused path off)
+
+    return snapshot_gdn, restore_gdn
+
+
+def _capture_tp_decode_device_loop(
     model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler, batch=1
 ):
-    """Device-resident greedy decode of the single-user TP demo (QWEN36_DECODE_DEVICE_LOOP, see
-    Qwen36Model.device_decode_step for the in-trace step).
-
-    Capture: the loop's persistent buffers are allocated first, one eager step of the exact in-trace sequence compiles
-    every program (it also advances the GDN state, the loop state and writes KV position T / history row 0 -- the GDN
-    state is restored from the snapshot taken before it, the loop state is re-armed, the KV / history writes are
-    overwritten by the real first step), then the step is captured once. Run: ``num_steps`` back-to-back non-blocking
-    ``execute_trace`` calls (no per-token host work at all), ONE synchronize, ONE history read.
-
-    Timing: steady-state throughput = ``num_steps`` tokens / (time from just after the 1st enqueue, i.e. at the 2nd, to
-    the end of the final drain + history read), the convention of models/demos/qwen38_27b_qb2's demo. It is NOT
-    comparable step by step with the host loop's metric, which timed every step including a host update, a device
-    sync and a host readback; ``total_*`` additionally includes the first enqueue.
-
-    Batched (``batch`` > 1, the batched demo): ``first_token`` is the list of the ``batch`` users' first tokens, all
-    users sit at position ``T``, and the returned tokens are ``batch`` per-user lists. Each trace replay advances every
-    user by one token, so ``steady_tok_s`` is per user and ``agg_tok_s`` = batch * steady_tok_s.
-
-    Returns (tokens, info) -- the ``num_steps`` tokens after ``first_token`` -- or None when the loop does not apply or
-    could not be built (the caller then runs the host loop; QWEN36_DECODE_DEVICE_LOOP=2 re-raises instead).
-    """
+    """Eligibility + buffer setup + eager warm step + trace capture of the device-resident decode loop (see
+    _run_tp_decode_device_loop). Returns (dl, trace_id) armed at (first_token, T), or None when the loop does not apply
+    or could not be built (QWEN36_DECODE_DEVICE_LOOP=2 re-raises instead)."""
     strict = os.environ.get("QWEN36_DECODE_DEVICE_LOOP", "1") == "2"
     reason = model.device_decode_loop_unsupported_reason(T, num_steps, batch)
     if reason is not None:
@@ -1057,6 +1180,39 @@ def _run_tp_decode_device_loop(
         )
         return None
     profiler.end("compile_decode")
+    return dl, trace_id
+
+
+def _run_tp_decode_device_loop(
+    model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler, batch=1
+):
+    """Device-resident greedy decode of the single-user TP demo (QWEN36_DECODE_DEVICE_LOOP, see
+    Qwen36Model.device_decode_step for the in-trace step).
+
+    Capture: the loop's persistent buffers are allocated first, one eager step of the exact in-trace sequence compiles
+    every program (it also advances the GDN state, the loop state and writes KV position T / history row 0 -- the GDN
+    state is restored from the snapshot taken before it, the loop state is re-armed, the KV / history writes are
+    overwritten by the real first step), then the step is captured once. Run: ``num_steps`` back-to-back non-blocking
+    ``execute_trace`` calls (no per-token host work at all), ONE synchronize, ONE history read.
+
+    Timing: steady-state throughput = ``num_steps`` tokens / (time from just after the 1st enqueue, i.e. at the 2nd, to
+    the end of the final drain + history read), the convention of models/demos/qwen38_27b_qb2's demo. It is NOT
+    comparable step by step with the host loop's metric, which timed every step including a host update, a device
+    sync and a host readback; ``total_*`` additionally includes the first enqueue.
+
+    Batched (``batch`` > 1, the batched demo): ``first_token`` is the list of the ``batch`` users' first tokens, all
+    users sit at position ``T``, and the returned tokens are ``batch`` per-user lists. Each trace replay advances every
+    user by one token, so ``steady_tok_s`` is per user and ``agg_tok_s`` = batch * steady_tok_s.
+
+    Returns (tokens, info) -- the ``num_steps`` tokens after ``first_token`` -- or None when the loop does not apply or
+    could not be built (the caller then runs the host loop; QWEN36_DECODE_DEVICE_LOOP=2 re-raises instead).
+    """
+    cap = _capture_tp_decode_device_loop(
+        model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler, batch
+    )
+    if cap is None:
+        return None
+    dl, trace_id = cap
 
     signpost("inference_decode")
     profiler.start("inference_decode")
@@ -1098,6 +1254,129 @@ def _run_tp_decode_device_loop(
     bad = [(i, t) for i, t in enumerate(flat) if not 0 <= t < model.vocab_size]
     assert not bad, f"device decode loop produced out-of-vocab token ids (step, id): {bad[:8]}"
     return tokens, info
+
+
+def _run_tp_generation_dp(models, prompts, max_generated_tokens, num_blocks):
+    """Data-parallel greedy generation: one Qwen36Model per submesh (TP group), one user per group.
+
+    Each group is set up and prefilled on its own, then every group captures its own device-resident decode loop
+    (see _run_tp_decode_device_loop). The decode steps are driven in lockstep: every step's trace replays are
+    enqueued (non-blocking) across all groups before the next step, then one drain and one history read per group.
+
+    ``prompts``: one torch [1, T] token tensor per group. Returns (per_group, info): per_group is a list of
+    {"tokens": [first] + decoded, "ttft_s": ...}, info holds the lockstep decode timing (same conventions as
+    _run_tp_decode_device_loop; ``steady_tok_s`` is per user, ``agg_tok_s`` is summed over groups).
+    """
+    CHUNK = 2048
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    num_groups = len(models)
+    assert len(prompts) == num_groups, f"{len(prompts)} prompts for {num_groups} groups"
+    num_steps = max_generated_tokens - 1
+    assert num_steps >= 2, "DP device-loop decode needs max_generated_tokens >= 3"
+
+    # Per-group KV cache, page table and prefill traces.
+    state = []
+    for g, (model, token_ids) in enumerate(zip(models, prompts)):
+        T = token_ids.shape[1]
+        nb = num_blocks
+        # Traced short prefill writes the bucket's padded K/V into a TRASH block that nothing else owns.
+        if model.short_prefill_trace_enabled():
+            if nb <= -(-(T + max_generated_tokens) // BLOCK_SIZE):
+                nb += 32
+            model.prefill_trash_block = nb - 1
+        kv_cache_shape = [nb, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+        model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+        page_table = torch.arange(nb, dtype=torch.int32).reshape(1, nb)
+        bucket = model.short_prefill_trace_bucket(T, CHUNK)
+        t_cap = time.time()
+        model.capture_prefill_trace_chunked(
+            model.mesh_device, page_table, chunk_size=CHUNK, capture_chunk_trace=bucket is None
+        )
+        if bucket is not None:
+            model.capture_prefill_trace_short(model.mesh_device, page_table, bucket=bucket)
+        logger.info(f"[DP {g}] prefill traces captured in {time.time() - t_cap:.1f}s")
+        state.append({"T": T, "page_table": page_table, "bucket": bucket})
+
+    # Prefill each group in turn; the first token is greedy.
+    for g, (model, token_ids) in enumerate(zip(models, prompts)):
+        st = state[g]
+        T, page_table = st["T"], st["page_table"]
+        t0 = time.time()
+        nxt = None
+        if st["bucket"] is not None:
+            nxt = model.prefill_short_traced(token_ids[:, :T], page_table, actual_len=T)
+        if nxt is None:
+            logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
+            ttnn.synchronize_device(model.mesh_device)
+            lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+            nxt = int(torch.argmax(lt.reshape(-1, model.args.vocab_size)[0].float()).item())
+        st["ttft_s"] = time.time() - t0
+        st["first"] = nxt
+        logger.info(f"[DP {g}] prefill T={T}: ttft={st['ttft_s']:.3f}s, first token {nxt}")
+
+    # Decode setup + trace capture per group.
+    for g, model in enumerate(models):
+        st = state[g]
+        model._ondev_argmax = True
+        # Keep dev referenced to the end: the page table buffer is baked into the captured trace.
+        st["dev"] = model.prepare_inputs_decode(
+            torch.tensor([[st["first"]]], dtype=torch.int32),
+            torch.tensor([st["T"]], dtype=torch.int32),
+            page_table=st["page_table"],
+        )
+        snap, restore = _gdn_snapshot_restore(model)
+        st["profiler"] = BenchmarkProfiler()
+        cap = _capture_tp_decode_device_loop(
+            model, model.mesh_device, st["dev"][3], st["first"], st["T"], num_steps, snap, restore, st["profiler"]
+        )
+        if cap is None:
+            raise RuntimeError(f"[DP] device decode loop unavailable for group {g}")  # reason logged above
+        st["dl"], st["trace_id"] = cap
+
+    # Lockstep decode: all groups' replays for a step are enqueued before the next step (non-blocking).
+    t_begin = time.time()
+    for step in range(num_steps):
+        for g, model in enumerate(models):
+            ttnn.execute_trace(model.mesh_device, state[g]["trace_id"], cq_id=0, blocking=False)
+        if step == 0:
+            t_second = time.time()  # steady-state window opens after the 1st step's enqueues
+    t_enqueued = time.time()
+    for model in models:
+        ttnn.synchronize_device(model.mesh_device)  # one drain per group
+    all_tokens = [model.read_device_decode_history(state[g]["dl"], num_steps) for g, model in enumerate(models)]
+    t_end = time.time()
+    for g, model in enumerate(models):
+        ttnn.release_trace(model.mesh_device, state[g]["trace_id"])
+        state[g]["dl"].release()
+
+    vocab = models[0].vocab_size
+    for g, toks in enumerate(all_tokens):
+        bad = [(i, t) for i, t in enumerate(toks) if not 0 <= t < vocab]
+        assert not bad, f"[DP {g}] device decode loop produced out-of-vocab token ids (step, id): {bad[:8]}"
+
+    steady_s = t_end - t_second
+    total_s = t_end - t_begin
+    info = {
+        "num_steps": num_steps,
+        "steady_s": steady_s,
+        "steady_tok_s": num_steps / steady_s if steady_s > 0 else 0.0,
+        "total_s": total_s,
+        "total_tok_s": num_steps / total_s if total_s > 0 else 0.0,
+        "enqueue_s": t_enqueued - t_begin,
+        "data_parallel": num_groups,
+        "agg_tok_s": num_groups * num_steps / steady_s if steady_s > 0 else 0.0,
+    }
+    logger.info(
+        f"[DP x{num_groups}] {num_steps} decode steps, lockstep trace replays across groups "
+        f"({info['enqueue_s'] * 1000:.1f} ms for all enqueues): steady-state "
+        f"{info['steady_tok_s']:.2f} tok/s per user, {info['agg_tok_s']:.1f} tok/s aggregate "
+        f"({steady_s * 1000 / num_steps:.2f} ms/token; 2nd step enqueue -> final drain + history reads = "
+        f"{steady_s:.3f}s), {info['total_tok_s']:.2f} tok/s per user incl. the 1st step"
+    )
+    per_group = [
+        {"tokens": [state[g]["first"]] + all_tokens[g], "ttft_s": state[g]["ttft_s"]} for g in range(num_groups)
+    ]
+    return per_group, info
 
 
 def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch):

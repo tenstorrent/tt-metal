@@ -1003,6 +1003,7 @@ class Qwen36Model:
         layer_indices=None,
         hf_model=None,
         enable_mtp=None,
+        state_dict=None,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -1043,8 +1044,11 @@ class Qwen36Model:
         # the vision demo emit token soup, on the text path. Re-enabling needs those conv weights either
         # cache-backed or captured to the sidecar via an is_host_weight predicate. (#45400 review)
         cache_path = args.weight_cache_path()
-        logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
-        state_dict = args.load_state_dict()
+        if state_dict is None:
+            logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
+            state_dict = args.load_state_dict()
+        else:
+            logger.info("Using preloaded state dict")
 
         model = cls(device, args, state_dict, tensor_cache_path=cache_path)
         return model
