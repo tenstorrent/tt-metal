@@ -1512,7 +1512,10 @@ class MultichipDecoder(OptimizedDecoder):
         if self._sh1:
             # shared expert as one always-active expert through the same kernels: 2 programs that read whole weight
             # columns instead of a DRAM-sharded matmul, 2 slices, SwiGLU, a reshard and a second matmul (~27 us)
-            sh_glu = moe_decode1.gate_up_swiglu(x1, self.w["sh_gate_up_cp"], self.w["sh_active"])
+            # one active expert = 8 working cores (one per gate/up column pair): 48-tile reads keep each core's DRAM
+            # stream busier than the routed experts' 16 (16.7 -> 14.3 us, outputs identical)
+            sh_glu = moe_decode1.gate_up_swiglu(x1, self.w["sh_gate_up_cp"], self.w["sh_active"],
+                                                chunk=int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48")))
             shared_local = moe_decode1.down_sum(sh_glu, self.w["sh_down_cp"], self.w["sh_active"])
             return self._reduce(ttnn.add(routed_local, shared_local, memory_config=ttnn.L1_MEMORY_CONFIG))
         keep = sharded and self._glu_out_sharded

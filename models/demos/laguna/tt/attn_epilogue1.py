@@ -8,6 +8,7 @@ WO's width-sharded input (5 small ops): core b reads token row b's SDPA output (
 logits (row b of the fused qkv(+gate) output), computes attn * softplus(g) per head row on the tile engine and
 writes each head's row into row b of the WO input."""
 
+import os
 import struct
 from pathlib import Path
 
@@ -40,12 +41,14 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, rows, H * 128]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem
     )
-    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(rows - 1, 0))})
+    # core (b, j): token row b, head_dim tile j (TT_LAGUNA_AE1_SPLIT=0: one core per row does all 4 tiles)
+    tj = 1 if os.environ.get("TT_LAGUNA_AE1_SPLIT", "1") == "1" else 4
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(rows - 1, 4 // tj - 1))})
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "ae1_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[H, g_col // 32]
+        compile_time_args=[H, g_col // 32, tj]
         + list(ttnn.TensorAccessorArgs(attn).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(qkv).get_compile_time_args()),
         common_runtime_args=[attn.buffer_address(), qkv.buffer_address()],
@@ -55,7 +58,7 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
         kernel_source=str(_KDIR / "ae1_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[H] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
+        compile_time_args=[H, tj] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
         common_runtime_args=[out.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -66,7 +69,7 @@ def attn_epilogue1(attn, qkv, g_col, num_heads, out_mem, beta=1.0, threshold=20.
         kernel_source=str(_KDIR / "ae1_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[_bits(beta), _bits(1.0 / beta), _bits(threshold)],
+        compile_time_args=[_bits(beta), _bits(1.0 / beta), _bits(threshold), tj],
         config=cfg,
     )
     cbs = [_cb(grid, 0, 4), _cb(grid, 1, 1), _cb(grid, 2, 1), _cb(grid, 3, 1), _cb(grid, 16, 4)]

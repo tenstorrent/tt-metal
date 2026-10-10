@@ -12,16 +12,18 @@
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(0);
     constexpr uint32_t g_tile = get_compile_time_arg_val(1);  // qkv tile holding the gate columns
-    constexpr auto a_args = TensorAccessorArgs<2>();
+    constexpr uint32_t TJ = get_compile_time_arg_val(2);      // head_dim tiles per core (4, or 1: core y = tile j)
+    constexpr auto a_args = TensorAccessorArgs<3>();
     constexpr auto x_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr uint32_t T = 2048, cb_attn = 0, cb_g = 1, cb_tmp = 2;
     const auto attn = TensorAccessor(a_args, get_common_arg_val<uint32_t>(0), T);
     const auto x = TensorAccessor(x_args, get_common_arg_val<uint32_t>(1), T);
 
     const uint32_t b = get_absolute_logical_x();
-    cb_reserve_back(cb_attn, 4);
-    for (uint32_t j = 0; j < 4; ++j) {
-        noc_async_read(attn.get_noc_addr(b * 4 + j), get_write_ptr(cb_attn) + j * T, T);
+    const uint32_t j0 = get_absolute_logical_y() * TJ;
+    cb_reserve_back(cb_attn, TJ);
+    for (uint32_t j = 0; j < TJ; ++j) {
+        noc_async_read(attn.get_noc_addr(b * 4 + j0 + j), get_write_ptr(cb_attn) + j * T, T);
     }
     cb_reserve_back(cb_g, 1);
     const uint32_t gt = get_write_ptr(cb_g), tmp = get_write_ptr(cb_tmp);
@@ -44,6 +46,6 @@ void kernel_main() {
         g[(h < 16 ? 0 : 512) + (h % 16) * 16] = v;               // (row h, col 0): face 0 or face 2, 16 values per row
     }
     asm volatile("fence" ::: "memory");
-    cb_push_back(cb_attn, 4);
+    cb_push_back(cb_attn, TJ);
     cb_push_back(cb_g, 1);
 }
