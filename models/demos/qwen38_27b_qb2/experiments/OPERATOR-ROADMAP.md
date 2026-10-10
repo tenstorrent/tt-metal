@@ -13,9 +13,12 @@ and labeled measured Galaxy throughput. This continues the Metal path.
   43.955 ms / 22.751 TSU (+23.60%). All three repeats per context match the
   baseline's output hashes and the candidate cleaned up successfully.
   The after-control passed with 0.00202% drift at 32K and 0.000702% at 16K.
-  Eight-replica G0/API checks passed; compact GPQA remains in progress.
-  Whole-Galaxy client throughput is not measured.
-  [Completed controls and qualification snapshot](../galaxy-evidence/gdn-resident-v1/README.md).
+  Eight-replica G0/API checks passed; compact GPQA passed **177/198 (89.39%)**
+  in 59m 53s. Five output-budget cutoffs count incorrect; there were no context
+  cutoffs. The completed-answer audit independently matches the score.
+  The eval measured 804.2 aggregate output tokens/s across variable requests;
+  saturated whole-Galaxy throughput remains unmeasured.
+  [Completed qualification and source boundaries](../galaxy-evidence/compact-qualified-v1/README.md).
 - Qualified shared-QK baseline: 67.245 ms/token, 14.871 tokens/s/user and
   237.94 aggregate decode tokens/s/TP4. Full GPQA: 178/198 (89.90%); all
   questions remain in the denominator, including five output-budget cutoffs.
@@ -119,7 +122,7 @@ compact baseline is 49.913 ms, so 1 ms now corresponds to about 2% more TSU.
 | Order | Change and ownership | Expected benefit | Evidence, effort and risk |
 |---|---|---|---|
 | 0, completed | Direct preparation + fused GDN output epilogue | Measured 6.82-ms saving; +11.3% decode, reaching 16.55 TSU. | Matched controls and full GPQA 177/198 passed. Serving promotion and full Galaxy client performance remain separate. |
-| 1, qualifying | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control passed; GPQA running. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4K check separately queued. This gain replaces the initial estimate and overlaps broader fusion savings. |
+| 1, qualified frozen candidate | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control and full 177/198 GPQA passed. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4K check separately queued. This gain replaces the initial estimate and overlaps broader fusion savings. Later default-off development changes are not the exact evaluated source. |
 | 2 | Retune output/down matmuls first, then GDN packed projection; include input/output conversions | Target 1.5-3.5 ms across matmuls, ~3-8% over the current compact baseline. This is a target range, not a demonstrated 90%-bandwidth result. | Vary reader count, bank/worker placement, K blocking and output sharding together. Measure the complete projection boundary. Avoid losing more to padding/resharding than the kernel saves. Existing gate/up is lower priority. Medium effort/risk. |
 | 3 | Production SDPA reader/compute delivery: chunk size, worker distribution, tagged lookahead and bank-local delivery | Target 1-2.7 ms, ~2-4% of the baseline. | SDPA is 12.63 ms; modeled KV-only floor is 8.91 ms at peak or 9.90 ms at 90%. Required math/reduction adds cost. Existing remote-delivery prototype loses to production and must not be promoted. Medium/high effort; preserve accurate exponentiation, FP32 accumulation and page ownership. |
 | 4 | Recurrence/preparation scheduling with shared Q/K and FP32 state | Target 0.5-1.5 ms after compact, ~1-3%; remeasure the boundary before credit. | Default-off register-resident compute variant compiled in simulator but execution was blocked by unsupported SETDVALID in both arms. Persistent physical correctness/timing test queued; full-DEST synchronization may offset saved L1 traffic. Baseline generic kernels total 5.29 ms including preparation; this is not the post-compact recurrence cost. Medium/high risk. |
@@ -152,7 +155,7 @@ Its gains replace overlapping rows above; they cannot be added a second time.
 | SDPA | KV delivery, page lookup, split/reduction balance, chunk sizes, accurate partial-query implementation | Split-KV/double buffering already exist. Approximate partial-query path is not acceptable. |
 | Tilize/untilize, reshape, slice, pad/fill-pad, typecast, concat, transpose, reshard, interleaved/sharded conversions | Keep compact row/head geometry across boundaries; reader/writer address transforms; persistent correctly sized output buffers | Full-profile sum 22.58 ms. This is a shared opportunity pool, not removable time or an extra additive row. |
 | Generic GDN preparation/state kernels | Eliminate redundant operand reads, normalized shared-Q/K reuse, state bank placement and compute/dataflow pipeline | Shared-QK and in-place FP32 state already selected. Decode and prefill math paths differ. |
-| Causal convolution | Compute retained row only; read old history once, update disjoint ranges in place, write compact tiles | Native packed-batch convolution already replaces per-user calls at B8/B16/B32. Compact replacement measured in full model; accuracy qualification pending. |
+| Causal convolution | Compute retained row only; read old history once, update disjoint ranges in place, write compact tiles | Native packed-batch convolution already replaces per-user calls at B8/B16/B32. Compact replacement measured in full model and passed full GPQA. |
 | Gated RMSNorm | Fuse recurrence output preparation, gating/norm and z multiplication | Current candidate covers this. Do not claim its gain again under general eltwise fusion. |
 | RMSNorm, binary/unary, reduce | Fuse residual/gates/SwiGLU where dependency and rounding permit; retain activations in L1 | Some activation fusion already exists. Full-row/head reductions still require completed inputs. |
 | All-reduce/all-gather | Persistent buffers, layout alignment, link/worker placement, progress/credit-based tiled overlap | Communication shares NoC and depends on complete partial sums. No free overlap assumption. |
@@ -239,7 +242,7 @@ an acceptable way to meet this target.
 
 The measured compact candidate's 49.9128 ms must reach 33.3333 ms: another
 16.5794 ms removed, or 33.22% less step time / 49.74% more output throughput.
-Native 20 TSU is now measured; compact accuracy qualification remains pending.
+Native 20 TSU is measured and the frozen compact candidate passed full GPQA.
 Small independent knob changes do not establish the 30-TSU target.
 
 The current useful-byte model is about 12.883 GB/chip/step: 7.112 GB encoded

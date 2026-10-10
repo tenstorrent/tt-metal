@@ -1,0 +1,10 @@
+{
+  "g0_model_files": 38,
+  "serving_model_files": 177,
+  "all_match_frozen_manifest": true,
+  "policy": "config/precision_single_step_compact_gdn_bfp8_all.json",
+  "policy_sha256": "985feafd597ba4df219368a0b4d562814ac00b616cfa564214d970ebb2bb20ca",
+  "g0_and_serving_precision_match": true,
+  "source_directory": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+  "head_is_not_identical_to_frozen_source": true
+}

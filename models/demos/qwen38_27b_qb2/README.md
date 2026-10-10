@@ -13,15 +13,20 @@ candidate as qualified.
 
 **Current optimization priority:** B16 per-user prefill and decode, 32K first
 and 16K second. See the [benefit estimates and queued experiments](experiments/B16_PRIORITIES.md).
-The compact GDN front-end prototype is experimental and not enabled in serving.
+Compact GDN has full-model timing and full GPQA qualification; it remains an
+opt-in policy. Later kernel experiments remain unqualified and default-off.
 
-**Oct 10, 19:07 UTC:** compact GDN completed three full-model measurements per
+**Oct 10, 21:21 UTC:** compact GDN completed three full-model measurements per
 context: **20.03 TSU at B16/32K** and **22.75 TSU at B16/16K**, respectively
-20.81% and 23.60% above the fresh before-control. Output hashes match; the
-after-control and compact full GPQA remain pending in the persistent queue.
+20.81% and 23.60% above the fresh before-control. Output hashes match and
+after-controls passed. Full GPQA passed **177/198 (89.39%)** in **59m53s**;
+five output-budget cutoffs remain incorrect in the denominator, with no
+model-context cutoffs. The saved-response audit gives the same completed-answer
+score. Eight-replica G0 and API checks passed for the frozen compact source.
 These are one-TP4 native decode results. The eight-replica 32K estimate is
 2564 output tok/s/Galaxy, not measured full-Galaxy or HTTP throughput.
-See [raw compact results and qualification queue](galaxy-evidence/compact-first-decode-v1/README.md)
+See [completed qualification and source boundaries](galaxy-evidence/compact-qualified-v1/README.md),
+[raw compact timings](galaxy-evidence/compact-first-decode-v1/README.md)
 and the [current operator roadmap](experiments/OPERATOR-ROADMAP.md).
 The previously qualified fusion policy achieved 16.55 TSU at B16/32K and
 177/198 GPQA (89.39%); six output cutoffs remained incorrect in the denominator.

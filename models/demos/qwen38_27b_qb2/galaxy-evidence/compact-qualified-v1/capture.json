@@ -1,0 +1,121 @@
+{
+  "captured_at": "2026-10-10T21:28:30.484079+00:00",
+  "scope": "Full compact GPQA qualification, exact frozen-source verification and CPU operator analysis validation; no private response text exported",
+  "files": {
+    "receipts/compact-followup-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/queue.json",
+      "uncompressed_bytes": 6716,
+      "uncompressed_sha256": "9bae567a67193e2ce3d98679432bc1f1b89aca0cbcc5afc555564429d27413e6"
+    },
+    "receipts/compact-followup-v3/qualification/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/queue.json",
+      "uncompressed_bytes": 33444,
+      "uncompressed_sha256": "2ec8321e8623fede8638f6e746d66ff3e72b2f68d32a35e43a6d9c778ebeb101"
+    },
+    "receipts/compact-followup-v3/qualification/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/unit.xml",
+      "uncompressed_bytes": 188300,
+      "uncompressed_sha256": "16e793b02014ecad1f7601732f458524838242e3ebb2af23045679c7d71dd307"
+    },
+    "receipts/compact-followup-v3/qualification/native-g0/receipts/full-model.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-g0/receipts/full-model.json",
+      "uncompressed_bytes": 267258,
+      "uncompressed_sha256": "2e46156b8f28c7332f777d3d5d34114750117135c2d2eb26efe2647922c6606e"
+    },
+    "receipts/compact-followup-v3/qualification/native-g0/receipts/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-g0/receipts/hardware.xml",
+      "uncompressed_bytes": 548,
+      "uncompressed_sha256": "607381ab43455136dcb2cef64ab8cc6db787d99ecb8c0e5c7351a5283069d46a"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/deployment.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/deployment.json",
+      "uncompressed_bytes": 25580,
+      "uncompressed_sha256": "741e1ed93d6472d68ad97f8c1c12bee143e820aaa5fd8b6b49b12e6eee26b148"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/api.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/api.json",
+      "uncompressed_bytes": 38602,
+      "uncompressed_sha256": "17b5fe3b56bc922e74fc6c2e7337a8647568ac9a4047b5e005e4cfe00ea3c8a0"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/gpqa/summary.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/summary.json",
+      "uncompressed_bytes": 2126,
+      "uncompressed_sha256": "17658739dd5a298b13190f299691f546c211d98dbea2f580a08f6b7adfa5b070"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json",
+      "uncompressed_bytes": 1472,
+      "uncompressed_sha256": "92ce8366444b2fb4685ed2c00d0cd16ea174435f418bd249b0adab5c0b4f275b"
+    },
+    "receipts/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json",
+      "uncompressed_bytes": 622,
+      "uncompressed_sha256": "fc51aa7cd1e7bd59629405f1a195a209aaa426169e6c33390c15d3f9fd9a60df"
+    },
+    "receipts/compact-followup-control-v3/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-control-v3/launch.json",
+      "uncompressed_bytes": 2826,
+      "uncompressed_sha256": "377e82a69a65747f79f6f92f631aeaf4348df0edca24b786ca371f67f2926f77"
+    },
+    "receipts/compact-gdn-control-v3/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/source-manifest.json",
+      "uncompressed_bytes": 27435,
+      "uncompressed_sha256": "ca5fb807ce7c370967f882c85c7632a9976af8f0c55921b46f1a1db4bb589465"
+    },
+    "receipts/operator-profile-control-v1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/launch.json",
+      "uncompressed_bytes": 3333,
+      "uncompressed_sha256": "283e3216ee69fd9d23b7d768b71e0e3d70d06a5d0d98a1ff672853f7f703aaff"
+    },
+    "receipts/operator-profile-control-v1/launch-units.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/launch-units.json",
+      "uncompressed_bytes": 448,
+      "uncompressed_sha256": "e724dfad808089011d525caf450a9d78e3bf282e416844d5779d8df622417273"
+    },
+    "receipts/operator-profile-control-v1/plan.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/plan.json",
+      "uncompressed_bytes": 39660,
+      "uncompressed_sha256": "9a89e6fec64cf1133ee9fea937a263dd9501214afeae0f4110e2cf07d4fab6e8"
+    },
+    "receipts/operator-profile-control-v1/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/source-manifest.json",
+      "uncompressed_bytes": 25577,
+      "uncompressed_sha256": "6bde017e0c258b81fac9745e286e2a69a1dd0dacef21de3dc4fb36c9e286f2d5"
+    },
+    "receipts/operator-profile-control-v1/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/unit.xml",
+      "uncompressed_bytes": 196885,
+      "uncompressed_sha256": "a243dd2bf0dd9450ca32b6a97280020f0547b405cc6a8354e7aa021dd1716bb3"
+    },
+    "receipts/operator-profile-control-v1/preflight.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/preflight.log",
+      "uncompressed_bytes": 1289,
+      "uncompressed_sha256": "61c17b9c4ca6cca26faef6fd41083814efb6e9def7d90866eb8dee62d7ed10b5"
+    },
+    "receipts/operator-profile-control-v1/validation.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/validation.log",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "receipts/operator-profile-control-v1/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/run.log",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "receipts/operator-profile-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-v1/queue.json",
+      "uncompressed_bytes": 233,
+      "uncompressed_sha256": "590707952507ce86dfdacd5c344c658dd86b5a6a21cb0e3506ca70cc3244fb99"
+    },
+    "receipts/operator-profile-validation-v1/analysis.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-validation-v1/analysis.json",
+      "uncompressed_bytes": 52163,
+      "uncompressed_sha256": "2969f596ae775f21164f319211d33cf39859348d6fa6e615d7fd76f5f7b1d25e"
+    },
+    "receipts/operator-profile-validation-v1/INVENTORY.md": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-validation-v1/INVENTORY.md",
+      "uncompressed_bytes": 6551,
+      "uncompressed_sha256": "59d338d3725b527a135eefef3dde329dbb78c8c17af97fcc9d9abe1a0661d929"
+    }
+  }
+}

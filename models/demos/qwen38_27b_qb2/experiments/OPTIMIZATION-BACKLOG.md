@@ -2,9 +2,8 @@
 
 **Historical snapshot, superseded October 10.** Use the
 [operator roadmap](OPERATOR-ROADMAP.md) for current priorities and results.
-B16/32K/TP4 BFP8 decode has since reached **16.55 TSU**, with full GPQA
-**177/198 (89.39%)**. Compact GDN projects to roughly 20 TSU from measured
-block savings, but its full-model timing and qualification remain pending.
+B16/32K/TP4 BFP8 compact decode has since reached **20.035 TSU**, with
+matched full-model controls and full GPQA **177/198 (89.39%)**.
 The current target is **30 native TSU**, without speculative decoding. The
 unqualified/queued statuses and performance values below describe October 9,
 not the present deployment or experiment queue.

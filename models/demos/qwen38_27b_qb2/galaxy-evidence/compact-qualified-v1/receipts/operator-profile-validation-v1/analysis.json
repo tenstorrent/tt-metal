@@ -1,0 +1,1719 @@
+{
+  "scope": "Full 64-layer model plus split device sampler, real weights and synthetic populated caches; three restored-state trace replays, not natural-prompt accuracy or unprofiled serving throughput",
+  "state": "completed",
+  "full_trace_reconciliation_passed": true,
+  "policy": {
+    "config_id": "decoder_bfp8_hifi2_head_bfp8_hifi2_accurate_decode_single_step_shared_qk",
+    "weight_groups": {
+      "attention": "bfloat8_b",
+      "output": "bfloat8_b",
+      "gate": "bfloat8_b",
+      "up": "bfloat8_b",
+      "down": "bfloat8_b",
+      "head": "bfloat8_b"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi2",
+      "output": "HiFi2",
+      "gate": "HiFi2",
+      "up": "HiFi2",
+      "down": "HiFi2",
+      "head": "HiFi2"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "single_step_shared_qk"
+  },
+  "batch": 16,
+  "input_tokens": 32768,
+  "distinct_operation_types": 38,
+  "device_op_rows_per_rank": [
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001,
+    5001
+  ],
+  "inventory": [
+    {
+      "operation": "MatmulDeviceOperation",
+      "family": "matmul",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 18.8878645,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 16.7341405,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 18.637017,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        260,
+        260
+      ],
+      "median_calls": 260.0,
+      "median_kernel_ms": 18.888937,
+      "kernel_ms_range": [
+        18.779106,
+        18.905567
+      ]
+    },
+    {
+      "operation": "SdpaDecodeDeviceOperation",
+      "family": "attention",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 12.627386,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 12.257487,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 12.618958,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        16,
+        16
+      ],
+      "median_calls": 16.0,
+      "median_kernel_ms": 12.6328485,
+      "kernel_ms_range": [
+        12.104705,
+        12.635651
+      ]
+    },
+    {
+      "operation": "TilizeWithValPaddingDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 5.8485955,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 4.9651495,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 4.032774,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        387,
+        387
+      ],
+      "median_calls": 387.0,
+      "median_kernel_ms": 5.863095,
+      "kernel_ms_range": [
+        5.858754,
+        5.868951
+      ]
+    },
+    {
+      "operation": "GenericOpDeviceOperation",
+      "family": "custom_gdn_conv_gated_norm",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 5.288322,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 3.84746,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 5.10339,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        96,
+        96
+      ],
+      "median_calls": 96.0,
+      "median_kernel_ms": 5.289112,
+      "kernel_ms_range": [
+        5.285938,
+        5.295095
+      ]
+    },
+    {
+      "operation": "SliceDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 4.9818915,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 4.6764975,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 12876
+        }
+      },
+      "calls_range": [
+        1073,
+        1073
+      ],
+      "median_calls": 1073.0,
+      "median_kernel_ms": 4.987486,
+      "kernel_ms_range": [
+        4.963529,
+        5.014471
+      ]
+    },
+    {
+      "operation": "ReshapeViewDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 3.721061,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 2.93911,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 3864
+        }
+      },
+      "calls_range": [
+        322,
+        322
+      ],
+      "median_calls": 322.0,
+      "median_kernel_ms": 3.725457,
+      "kernel_ms_range": [
+        3.704975,
+        3.742418
+      ]
+    },
+    {
+      "operation": "UntilizeWithUnpaddingDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 3.0330425,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 2.279283,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 2.1256965,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        480,
+        480
+      ],
+      "median_calls": 480.0,
+      "median_kernel_ms": 3.041097,
+      "kernel_ms_range": [
+        3.032338,
+        3.056779
+      ]
+    },
+    {
+      "operation": "AllReduceAsyncDeviceOperation",
+      "family": "collectives",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.6523045,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 2.553929,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1436885,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        128,
+        128
+      ],
+      "median_calls": 128.0,
+      "median_kernel_ms": 2.6101095,
+      "kernel_ms_range": [
+        2.583318,
+        3.308333
+      ]
+    },
+    {
+      "operation": "BinaryNgDeviceOperation",
+      "family": "elementwise_and_typecast",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.8665595,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.342762,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.756362,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        364,
+        364
+      ],
+      "median_calls": 364.0,
+      "median_kernel_ms": 1.903905,
+      "kernel_ms_range": [
+        1.896656,
+        1.918138
+      ]
+    },
+    {
+      "operation": "FillPadDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.6626325,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.588104,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.5970225,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        161,
+        161
+      ],
+      "median_calls": 161.0,
+      "median_kernel_ms": 1.667805,
+      "kernel_ms_range": [
+        1.664901,
+        1.671216
+      ]
+    },
+    {
+      "operation": "SigmoidGatedRmsNormOperation",
+      "family": "custom_gdn_conv_gated_norm",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.5745995,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.82193,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.542713,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        48,
+        48
+      ],
+      "median_calls": 48.0,
+      "median_kernel_ms": 1.574812,
+      "kernel_ms_range": [
+        1.559644,
+        1.57956
+      ]
+    },
+    {
+      "operation": "LayerNormDeviceOperation",
+      "family": "normalization",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.94717,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.4820175,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.979155,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        161,
+        161
+      ],
+      "median_calls": 161.0,
+      "median_kernel_ms": 1.0846635,
+      "kernel_ms_range": [
+        1.082153,
+        1.088192
+      ]
+    },
+    {
+      "operation": "QkvCausalConv1dSiluOperation",
+      "family": "custom_gdn_conv_gated_norm",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.0667565,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.555436,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 1.0336925,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        48,
+        48
+      ],
+      "median_calls": 48.0,
+      "median_kernel_ms": 1.06682,
+      "kernel_ms_range": [
+        1.053062,
+        1.074489
+      ]
+    },
+    {
+      "operation": "TypecastDeviceOperation",
+      "family": "elementwise_and_typecast",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.6588965,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.5085685,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.241706,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        244,
+        244
+      ],
+      "median_calls": 244.0,
+      "median_kernel_ms": 0.668102,
+      "kernel_ms_range": [
+        0.664411,
+        0.678319
+      ]
+    },
+    {
+      "operation": "ConcatDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.6168655,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.549618,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 2124
+        }
+      },
+      "calls_range": [
+        177,
+        177
+      ],
+      "median_calls": 177.0,
+      "median_kernel_ms": 0.6173505,
+      "kernel_ms_range": [
+        0.607848,
+        0.628825
+      ]
+    },
+    {
+      "operation": "ReshardDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.2104735,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.5014455,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 2316
+        }
+      },
+      "calls_range": [
+        193,
+        193
+      ],
+      "median_calls": 193.0,
+      "median_kernel_ms": 0.542054,
+      "kernel_ms_range": [
+        0.532096,
+        0.555034
+      ]
+    },
+    {
+      "operation": "UnaryDeviceOperation",
+      "family": "elementwise_and_typecast",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.45916,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.321724,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.4116285,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        97,
+        97
+      ],
+      "median_calls": 97.0,
+      "median_kernel_ms": 0.4594985,
+      "kernel_ms_range": [
+        0.450359,
+        0.47039
+      ]
+    },
+    {
+      "operation": "UntilizeCodegenDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.423256,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1836435,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.115586,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        144,
+        144
+      ],
+      "median_calls": 144.0,
+      "median_kernel_ms": 0.4235925,
+      "kernel_ms_range": [
+        0.422838,
+        0.426563
+      ]
+    },
+    {
+      "operation": "TransposeDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.305881,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.23082,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1070425,
+          "missing_rows": 768
+        }
+      },
+      "calls_range": [
+        112,
+        112
+      ],
+      "median_calls": 112.0,
+      "median_kernel_ms": 0.3109635,
+      "kernel_ms_range": [
+        0.300413,
+        0.315863
+      ]
+    },
+    {
+      "operation": "TopkLargeIndicesDeviceOperation",
+      "family": "sampling",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.27214,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.265298,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.271715,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.27214,
+      "kernel_ms_range": [
+        0.27104,
+        0.274206
+      ]
+    },
+    {
+      "operation": "ShardedToInterleavedDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.242604,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0834025,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 1968
+        }
+      },
+      "calls_range": [
+        164,
+        164
+      ],
+      "median_calls": 164.0,
+      "median_kernel_ms": 0.2428465,
+      "kernel_ms_range": [
+        0.240618,
+        0.243901
+      ]
+    },
+    {
+      "operation": "InterleavedToShardedDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.231301,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.2316805,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 1752
+        }
+      },
+      "calls_range": [
+        146,
+        146
+      ],
+      "median_calls": 146.0,
+      "median_kernel_ms": 0.2354515,
+      "kernel_ms_range": [
+        0.230724,
+        0.241644
+      ]
+    },
+    {
+      "operation": "CopyDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.188786,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.165458,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 588
+        }
+      },
+      "calls_range": [
+        49,
+        49
+      ],
+      "median_calls": 49.0,
+      "median_kernel_ms": 0.18891,
+      "kernel_ms_range": [
+        0.180727,
+        0.199387
+      ]
+    },
+    {
+      "operation": "PadDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1682505,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1520655,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 576
+        }
+      },
+      "calls_range": [
+        48,
+        48
+      ],
+      "median_calls": 48.0,
+      "median_kernel_ms": 0.168305,
+      "kernel_ms_range": [
+        0.155885,
+        0.185097
+      ]
+    },
+    {
+      "operation": "RotaryEmbeddingDeviceOperation",
+      "family": "rotary",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.1315485,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.115259,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.122384,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        32,
+        32
+      ],
+      "median_calls": 32.0,
+      "median_kernel_ms": 0.1368765,
+      "kernel_ms_range": [
+        0.13551,
+        0.137942
+      ]
+    },
+    {
+      "operation": "NLPCreateQKVHeadsDecodeDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0734635,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.072959,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 192
+        }
+      },
+      "calls_range": [
+        16,
+        16
+      ],
+      "median_calls": 16.0,
+      "median_kernel_ms": 0.073478,
+      "kernel_ms_range": [
+        0.072864,
+        0.073683
+      ]
+    },
+    {
+      "operation": "PagedFusedUpdateCacheDeviceOperation",
+      "family": "cache_update",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.070587,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0456895,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0525155,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        16,
+        16
+      ],
+      "median_calls": 16.0,
+      "median_kernel_ms": 0.070625,
+      "kernel_ms_range": [
+        0.070164,
+        0.070739
+      ]
+    },
+    {
+      "operation": "AllGatherDeviceOperation",
+      "family": "collectives",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.022391,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.025824,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 24
+        }
+      },
+      "calls_range": [
+        2,
+        2
+      ],
+      "median_calls": 2.0,
+      "median_kernel_ms": 0.025826,
+      "kernel_ms_range": [
+        0.01416,
+        0.033851
+      ]
+    },
+    {
+      "operation": "TopkRoutePrepDeviceOperation",
+      "family": "sampling",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.024245,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0218215,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.02256,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.0242465,
+      "kernel_ms_range": [
+        0.023782,
+        0.025213
+      ]
+    },
+    {
+      "operation": "SamplingDeviceOperation",
+      "family": "sampling",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0214465,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.01597,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0203055,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.02145,
+      "kernel_ms_range": [
+        0.02141,
+        0.021496
+      ]
+    },
+    {
+      "operation": "TopkRouteFinishDeviceOperation",
+      "family": "sampling",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.020375,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.019992,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 12
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.0203775,
+      "kernel_ms_range": [
+        0.020217,
+        0.02135
+      ]
+    },
+    {
+      "operation": "AllGatherAsyncDeviceOperation",
+      "family": "collectives",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0173795,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0175355,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 12
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.0191335,
+      "kernel_ms_range": [
+        0.016088,
+        0.026825
+      ]
+    },
+    {
+      "operation": "ManualSeedDeviceOperation",
+      "family": "sampling",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 12
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.017626,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.01901,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.0190145,
+      "kernel_ms_range": [
+        0.018874,
+        0.019188
+      ]
+    },
+    {
+      "operation": "EmbeddingsDeviceOperation",
+      "family": "other",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0069605,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0060085,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 36
+        }
+      },
+      "calls_range": [
+        3,
+        3
+      ],
+      "median_calls": 3.0,
+      "median_kernel_ms": 0.0069655,
+      "kernel_ms_range": [
+        0.006672,
+        0.007839
+      ]
+    },
+    {
+      "operation": "UntilizeDeviceOperation",
+      "family": "layout",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.004183,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.001722,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0021025,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.0042825,
+      "kernel_ms_range": [
+        0.00425,
+        0.004444
+      ]
+    },
+    {
+      "operation": "ReduceDeviceOperation",
+      "family": "other",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.003916,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0017355,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0034375,
+          "missing_rows": 0
+        }
+      },
+      "calls_range": [
+        2,
+        2
+      ],
+      "median_calls": 2.0,
+      "median_kernel_ms": 0.0041975,
+      "kernel_ms_range": [
+        0.004122,
+        0.004279
+      ]
+    },
+    {
+      "operation": "PlusOneDeviceOperation",
+      "family": "other",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 48
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.003107,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 48
+        }
+      },
+      "calls_range": [
+        4,
+        4
+      ],
+      "median_calls": 4.0,
+      "median_kernel_ms": 0.003107,
+      "kernel_ms_range": [
+        0.003055,
+        0.003213
+      ]
+    },
+    {
+      "operation": "IndexedFillDeviceOperation",
+      "family": "cache_update",
+      "risc_wait_inclusive": {
+        "reader": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.002903,
+          "missing_rows": 0
+        },
+        "writer": {
+          "available_rank_replays": 12,
+          "median_sum_ms": 0.0026665,
+          "missing_rows": 0
+        },
+        "compute": {
+          "available_rank_replays": 0,
+          "median_sum_ms": null,
+          "missing_rows": 12
+        }
+      },
+      "calls_range": [
+        1,
+        1
+      ],
+      "median_calls": 1.0,
+      "median_kernel_ms": 0.002903,
+      "kernel_ms_range": [
+        0.002829,
+        0.004929
+      ]
+    }
+  ],
+  "projections": [
+    {
+      "projection": "Attention/GDN output projection",
+      "stored_kn": [
+        1536,
+        5120
+      ],
+      "calls_per_step": 64,
+      "median_kernel_ms": 1.8327815,
+      "encoded_weight_bytes": 534773760,
+      "encoded_weight_gbs": 291.7826047458467,
+      "fraction_of_assumed_peak": 0.5698878998942318,
+      "weight_only_floor_ms": 1.04448,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "MLP down",
+      "stored_kn": [
+        4352,
+        5120
+      ],
+      "calls_per_step": 64,
+      "median_kernel_ms": 4.346555,
+      "encoded_weight_bytes": 1515192320,
+      "encoded_weight_gbs": 348.59614568319046,
+      "fraction_of_assumed_peak": 0.6808518470374815,
+      "weight_only_floor_ms": 2.9593599999999998,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "Full-attention packed projection",
+      "stored_kn": [
+        5120,
+        3584
+      ],
+      "calls_per_step": 16,
+      "median_kernel_ms": 0.8696805,
+      "encoded_weight_bytes": 311951360,
+      "encoded_weight_gbs": 358.6965098102119,
+      "fraction_of_assumed_peak": 0.7005791207230702,
+      "weight_only_floor_ms": 0.60928,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=12;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "GDN packed projection",
+      "stored_kn": [
+        5120,
+        4608
+      ],
+      "calls_per_step": 48,
+      "median_kernel_ms": 3.3524835,
+      "encoded_weight_bytes": 1203240960,
+      "encoded_weight_gbs": 358.91033020744175,
+      "fraction_of_assumed_peak": 0.7009967386864095,
+      "weight_only_floor_ms": 2.35008,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=15;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "MLP gate/up",
+      "stored_kn": [
+        5120,
+        9216
+      ],
+      "calls_per_step": 64,
+      "median_kernel_ms": 7.5929105,
+      "encoded_weight_bytes": 3208642560,
+      "encoded_weight_gbs": 422.58400912272043,
+      "fraction_of_assumed_peak": 0.8253593928178133,
+      "weight_only_floor_ms": 6.26688,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "Vocabulary head tail chunk",
+      "stored_kn": [
+        5120,
+        12928
+      ],
+      "calls_per_step": 1,
+      "median_kernel_ms": 0.193834,
+      "encoded_weight_bytes": 70328320,
+      "encoded_weight_gbs": 362.8275741098053,
+      "fraction_of_assumed_peak": 0.7086476056832135,
+      "weight_only_floor_ms": 0.13736,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=52;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    },
+    {
+      "projection": "Vocabulary head full chunk",
+      "stored_kn": [
+        5120,
+        16384
+      ],
+      "calls_per_step": 3,
+      "median_kernel_ms": 0.7029445,
+      "encoded_weight_bytes": 267386880,
+      "encoded_weight_gbs": 380.38121074992404,
+      "fraction_of_assumed_peak": 0.7429320522459455,
+      "weight_only_floor_ms": 0.52224,
+      "program_attributes": [
+        "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0;range_lockstep_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'prefetcher_pipes': '{}'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+      ]
+    }
+  ],
+  "disjoint_rank_timelines": [
+    {
+      "device": 0,
+      "replay": 0,
+      "firmware_span_ms": 71.9152437037037,
+      "families_ms": {
+        "layout": 21.712139259259256,
+        "uncovered_gap": 0.34073333333333333,
+        "other": 0.01349111111111111,
+        "collectives": 0.19214222222222221,
+        "overlap": 40.61091481481481,
+        "normalization": 0.6844266666666666,
+        "matmul": 0.8231355555555555,
+        "elementwise_and_typecast": 2.291063703703703,
+        "custom_gdn_conv_gated_norm": 4.73679037037037,
+        "rotary": 0.027054074074074074,
+        "cache_update": 0.021885925925925923,
+        "attention": 0.0904911111111111,
+        "sampling": 0.3709755555555555
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 0,
+      "replay": 1,
+      "firmware_span_ms": 71.92396296296296,
+      "families_ms": {
+        "layout": 21.73661851851852,
+        "uncovered_gap": 0.33585777777777776,
+        "other": 0.013874074074074073,
+        "collectives": 0.18246518518518517,
+        "overlap": 40.60860814814814,
+        "normalization": 0.6871222222222221,
+        "matmul": 0.8224022222222221,
+        "elementwise_and_typecast": 2.2877266666666665,
+        "custom_gdn_conv_gated_norm": 4.740902222222222,
+        "rotary": 0.026661481481481477,
+        "cache_update": 0.021799259259259258,
+        "attention": 0.08760296296296297,
+        "sampling": 0.37232222222222217
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 0,
+      "replay": 2,
+      "firmware_span_ms": 71.91887851851851,
+      "families_ms": {
+        "layout": 21.7095437037037,
+        "uncovered_gap": 0.33641407407407403,
+        "other": 0.013968888888888888,
+        "collectives": 0.20238888888888887,
+        "overlap": 40.604576296296294,
+        "normalization": 0.6851451851851852,
+        "matmul": 0.8248,
+        "elementwise_and_typecast": 2.2914466666666664,
+        "custom_gdn_conv_gated_norm": 4.740154814814814,
+        "rotary": 0.02707333333333333,
+        "cache_update": 0.021933333333333332,
+        "attention": 0.0905362962962963,
+        "sampling": 0.370897037037037
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 4,
+      "replay": 0,
+      "firmware_span_ms": 71.94845481481481,
+      "families_ms": {
+        "layout": 21.723934814814815,
+        "uncovered_gap": 0.3419074074074074,
+        "other": 0.013916296296296296,
+        "collectives": 0.2077,
+        "overlap": 40.6233437037037,
+        "normalization": 0.6817103703703703,
+        "matmul": 0.8218985185185185,
+        "elementwise_and_typecast": 2.2866392592592595,
+        "custom_gdn_conv_gated_norm": 4.737022222222222,
+        "rotary": 0.026974074074074074,
+        "cache_update": 0.02189333333333333,
+        "attention": 0.09046444444444444,
+        "sampling": 0.3710503703703703
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 4,
+      "replay": 1,
+      "firmware_span_ms": 71.92072,
+      "families_ms": {
+        "layout": 21.731111111111108,
+        "uncovered_gap": 0.3373548148148148,
+        "other": 0.01361925925925926,
+        "collectives": 0.19824296296296295,
+        "overlap": 40.59926296296296,
+        "normalization": 0.6809259259259258,
+        "matmul": 0.8228103703703703,
+        "elementwise_and_typecast": 2.2919029629629626,
+        "custom_gdn_conv_gated_norm": 4.738327407407406,
+        "rotary": 0.026075555555555553,
+        "cache_update": 0.021868888888888886,
+        "attention": 0.08785037037037037,
+        "sampling": 0.37136740740740737
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 4,
+      "replay": 2,
+      "firmware_span_ms": 71.94549703703703,
+      "families_ms": {
+        "layout": 21.734454074074073,
+        "uncovered_gap": 0.33863185185185185,
+        "other": 0.01372222222222222,
+        "collectives": 0.2054,
+        "overlap": 40.60851407407407,
+        "normalization": 0.684042962962963,
+        "matmul": 0.8240733333333332,
+        "elementwise_and_typecast": 2.291945185185185,
+        "custom_gdn_conv_gated_norm": 4.734902962962963,
+        "rotary": 0.027935555555555554,
+        "cache_update": 0.021921481481481483,
+        "attention": 0.08933703703703703,
+        "sampling": 0.3706162962962963
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 8,
+      "replay": 0,
+      "firmware_span_ms": 71.8828711111111,
+      "families_ms": {
+        "layout": 21.704827407407407,
+        "uncovered_gap": 0.33559851851851846,
+        "other": 0.013764444444444444,
+        "collectives": 0.18288222222222222,
+        "overlap": 40.599427407407404,
+        "normalization": 0.6849429629629629,
+        "matmul": 0.8227214814814815,
+        "elementwise_and_typecast": 2.2889525925925924,
+        "custom_gdn_conv_gated_norm": 4.743968888888889,
+        "rotary": 0.025907407407407407,
+        "cache_update": 0.021897037037037038,
+        "attention": 0.08748518518518518,
+        "sampling": 0.3704955555555555
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 8,
+      "replay": 1,
+      "firmware_span_ms": 71.92518148148147,
+      "families_ms": {
+        "layout": 21.72537037037037,
+        "uncovered_gap": 0.3242333333333333,
+        "other": 0.014196296296296295,
+        "collectives": 0.20406666666666665,
+        "overlap": 40.62154592592592,
+        "normalization": 0.685042962962963,
+        "matmul": 0.8192481481481481,
+        "elementwise_and_typecast": 2.28068,
+        "custom_gdn_conv_gated_norm": 4.741082962962962,
+        "rotary": 0.027906666666666663,
+        "cache_update": 0.021892592592592592,
+        "attention": 0.09002370370370369,
+        "sampling": 0.36989185185185186
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 8,
+      "replay": 2,
+      "firmware_span_ms": 71.91971259259259,
+      "families_ms": {
+        "layout": 21.77381925925926,
+        "uncovered_gap": 0.3255607407407407,
+        "other": 0.01389185185185185,
+        "collectives": 0.18297703703703702,
+        "overlap": 40.574230370370366,
+        "normalization": 0.684897037037037,
+        "matmul": 0.8224874074074073,
+        "elementwise_and_typecast": 2.287441481481481,
+        "custom_gdn_conv_gated_norm": 4.740594074074074,
+        "rotary": 0.02884222222222222,
+        "cache_update": 0.02193259259259259,
+        "attention": 0.08949925925925925,
+        "sampling": 0.37353925925925924
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 12,
+      "replay": 0,
+      "firmware_span_ms": 71.9022962962963,
+      "families_ms": {
+        "layout": 21.700467407407405,
+        "uncovered_gap": 0.33294,
+        "other": 0.014645185185185185,
+        "collectives": 0.19663629629629628,
+        "overlap": 40.63083185185185,
+        "normalization": 0.6842814814814815,
+        "matmul": 0.8144185185185184,
+        "elementwise_and_typecast": 2.2878844444444444,
+        "custom_gdn_conv_gated_norm": 4.731026666666666,
+        "rotary": 0.026766666666666664,
+        "cache_update": 0.02186074074074074,
+        "attention": 0.09027111111111111,
+        "sampling": 0.3702659259259259
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 12,
+      "replay": 1,
+      "firmware_span_ms": 71.95703407407407,
+      "families_ms": {
+        "layout": 21.71190222222222,
+        "uncovered_gap": 0.33950444444444444,
+        "other": 0.014646666666666665,
+        "collectives": 0.2037133333333333,
+        "overlap": 40.65741111111111,
+        "normalization": 0.6838214814814815,
+        "matmul": 0.8093785185185184,
+        "elementwise_and_typecast": 2.293792592592592,
+        "custom_gdn_conv_gated_norm": 4.73509037037037,
+        "rotary": 0.02649925925925926,
+        "cache_update": 0.02184962962962963,
+        "attention": 0.08818814814814814,
+        "sampling": 0.3712362962962963
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 12,
+      "replay": 2,
+      "firmware_span_ms": 71.9286037037037,
+      "families_ms": {
+        "layout": 21.711411111111108,
+        "uncovered_gap": 0.3301785185185185,
+        "other": 0.01466962962962963,
+        "collectives": 0.20678888888888888,
+        "overlap": 40.624394074074075,
+        "normalization": 0.6859281481481481,
+        "matmul": 0.8093614814814815,
+        "elementwise_and_typecast": 2.3002177777777777,
+        "custom_gdn_conv_gated_norm": 4.736256296296296,
+        "rotary": 0.02697185185185185,
+        "cache_update": 0.02184074074074074,
+        "attention": 0.08940962962962962,
+        "sampling": 0.3711755555555555
+      },
+      "device_op_rows": 5001
+    }
+  ],
+  "longest_rank_timelines": [
+    {
+      "device": 4,
+      "replay": 0,
+      "firmware_span_ms": 71.94845481481481,
+      "families_ms": {
+        "layout": 21.723934814814815,
+        "uncovered_gap": 0.3419074074074074,
+        "other": 0.013916296296296296,
+        "collectives": 0.2077,
+        "overlap": 40.6233437037037,
+        "normalization": 0.6817103703703703,
+        "matmul": 0.8218985185185185,
+        "elementwise_and_typecast": 2.2866392592592595,
+        "custom_gdn_conv_gated_norm": 4.737022222222222,
+        "rotary": 0.026974074074074074,
+        "cache_update": 0.02189333333333333,
+        "attention": 0.09046444444444444,
+        "sampling": 0.3710503703703703
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 12,
+      "replay": 1,
+      "firmware_span_ms": 71.95703407407407,
+      "families_ms": {
+        "layout": 21.71190222222222,
+        "uncovered_gap": 0.33950444444444444,
+        "other": 0.014646666666666665,
+        "collectives": 0.2037133333333333,
+        "overlap": 40.65741111111111,
+        "normalization": 0.6838214814814815,
+        "matmul": 0.8093785185185184,
+        "elementwise_and_typecast": 2.293792592592592,
+        "custom_gdn_conv_gated_norm": 4.73509037037037,
+        "rotary": 0.02649925925925926,
+        "cache_update": 0.02184962962962963,
+        "attention": 0.08818814814814814,
+        "sampling": 0.3712362962962963
+      },
+      "device_op_rows": 5001
+    },
+    {
+      "device": 4,
+      "replay": 2,
+      "firmware_span_ms": 71.94549703703703,
+      "families_ms": {
+        "layout": 21.734454074074073,
+        "uncovered_gap": 0.33863185185185185,
+        "other": 0.01372222222222222,
+        "collectives": 0.2054,
+        "overlap": 40.60851407407407,
+        "normalization": 0.684042962962963,
+        "matmul": 0.8240733333333332,
+        "elementwise_and_typecast": 2.291945185185185,
+        "custom_gdn_conv_gated_norm": 4.734902962962963,
+        "rotary": 0.027935555555555554,
+        "cache_update": 0.021921481481481483,
+        "attention": 0.08933703703703703,
+        "sampling": 0.3706162962962963
+      },
+      "device_op_rows": 5001
+    }
+  ],
+  "comparisons": [
+    {
+      "replay": 0,
+      "host_step_ns": 72239661.12360358,
+      "longest_rank": 4,
+      "device_span_ns": 71948454.8148148,
+      "relative_unaccounted_time": 0.004031113992776299,
+      "within_five_percent": true
+    },
+    {
+      "replay": 1,
+      "host_step_ns": 72290435.89904904,
+      "longest_rank": 12,
+      "device_span_ns": 71957034.07407407,
+      "relative_unaccounted_time": 0.004611976962492694,
+      "within_five_percent": true
+    },
+    {
+      "replay": 2,
+      "host_step_ns": 72258616.33196473,
+      "longest_rank": 4,
+      "device_span_ns": 71945497.03703703,
+      "relative_unaccounted_time": 0.0043333142927785085,
+      "within_five_percent": true
+    }
+  ],
+  "encoded_weight_bytes_per_chip": 7111516160,
+  "unprofiled_step_ms": 67.24002119153738,
+  "profiled_step_ms": 72.25861633196473,
+  "profiler_overhead_fraction": 0.07463702496659796,
+  "counts_are_program_counts": false,
+  "physical_dram_counters": false,
+  "compute_roofline_calibrated": false,
+  "accounting": "Each rank's firmware span is partitioned by op family with overlap and gaps explicit. Use each replay's longest-rank timeline; do not sum rank times or family medians. Firmware includes waits. Profile overhead is measured for the full step, not per operation.",
+  "bandwidth_assumptions": "One read of each declared padded BFP8 weight tile (1088 B/32x32); 512 GB/s/chip assumed. Extra transactions, activation traffic and compute excluded.",
+  "source_sha256": {
+    "ops": "f65905e06854615ad2499bed809d749aa3abaac7dae3e0c0bc36805ab76056ec",
+    "profile": "7713b7682808401a6862b7d19e7da83cd6b725c4e373e87f98b9af3ef6f13e71",
+    "baseline": "b871fa8d1ebd3f091e3829951ec698ae3d0af65a2f9586bd21a2394fb3c51a52"
+  },
+  "capture": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-validation-v2",
+  "baseline": "/dev/shm/qwen38-p0-priority-v1-20261010/unprofiled",
+  "physical_devices_accessed": false,
+  "updated_at": "2026-10-10T21:24:35Z"
+}

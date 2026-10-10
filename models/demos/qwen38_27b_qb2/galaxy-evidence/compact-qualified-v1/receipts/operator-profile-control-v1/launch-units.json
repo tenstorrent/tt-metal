@@ -1,0 +1,16 @@
+{
+  "qwen38-operator-profile-v1-20261010.service": {
+    "MainPID": "434474",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "725ee5aec59b4e32a96822a627a58686"
+  },
+  "qwen38-operator-profile-validation-v1-20261010.service": {
+    "MainPID": "434472",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "f48c4a12aa854a82b6acebb52bb11fb9"
+  }
+}

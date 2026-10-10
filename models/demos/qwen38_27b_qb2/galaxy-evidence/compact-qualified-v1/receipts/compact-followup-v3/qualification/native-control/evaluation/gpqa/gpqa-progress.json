@@ -1,0 +1,21 @@
+{
+  "measurement_start": "2026-10-10T20:21:02.828956+00:00",
+  "measurement_end": "2026-10-10T21:20:55.763566+00:00",
+  "measured_s": 3592.9345912430435,
+  "requests": 198,
+  "mean_ttft_ms": 17941.10747108076,
+  "mean_decode_tokens_per_s": 21.638527851752595,
+  "aggregate_output_tokens_per_s": 804.2164215965657,
+  "accuracy": 0.8939393939393939,
+  "correct": 177,
+  "completed_samples": 198,
+  "dataset_samples": 198,
+  "full_dataset": true,
+  "concurrency": 128,
+  "max_output_tokens": 65536,
+  "accuracy_threshold": 0.892,
+  "truncated_samples": 5,
+  "truncated_correct": 0,
+  "passed": true,
+  "state": "completed"
+}

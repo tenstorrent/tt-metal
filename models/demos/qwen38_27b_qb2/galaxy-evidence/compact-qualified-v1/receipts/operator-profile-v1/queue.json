@@ -1,0 +1,9 @@
+{
+  "state": "waiting",
+  "physical_devices_accessed": false,
+  "cleanup_completed": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791667470.4543703,
+  "updated_at": "2026-10-10T21:24:30Z"
+}

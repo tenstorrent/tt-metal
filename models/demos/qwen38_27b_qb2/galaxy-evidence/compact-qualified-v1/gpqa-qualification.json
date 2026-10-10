@@ -1,0 +1,10 @@
+{
+  "required_correct": 177,
+  "selected_count": 198,
+  "harness_correct": 177,
+  "harness_passed": true,
+  "completed_response_correct": 177,
+  "completed_response_passed": true,
+  "incomplete_credited_by_harness": 0,
+  "proves_container_or_release_qualification": false
+}

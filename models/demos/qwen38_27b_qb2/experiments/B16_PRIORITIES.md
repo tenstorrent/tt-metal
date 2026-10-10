@@ -7,10 +7,11 @@ FP32 recurrent state. Prefill and decode share the Galaxy.
 
 Latest user target: **30 native decode tokens/s/user at B16/32K, with no
 speculative decoding**. Prioritize complete compact/fused operator boundaries
-over isolated low-payoff knobs. Current measured fusion is 16.55 TSU; the gap is
-27.09ms per step. Neither the compact block's 4-6 ms engineering target nor the
-projection sweep alone closes that gap. See the native-only budget in the
-operator roadmap.
+over isolated low-payoff knobs. Current measured compact GDN is **20.035 TSU**,
+with matched controls and full GPQA **177/198 (89.39%)**. The remaining gap is
+**16.58 ms per step**. The projection sweep alone does not close it. See the
+native-only budget in the operator roadmap and the
+[completed compact qualification](../galaxy-evidence/compact-qualified-v1/README.md).
 
 The [complete operator roadmap](OPERATOR-ROADMAP.md) ranks all measured
 operator families, separates overlapping savings, and includes prefill priorities.
@@ -26,8 +27,8 @@ not an HTTP serving benchmark. Eightfold scaling is not implied.
 | Change | Expected B16 benefit | Evidence and qualification |
 |---|---|---|
 | Prefill token budget 32K to 64K | About 10% input throughput; roughly 99 to 90 seconds TTFT at 32K/B16; about 9% all-in output throughput for 128 output tokens | Earlier budget experiment measured 5,321 to 5,870 input tokens/s at B16. B32 failed allocation. Queue a fresh matched B16-only control/candidate/control comparison. Changed chunk boundaries require accuracy requalification. |
-| Direct preparation plus fused GDN epilogue | Measured 14.87 to 16.55 decode tokens/s/user at 32K, about 11.3%; projected 16.34 to 18.38 at 16K, about 12.5% | Three full-model B16/32K repeats completed at 60.422 ms/token. After-control comparison and GPQA remain pending. About 1% all-in benefit for the prefill-dominated 32K/128-output batch. |
-| Complete compact GDN boundary | Engineering target: 4-6 ms, about 7-11% decode throughput on the combined-fusion candidate | Implemented as an opt-in policy; hardware unqualified. Connects compact packed projection, convolution/history, preparation, gated output and output projection. It is a subset of broader decoder fusion, not an additive 10-15 ms saving. |
+| Direct preparation plus fused GDN epilogue | Measured 14.87 to 16.55 decode tokens/s/user at 32K, about 11.3% | Matched full-model controls and full 177/198 GPQA passed. About 1% all-in benefit for the prefill-dominated 32K/128-output batch. This is now the prior control. |
+| Complete compact GDN boundary | Measured 16.584 to 20.035 TSU at 32K (+20.81%) and 18.406 to 22.751 TSU at 16K (+23.60%) | Opt-in frozen candidate passed matched controls, eight-replica G0/API and full 177/198 GPQA. Connects compact packed projection, convolution/history, preparation, gated output and output projection. This replaces the estimate and overlaps broader decoder fusion savings; later default-off experiments remain pending. |
 | Scheduler chunked prefill | Reduce decode pauses under arriving prompts; no raw compute-throughput gain assumed | Workload-dependent benefit is unquantified. Older BFP4 adapter state test passed. Current BFP8 scheduler, device sampler and mixed-load serving tests are still needed. |
 
 For each further optimization, record baseline, workload, per-op change,
@@ -36,7 +37,7 @@ test duration and acceptance evidence **before** running it. Then replace the
 estimate with measured results, retaining regressions and failed attempts.
 Do not add percentage speedups or count already-selected buffering twice.
 
-## What the new profiles show
+## Earlier two-layer profiles
 
 All four 32K B16/B32 control/candidate Tracy captures completed. They are warm
 eager profiles of real-weight layers 0 and 3 with synthetic populated caches.

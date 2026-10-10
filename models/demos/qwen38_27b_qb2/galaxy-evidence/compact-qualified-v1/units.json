@@ -1,0 +1,68 @@
+{
+  "captured_at": "2026-10-10T21:28:30.484079+00:00",
+  "units": {
+    "qwen38-compact-followup-v3-20261010.service": {
+      "MainPID": "244905",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "28c688b7780445999483523a9cbc75fc"
+    },
+    "qwen38-operator-profile-v1-20261010.service": {
+      "MainPID": "434474",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "725ee5aec59b4e32a96822a627a58686"
+    },
+    "qwen38-operator-profile-validation-v1-20261010.service": {
+      "MainPID": "0",
+      "Result": "success",
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "InvocationID": ""
+    },
+    "qwen38-compact-export-fallback-v2-20261010.service": {
+      "MainPID": "419892",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "e37b2f244e924e2f9b03f58af90d47ba"
+    },
+    "qwen38-projection-sweep-v6-20261010.service": {
+      "MainPID": "268165",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "960d702be457402a92d32d88b4a4a591"
+    },
+    "qwen38-prefill-attention-v3-20261010.service": {
+      "MainPID": "268168",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "d7501d6753824d31846a13ecef289c32"
+    },
+    "qwen38-compact-long-horizon-v3-20261010.service": {
+      "MainPID": "268172",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "6f0ee1599ae144d6a6843b49bf22455b"
+    },
+    "qwen38-gdn-resident-hardware-v1-20261010.service": {
+      "MainPID": "334725",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "9a87b6620b6c4892b407a17f7c54f04e"
+    },
+    "qwen38-gdn-compact-gates-v1-20261010.service": {
+      "MainPID": "402442",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "37fb5d460eed4792841823a8ba71d855"
+    }
+  }
+}

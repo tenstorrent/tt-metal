@@ -49,6 +49,15 @@ See `galaxy-evidence/gpqa-first-final-v2/` for original receipts. This is explic
 user acceptance, not a retroactive claim that the original 177/198 gate passed;
 immutable benchmark receipts and the running protocol remain unchanged.
 
+**Oct 10 update:** the newer frozen compact-GDN source passed the strict gate
+at 177/198 (89.39%) in 59m 53s, with five incorrect output-budget cutoffs and no
+context cutoffs. Its completed-answer audit, eight-replica G0 and API checks
+passed. See `galaxy-evidence/compact-qualified-v1/` for exact source hashes.
+This source is newer than the frozen runtime/image listed above; those image
+digests do not automatically contain or qualify the compact candidate. The
+development branch also contains later default-off experiments. A release
+must pin and test the exact selected source and rebuilt image.
+
 Remaining gates: tool-calling/agentic acceptance, successful
 container startup and inference, Galaxy catalogue/job integration, passing
 target-device On-dispatch and nightly/release CI, stable-branch alignment and

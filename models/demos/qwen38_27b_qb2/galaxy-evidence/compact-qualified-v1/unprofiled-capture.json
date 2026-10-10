@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-10-10T21:32:43.481306+00:00",
+  "files": {
+    "unprofiled/profile.json": {
+      "remote_path": "/dev/shm/qwen38-compact-profile-v2-20261010/unprofiled/profile.json",
+      "uncompressed_bytes": 34814,
+      "uncompressed_sha256": "909aa26cf2f845d1c5b64faf6f08c769fee8854631bf2d618ab7fa4b3793506d"
+    },
+    "unprofiled/hardware.xml.gz": {
+      "remote_path": "/dev/shm/qwen38-compact-profile-v2-20261010/unprofiled/hardware.xml",
+      "uncompressed_bytes": 541,
+      "uncompressed_sha256": "6eea99f39bc17e06591af72ebcc015b2a9f3dbac33ec1b6eacda68caeab8fc78"
+    }
+  }
+}
