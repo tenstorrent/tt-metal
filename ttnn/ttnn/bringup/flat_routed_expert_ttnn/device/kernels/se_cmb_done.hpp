@@ -4,12 +4,14 @@
 //
 // Combine overlap (flat_combine_overlap): every y writer (down core, reader tail) reports each local expert to
 // combine_fabric2d's collector once its rows of that expert have landed, so combine takes the expert while the flat
-// expert still computes the next ones. The collector counts per step (step s = local expert s: combine walks the
-// experts in slot order when the routed expert runs one pass) and releases step s once every writer has reported it.
+// expert still computes the next ones. The collector counts per step and releases step s once every writer has
+// reported it. Step s is the s-th expert in the order this chip's schedule finishes them (se_dyn_completion_order:
+// inactive experts first, then by each expert's last entry, so a pinned expert comes at its last chunk); combine
+// rebuilds the same order from the counts and walks the experts in it.
 //
-// A writer reports step s once it has written all of its blocks of local experts 0..s: the schedule (se_dyn.hpp) may
-// run experts out of slot order (pinning) and skips inactive ones, so it counts the blocks it still owes per expert
-// and reports the longest finished prefix, behind a write barrier (the rows have landed, not just left). The collector
+// A writer reports step s once it has written all of its blocks of the experts of steps 0..s: it counts the blocks
+// it still owes per expert and reports the longest finished prefix of the order, behind a write barrier (the rows
+// have landed, not just left). The collector
 // zeroes its counts at launch and then multicasts `go`; a writer waits for `go` before its first report.
 //
 // Runtime args at SE_CMB_DONE_RT: collector noc x, collector noc y, the collector's count array address, go address.
@@ -22,12 +24,20 @@
 
 struct SeCmbDone {
     uint16_t left[SE_MAX_E];  // blocks this core still writes, per local expert
+    uint8_t order[SE_MAX_E];  // step -> local expert (se_dyn_completion_order)
     uint32_t num_e = 0, next = 0;
     bool go_seen = false;
 
     // `writes`: this core writes y blocks for the schedule's entries (false: it reports every step at once)
     void init(const SeDyn& d, uint32_t ne, bool writes) {
         num_e = ne;
+#ifdef SE_CMB_SLOT_ORDER  // combine walks slot order (bfp8 tiles through its untilizers, or the probe)
+        for (uint32_t e = 0; e < ne; ++e) {
+            order[e] = static_cast<uint8_t>(e);
+        }
+#else
+        se_dyn_completion_order(d, ne, order);
+#endif
         for (uint32_t e = 0; e < ne; ++e) {
             left[e] = 0;
         }
@@ -51,7 +61,7 @@ struct SeCmbDone {
     // Report every step whose expert this core has finished (all earlier ones too). `barrier`: wait for this core's
     // writes to land first (false: the caller knows they have, the row-major y writer's flushed transaction ids).
     void report(bool barrier = true) {
-        if (next >= num_e || left[next] != 0) {
+        if (next >= num_e || left[order[next]] != 0) {
             return;
         }
         if (!go_seen) {
@@ -69,7 +79,7 @@ struct SeCmbDone {
         const uint32_t x = get_arg_val<uint32_t>(SE_CMB_DONE_RT);
         const uint32_t y = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 1);
         const uint32_t counts = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 2);
-        while (next < num_e && left[next] == 0) {
+        while (next < num_e && left[order[next]] == 0) {
             noc_semaphore_inc(get_noc_addr(x, y, counts + 4 * next), 1);
             ++next;
         }

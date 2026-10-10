@@ -354,6 +354,30 @@ Prompted by: "store and forward is, for some reason, mostly just better". Collec
   contiguous same-bank multi-page payloads instead of one token per packet, counter-gated relays.
 - 6.7's "no landing" option (1) is withdrawn; the landing location / pattern options (2, 3) stand.
 
+### 6.9 Combine walks experts in the order flat finishes them (idea 1a)
+- `se_dyn.hpp`: `se_dyn_load` split into a pure `se_dyn_build` (counts in, schedule out) + `se_dyn_from_counts`
+  (build + pinning + ring regions) + `se_dyn_completion_order` (inactive experts first, then each expert at its
+  last entry: a pinned expert comes at its last chunk).
+- Flat's writers (`SeCmbDone`) report prefixes of that order; combine's readers (`CMBF2D_FLAT_ORDER`) rebuild every
+  ring chip's order once per launch from the replicated counts with flat's own schedule code and defines
+  (`flat_schedule_defines`: SE_RPS, SE_MAX_E, SE_GU_NREG, SE_PIN_*, passed through
+  `CombineFabric2dParams::routed_expert_schedule_defines`), so `expert_of` and the gate follow it. Slot order stays
+  for bfp8 tiles (untilizers) and the `MIMO_FL_CMB_SLOT_ORDER` probe; writers and readers switch together.
+- Why it should work: with pin 1 the largest expert (often slot 0) finished last, so slot-order prefixes released
+  almost nothing until the end. Without pinning the order is slot order: nothing changes there.
+- Bit-identical on all four cases (first call and cache hit), 10240/10240.
+
+| overlap us (vs row-major baseline) | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| np 2 rows 1-9, slot order | 1222 (-14%) | 2183 (+25%) | 896 (-10%) | 1763 (+8%) |
+| np 2 rows 1-9, completion order | 1136 (-20%) | 1922 (+10%) | 840 (-16%) | 1693 (+3.5%) |
+| 64 gu + 19 down, slot order | 1565 (+10%) | 1804 (+3%) | 895 (-11%) | 1549 (-5%) |
+| **64 gu + 19 down, completion order** | **1350 (-5%)** | **1739 (-0.5%)** | **885 (-12%)** | **1510 (-8%)** |
+
+It worked: -4..-12% everywhere; the 19-down layout is now one config per model that wins both routing cases for
+Kimi and GLM. Remaining gap to the ungated ceiling is largest on the hot expert (its rows are still released only
+when the whole expert is done): next, progressive release (1b).
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.

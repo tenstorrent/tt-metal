@@ -36,7 +36,16 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     const FlatCombineOverlapInputs& t,
     Tensor& output) {
     using namespace tt::tt_metal;
-    // combine as the hybrid's overlap builds it, one pass (threshold 0: experts in slot order), its L1 in the arena
+    // Row-major y: combine walks every chip's experts in the order the flat schedule finishes them (pinning finishes
+    // the largest expert last); its readers rebuild that schedule from the counts with the same defines
+    // (MIMO_FL_CMB_SLOT_ORDER=1, probe: slot order as before)
+    std::vector<std::string> schedule_defines;
+    if (p.flat.y_row_major && !std::getenv("MIMO_FL_CMB_SLOT_ORDER")) {
+        for (const auto& [k, v] : flat_schedule_defines(p.flat, make_flat_routed_expert_plan(t.x.device(), p.flat))) {
+            schedule_defines.push_back(k + "=" + v);
+        }
+    }
+    // combine as the hybrid's overlap builds it, one pass (threshold 0), its L1 in the arena
     const cmb::CombineFabric2dParams cp{
         .device = p.device,
         .experts_per_chip = p.experts_per_chip,
@@ -49,6 +58,7 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
         .routed_expert_cores = p.flat_cores,
         .routed_expert_go_addr = static_cast<uint32_t>(p.expert_go->address()),
         .routed_expert_extra_cores = p.extra_cores,
+        .routed_expert_schedule_defines = schedule_defines,
     };
     const cmb::CombineFabric2dInputs ci{
         .dispatched_buffer = t.y,

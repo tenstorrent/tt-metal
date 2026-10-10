@@ -51,6 +51,11 @@
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
+#ifdef CMBF2D_FLAT_ORDER
+// The flat routed expert's dynamic schedule (built with its defines, which the host passes along): every chip's walk
+// order is rebuilt from the replicated counts.
+#include "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_dyn.hpp"
+#endif
 
 // `local_expert` throughout is a WALK STEP, not a slot id. Standalone the two coincide; overlapped the
 // step is the routed expert's threshold-split order and `expert_of` maps it through the id table. That one
@@ -113,7 +118,29 @@ volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
 
 // The global expert chip `dg_index` handles at walk step `step`. Any chip of the ring, not just ours, which
 // is what lets us size a chunk we neither produced nor receive.
-#ifdef CMBF2D_OVERLAPPED
+#if defined(CMBF2D_OVERLAPPED) && defined(CMBF2D_FLAT_ORDER)
+// Overlapped with the flat routed expert: step s of ring chip dg is the s-th expert that chip's flat schedule finishes
+// (se_dyn_completion_order), which is also the order its writers report in. Built once per launch for every chip of
+// the ring: a relay sizes the chunks it forwards from the origin chip's order.
+static_assert(ct.experts_per_chip <= SE_MAX_E, "combine_fabric2d: more local experts than the flat schedule holds");
+uint8_t flat_walk[ct.dispatch_group_size * ct.experts_per_chip];
+
+void build_flat_walk(const ::cmbf2d::ControlTables& ctl) {
+    for (uint32_t dg = 0; dg < ct.dispatch_group_size; dg++) {
+        SeDyn d;
+        se_dyn_from_counts(d, ct.experts_per_chip, SE_RPS, [&](uint32_t e) { return ctl.counts[ctl.expert_id(dg, e)]; });
+        uint8_t order[SE_MAX_E];
+        se_dyn_completion_order(d, ct.experts_per_chip, order);
+        for (uint32_t s = 0; s < ct.experts_per_chip; s++) {
+            flat_walk[dg * ct.experts_per_chip + s] = order[s];
+        }
+    }
+}
+
+uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
+    return ctl.expert_id(dg_index, flat_walk[dg_index * ct.experts_per_chip + step]);
+}
+#elif defined(CMBF2D_OVERLAPPED)
 // Overlapped, steps are the routed expert's threshold-split order, so the id comes from the table.
 uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
     return ::cmbf2d::expert_at_step(ctl, dg_index, ct.experts_per_chip, ct.expert_threshold, step);
@@ -327,11 +354,15 @@ struct Reader {
     void gate() {
         if (!step_ready) {
             DeviceZoneScopedN("CMB-GATE");
+#ifdef CMBF2D_FLAT_ORDER
+            ::cmbf2d::wait_for_ready(CMBF2D_READY_SEM, step + 1);  // the writers report steps in the walk's order
+#else
             const uint32_t local =
                 ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
             ::cmbf2d::wait_for_ready(
                 CMBF2D_READY_SEM,
                 ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
+#endif
             step_ready = true;
         }
     }
@@ -706,6 +737,9 @@ void kernel_main() {
 #endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
+#ifdef CMBF2D_FLAT_ORDER
+    build_flat_walk(reader.ctl);
+#endif
 
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
     // e + 1 is touched.

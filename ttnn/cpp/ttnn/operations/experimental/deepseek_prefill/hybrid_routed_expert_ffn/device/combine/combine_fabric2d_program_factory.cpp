@@ -499,6 +499,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             const char* v = std::getenv(knob);
             rdr.defines.emplace_back(knob, v != nullptr ? v : "0");
         }
+        if (!args.routed_expert_schedule_defines.empty()) {
+            TT_FATAL(
+                !sems.has_untilizers(),
+                "combine_fabric2d: the flat schedule's walk order needs row-major routed-expert output");
+            rdr.defines.emplace_back("CMBF2D_FLAT_ORDER", "1");
+            for (const auto& kv : args.routed_expert_schedule_defines) {
+                const auto eq = kv.find('=');
+                rdr.defines.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
+            }
+        }
         if (!sems.has_untilizers()) {
             // Row-major routed-expert output: no untilizers, the readers read its rows and wait on `ready` themselves.
             rdr.defines.emplace_back("CMBF2D_READY_SEM", std::to_string(sems.ready()));

@@ -34,6 +34,9 @@ struct CombineFabric2dParams {
     uint32_t routed_expert_go_addr = 0;
     // Routed-expert cores outside that rectangle (logical): they get `go` unicast.
     std::vector<tt::tt_metal::CoreCoord> routed_expert_extra_cores;
+    // "NAME=VALUE" defines of a flat routed expert's dynamic schedule (flat_schedule_defines): set, the readers walk
+    // every chip's experts in the order that schedule finishes them (row-major routed-expert output only).
+    std::vector<std::string> routed_expert_schedule_defines;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 };
