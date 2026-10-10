@@ -129,8 +129,6 @@ struct PushIssue {};
 #endif
 }  // namespace tensor_accessor::detail
 
-// TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
-// (need to break the include dependency dataflow_api.h -> tensor_accessor.h.).
 template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue<noc_traits_t<TensorAccessor<DSpecT>>> {
     struct src_args_type {
