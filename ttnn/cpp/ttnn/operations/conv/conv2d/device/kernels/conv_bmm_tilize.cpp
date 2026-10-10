@@ -493,7 +493,7 @@ void kernel_main() {
 
                         uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                        if constexpr (tile_pack_subblocks) {
+                        if constexpr (true) {
                             PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
                                 start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles)));
                         } else {
