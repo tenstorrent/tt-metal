@@ -18,9 +18,10 @@ namespace ckernel
  * @brief Program the address modifiers of the scalar block multiply and reset the counters.
  *
  * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply; above LoFi ADDR_MOD_6 steps the fidelity counter on
- * the last multiply of a phase. The matmul and SFPU inits reprogram both, so a kernel that runs one of them re-runs this.
+ * the last multiply of a phase. Other inits may reprogram either slot, so a kernel that runs one in between re-runs this.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_scalar_block_init_.
  */
 template <MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_mul_scalar_block_init_()
@@ -56,6 +57,8 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
  * @tparam math_fidelity: Fidelity phases of the multiply, must match the init.
  * @param dst_index: DEST tile of the first product.
  * @param block_size: Number of tiles in the block.
+ * @note Call @ref _llk_math_eltwise_mul_scalar_block_init_ with the same math_fidelity before this function;
+ *       @ref _llk_unpack_AB_scalar_block_ feeds it on the unpack thread.
  */
 template <MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, const std::uint32_t block_size)

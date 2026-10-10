@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import EltwiseBinaryGolden
+from helpers.golden_generators import ELEMENTS_PER_TILE, EltwiseBinaryGolden
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -40,13 +40,13 @@ class SCALAR_BLOCK_ALIAS(TemplateParameter):
 
 def _scalar_tiles(scalars):
     # Other SrcB lanes are poison: only B[0] is a scalar.
-    tiles = torch.full((len(scalars), 1024), -17.0, dtype=torch.bfloat16)
+    tiles = torch.full((len(scalars), ELEMENTS_PER_TILE), -17.0, dtype=torch.bfloat16)
     tiles[:, 0] = scalars
     return tiles
 
 
 def _block_config(
-    src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, alias
+    src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, *, alias
 ):
     return TestConfig(
         "sources/eltwise_mul_scalar_block_test.cpp",
@@ -83,9 +83,9 @@ def _block_config(
 def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
     block_size, dst_index = block_layout
     scalars = torch.tensor([1.5, -0.5, 0.0, 2.0], dtype=torch.bfloat16)
-    count = len(scalars) * block_size * 1024
+    count = len(scalars) * block_size * ELEMENTS_PER_TILE
     # Exactly representable products allow an elementwise, zero-tolerance check
-    # in both DEST widths. Other SrcB lanes are poison: only B[0] is a scalar.
+    # in both DEST widths.
     src = ((torch.arange(count) * 17 % 63 - 31).to(torch.float32) / 8).to(
         torch.bfloat16
     )
@@ -100,7 +100,7 @@ def test_eltwise_mul_scalar_block(block_layout, dest_acc, dest_sync):
         dest_acc,
         dest_sync,
         MathFidelity.LoFi,
-        False,
+        alias=False,
     )
     result = torch.as_tensor(config.run().result).float().flatten()
     assert torch.equal(
@@ -139,7 +139,7 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
     # Scalars and operands with full mantissas, so every fidelity phase contributes.
     scalars = torch.tensor([1.0 / 3, -0.7, 1.01, 2.9], dtype=torch.bfloat16)
     torch.manual_seed(0)
-    count = len(scalars) * block_size * 1024
+    count = len(scalars) * block_size * ELEMENTS_PER_TILE
     src = (torch.rand(count) * 4.0 - 2.0).to(torch.bfloat16)
 
     golden = _fidelity_golden(src, scalars, math_fidelity)
@@ -149,10 +149,24 @@ def test_eltwise_mul_scalar_block_fidelity(math_fidelity, dest_acc):
     ), "the stimuli do not depend on the fidelity"
 
     block_cfg = _block_config(
-        src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, False
+        src,
+        scalars,
+        block_size,
+        dst_index,
+        dest_acc,
+        dest_sync,
+        math_fidelity,
+        alias=False,
     )
     alias_cfg = _block_config(
-        src, scalars, block_size, dst_index, dest_acc, dest_sync, math_fidelity, True
+        src,
+        scalars,
+        block_size,
+        dst_index,
+        dest_acc,
+        dest_sync,
+        math_fidelity,
+        alias=True,
     )
     # Build both before running either: under --compile-producer run() returns after the first build.
     block_cfg.prepare()

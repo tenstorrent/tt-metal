@@ -52,6 +52,9 @@ def test_perf_eltwise_mul_scalar_block(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
     out_fmt, dest_acc, block, math_fidelity = variant
+    # A 32-bit DEST half holds 4 tiles, so an 8-tile block takes all of DEST.
+    half_dest_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
+    dest_sync = DestSync.Half if block <= half_dest_tiles else DestSync.Full
     configuration = PerfConfig(
         "sources/eltwise_mul_scalar_block_perf.cpp",
         InputOutputFormat(BF16, out_fmt),
@@ -61,7 +64,7 @@ def test_perf_eltwise_mul_scalar_block(perf_report, variant):
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[DEST_SYNC(DestSync.Half), MATH_FIDELITY(math_fidelity)],
+        templates=[DEST_SYNC(dest_sync), MATH_FIDELITY(math_fidelity)],
         runtimes=[
             NUM_BLOCKS(1),
             NUM_TILES_IN_BLOCK(block),
