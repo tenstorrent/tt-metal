@@ -148,17 +148,17 @@ sfpi_inline void _sqrt_accurate_reciprocal_edge_(
 // _calculate_sqrt_body_<false, false, FAST_APPROX>.
 template <bool FAST_APPROX>
 sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi::vFloat y) {
+    // Issue order: the constant load sits between the multiply and its first reader, and the compare between the
+    // half product and the multiply-add that reads it, so no instruction reads the result of the one before it.
+    sfpi::vFloat xy = x * y;
     sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
     sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
-    sfpi::vFloat xy = x * y;
     sfpi::vFloat negative_y = -y;
     sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
+    sfpi::vFloat half_xy = 0.5f * xy;
     // `<`, not `!=`: skips x = inf (y is already inf) and positive NaN, which the step would sign-flip; a negative
     // NaN runs the step and the clamp below rewrites it.
-    v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) {
-        sfpi::vFloat half_xy = 0.5f * xy;
-        y = one_minus_xyy * half_xy + xy;
-    }
+    v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
     v_endif;
 
     if constexpr (!FAST_APPROX) {
