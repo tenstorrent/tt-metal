@@ -159,12 +159,29 @@ class V41PrefillRuntime:
             for L in range(self.num_layers):
                 self._ack(L)
         t4 = time.time()
+        if warmup and os.environ.get("V41_PREFILL_WARM_ALL", "0") == "1":
+            self._warm_all(ids[:real], kv_caches, int(slot_id), int(actual_end))
         logger.info(
             f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
             + (" (warm-up)" if warmup else "")
         )
         return None
+
+    def _warm_all(self, ids, kv_caches, slot: int, start: int) -> None:
+        """V41_PREFILL_WARM_ALL=1 (DS41F-0037 C-P1): after the warm-up chunk, run the same ids as dummy chunks at every later
+        chunk position up to the capacity, export included, so every live-width program (the CSA live extent steps every
+        4096 entries) is built before the first request instead of inside it (5-13 s per new width, MEASURED 10-10). The
+        slot's states and export rows are reset by the next request's first chunk."""
+        t0 = time.time()
+        n = 0
+        for s0 in range(start, self.max_seq_len, self.chunk_size):
+            real = min(self.chunk_size, self.max_seq_len - s0)
+            self.pf._chunk([int(v) for v in ids[:real]], s0, self.engram, None)
+            export_chunk(kv_caches, self.pf, slot, s0, s0 + real)
+            n += 1
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"[v41 runtime] warm-all: {n} more chunk(s) to {self.max_seq_len} in {time.time() - t0:.1f} s")
 
     def set_layer_ack_channel(self, channel) -> None:
         self._ack = lambda layer_idx: channel.inject(1)
