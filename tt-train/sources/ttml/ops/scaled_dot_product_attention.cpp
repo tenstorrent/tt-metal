@@ -243,7 +243,8 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    float dropout_probability) {
+    float dropout_probability,
+    const std::optional<autograd::TensorPtr>& gate) {
     validate_qkv_shapes(query, key, value);
 
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
@@ -254,6 +255,14 @@ autograd::TensorPtr scaled_dot_product_attention(
         mask_type = ttml::metal::AttentionMaskType::Arbitrary;
     }
 
+    // Optional output gate: out = sdpa(Q, K, V) * sigmoid(gate), gate shaped like the output (B, H, S, Dv).
+    // The kernels validate the gate shape.
+    autograd::TensorPtr gate_ptr = (gate.has_value() && gate.value()) ? gate.value() : nullptr;
+    std::optional<ttnn::Tensor> gate_tensor = std::nullopt;
+    if (gate_ptr) {
+        gate_tensor = gate_ptr->get_value();
+    }
+
     // ========== Forward Pass using sdpa_fw kernel ==========
     auto fw_result = ttml::metal::sdpa_fw(
         query->get_value(),
@@ -262,23 +271,25 @@ autograd::TensorPtr scaled_dot_product_attention(
         mask_type,
         mask_tensor,
         dropout_probability,
-        /*return_intermediates=*/true);  // Need intermediates for backward pass
+        /*return_intermediates=*/true,  // Need intermediates for backward pass
+        gate_tensor);
 
-    auto attn_output = fw_result[0].value();    // (B, H, S, D)
+    auto attn_output = fw_result[0].value();    // (B, H, S, D), gated when a gate is given
     auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax
 
     auto out = ttml::autograd::create_tensor(attn_output);
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
     ttml::autograd::GradFunction grad =
-        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
+        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability, gate_ptr]() {
             auto grad_output = out->get_grad();
 
-            // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
+            // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V, grad_gate]
             // dL_dQ: (B, H, S, D)
             // dL_dK: (B, G, S, D) for GQA, (B, H, S, D) for MHA
             // dL_dV: (B, G, S, D) for GQA, (B, H, S, D) for MHA
-            auto [dL_dQ, dL_dK, dL_dV] = ttml::metal::sdpa_bw(
+            // dL_dGate: (B, H, S, Dv) when a gate was given, nullopt otherwise
+            auto [dL_dQ, dL_dK, dL_dV, dL_dGate] = ttml::metal::sdpa_bw(
                 grad_output,
                 attn_output,
                 query->get_value(),
@@ -287,14 +298,20 @@ autograd::TensorPtr scaled_dot_product_attention(
                 intermediates,
                 mask_type,
                 mask_tensor,
-                dropout_probability);
+                dropout_probability,
+                gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt);
 
             query->add_grad(dL_dQ);
             key->add_grad(dL_dK);
             value->add_grad(dL_dV);
+            if (gate_ptr && dL_dGate.has_value()) {
+                gate_ptr->add_grad(dL_dGate.value());
+            }
         };
 
-    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
+    // The gate is a differentiable input only when present; a null entry is ignored by add_backward_node.
+    out->set_node(ttml::autograd::add_backward_node(
+        std::move(grad), out, std::vector<autograd::TensorPtr>{query, key, value, gate_ptr}));
 
     return out;
 }

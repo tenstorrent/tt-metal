@@ -11,6 +11,8 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_query_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t u_scaler_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t grad_gate_addr = get_arg_val<uint32_t>(runtime_args_counter++);          // 0 if no gate
+    const uint32_t gated_grad_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);  // 0 if no gate
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
@@ -18,10 +20,15 @@ void kernel_main() {
     constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_7;    // Matmul row reduce tile
     constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;       // Output: grad_Q
     constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;  // Output: u_scaler for KV kernel
+#ifdef HAS_GATE
+    constexpr uint32_t cb_grad_gate = tt::CBIndex::c_16;          // Output: grad_gate = dY * Y * (1 - sigmoid(G))
+    constexpr uint32_t cb_gated_grad_output = tt::CBIndex::c_17;  // Output: dO = dY * sigmoid(G) for KV kernel
+#endif
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
     constexpr uint32_t Ht = get_compile_time_arg_val(1);   // sequence length in tiles
+    constexpr uint32_t vWt = get_compile_time_arg_val(2);  // V/dO width in tiles (grad_gate / gated dO rows)
 
     // Generate helper tiles once at the start
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
@@ -36,12 +43,18 @@ void kernel_main() {
     const uint32_t u_scaler_tile_bytes = get_tile_size(cb_u_scaler_output);
 
     // TensorAccessor definitions
-    constexpr auto grad_query_args = TensorAccessorArgs<2>();
+    constexpr auto grad_query_args = TensorAccessorArgs<3>();
     constexpr auto u_scaler_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
+    constexpr auto grad_gate_args = TensorAccessorArgs<u_scaler_args.next_compile_time_args_offset()>();
+    constexpr auto gated_grad_output_args = TensorAccessorArgs<grad_gate_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators
     const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr);
     const auto u_scaler_addr_generator = TensorAccessor(u_scaler_args, u_scaler_output_addr);
+#ifdef HAS_GATE
+    const auto grad_gate_addr_generator = TensorAccessor(grad_gate_args, grad_gate_addr);
+    const auto gated_grad_output_addr_generator = TensorAccessor(gated_grad_output_args, gated_grad_output_addr);
+#endif
 
     auto write_u_scaler_for_row = [&](const uint32_t global_row_idx) {
         // u_scaler tensor: one tile per query row, indexed by global_row_idx
@@ -51,6 +64,15 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_u_scaler_output, onetile);
     };
+
+#ifdef HAS_GATE
+    // grad_gate and gated dO both have grad_output's (B, H, S, vE) layout: one vWt-wide row per query row.
+    auto write_gate_outputs_for_row = [&](const uint32_t global_row_idx) {
+        const uint32_t vo_start_idx = global_row_idx * vWt;
+        write_tiles_by_row(cb_grad_gate, grad_gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+        write_tiles_by_row(cb_gated_grad_output, gated_grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+    };
+#endif
 
 #ifdef BALANCED_PARALLELISM
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -68,15 +90,21 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        // Write heavy row grad_query + u_scaler
+        // Write heavy row grad_query + u_scaler (+ gate outputs)
         const uint32_t heavy_start_idx = heavy_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, heavy_start_idx, qWt, tile_bytes, qWt);
         write_u_scaler_for_row(heavy_global_row);
+#ifdef HAS_GATE
+        write_gate_outputs_for_row(heavy_global_row);
+#endif
 
-        // Write light row grad_query + u_scaler
+        // Write light row grad_query + u_scaler (+ gate outputs)
         const uint32_t light_start_idx = light_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, light_start_idx, qWt, tile_bytes, qWt);
         write_u_scaler_for_row(light_global_row);
+#ifdef HAS_GATE
+        write_gate_outputs_for_row(light_global_row);
+#endif
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;
@@ -88,6 +116,11 @@ void kernel_main() {
 
         // Write u_scaler tile for this row
         write_u_scaler_for_row(r);
+
+#ifdef HAS_GATE
+        // Write grad_gate and gated dO rows
+        write_gate_outputs_for_row(r);
+#endif
     }
 #endif
 }
