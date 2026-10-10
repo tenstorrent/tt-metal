@@ -941,8 +941,9 @@
   team: models
   sp_config: sc1
 
-# Gemma4 layer perf: global chunks 0/1/15/31 and sliding chunks 0/1 at 256k@8k.
-- name: "(Gemma4-31B-it) D_P layer perf 256k@8k"
+# Gemma4 layer perf at 256k context: first, second, middle and last global chunk and the first two sliding
+# chunks, for 2k, 4k and 8k chunks.
+- name: "(Gemma4-31B-it) D_P layer perf 256k@2k, 256k@4k, 256k@8k"
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
@@ -953,9 +954,13 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install tt-perf-report
+      # One Tracy session per chunk size: a shared session exceeds the 32K source-location limit of Tracy.
       # A node id, not -k: tracy re-joins the -m argument into one shell command.
-      python3 -m tracy -p -r -v -o generated/profiler --check-exit-code --op-support-count 20000 \
-        -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4] -vv --tb=short --timeout=7200"
+      T=models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n
+      for size in 2048 4096 8192; do
+        python3 -m tracy -p -r -v -o generated/profiler --check-exit-code --op-support-count 20000 \
+          -m "pytest ${T}[blackhole-chunkci-both-sz${size}-ctx_256k-8x4] -vv --tb=short --timeout=7200"
+      done
       python3 models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
     '
   test_type: gemma4_d_p_layer_perf
@@ -1879,8 +1884,11 @@
   sp_config: sc1
 
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
-  # Run both perf checks unconditionally (so both report numbers) but fail the step if either
+  # Run every check unconditionally (so each reports numbers) but fail the step if any
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
+  # Split-KV ring MLA gathers KV over the full-mesh snake, so only its perf check gets the
+  # TorusXY descriptor (see fabric_profile); it holds split KV within 2.5% of the classic SP
+  # ring measured back to back. Its accuracy cases run on QB2 (blackhole_multi_card_sanity_tests).
   cmd: |
     export MESH_DEVICE=TG
 
@@ -1891,14 +1899,16 @@
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
+      TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto \
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py::test_ring_mla_split_kv_perf_check -svv || rc=1
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
-  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, determinism]
+  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, ccl, determinism]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 40
+      timeout: 45
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic

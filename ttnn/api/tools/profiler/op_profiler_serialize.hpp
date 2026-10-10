@@ -25,6 +25,7 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
 #include "ttnn/tensor/tensor.hpp"

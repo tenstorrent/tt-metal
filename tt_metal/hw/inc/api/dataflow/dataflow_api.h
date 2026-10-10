@@ -23,7 +23,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "internal/tensor/transfer_noc_addr.h"
 #include "api/dataflow/buf_rw_note.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 
@@ -1401,7 +1401,7 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
-    tt_buf_rw::note_if_bound<tt_buf_rw::READ, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+    tt_buf_rw::note_if_bound<tt_buf_rw::kRead, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
@@ -1586,7 +1586,7 @@ FORCE_INLINE void noc_async_write_page(
             posted,
             noc);
     }
-    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+    tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc),
@@ -1769,7 +1769,7 @@ FORCE_INLINE void noc_async_read_shard(
         -1,
         false,
         noc);
-    tt_buf_rw::note_if_bound<tt_buf_rw::READ, TensorAccessor<DSpec>>();  // op-to-op R/W inference
+    tt_buf_rw::note_if_bound<tt_buf_rw::kRead, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
@@ -1807,7 +1807,7 @@ FORCE_INLINE void noc_async_write_shard(
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
-    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, TensorAccessor<DSpec>>();  // op-to-op R/W inference
+    tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
@@ -2453,7 +2453,7 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     uint32_t customized_src_addr = 0,
     uint32_t num_dest = 1) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NOC_MULTI_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
     if constexpr (dst_type == InlineWriteDst::L1) {
@@ -2908,7 +2908,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
         noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE_ON(noc, cmd_buf, dst_local_l1_addr, src_local_l1_addr, size);
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary

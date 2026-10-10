@@ -5,6 +5,7 @@
 
 #include <array>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -77,6 +78,19 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(
         channels % attrs.channel_chunk_size == 0,
         "qkv_causal_conv1d_silu: channel_chunk_size must divide Q+K+V width exactly");
+    const auto* mesh = in.input.device();
+    const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
+        attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
+        in.input.element_size());
+    const uint64_t available_l1_bytes =
+        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        required_l1_bytes <= available_l1_bytes,
+        "qkv_causal_conv1d_silu: channel_chunk_size = {} needs {} bytes of L1 per core, only {} are available",
+        attrs.channel_chunk_size,
+        required_l1_bytes,
+        available_l1_bytes);
 
     const auto& input_shape = in.input.logical_shape();
     const auto& history_shape = in.history.logical_shape();

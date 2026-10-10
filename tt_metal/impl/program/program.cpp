@@ -310,12 +310,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
-std::string ensure_kernel_binaries(
+// With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
+std::optional<std::string> ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
     IDevice* device,
     JitBuildOptions& build_options,
     const DeviceBuildEnv& build_env,
-    size_t kernel_hash) {
+    size_t kernel_hash,
+    bool no_wait = false) {
     if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
         if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
             log_debug(
@@ -333,14 +335,21 @@ std::string ensure_kernel_binaries(
         }
     }
 
-    jit_build_once(kernel_hash, [&] {
+    auto build = [&] {
         try {
             jit_build_genfiles_descriptors(build_env.build_env, build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
-    });
+    };
+    if (no_wait) {
+        if (!jit_build_once_no_wait(kernel_hash, build)) {
+            return std::nullopt;
+        }
+    } else {
+        jit_build_once(kernel_hash, build);
+    }
     return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
@@ -1245,6 +1254,19 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
         "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
 
+    // The deserialization constructor sets these sets independently, so local and remote are not
+    // guaranteed to be subsets of buffer_indices; all three index the per-core bitsets below.
+    const CircularBufferConfig& config = circular_buffer->config();
+    for (const auto* indices :
+         {&config.buffer_indices(), &config.local_buffer_indices(), &config.remote_buffer_indices()}) {
+        for (uint32_t buffer_index : *indices) {
+            if (buffer_index >= max_dfbs_) {
+                TT_THROW(
+                    "Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+            }
+        }
+    }
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -1264,17 +1286,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                uint32_t max_dfbs = max_dfbs_;
-                auto add_buffer_indices = [&cb_indices, max_dfbs](
+                auto add_buffer_indices = [&cb_indices](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
-                        // TT_ASSERT since we validate when constructing the config that it's within range
-                        TT_ASSERT(
-                            buffer_index < max_dfbs,
-                            "Invalid circular buffer index: {} should be between 0 and {}",
-                            buffer_index,
-                            max_dfbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
@@ -2616,7 +2631,8 @@ void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     validate_semaphore_id(crs, semaphore_id, core_type);
-    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
+    const uint32_t l1_alignment = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1);
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, l1_alignment, core_type));
 }
 
 uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
@@ -3184,6 +3200,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return std::pair{std::move(build_options), kernel_hash};
     };
 
+    auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
+                                    const JitBuildOptions& build_options,
+                                    const std::string& binary_root) {
+        kernel->read_binaries(device, binary_root);
+        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+    };
+
+    // Validate every kernel before starting any build: a throw after a local task launches would unwind
+    // locals it still references, and a throw after a remote submit would leave its dedup entry pending.
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+        }
+    }
+
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
@@ -3211,7 +3243,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -3239,28 +3270,37 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            load_kernel_binaries(kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
+        std::mutex deferred_mutex;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        const std::string binary_root =
-                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
-                        kernel->read_binaries(device, binary_root);
-                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        // A duplicate that waited here would hold a compile worker, so it joins the
+                        // build after the sync below.
+                        const auto binary_root = ensure_kernel_binaries(
+                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
+                        if (!binary_root) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
+                            return;
+                        }
+                        load_kernel_binaries(kernel, build_options, *binary_root);
                     },
                     events);
             }
         }
         sync_build_steps(events);
+        // Join in-progress builds only now, once this Program's tasks have released their compile workers.
+        for (auto& [kernel, build_options, kernel_hash] : deferred) {
+            load_kernel_binaries(
+                kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
+        }
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
@@ -3384,14 +3424,6 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
-bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
-    const auto& hal = MetalContext::instance(context_id_).hal();
-    return (
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
-}
-
-// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     const auto& hal = MetalContext::instance(context_id_).hal();
     return (
@@ -3495,7 +3527,9 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
-    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    // The dispatch-to-eth go-signal unicast path was removed; this slot (formerly
+    // runs_on_noc_unicast_only_cores()) is retained to keep the worker config-buffer layout stable.
+    program_config_sizes_[programmable_core_count_ + 1] = 0;
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
     if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import namedtuple
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 
 import torch
 
@@ -132,6 +132,8 @@ class MathOperation(Enum):
     Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
+    # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -510,6 +512,15 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class SfpuSrcsImpl(Enum):
+    LoadMacro = True
+    Sfpi = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
 class DstRoundingMode(Enum):
     """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
     on store into a bf16 DEST."""
@@ -821,6 +832,16 @@ class UnpackerEngine(Enum):
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
+
+
+class GatedReduceScale(IntFlag):
+    """Independent input/output scaling flags for gated-reduce tests."""
+
+    None_ = 0
+    Gate = 1
+    Up = 2
+    Out = 4
+    All = Gate | Up | Out
 
 
 class SdpaOp(Enum):

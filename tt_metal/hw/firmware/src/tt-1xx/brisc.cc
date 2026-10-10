@@ -18,8 +18,8 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/perf_counters.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -461,7 +461,6 @@ int main() {
 #ifdef DEBUG_CHECKPOINT_ENABLED
                 debug_checkpoint_init(enables);
 #endif
-                ArmPerfCounters();
                 run_triscs(enables);
 
                 noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -550,8 +549,9 @@ int main() {
 
                 wait_ncrisc_trisc();
 
-                // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-                ReadPerfCounters();
+                // BRISC stops and reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 

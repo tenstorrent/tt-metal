@@ -4,10 +4,12 @@
 
 import contextlib
 
+import numpy as np
 import pytest
 import torch
 import ttnn
-import numpy as np
+from models.common.utility_functions import skip_for_slow_dispatch
+
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 
 TILE_HEIGHT = 32
@@ -491,6 +493,7 @@ def _trace_case(device):
     ids=["warm_under_pressure", "warm_then_pressure"],
 )
 @pytest.mark.parametrize("device_params", [_TRACE_DEVICE_PARAMS], indirect=True)
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
 def test_gather_codegen_trace_capture_under_pressure(device, pin_before_warmup):
     """Capturing with L1 constrained must record the plan that frontier admits.
 
