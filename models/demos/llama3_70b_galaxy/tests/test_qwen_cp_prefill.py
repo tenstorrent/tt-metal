@@ -814,3 +814,55 @@ def test_cp_slot_coverage(mesh_device, seq_len, reset_seeds):
             bad.append(f"column {c}: other columns' user blocks written ({same}/2 unchanged)")
     model.tt_ccl.close()
     assert not bad, "\n".join(bad)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+@pytest.mark.parametrize("seq_len", [16384, 32768, 40960])
+def test_cp_chunked_sdpa_pair(mesh_device, seq_len):
+    """cp.chunked_sdpa_pair (two chunked SDPA calls, per-device chunk start) against the ring_distributed SDPA call it
+    replaces, on the scratch-shaped K / V [S/64, 1, 64, 128] through the identity page table (as attention_prefill
+    calls it). Replicated random bf8 Q [1, 8, S, 128] / K / V. Per column (row 0) and slice: PCC vs ring >= 0.9997;
+    all 8 rows of every column equal; a second call equal (program cache hit). Not bit-identical (streaming compute)."""
+    from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+
+    margs = TtQwenModelArgs(mesh_device, max_batch_size=32, max_seq_len=seq_len)
+    mc = margs.get_model_config()
+    base = margs.compute_kernel_config_ring_sdpa_long
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=base.math_fidelity,
+        math_approx_mode=base.math_approx_mode,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=base.packer_l1_acc,
+    )
+    ctx = cp.CPContext(mesh_device, seq_len)
+    lay = ctx.lay
+    torch.manual_seed(seq_len)
+    q = _replicated(mesh_device, torch.randn(1, N_LOCAL_HEADS, seq_len, HEAD_DIM), ttnn.bfloat8_b)
+    kv = [
+        _replicated(mesh_device, torch.randn(seq_len // cp.KV_BLOCK, 1, cp.KV_BLOCK, HEAD_DIM), ttnn.bfloat8_b)
+        for _ in range(2)
+    ]
+    nat = [ttnn.reshape(t, [1, 1, seq_len, HEAD_DIM]) for t in kv]
+    ring_pc = mc["SDPA_RING_PROGCFG"](seq_len, chunk_start_idx=0)
+    scale = HEAD_DIM**-0.5
+    ring = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+        q, nat[0], nat[1], ring_size=COLS, scale=scale, compute_kernel_config=ckc, program_config=ring_pc
+    )
+    pc = cp.chunked_sdpa_config(ring_pc, lay.sl)
+    outs = [cp.chunked_sdpa_pair(ctx, q, kv[0], kv[1], ctx.identity_page_table(), scale, ckc, pc) for _ in range(2)]
+    rd = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(ring)]
+    nd, nd2 = ([ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(o)] for o in outs)
+    bad = []
+    for c in range(COLS):
+        for j, s in enumerate(lay.slices(c)):
+            part = slice(j * lay.sl, (j + 1) * lay.sl)
+            p = _pcc(nd[c][:, :, part], rd[c][:, :, part])
+            logger.info(f"CP_CHUNKED S={seq_len} column {c} slice {s}: pcc vs ring {p:.6f}")
+            if p < 0.9997:
+                bad.append(f"column {c} slice {s}: pcc {p:.6f}")
+    rows_eq = all(torch.equal(nd[r * COLS + c], nd[c]) for r in range(ROWS) for c in range(COLS))
+    rep_eq = all(torch.equal(a, b) for a, b in zip(nd, nd2))
+    logger.info(f"CP_CHUNKED S={seq_len} q{pc.q_chunk_size} k{pc.k_chunk_size}: rows equal {rows_eq}, repeat {rep_eq}")
+    assert rows_eq and rep_eq and not bad, bad
