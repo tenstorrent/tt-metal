@@ -147,6 +147,16 @@ SCENARIOS = [
     _s(f"{PROMPTS}/input_data_long_128k_exact.json", 8, 135000, 64, "isl128k_b8"),
     _s(f"{PROMPTS}/input_data_long_256k_exact.json", 8, 270000, 64, "isl256k_b8"),
     _s(f"{PROMPTS}/input_data_long_128k_exact.json", 16, 135000, 64, "isl128k_b16"),
+    _s(
+        f"{PROMPTS}/input_data_long_128k_exact.json", 16, 131072, 64, "isl128k_b16_m131072"
+    ),  # the vLLM max_model_len 131072 (the demo clips the prompt to 131072 - 64 tokens)
+    _s(
+        Q128, 16, 131072, 64, "prefill_128_b16_m131072"
+    ),  # DRAM probe: the 131072 build with a short prompt (runner / trace cost does not depend on the prompt; the prefill chunk trace does)
+    # the first 16 prompts of the vLLM perf pool (GSM8K 8-shot, ~720 tokens, chat template, exactly 256 generated tokens) at the vLLM B=16 / max_model_len 70000 build: the demo-side reference of the tt-inference-server perf sweep at concurrency 16
+    _s(
+        "/mnt/tt-data/ssinghal/dsv4-logs/perf/gsm8k_8shot_16.json", 16, 70000, 256, "gsm8k8shot_b16_c70k", instruct=True
+    ),
     _s(f"{PROMPTS}/input_data_long_256k_exact.json", 16, 270000, 64, "isl256k_b16"),
     _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
     _s(f"{LONG}/input_data_long_32k.json", 32, 40000, 64, "isl32k_b32"),
