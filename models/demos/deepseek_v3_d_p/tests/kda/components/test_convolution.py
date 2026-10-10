@@ -70,6 +70,12 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     dims = [None, None]
     dims[axis], dims[tp_axis] = 1, 2
     qkv_tt = _to_device(qkv, mesh_device, tuple(dims))
+    # Unbounded intervals end in full segments, so the layer history is never selected.
+    layer_dims = [None, None]
+    layer_dims[tp_axis] = 2
+    layer_history_tt = _to_device(
+        torch.randn(1, 3, width, generator=generator).bfloat16(), mesh_device, tuple(layer_dims)
+    )
 
     def release(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
         for tensor in outputs:
@@ -99,7 +105,9 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                 selections = ChronologicalSelections(selection_records)
 
                 def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-                    return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, selections=selections)
+                    return exchange_convolution_carry(
+                        qkv_tt, layer_history_tt, sequence_parallel_axis=axis, selections=selections
+                    )
 
                 def check(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
                     entries, final = outputs
@@ -150,4 +158,5 @@ def test_exchange_convolution_carry_preserves_causal_carries(
         assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
     finally:
         ttnn.deallocate(qkv_tt)
+        ttnn.deallocate(layer_history_tt)
     print(f"SP={sp} axis={axis} C={local_rows}: exact routing, trace, rebinding and immutable inputs PASS")
