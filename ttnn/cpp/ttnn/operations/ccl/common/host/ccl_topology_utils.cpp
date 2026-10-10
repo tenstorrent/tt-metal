@@ -58,7 +58,7 @@ bool strict_ccl_topology() { return ttnn::CONFIG.get<"strict_ccl_topology">(); }
 
 // Which family refused: the fallback (the input's label) is safe for a gather family -- it never adds a Replicate the
 // output lacks -- but can over-claim Replicate for the scatter family, so the latter logs at error level.
-enum class Family { Gather, Scatter };
+using Family = RefusalFamily;
 
 // CallerRelabelsScope objects alive on this thread (see the header): while positive, refusals are silent.
 thread_local int caller_relabels_depth = 0;
@@ -303,6 +303,8 @@ std::optional<TensorTopology> scatter_output_topology(
 CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
 
 CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
+
+std::optional<TensorTopology> refuse(const std::string& what, RefusalFamily family) { return fail(what, family); }
 
 std::optional<TopologyPlacements> uncollapse_placements(
     const TensorTopology& in, const MeshShape& mesh_shape, std::string* reason) {

@@ -64,6 +64,17 @@ public:
     CallerRelabelsScope& operator=(const CallerRelabelsScope&) = delete;
 };
 
+// Which family a refusal belongs to (see "The fallback is not equally safe" above): a gather-family refusal is logged
+// at warning level, a scatter-family one at error level.
+enum class RefusalFamily { Gather, Scatter };
+
+// A refusal raised by a device op's hook rather than by a helper above: a label the op cannot renumber into its
+// output layout, a ring order no label can carry. Handled exactly like the helpers' own refusals -- silent nullopt
+// inside a CallerRelabelsScope, TT_FATAL under strict mode, otherwise one log line per distinct message -- so a hook's
+// "no honest label" is as visible as the helper's and strict mode covers it. Always returns nullopt (or throws), so a
+// hook writes `return {refuse(what, family).value_or(input_topology)};` or calls it and returns the input's label.
+std::optional<tt::tt_metal::TensorTopology> refuse(const std::string& what, RefusalFamily family);
+
 // Expands `in` to one placement per axis of `mesh_shape`. An N-D label (distribution dims == placements == mesh dims)
 // is returned verbatim, provided its axes align with the mesh axes: its distribution shape fits the mesh per axis and
 // its coordinates walk a distribution-shaped block of the mesh in row-major order (an N-D mapper whose shape fits, with

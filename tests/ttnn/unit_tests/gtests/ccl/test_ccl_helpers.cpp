@@ -1381,3 +1381,22 @@ TEST(CclTopologyUtils, StrictModeThrowsWhereWarnOnlyReturnsNullopt) {
     const auto message = message_of([&] { topo::all_reduce_output_topology(fewer_shards, 1, mesh, kRank); });
     EXPECT_NE(message.find("row-major"), std::string::npos) << message;
 }
+
+TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
+    // A hook-level refusal (a label the op cannot renumber into its output layout, a ring order no label carries)
+    // goes through the same handling as the helpers' own: nullopt in warn-only mode, TT_FATAL under strict mode,
+    // silent inside a CallerRelabelsScope -- so strict mode covers every "no honest label", not only the helpers'.
+    {
+        StrictCclTopologyScope warn_only(false);
+        EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Gather).has_value());
+        EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter).has_value());
+    }
+    StrictCclTopologyScope strict(true);
+    {
+        const topo::CallerRelabelsScope caller_relabels;
+        EXPECT_FALSE(topo::refuse("hook: intermediate", topo::RefusalFamily::Scatter).has_value());
+    }
+    const auto message = message_of([&] { topo::refuse("hook: no honest label", topo::RefusalFamily::Gather); });
+    EXPECT_NE(message.find("hook: no honest label"), std::string::npos) << message;
+    EXPECT_THROW(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter), std::runtime_error);
+}
