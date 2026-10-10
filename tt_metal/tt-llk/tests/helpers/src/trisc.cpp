@@ -106,7 +106,14 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER) && (defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_PACK))
+        // INIT with icache prefetch, as tt-metal's trisck.cc runs a kernel's init; counters.h init_zone ends it before the loop
+        ckernel::icache_prefetch_init_begin();
+#endif
         run_kernel(temp_args);
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER) && (defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_PACK))
+        ckernel::icache_prefetch_init_end();
+#endif
 
         ckernel::fence_compiler();
 
