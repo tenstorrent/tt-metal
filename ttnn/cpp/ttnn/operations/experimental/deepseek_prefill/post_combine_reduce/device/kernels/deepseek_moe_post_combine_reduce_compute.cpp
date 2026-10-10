@@ -24,11 +24,11 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 // is true; it carries zero from the program factory otherwise.
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
-// Per-token scaled fp8 combine rows (fused DQ2): c_0 holds e4m3 pseudo-tiles with the row's fp32 scale at
-// word fp8_scale_word of the last one. Each local slot is unpacked to 32-bit DEST and scaled by
-// weight * row_scale with two SFPU scalar multiplies; everything stays in compute.
+// Per-token scaled fp8 combine rows (fused DQ2): c_0 holds e4m3 pseudo-tiles and c_4 the slot's fp32 row scale
+// (word 0). Each local slot is unpacked to 32-bit DEST and scaled by weight * row_scale with two SFPU scalar
+// multiplies; everything stays in compute.
 constexpr bool fp8_in = get_compile_time_arg_val(4) != 0;
-constexpr uint32_t fp8_scale_word = get_compile_time_arg_val(5);
+constexpr uint32_t cb_row_scale_id = tt::CBIndex::c_4;
 
 // Like read_tile_value but reads a uint16 element (zero-extended to uint32_t).
 // Indices arrive from DRAM as uint16 and stay uint16 in the CB; this avoids
@@ -67,6 +67,7 @@ void kernel_main() {
     CircularBuffer cb_indices(cb_indices_id);
     CircularBuffer cb_output(cb_output_id);
     CircularBuffer cb_rowmajor(cb_rowmajor_id);
+    CircularBuffer cb_row_scale(cb_row_scale_id);
 
     if constexpr (use_dispatch_table_skip) {
         // Wait for writer to finish pre-loading dispatch table (loaded once for all chunks)
@@ -99,6 +100,9 @@ void kernel_main() {
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
                 cb_combine_input.wait_front(emb_dim_cb_tiles);
                 cb_weights.wait_front(1);
+                if constexpr (fp8_in) {
+                    cb_row_scale.wait_front(1);
+                }
 
                 bool skip_expert = false;
                 bool must_zero_init = false;
@@ -127,6 +131,9 @@ void kernel_main() {
                 if (skip_expert) {
                     cb_combine_input.pop_front(emb_dim_cb_tiles);
                     cb_weights.pop_front(1);
+                    if constexpr (fp8_in) {
+                        cb_row_scale.pop_front(1);
+                    }
                     continue;
                 }
 
@@ -140,7 +147,7 @@ void kernel_main() {
                 if constexpr (fp8_in) {
                     // Weight (bf16 element 0 -> fp32 bits) and row scale (fp32), mailboxed to all threads.
                     const uint32_t w_bits = (read_tile_value(cb_weights_id, 0, 0) & 0xFFFFu) << 16;
-                    const uint32_t s_bits = read_tile_value(cb_combine_input_id, emb_dim_cb_tiles - 1, fp8_scale_word);
+                    const uint32_t s_bits = read_tile_value(cb_row_scale_id, 0, 0);
                     tile_regs_acquire();
                     if (zero_fill) {
                         // No local expert: the writer zeroed the weight tile; never read the unwritten slot.
@@ -179,6 +186,9 @@ void kernel_main() {
 
                 cb_combine_input.pop_front(emb_dim_cb_tiles);
                 cb_weights.pop_front(1);
+                if constexpr (fp8_in) {
+                    cb_row_scale.pop_front(1);
+                }
             }
             pack_reconfig_l1_acc(0);
         }

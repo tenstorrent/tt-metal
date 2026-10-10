@@ -217,8 +217,10 @@ void kernel_main() {
         const uint32_t row_tile = work.grp + k * PR_GROUP;
 #if PR_SEGMENTS > 1
         {
-            // Send this segment's partial max tile into each partner's cb_peers slot for this row parity,
-            // then credit the partner; wait for all partners' credits and hand cb_peers to compute.
+            // Send this segment's partial max tile into each partner's cb_peers slot for this row (ring of
+            // three rows: with the compute's A(k+1)-before-B(k) pipeline a partner can deliver row k+1 while
+            // row k-1 is still unread, never row k+2), then credit the partner; wait for all partners'
+            // credits and hand cb_peers to compute.
             cb_send_obj.wait_front(1);
             const uint32_t src_l1 = cb_send_obj.get_read_ptr();
             for (uint32_t sp = 0; sp < PR_SEGMENTS; ++sp) {
@@ -226,7 +228,7 @@ void kernel_main() {
                     continue;
                 }
                 const uint32_t pos = work.seg < sp ? work.seg : work.seg - 1;  // my slot among sp's peers
-                const uint32_t dst_l1 = peers_base + ((k & 1) * (PR_SEGMENTS - 1) + pos) * partial_bytes;
+                const uint32_t dst_l1 = peers_base + ((k % 3) * (PR_SEGMENTS - 1) + pos) * partial_bytes;
                 const uint32_t px = get_arg_val<uint32_t>(PR_XARGS + 1 + 2 * sp);
                 const uint32_t py = get_arg_val<uint32_t>(PR_XARGS + 2 + 2 * sp);
                 noc_async_write(src_l1, get_noc_addr(px, py, dst_l1), partial_bytes);

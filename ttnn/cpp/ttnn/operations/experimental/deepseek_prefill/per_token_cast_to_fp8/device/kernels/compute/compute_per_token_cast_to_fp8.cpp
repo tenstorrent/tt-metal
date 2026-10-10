@@ -182,19 +182,22 @@ void kernel_main() {
 #endif
     static_assert(tiles_per_block == 4, "abs_max4_tile folds exactly one 4-tile chunk");
     constexpr uint32_t seg_tiles = PR_CPS * tiles_per_block;
+    // Rows alternate between two input CBs (even rows cb_in, odd rows PR_CB_IN_ODD), so stage A(k+1) and pass 2
+    // of row k each read the front segment of their own CB and indexing never crosses a ring wrap.
+    auto row_cb = [](uint32_t row) -> uint32_t { return (row & 1) ? static_cast<uint32_t>(PR_CB_IN_ODD) : cb_in_id; };
 
-    // Stage A on the segment at tile offset `in_base` of cb_in (0: front row, seg_tiles: the next one).
-    auto stage_a = [&](uint32_t in_base) {
-        cb_in.wait_front(in_base + seg_tiles);
-        reconfig_full_operand_srca(cb_in_id);
+    // Stage A on the front segment of input CB `in_cb`.
+    auto stage_a = [&](uint32_t in_cb) {
+        CircularBuffer(in_cb).wait_front(seg_tiles);
+        reconfig_full_operand_srca(in_cb);
         pack_reconfig_data_format(PR_CB_CHUNK);
-        copy_init(cb_in_id);
+        copy_init(in_cb);
         MATH((SFPU_UNARY_INIT(unused)));
         for (uint32_t c = 0; c < PR_CPS; ++c) {
             cb_chunk.reserve_back(1);
             tile_regs_acquire();
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                copy_tile(cb_in_id, in_base + c * tiles_per_block + k, k);
+                copy_tile(in_cb, c * tiles_per_block + k, k);
             }
             MATH((abs_max4_tile(0)));
             tile_regs_commit();
@@ -253,12 +256,13 @@ void kernel_main() {
     };
 
     if (num_blocks > 0) {
-        stage_a(0);
+        stage_a(row_cb(0));
     }
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         if (blk + 1 < num_blocks) {
-            stage_a(seg_tiles);
+            stage_a(row_cb(blk + 1));
         }
+        const uint32_t in_cb = row_cb(blk);
         // Stage B: row max = max(own, partners) -> scale = pow2(clamp(amax)/448) -> writer; 1/scale -> pass 2
         cb_own.wait_front(1);
         cb_scale_tiles.reserve_back(1);
@@ -307,8 +311,8 @@ void kernel_main() {
         // x * (1/scale) straight from the input CB: a bf16 / bf8_b input sits in SrcA exactly, so this matches
         // the fp32 round trip without it. Nothing else touches unpack / pack config in this loop, so the
         // bcast, SFPU and pack-untilize inits are issued once per segment.
-        reconfig_data_format(cb_in_id, cb_inv_scale_tiles_id);
-        mul_bcast_cols_init(cb_in_id, cb_inv_scale_tiles_id);
+        reconfig_data_format(in_cb, cb_inv_scale_tiles_id);
+        mul_bcast_cols_init(in_cb, cb_inv_scale_tiles_id);
         if constexpr (round_to_nearest_even) {
             MATH((SFPU_UNARY_INIT(unused)));
         }
@@ -317,7 +321,7 @@ void kernel_main() {
             cb_output_e4m3.reserve_back(tiles_per_block);
             tile_regs_acquire();
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, c * tiles_per_block + k, 0, k);
+                mul_tiles_bcast_cols(in_cb, cb_inv_scale_tiles_id, c * tiles_per_block + k, 0, k);
             }
             if constexpr (round_to_nearest_even) {
                 for (uint32_t k = 0; k < tiles_per_block; ++k) {
@@ -333,22 +337,16 @@ void kernel_main() {
         pack_untilize_uninit(cb_output_e4m3_id);
 #else
         for (uint32_t c = 0; c < PR_CPS; ++c) {
-#ifdef PR_DIRECT_SCALE
-            // x * (1/scale) straight from the input CB: a bf16 / bf8_b input sits in SrcA exactly, so this
-            // matches the fp32 round trip below without it (an fp32 input would be truncated to tf32 in SrcA).
-            constexpr uint32_t cb_src_id = cb_in_id;
-            const uint32_t src_base = c * tiles_per_block;
-#else
-            // input -> fp32 cb_tile (as the per-block path does), then x * (1/scale) per row
+            // fp32 input: copy to the fp32 cb_tile (as the per-block path does), then x * (1/scale) per row
             constexpr uint32_t cb_src_id = cb_tile_id;
             constexpr uint32_t src_base = 0;
-            reconfig_full_operand_srca(cb_in_id);
+            reconfig_full_operand_srca(in_cb);
             pack_reconfig_data_format(cb_tile_id);
-            copy_init(cb_in_id);
+            copy_init(in_cb);
             cb_tile.reserve_back(tiles_per_block);
             tile_regs_acquire();
             for (uint32_t k = 0; k < tiles_per_block; ++k) {
-                copy_tile(cb_in_id, c * tiles_per_block + k, k);
+                copy_tile(in_cb, c * tiles_per_block + k, k);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -358,7 +356,6 @@ void kernel_main() {
             tile_regs_release();
             cb_tile.push_back(tiles_per_block);
             cb_tile.wait_front(tiles_per_block);
-#endif
             cb_output_e4m3.reserve_back(tiles_per_block);
             reconfig_data_format(cb_src_id, cb_inv_scale_tiles_id);
             mul_bcast_cols_init(cb_src_id, cb_inv_scale_tiles_id);
@@ -384,7 +381,7 @@ void kernel_main() {
 #endif
         }
 #endif
-        cb_in.pop_front(seg_tiles);
+        CircularBuffer(in_cb).pop_front(seg_tiles);
         cb_inv_scale_tiles.pop_front(1);
     }
 #else

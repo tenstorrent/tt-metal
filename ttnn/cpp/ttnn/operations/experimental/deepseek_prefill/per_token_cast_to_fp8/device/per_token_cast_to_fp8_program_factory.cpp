@@ -142,16 +142,20 @@ KernelIds build_kernels_and_cbs(
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    // Per-row scale: the reader keeps whole column segments resident (both passes read them); the compute holds
-    // rows k and k+1 at once (software pipeline), so three segments let the reader run one row ahead.
+    // Per-row scale: the reader keeps whole column segments resident (both passes read them); even rows go to
+    // cb_in and odd rows to c_21 (the compute holds rows k and k+1 at once), two segments each.
     const uint32_t in_block_tiles = attrs.per_row_scale
                                         ? (chunks_per_row / std::stoul(defines.at("PR_SEGMENTS"))) * tiles_per_block
                                         : tiles_per_block;
-    const uint32_t in_blocks = attrs.per_row_scale ? 3u : 2u;
-    CircularBufferConfig cb_in_cfg =
-        CircularBufferConfig(in_blocks * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
-            .set_page_size(cb_in_idx, in_tile_bytes);
+    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
+                                         .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
+    if (attrs.per_row_scale) {
+        CircularBufferConfig cb_in_odd_cfg =
+            CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{CBIndex::c_21, input_df}})
+                .set_page_size(CBIndex::c_21, in_tile_bytes);
+        CreateCircularBuffer(program, all_cores, cb_in_odd_cfg);
+    }
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
@@ -165,7 +169,7 @@ KernelIds build_kernels_and_cbs(
         make_fp32_tile_cb(CBIndex::c_18, 2);                          // own partial row max (rows k and k+1 in flight)
         if (segments > 1) {
             make_fp32_tile_cb(CBIndex::c_17, 2);                   // partial row max -> writer -> partners
-            make_fp32_tile_cb(CBIndex::c_19, 2 * (segments - 1));  // partners' partials, double-buffered by row
+            make_fp32_tile_cb(CBIndex::c_19, 3 * (segments - 1));  // partners' partials, ring of three rows
         }
     }
     make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
@@ -397,6 +401,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         defines["PR_CB_OWN"] = std::to_string(static_cast<uint32_t>(CBIndex::c_18));
         defines["PR_CB_PEERS"] = std::to_string(static_cast<uint32_t>(CBIndex::c_19));
         defines["PR_CB_CHUNK"] = std::to_string(static_cast<uint32_t>(CBIndex::c_20));
+        defines["PR_CB_IN_ODD"] = std::to_string(static_cast<uint32_t>(CBIndex::c_21));
     }
     if (attrs.token_count_aware) {
         // The host does not know the valid prefix: light up the whole grid; each core sizes its slice on device.

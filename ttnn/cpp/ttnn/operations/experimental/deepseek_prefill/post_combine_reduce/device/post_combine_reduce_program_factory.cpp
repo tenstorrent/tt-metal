@@ -57,9 +57,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     const uint32_t emb_dim_cb_tiles = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
     // Number of real 32x32 output tiles per 32-token block.
     const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
-    // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
-    // fp8: the row bytes plus the 16-B head of the tail (fp32 scale), landing in the last pseudo-tile.
-    const uint32_t emb_dim_bytes = fp8_in ? emb_dim + 16 : emb_dim * BF16_BYTES;
 
     TT_FATAL(
         emb_dim % TILE_WIDTH == 0,
@@ -67,10 +64,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim,
         TILE_WIDTH,
         emb_dim % TILE_WIDTH);
-    TT_FATAL(
-        !fp8_in || (emb_dim % TILE_SIZE != 0 && emb_dim_cb_tiles <= 4),
-        "fused fp8 dequant: emb_dim {} must leave room for the scale in the last pseudo-tile and fit 4 fp32 DST tiles",
-        emb_dim);
     TT_FATAL(
         emb_dim_cb_tiles <= 8,
         "Embedding dimension tiles {} must fit in 8 DST registers for batching",
@@ -90,9 +83,20 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
-    const uint32_t num_cores = std::min(total_chunks, num_cores_total);
-    const uint32_t base_chunks_per_core = total_chunks / num_cores;
-    const uint32_t extra_chunks = total_chunks % num_cores;
+    // Column parts: a prefill chunk of a few 32-token blocks (640 tokens/chip = 20) leaves most of the grid idle,
+    // so split each row into num_parts pseudo-tile columns (1024 elements each); part p runs on its own group of
+    // cores over all the 32-token blocks. Every part has the same CB geometry (part_cb_tiles pseudo-tiles).
+    const uint32_t num_parts = (2 * total_chunks <= num_cores_total && emb_dim_cb_tiles > 1) ? emb_dim_cb_tiles : 1;
+    const uint32_t part_cb_tiles = emb_dim_cb_tiles / num_parts;
+    const uint32_t cores_per_part = std::min(total_chunks, num_cores_total / num_parts);
+    const uint32_t num_cores = cores_per_part * num_parts;
+    const uint32_t base_chunks_per_core = total_chunks / cores_per_part;
+    const uint32_t extra_chunks = total_chunks % cores_per_part;
+    const uint32_t elem_bytes = fp8_in ? 1 : BF16_BYTES;
+    TT_FATAL(
+        !fp8_in || part_cb_tiles <= 4,
+        "fused fp8 dequant: {} pseudo-tiles per core exceed the 4 fp32 DST tiles",
+        part_cb_tiles);
 
     constexpr bool row_major = true;
 
@@ -106,8 +110,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
-    // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
+    // c_0: the reader pushes one token's num_experts slots per batch; double-buffered by token when a part is one
+    // pseudo-tile wide (the column-split case), single otherwise to bound L1 on wide rows.
+    uint32_t combine_cb_size = (part_cb_tiles == 1 ? 2 : 1) * num_experts * part_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = combine_cb_size,
         .core_ranges = core_range_set,
@@ -121,7 +126,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
     const uint32_t out_tile_size = tt::tile_size(output_cb_data_format);
     const uint32_t weight_tile_size = tt::tile_size(weight_cb_data_format);
-    uint32_t weight_cb_size = weight_tile_size;
+    uint32_t weight_cb_size = 2 * num_experts * weight_tile_size;  // one token's weights per batch, double-buffered
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -131,6 +136,20 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             .page_size = weight_tile_size,
         }}},
     });
+
+    // c_4 (fp8 only): each slot's fp32 row scale (the 16-B head of the row tail), read by the reader beside c_0.
+    if (fp8_in) {
+        constexpr uint32_t scale_page = 64;  // DRAM reads keep the source offset modulo 64 B
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * num_experts * scale_page,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = tt::DataFormat::Float32,
+                .page_size = scale_page,
+            }}},
+        });
+    }
 
     // c_2 / c_3 CBs (dispatch table, indices) are only allocated when the
     // DeepSeek skip path is in use; the GPT-OSS path does not touch them.
@@ -181,7 +200,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     }
 
     // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
-    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * out_tile_size;
+    uint32_t output_cb_size = TOKENS_PER_CHUNK * part_cb_tiles * out_tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = output_cb_size,
         .core_ranges = core_range_set,
@@ -193,7 +212,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     // c_17: Row-major scratch for tilize — one chunk at a time
-    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * out_tile_size;
+    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * part_cb_tiles * out_tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = rowmajor_cb_size,
         .core_ranges = core_range_set,
@@ -210,12 +229,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
+    // Reader compile-time args: num_experts, part_cb_tiles, fp8_in, combine accessor.
     // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
-        emb_dim_bytes,
+        part_cb_tiles,
+        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 2: read each slot's fp32 row scale into c_4
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 
@@ -224,11 +243,10 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // across both modes (it is zero in the GPT-OSS path).
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
+        part_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
-        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 4: fused per-token fp8 dequant
-        (emb_dim % TILE_SIZE) / 4,              // 5: scale word offset in the last pseudo-tile
+        static_cast<uint32_t>(fp8_in ? 1 : 0),  // 4: fused per-token fp8 dequant (row scale in c_4)
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -238,7 +256,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // kernel guards every use of them with `if constexpr (use_dispatch_table_skip)`.
     std::vector<uint32_t> writer_compile_time_args = {
         num_experts,
-        emb_dim_cb_tiles,
+        part_cb_tiles,
         emb_dim_out_tiles,
         dispatch_table_num_pages,
         dispatch_table_page_size_val,
@@ -301,12 +319,19 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
+    // Distribute chunks of 32 tokens across each part's cores. The first `extra_chunks` cores of a part
     // get (base_chunks_per_core + 1) chunks; the remaining get base_chunks_per_core.
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
-        const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
+        const uint32_t part = i / cores_per_part;
+        const uint32_t j = i % cores_per_part;
+        if (j == 0) {
+            token_start = 0;
+        }
+        const uint32_t chunks_this_core = base_chunks_per_core + (j < extra_chunks ? 1 : 0);
+        const uint32_t part_first_elem = part * part_cb_tiles * TILE_SIZE;
+        const uint32_t part_elems = std::min(part_cb_tiles * TILE_SIZE, emb_dim - part_first_elem);
 
         // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
         // Push the buffer pointer first so the framework records a BufferBinding
@@ -315,6 +340,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         reader_rt_args.push_back(combine_buffer);
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
+        reader_rt_args.push_back(part_first_elem * elem_bytes);  // part's byte offset in a row
+        reader_rt_args.push_back(part_elems * elem_bytes);       // part's bytes per row
+        reader_rt_args.push_back(emb_dim * elem_bytes);          // fp8: the row scale's byte offset
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
         // Compute RT args (no Buffer*).
@@ -336,6 +364,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }
         writer_rt_args.push_back(token_start);
         writer_rt_args.push_back(chunks_this_core);
+        writer_rt_args.push_back(part_first_elem / TILE_WIDTH);  // part's first output tile column
+        writer_rt_args.push_back(part_elems / TILE_WIDTH);       // part's output tiles per 32-token block
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
 
         token_start += chunks_this_core * TOKENS_PER_CHUNK;

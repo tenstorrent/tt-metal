@@ -695,10 +695,16 @@ def test_cast_to_fp8_per_row_scale(device, shape, dtype):
     assert match >= 0.9999
 
 
-def test_count_aware_packed_per_row_expert_buffer(device):
+# "multi_row": K3-like expert buffer whose valid prefix gives every core several tile-rows (exercises the per-row
+# segment exchange across rows, i.e. the row-parity peer slots and the software pipeline).
+@pytest.mark.parametrize(
+    "counts, capacity",
+    [([37, 0, 64, 5, 130], 640), ([23 + (7 * i) % 40 for i in range(112)], 9952)],
+    ids=["few_rows", "multi_row"],
+)
+def test_count_aware_packed_per_row_expert_buffer(device, counts, capacity):
     torch.manual_seed(2)
-    H, capacity = K3_LATENT, 640
-    counts = [37, 0, 64, 5, 130]
+    H = K3_LATENT
     epc = len(counts)
     table = [2 * s + 1 for s in range(epc)]
     region, tok = [0] * (2 * epc), [0] * (2 * epc)

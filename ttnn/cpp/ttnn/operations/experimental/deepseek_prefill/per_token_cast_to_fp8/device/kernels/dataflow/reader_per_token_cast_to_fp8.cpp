@@ -162,17 +162,19 @@ void kernel_main() {
     for (uint32_t k = 0; k < work.num_rows; ++k) {
         const uint32_t row_tile = work.grp + k * PR_GROUP;
         const uint32_t first_tile_id = (row_tile * PR_CHUNKS + work.seg * PR_CPS) * tiles_per_block;
-        cb_in_obj.reserve_back(seg_tiles);
+        // even rows -> cb_in, odd rows -> PR_CB_IN_ODD (the compute holds rows k and k+1 at once)
+        CircularBuffer row_cb((k & 1) ? PR_CB_IN_ODD : cb_in);
+        row_cb.reserve_back(seg_tiles);
         for (uint32_t t = 0; t < seg_tiles; ++t) {
             noc.async_read(
                 src,
-                cb_in_obj,
+                row_cb,
                 in_tile_bytes,
                 {.page_id = first_tile_id + t, .offset_bytes = 0},
                 {.offset_bytes = t * in_tile_bytes});
         }
         noc.async_read_barrier();
-        cb_in_obj.push_back(seg_tiles);
+        row_cb.push_back(seg_tiles);
     }
 #else
     const uint32_t global_block_end = block_offset + num_blocks;
