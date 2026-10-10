@@ -294,6 +294,30 @@ flat's VCs 2/3, likely worse than today. Better options, in order:
 3. If a landing buffer is needed, put it where the fabric's NoC 1 write is short: the bottom row (2 hops from the
    eth row through the wrap), west of the eth core; row 0 reads it back in 3 hops on NoC 0 through the wrap.
 
+### 6.8 Fabric multi-hop vs store-and-forward: evidence from code (nothing run)
+Prompted by: "store and forward is, for some reason, mostly just better". Collected from the tree and git history.
+
+| Transport | Kind | Measured (LoudBox / BH, 2 links unless noted) |
+|---|---|---|
+| bare one-hop stream (`fabric_link_ceiling`, `05d3e4d94b9`, `bf712886b59`) | 1 hop | 48.5 GB/s per link direction (14336 B payload) only with each link's core in its eth core's NoC column; side-by-side cores sharing NoC links: 40.6 uni / 30.5 bi |
+| `fabric_all_gather` (ours, `mimo-v2-dp`; README, `ac4cd4dec5a`, `a29854dac97`) | store-and-forward: forwards from its own output in DRAM | 2-chip line 84% of a link, QuietBox 2-link ring ~80%, 4-chip ring 155 GB/s per chip |
+| `fabric_reduce_scatter` (ours, `ac4cd4dec5a`) | store-and-forward (add and forward) | 69-87% of a link |
+| `high_bw_all_gather` (README) | neighbour hops only | "a topology that would require Fabric forwarding is rejected rather than silently taking a slower or unsafe path" |
+| `all_to_all_async_generic` (Pavle Josipovic, `7dd72a0c648`, `dbb91c2dfe0`, `6f877e59a39`) | direct multi-hop (`fabric_set_line_unicast_route`, up to 3 workers per egress through a fabric mux, banks assigned to links, antipodes split over both arcs) | 31-37 GB/s useful per chip on the 8-chip LoudBox ring: x ~2.3 average hops = ~21 GB/s per link direction, ~43% of a link |
+| combine_fabric2d standalone (this work, Kimi) | store-and-forward through a DRAM forwarding buffer | 16 MB own + 20.7 MB forwarded per chip in ~495 us = ~32 GB/s useful per chip, ~18.6 GB/s per link direction (~38%) |
+
+- Multi-hop has no demonstrated edge here: the best tuned direct all-to-all reaches the same useful rate per chip as
+  combine's store-and-forward, and both sit far below what store-and-forward collectives reach (~80%+).
+- Stability history: Fabric express link routing (#48280, multi-hop shortcuts) was reverted (#57434, Pavle Popovic)
+  for a GLM-5.2 sparse-MLA `all_to_all_async_generic` hang on 8x4 TORUS_XY (unit repro `test_a2a_hang_repro.py`
+  on `ppopovic/hang_ut`); the all-to-all dropped its custom routing (`6f877e59a39`) because TTNN-owned routes broke
+  with fabric changes.
+- So: keep store-and-forward. The lever is not the transport kind but combine's own link efficiency (~38% vs ~80%
+  for the all-gather) and where its landing traffic goes. What the fast store-and-forward ops do that combine does not:
+  link cores in their eth core's NoC column, separate local-copy cores (`5bbfbc34f39`: 1 link 32.6 -> 48.2 GB/s),
+  contiguous same-bank multi-page payloads instead of one token per packet, counter-gated relays.
+- 6.7's "no landing" option (1) is withdrawn; the landing location / pattern options (2, 3) stand.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
@@ -308,7 +332,8 @@ flat's VCs 2/3, likely worse than today. Better options, in order:
 1. **Progressive release + completion-order walk** (hot case: ungated ceiling 95% hidden). Writers report per
    sub-block (or chunk) of a large expert, the collector releases row ranges, readers gate per page; combine walks
    experts in the order flat finishes them (computable on device from the replicated counts).
-2. **Forwarded tokens without landing:** fabric multi-hop to the destination chip, final write into its output.
+2. **Combine's link efficiency, store-and-forward kept (6.8):** ~38% of a link today vs ~80% for fabric_all_gather;
+   copy cores, contiguous payloads, landing traffic off flat's busy links / VCs. (Multi-hop dropped: no perf edge.)
 3. **y from L1** into the senders' rings (see 6.7).
 4. **Fabric local writes off flat's VCs:** flat's y and weight forwarding could move to VCs 0/1 classes the fabric
    does not use, or the fabric's `edm_noc_vc` changed; measure with the probes above.
