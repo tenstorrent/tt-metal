@@ -9,10 +9,12 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
+#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 
@@ -41,6 +43,24 @@ using namespace ckernel;
     MOVD2A_4_ROWS(base_offset, 13)  \
     MOVD2A_4_ROWS(base_offset, 14)  \
     MOVD2A_4_ROWS(base_offset, 15)
+
+#define MOVD2A_FACE(base_offset, face)         \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 0) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 1) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 2) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 3)
+
+#define MOVD2A_FACES(base_offset, num_faces) \
+    MOVD2A_FACE(base_offset, 0)              \
+    if ((num_faces) > 1)                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 1)          \
+    }                                        \
+    if ((num_faces) > 2)                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 2)          \
+        MOVD2A_FACE(base_offset, 3)          \
+    }
 
 /**
  * @brief Execute GAPOOL operations with optional high fidelity phases
@@ -73,7 +93,8 @@ inline void execute_high_fidelity_gapool()
 /**
  * @brief Move destination tile to source registers for mul_reduce_scalar
  *
- * Moves data from destination registers to source A or B registers.
+ * Moves a whole tile from destination registers to source A, or its first 16 rows to source B (the scaler rows 0 to 3 and
+ * the rest of the 16x16 block the pooling reads).
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
  * @param idst Destination tile index (0-7)
@@ -134,18 +155,106 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 16);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 20);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 24);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 28);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 32, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 32);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 36, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 36);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 40, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 40);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 44, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 44);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 48, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 48);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 52, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 52);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 56, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 56);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 60, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 60);
+        // The pooling passes read SrcB rows 0 to 15 only.
+    }
+}
+
+/**
+ * @brief Move the faces of dest[idst] that the tile has into SrcA; the column pass reads 16 SrcA rows per face.
+ */
+inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t idst, const ckernel::TensorShape tensor_shape)
+{
+    if (idst == 0)
+    {
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+
+    math::srca_bank_wait();
+
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    switch (idst)
+    {
+        case 0:
+            MOVD2A_FACES(0, num_faces);
+            break;
+        case 1:
+            MOVD2A_FACES(64, num_faces);
+            break;
+        case 2:
+            MOVD2A_FACES(128, num_faces);
+            break;
+        case 3:
+            MOVD2A_FACES(192, num_faces);
+            break;
+        case 4:
+            MOVD2A_FACES(256, num_faces);
+            break;
+        case 5:
+            MOVD2A_FACES(320, num_faces);
+            break;
+        case 6:
+            MOVD2A_FACES(384, num_faces);
+            break;
+        case 7:
+            MOVD2A_FACES(448, num_faces);
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * @brief Whether two products of this shape share a DEST slot: a 16x32 product takes 32 rows and its column pass moves
+ *        the SrcA counter 32 rows, so two fit one 64-row slot.
+ */
+inline bool _llk_math_mul_reduce_scalar_shares_slot_(const ckernel::TensorShape tensor_shape)
+{
+    return tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2;
+}
+
+/**
+ * @brief Multiply product product_index of a row of 16x32 tiles into rows 32 * (product_index % 2) of DEST slot
+ *        product_index / 2: _llk_math_eltwise_binary_'s ELWMUL path at a 32-row DEST stride.
+ *
+ * @note Call @ref _llk_math_eltwise_binary_init_ (ELWMUL) first, and move the products with
+ *       @ref _llk_math_mul_reduce_scalar_move_product_ with share_slots true.
+ */
+template <MathFidelity math_fidelity>
+inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShape tensor_shape, const std::uint32_t product_index)
+{
+    LLK_ASSERT(_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape), "the half-slot multiply is for 16x32 products");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_mul_reduce_scalar_mul_half_slot_", tensor_shape);
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "mul_half_slot: Src zero-substitution flag is not in DEFAULT state");
+    math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(product_index);
+    const std::uint32_t fidelity_loop = is_high_fidelity(math_fidelity) ? tensor_shape.total_num_faces() : 1;
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < fidelity_loop; i++)
+    {
+        ckernel_template::run();
+    }
+    math::clear_dst_reg_addr();
+}
+
+/**
+ * @brief The move into SrcA before product i's column pass: with shared slots the first of a pair moves the whole slot,
+ *        the second none.
+ *
+ * @tparam share_slots: The products were written with @ref _llk_math_mul_reduce_scalar_mul_half_slot_ where the shape
+ *         shares slots; it must match the multiply.
+ */
+template <bool share_slots>
+inline void _llk_math_mul_reduce_scalar_move_product_(const std::uint32_t i, const std::uint32_t num_products, const ckernel::TensorShape tensor_shape)
+{
+    if (!share_slots || !_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
+    {
+        _llk_math_mul_reduce_scalar_move_faces_to_srca_(i, tensor_shape);
+    }
+    else if ((i & 1) == 0)
+    {
+        _llk_math_mul_reduce_scalar_move_faces_to_srca_(i / 2, i + 1 < num_products ? ckernel::DEFAULT_TENSOR_SHAPE : tensor_shape);
     }
 }
 
@@ -203,10 +312,14 @@ inline void _llk_math_mul_reduce_scalar_init_()
  * destination tile. Used in a loop to accumulate multiple input tiles.
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
- * @param dst_index Destination tile index to accumulate into (0-7)
+ * @param dst_index Destination tile index to accumulate into (0-7); used only with tile_setup
+ * @tparam tile_setup Drain the SFPU and point the DEST address and counter at dst_index first
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
+ * @note Without tile_setup, call this only where the SFPU has drained and the DEST address and counter are those of the
+ *       accumulation tile: after the DEST_TO_SRCB move and @ref _llk_math_mul_reduce_scalar_clear_pool_face_, or after
+ *       an earlier pass of the same row.
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, bool tile_setup = true>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -216,9 +329,12 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
     // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    if constexpr (tile_setup)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
 
     for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
     {
@@ -243,6 +359,20 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
         }
     }
+}
+
+/**
+ * @brief Zero face 0 of dest[dst_index], the face the column passes pool into; the scalar reduce reads only its row 0.
+ *
+ * @note Call after @ref _llk_math_mul_reduce_scalar_init_, whose ADDR_MOD_0 leaves the counters in place for the
+ *       ZEROACC, and once the SFPU has drained, as the DEST_TO_SRCB move leaves it.
+ */
+template <bool is_fp32_dest_acc_en>
+inline void _llk_math_mul_reduce_scalar_clear_pool_face_(const std::uint32_t dst_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    constexpr std::uint32_t tiles_per_bank = is_fp32_dest_acc_en ? MAX_TILES_IN_HALF_DEST >> 1 : MAX_TILES_IN_HALF_DEST;
+    TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index & (tiles_per_bank - 1), 0));
 }
 
 /**

@@ -877,6 +877,16 @@ class VECTOR_MODE(TemplateParameter):
 
 
 @dataclass
+class ROW_TILES(TemplateParameter):
+    """A row length compiled into the kernel; 0 keeps the runtime TILE_CNT."""
+
+    row_tiles: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t ROW_TILES = {self.row_tiles};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
