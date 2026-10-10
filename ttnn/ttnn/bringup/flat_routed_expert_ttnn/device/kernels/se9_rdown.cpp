@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
+#include "se_cmb_done.hpp"
 #ifdef SE_Y_RM
 #include "se_yrm.hpp"
 #if !defined(SE_DYN) || !defined(SE_E2E) || defined(SE_SMALL_T)
@@ -105,6 +106,10 @@ void kernel_main() {
 #endif
     const uint64_t gu_base = gu_src, d_base = d_src;
     uint32_t y_a = 0, y_s = 0;
+#ifdef SE_CMB_DONE_RT
+    SeCmbDone cmb;
+    cmb.init(dyn, num_e, !small);
+#endif
 #else
     constexpr uint32_t gu_chunks = gu_chunks_ct, d_blocks = d_blocks_ct, num_v = num_v_ct;
 #endif
@@ -133,7 +138,9 @@ void kernel_main() {
                 const uint64_t src = gu_src + gu_iss * gu_bytes;
 #endif
                 noc_async_read_set_trid(1 + gu_iss % gu_depth);
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
                 noc_async_read(src, gu_l1 + (gu_iss % gu_slots) * gu_bytes, gu_bytes);
+#endif
                 ++gu_iss;
             }
             while (d_iss < d_blocks && d_iss - d_read < d_depth &&
@@ -152,7 +159,9 @@ void kernel_main() {
                 const uint64_t src = d_src + d_iss * d_bytes;
 #endif
                 noc_async_read_set_trid(8 + d_iss % d_depth);
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
                 noc_async_read(src, d_dst, d_bytes);
+#endif
                 ++d_iss;
             }
             while (gu_read < gu_iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + gu_read % gu_depth)) {
@@ -182,12 +191,16 @@ void kernel_main() {
         }
 #endif
         if (rd_gu) {
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(gu_src, get_write_ptr(gu_cb), gu_bytes);
+#endif
             gu_src += gu_bytes;
         }
         if (rd_d) {
 #ifndef SE9_SKIP_DW  // perf experiment only: down weights not read (garbage)
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(d_src, get_write_ptr(d_cb), d_bytes);
+#endif
 #endif
             d_src += d_bytes;
         }
@@ -221,6 +234,11 @@ void kernel_main() {
         if (yw.retire(dyn)) {
             noc_semaphore_inc(done_noc, 1);
             ++out_done;
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(dyn.eid[yw.done_a]);
+            cmb.wrote_entry(dyn, yw.done_a);
+            cmb.report(false);
+#endif
         }
 #else
         if (!y_pending && out_done < num_v && cb_pages_available_at_front(out_cb, out_tiles)) {
@@ -252,14 +270,24 @@ void kernel_main() {
             ++out_done;
             y_pending = false;
 #ifdef SE_DYN
+#ifdef SE_CMB_DONE_RT
+            const uint32_t e_done = dyn.eid[y_a];
+#endif
             if (++y_s == dyn.subs[y_a]) {
                 y_s = 0;
                 ++y_a;
             }
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(e_done);
+            cmb.report();
+#endif
 #endif
         }
 #endif
     }
+#ifdef SE_CMB_DONE_RT
+    cmb.report();  // the experts this core writes nothing of
+#endif
 #ifdef SE9_TRID
     noc_async_read_set_trid(0);
 #endif

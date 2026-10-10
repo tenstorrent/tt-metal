@@ -34,6 +34,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/flat_routed_expert_device_operation.cpp
+        device/flat_combine_overlap_device_operation.cpp
         device/flat_routed_expert_plan.cpp
         device/flat_routed_expert_program_factory.cpp
         flat_routed_expert.cpp

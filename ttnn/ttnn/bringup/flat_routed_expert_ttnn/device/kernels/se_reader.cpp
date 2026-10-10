@@ -58,7 +58,9 @@ void kernel_main() {
                 cb_reserve_back(cb, slot_tiles * batch);
                 l1 = get_write_ptr(cb);
             }
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(base + (d.load_eid[l] * nk_gu + c) * chunk_bytes, l1 + in_batch * slot_bytes, chunk_bytes);
+#endif
             if (++in_batch == batch) {
                 noc_async_read_barrier();
                 cb_push_back(cb, slot_tiles * batch);
@@ -74,7 +76,9 @@ void kernel_main() {
                 l1 = get_write_ptr(cb);
             }
             const uint32_t bytes = (is_down ? get_arg_val<uint32_t>(3 + p) : gu_chunk_tiles) * tile_bytes;
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(src, l1 + in_batch * slot_bytes, bytes);
+#endif
             src += bytes;
             if (++nmark % 8 == 0) {
                 SE_MARK("W_RD");
