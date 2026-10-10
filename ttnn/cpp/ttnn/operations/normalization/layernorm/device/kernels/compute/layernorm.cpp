@@ -422,13 +422,13 @@ void kernel_main() {
 
     // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
     // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
-    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
-    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
-    // rather than per block.
+    // chain waits block.start() + block.size() tiles and never pops. Pop them once here rather than
+    // per block. The reader pushes a full block_size for every block, including the last partial
+    // one, so pop that padded total rather than Wt.
 #ifdef FUSE_GAMMA
-    DataflowBuffer(dfb_gamma_id).pop_front(Wt);
+    DataflowBuffer(dfb_gamma_id).pop_front(total_buffer_size);
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer(dfb_beta_id).pop_front(Wt);
+    DataflowBuffer(dfb_beta_id).pop_front(total_buffer_size);
 #endif
 }

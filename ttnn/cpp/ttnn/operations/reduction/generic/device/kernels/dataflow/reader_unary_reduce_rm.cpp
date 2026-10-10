@@ -171,4 +171,11 @@ void reduce_rm_reader() {
     }
 }
 
-void kernel_main() { reduce_rm_reader<REDUCE_DIM>(); }
+void kernel_main() {
+    reduce_rm_reader<REDUCE_DIM>();
+    // The identity template in clear_value is this reader's own scratch (it is both producer and consumer):
+    // pushed once and read by address for every staged slab. Pop it so the buffer is left balanced.
+    DataflowBuffer dfb_clear_value(dfb::clear_value);
+    dfb_clear_value.wait_front(1);
+    dfb_clear_value.pop_front(1);
+}

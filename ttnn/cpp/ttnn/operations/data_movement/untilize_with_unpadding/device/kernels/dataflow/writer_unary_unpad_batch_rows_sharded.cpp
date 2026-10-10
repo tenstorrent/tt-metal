@@ -52,5 +52,6 @@ void kernel_main() {
         noc.async_read_barrier();
         dfb_untilize_out.pop_front(num_padded_tiles_per_batch);
     }
-    dfb_out.push_back(num_unpadded_output_rows);
+    // No push_back: out is the resident output shard, filled in place, and nothing consumes it as a FIFO, so
+    // a push would leave credits that are never popped (the reserve above posts none).
 }

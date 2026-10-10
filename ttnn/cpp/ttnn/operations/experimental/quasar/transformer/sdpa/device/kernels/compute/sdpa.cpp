@@ -245,6 +245,9 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+        if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
+            release_writer_constant(dfb_mask_in, lw_mask_tile_count);
+        }
 #endif  // !ARCH_QUASAR
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
@@ -327,5 +330,13 @@ void kernel_main() {
                 lw_mask,
                 use_zigzag_balancing);
         }
+        if constexpr (use_lightweight_causal_mask) {
+            release_writer_constant(dfb_mask_in, 2);
+        }
     }
+
+    // The writer pushes the identity scale and column identity tiles once; compute reads them by index for
+    // the whole kernel and never pops them. Release them so the buffers are left balanced.
+    release_writer_constant(dfb_identity_scale_in, 1);
+    release_writer_constant(dfb_col_identity, 1);
 }

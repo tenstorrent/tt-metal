@@ -79,6 +79,26 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
+#ifdef ARCH_QUASAR
+namespace dfb_drain {
+// Bit i is set when the owning DataflowBuffer for logical DFB i is destroyed. The blocking drain for every set bit runs
+// once, after kernel_main() returns (DataflowBuffer::drain_pending()), not in the destructor: helpers and temporaries
+// construct their own DataflowBuffer, and draining when they go out of scope deadlocks with a consumer that has not
+// popped yet. Thread-local because Quasar runs one kernel image on several threads.
+static_assert(dfb::NUM_DFBS <= 32, "dfb_drain masks hold one bit per logical DFB");
+inline thread_local uint32_t pending_mask = 0;
+// Subset of pending_mask whose owner wrote out of the DFB over the NoC (DM only).
+inline thread_local uint32_t pending_write_barrier_mask = 0;
+}  // namespace dfb_drain
+#else
+// TEMPORARY (WH/BH debug only, revert before merge): same deferred-drain mask as Quasar, used to emulate the Quasar
+// drain on WH/BH so DFB credit imbalances hang here too.
+namespace dfb_drain {
+static_assert(NUM_CIRCULAR_BUFFERS <= 32, "dfb_drain mask holds one bit per CB");
+inline uint32_t pending_mask = 0;
+}  // namespace dfb_drain
+#endif
+
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -108,9 +128,19 @@ public:
     DataflowBuffer(uint16_t logical_dfb_id);
 
 #ifdef ARCH_QUASAR
-    // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
-    // Only the original object drains. Copies passed into helpers never drain; the original must outlive them.
+    // Posts leftover implicit-sync credits and marks the DFB for draining when kernel_main() returns (see
+    // drain_pending()). Only the original object does this. Copies passed into helpers never do; the original must
+    // outlive them.
     ~DataflowBuffer();
+
+    // Called by the firmware after kernel_main() returns (DFB_DRAIN_PENDING). For every DFB marked by a destructor,
+    // waits for outstanding credits to drain (posted == acked) and, on DM, for writes out of the DFB to land.
+    static void drain_pending();
+#else
+    // TEMPORARY (WH/BH debug only, revert before merge): emulates the Quasar drain. The destructor marks the CB, and
+    // drain_pending() waits after kernel_main() for its occupancy (tiles_received - tiles_acked) to reach 0.
+    ~DataflowBuffer();
+    static void drain_pending();
 #endif
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -317,11 +347,12 @@ public:
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
+    // Deprecated no-op: on Quasar the drain runs after kernel_main() returns (drain_pending()); on WH/BH there is
+    // nothing to drain.
     void finish() {}
 
 #ifndef COMPILE_FOR_TRISC
-    // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
+    // Deprecated no-op on Quasar: the write barrier runs after kernel_main() returns (drain_pending()).
     // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
     // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
     void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
@@ -399,7 +430,8 @@ private:
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
 #ifdef ARCH_QUASAR
-    void finish_impl();
+    void post_final_credits_impl();
+    static void wait_all_acked_impl(DFBInterface& dfb_interface);
 #endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
@@ -419,7 +451,7 @@ private:
 
     void write_barrier_impl(const Noc& noc) const;
 #ifdef ARCH_QUASAR
-    void write_barrier_impl(uint8_t noc_id) const;
+    static void drain_write_barrier_impl(DFBInterface& dfb_interface, uint8_t noc_id);
 #endif
 #endif
 
@@ -482,6 +514,9 @@ private:
     // recorded on the original, and only the original drains.
     DataflowBuffer* drain_owner_ = this;
     bool has_outbound_writes_ = false;
+#else
+    // TEMPORARY (WH/BH debug only): mirrors the Quasar drain-owner rule; only the original object marks the CB.
+    DataflowBuffer* drain_owner_ = this;
 #endif
 };
 
@@ -540,8 +575,13 @@ inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
 // Arch-specific _impl bodies for DataflowBuffer member functions
 #ifdef ARCH_QUASAR
 #include "internal/tt-2xx/dataflow_buffer.inl"
+// Hook run by the firmware kernel wrappers after kernel_main() returns. Only defined when the kernel includes this
+// header, so kernels that never touch a DFB pay nothing.
+#define DFB_DRAIN_PENDING() DataflowBuffer::drain_pending()
 #else
 #include "internal/tt-1xx/dataflow_buffer.inl"
+// TEMPORARY (WH/BH debug only, revert before merge).
+#define DFB_DRAIN_PENDING() DataflowBuffer::drain_pending()
 #endif
 
 #ifndef COMPILE_FOR_TRISC

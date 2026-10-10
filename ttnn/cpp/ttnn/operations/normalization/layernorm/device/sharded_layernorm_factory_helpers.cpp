@@ -1031,6 +1031,10 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
     }
+    // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
+    if (c.is_post_all_gather && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("SCALER_SELF_LOOP", "1");
+    }
     if (c.do_col_mask) {
         kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
     }
@@ -1192,6 +1196,10 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
+    }
+    // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
+    if (!c.writes_back && !c.is_pre_all_gather) {
+        kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
     }
     for (const auto& [key, value] : c.activation_defines) {
         kernel.compiler_options.defines.emplace(key, value);

@@ -68,6 +68,15 @@ void kernel_main() {
         const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scalar_w_f);
+#ifdef SCALER_SELF_LOOP
+        {
+            // After the all-gather nothing consumes the per-core scaler: this kernel holds both ends of it.
+            // Pop the tile it just pushed so the buffer is left balanced.
+            DataflowBuffer dfb_scaler_obj(dfb::scaler);
+            dfb_scaler_obj.wait_front(1);
+            dfb_scaler_obj.pop_front(1);
+        }
+#endif
 
         const uint32_t eps = get_arg(args::eps);
         DataflowBuffer dfb_eps_obj(dfb::eps);

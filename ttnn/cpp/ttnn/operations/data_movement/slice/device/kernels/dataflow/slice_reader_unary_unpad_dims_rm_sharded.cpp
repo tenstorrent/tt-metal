@@ -86,6 +86,7 @@ void kernel_main() {
         read_noc_xy_ptr_offset += 2;
     }
 
+    // No push_back: the output shard is filled in place and nothing consumes it as a FIFO, so a push would
+    // leave credits that are never popped (the reserve above posts none).
     noc.async_read_barrier();
-    dfb_out.push_back(num_sticks_unpadded);
 }
