@@ -298,6 +298,12 @@ void init_unary_sfpu_operation_quasar()
     {
         selu_init();
     }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        // Loads vConstFloatPrgm0/1/2 for the bf16 path. The fp32-dest instantiation
+        // leaves them untouched.
+        softplus_init<is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::softshrink)
     {
         softshrink_init();

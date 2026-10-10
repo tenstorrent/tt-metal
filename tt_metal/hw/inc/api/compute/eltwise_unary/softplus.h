@@ -45,8 +45,24 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 
 /**
  * Please refer to documentation for any_init.
+ *
+ * is_fp32_dest_acc_en must match the softplus_tile instantiation it precedes: on Quasar
+ * it selects whether the bf16 programmable constants are loaded, and the bf16 path of
+ * softplus_tile<false> reads them.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void softplus_tile_init() {
+    // Quasar's plain SFPU_UNARY_INIT runs the common SFPU init (config registers,
+    // including the LREG11 = -1.0 reload the threshold compare relies on, and ADDR_MOD_7)
+    // but has no per-op hook. The _FN form adds softplus_init, which loads the bf16
+    // programmable constants once per init rather than on every face. Wormhole and
+    // Blackhole dispatch softplus_init from the one-arg op switch.
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT_FN(softplus, sfpu::softplus_init, (is_fp32_dest_acc_en)));
+#else
+    MATH(SFPU_UNARY_INIT(softplus));
+#endif
+}
 
 #ifndef ARCH_QUASAR
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
