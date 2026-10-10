@@ -28,3 +28,8 @@
 2. Pass -> `ttp checks`, then land: `git switch -c ttp/t365-land origin/ttp/t48-ltx25-integrated`,
    cherry-pick 53da67e9c61, `ttp push --detach`.
 3. Clean blx01: `git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t365/b; rm -rf /var/tmp/fasth3/t365`.
+
+## Result (blx01 broker job 477, 2026-10-10 19:38-19:41 UTC, no drops)
+- y0 (old default, unfused) vs y1 (new default, fused YUV + unpatch): md5-identical on all 5 seeds
+  (pcc 1.000000, psnr inf, maxabs 0). decode_s min 0.6587 -> 0.5380 s (-121 ms, -18%), 900 MHz clamp, relative only.
+- Log: tt-project/t365/run_job477.log.

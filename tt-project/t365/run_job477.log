@@ -1,0 +1,27 @@
+[t365] host=g15blx01 commit=53da67e9c618b7781882bd9ac780e86aa3f49cde 2026-10-10 19:38:25
+[t365] arm=y0 rc=0 wall=117 s
+AB arm=y0r1 weights=/var/tmp/fasth3/models/ltx-2.5/vae/ltx-2.5-video-vae-conv-bf16.safetensors latents=/var/tmp/fasth3/diffvae/latents
+AB arm=y0r1 seed=0 shape=(145, 1632, 1920) md5=12cbf7b2b3e51b50c525851dcadf9a84
+AB arm=y0r1 seed=1 shape=(145, 1632, 1920) md5=d6a8d7c2f06be43abcca348679ddb5b6
+AB arm=y0r1 seed=2 shape=(145, 1632, 1920) md5=320fa202bcb8f5160a095fb6e589ef71
+AB arm=y0r1 seed=3 shape=(145, 1632, 1920) md5=05f0ef9cdb38829bebd21be72717db51
+AB arm=y0r1 seed=4 shape=(145, 1632, 1920) md5=1dea4647722db66e3f5b4007a65ecc19
+AB arm=y0r1 decode_s=0.6587 0.6820 0.6851 min=0.6587
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_fuse_unpatch_ab.py::test_vae_ltx_fuse_unpatch_ab[blackhole-mesh_device0-device_params0]
+[t365] arm=y1 rc=0 wall=40 s
+AB arm=y1r1 weights=/var/tmp/fasth3/models/ltx-2.5/vae/ltx-2.5-video-vae-conv-bf16.safetensors latents=/var/tmp/fasth3/diffvae/latents
+AB arm=y1r1 seed=0 shape=(145, 1632, 1920) md5=12cbf7b2b3e51b50c525851dcadf9a84
+AB arm=y1r1 seed=1 shape=(145, 1632, 1920) md5=d6a8d7c2f06be43abcca348679ddb5b6
+AB arm=y1r1 seed=2 shape=(145, 1632, 1920) md5=320fa202bcb8f5160a095fb6e589ef71
+AB arm=y1r1 seed=3 shape=(145, 1632, 1920) md5=05f0ef9cdb38829bebd21be72717db51
+AB arm=y1r1 seed=4 shape=(145, 1632, 1920) md5=1dea4647722db66e3f5b4007a65ecc19
+AB arm=y1r1 decode_s=0.5380 0.5421 0.5470 min=0.5380
+PASSED
+PASSED models/tt_dit/tests/models/ltx/test_vae_ltx_fuse_unpatch_ab.py::test_vae_ltx_fuse_unpatch_ab[blackhole-mesh_device0-device_params0]
+[t365] seed=0 identical=True pcc=1.000000 psnr=inf maxabs=0
+[t365] seed=1 identical=True pcc=1.000000 psnr=inf maxabs=0
+[t365] seed=2 identical=True pcc=1.000000 psnr=inf maxabs=0
+[t365] seed=3 identical=True pcc=1.000000 psnr=inf maxabs=0
+[t365] seed=4 identical=True pcc=1.000000 psnr=inf maxabs=0
+T365_EXIT=0
