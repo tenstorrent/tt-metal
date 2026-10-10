@@ -86,10 +86,6 @@ struct ProgramSpec {
     Group<DataflowBufferSpec> dataflow_buffers;
 
     // Invariant:
-    // - Must be empty (Not yet implemented).
-    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
-
-    // Invariant:
     // - Must not have repeated SemaphoreSpec::unique_id.
     // - Each node must have at most 16 SemaphoreSpecs associated with them.
     Group<SemaphoreSpec> semaphores;
