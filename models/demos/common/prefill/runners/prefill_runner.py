@@ -450,6 +450,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    layer_ack_service=None,
     before_first_chunk=None,
 ) -> None:
     cfg = runtime.config
@@ -503,6 +504,8 @@ def run_request_loop(
         if first is None:
             first = t
         c += 1
+        if layer_ack_service is not None:
+            layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
@@ -804,9 +807,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service,
             ring_shm_name,
             source_rank=rank,
-            num_layers=num_ack_layers,
-            first_layer_idx=ack_first_idx,
-            local_layers=ack_local_count,
+            num_ack_layers=num_ack_layers,
+            ack_first_idx=ack_first_idx,
+            ack_local_count=ack_local_count,
             ack_layer_ids=my_ack_layer_ids,
             protocol=LAYER_COMPLETION_PROTOCOL,
         )
@@ -1022,6 +1025,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            layer_ack_service=layer_ack_service,
             before_first_chunk=_capture_trace if traced else None,
         )
     finally:
