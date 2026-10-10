@@ -143,7 +143,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
-    def forward(self, hidden_streams: ttnn.Tensor):
+    def forward(self, hidden_streams: ttnn.Tensor, pre_mix: ttnn.Tensor | None = None):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
         The streams are flattened to ``[1,1,T,hc*D]`` (``T = B*S``) and unweighted-RMSNormed
@@ -151,6 +151,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         the three parts concatenated. ``collapsed`` comes back in the input's layout -- the
         width-sharded L1 the single-token branch below builds -- while ``post`` / ``comb`` are
         DRAM (and all three are DRAM on the ``T > 1`` branch).
+
+        ``pre_mix`` ``[B,S,1,hc]`` (bf16 TILE) collapses the streams in place of the ``pre`` this
+        call computes (V4.1, where each sublayer collapses with its predecessor's ``pre``); that
+        ``pre`` is then returned fourth, in the layout ``pre_mix`` takes.
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
@@ -203,6 +207,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             post_scale=self.post_scale,
             comb_scale=self.comb_scale,
             eps=self.eps,
+            pre_mix=pre_mix,
             **fused_kwargs,
         )
 

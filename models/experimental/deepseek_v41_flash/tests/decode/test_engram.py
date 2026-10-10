@@ -12,13 +12,12 @@ position, as decode does, with random residual streams.
 The rows are checked bit-exact against the reference's own embedding; the layer output by PCC, on the
 whole output and on what the Engram adds to the streams (``out - x``).
 
-Set ``DEEPSEEK_V41_CACHE_DIR`` to keep the converted ttnn weights across runs.
+The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_engram.py
 """
 
 import math
-import os
 
 import pytest
 import torch
@@ -32,7 +31,7 @@ from models.experimental.deepseek_v41_flash.tests.reference import (
     reference_engram,
     reference_engram_hash,
 )
-from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, engram_weights, load_config
+from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, engram_weights, load_config
 from models.experimental.deepseek_v41_flash.tt.decode.engram import DeepSeekV41Engram
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup, load_engram_table, tensor_region
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -93,7 +92,7 @@ def test_engram_decode(mesh_device, tables, batch):
     reference = {i: reference_engram(model, snapshot, loader, i, *tables[i]) for i in ENGRAM_LAYERS}
     lookup = EngramHostLookup(config, snapshot, tables, batch, STEPS, tokenizer)
 
-    cache = WeightCache(os.environ.get("DEEPSEEK_V41_CACHE_DIR"))
+    cache = WeightCache(CACHE_DIR)
     engrams = {
         i: DeepSeekV41Engram(
             config,
@@ -118,13 +117,12 @@ def test_engram_decode(mesh_device, tables, batch):
         rows = lookup(token, pos)  # {layer: [B, 1, n_hash_cols * head_dim]}
         hashes = reference_hash(token, pos)  # [B, 1, n_engram_layers, n_hash_cols]
 
-        # Dispatch both layers first: each blocks in recv_async_h2d until its rows arrive.
+        # Rows first: each layer's recv_async_h2d stalls the device queue until its rows arrive.
         outs = {}
         for j, (i, engram) in enumerate(engrams.items()):
+            engram.write_rows(rows[i])
             x = ttnn.from_torch(streams[j, pos], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=engram.device)
             outs[i] = engram(x)
-        for i, engram in engrams.items():
-            engram.write_rows(rows[i])
 
         for j, i in enumerate(ENGRAM_LAYERS):
             layer_hashes = hashes[:, :, reference_hash.layout.layer_ids.index(i)]

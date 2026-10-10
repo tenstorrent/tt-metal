@@ -244,15 +244,26 @@ void kernel_main() {
         make_mask(cb_mask_obj, one);
         make_mask(cb_eps_mask_obj, static_cast<uint16_t>(eps_bits >> 16));
 
+        // comb_bias arrives as a device-side reshape to [1,1,H,H] whose tile padding is undefined, and
+        // the logits row max spans the whole tile row, so only the HxH block may be nonzero. Stage the
+        // DRAM tile in the comb_w slot (rebuilt below) and copy just that block into a zeroed tile.
         cb_cb.reserve_back(one_tile);
-        noc.async_read(comb_bias, cb_cb, cb_cb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_cb.push_back(one_tile);
-
         cb_cw.reserve_back(one_tile);
-        noc.async_write_zeros(cb_cw, cb_cw.get_tile_size(), {.offset_bytes = 0});
+        noc.async_read(comb_bias, cb_cw, cb_cb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_write_zeros(cb_cb, cb_cb.get_tile_size(), {.offset_bytes = 0});
+        noc.async_read_barrier();
         noc.write_zeros_l1_barrier();
         auto* cw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_cw.get_write_ptr());
+        auto* cbias = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_cb.get_write_ptr());
+        for (uint32_t r = 0; r < num_streams; ++r) {
+            for (uint32_t c = 0; c < num_streams; ++c) {
+                cbias[tile_face_index(r, c)] = cw[tile_face_index(r, c)];
+            }
+        }
+        cb_cb.push_back(one_tile);
+
+        noc.async_write_zeros(cb_cw, cb_cw.get_tile_size(), {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
         const uint32_t comb_base = 2u * num_streams;
         for (uint32_t r = 0; r < num_streams; ++r) {
             for (uint32_t c = 0; c < num_streams; ++c) {

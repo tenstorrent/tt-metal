@@ -86,9 +86,26 @@ void kernel_main() {
 
     // The bias is the same for every token: read it once and never pop it, so the compute
     // kernel can re-wait on the same tile for each of its tiles.
+    // It arrives as a device-side reshape to [1,1,H,H] whose tile padding is undefined, and the
+    // logits row max spans the whole tile row, so only the HxH block may be nonzero. Stage the DRAM
+    // tile in the first comb_w slot (overwritten below) and copy just that block into a zeroed tile.
     cb_b.reserve_back(one_tile);
-    noc.async_read(comb_bias, cb_b, cb_b.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+    cb_w.reserve_back(one_tile);
+    noc.async_read(comb_bias, cb_w, cb_b.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_write_zeros(cb_b, cb_b.get_tile_size(), {.offset_bytes = 0});
     noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+    {
+        volatile tt_l1_ptr uint16_t* staged = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_w.get_write_ptr());
+        volatile tt_l1_ptr uint16_t* bias = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_b.get_write_ptr());
+        for (uint32_t r = 0; r < num_streams; ++r) {
+            for (uint32_t c = 0; c < num_streams; ++c) {
+                const uint32_t face = ((r >= 16) ? 2u : 0u) + ((c >= 16) ? 1u : 0u);
+                const uint32_t idx = face * 256u + (r & 15u) * 16u + (c & 15u);
+                bias[idx] = staged[idx];
+            }
+        }
+    }
     cb_b.push_back(one_tile);
 
     // comb_w is [1,T,H,H]: one page per token, and this core owns [start_tile, start_tile+num_tiles).

@@ -1678,7 +1678,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         bsz, heads, _, dh = sel.shape
         ring = ttnn.slice(scache.kv, [0, 0, 0, 0], [bsz, heads, window, dh])
         ring_rm = ttnn.to_layout(ring, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ring)
+        # A ring-only ``kv`` (V4.1) is sliced whole, and a whole slice returns ``kv`` itself.
+        if ring.buffer_address() != scache.kv.buffer_address():
+            ttnn.deallocate(ring)
         ttnn.experimental.slice_write(ring_rm, sel, [0, 0, 0, 0], [bsz, heads, window, dh], [1, 1, 1, 1])
         ttnn.deallocate(ring_rm)
         return ttnn.to_layout(sel, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

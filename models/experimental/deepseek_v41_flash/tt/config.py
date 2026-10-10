@@ -4,6 +4,7 @@
 """DeepSeek-V4.1-Flash config and checkpoint access, on top of the V4-Flash loader."""
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,8 @@ from models.experimental.deepseek_v4_flash.tt.quant import dequantize_fp8_block,
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 DEFAULT_MODEL_DIR = Path("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash").expanduser()
+# Converted ttnn weights: the V4-Flash cache root, one subdirectory per checkpoint, as its demos keep it.
+CACHE_DIR = os.path.join(os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache"), DEFAULT_MODEL_DIR.name)
 # V4.1 quantizes its fp8 weights in 32x32 blocks (V4-Flash: 128x128).
 FP8_BLOCK = (32, 32)
 # HF names the V4 attention block reads; the V4 loader maps them onto ``layers.N.attn.*``.
@@ -34,6 +37,18 @@ _V4_MOE_KEYS = (
     "shared_experts.gate_proj.weight",
     "shared_experts.up_proj.weight",
     "shared_experts.down_proj.weight",
+)
+# HF names of the V4 decoder layer's own tensors; the V4 loader maps them onto ``layers.N.hc_attn_fn``,
+# ``layers.N.attn_norm.weight``, ...
+_V4_DECODER_LAYER_KEYS = (
+    "attn_hc.fn",
+    "attn_hc.base",
+    "attn_hc.scale",
+    "ffn_hc.fn",
+    "ffn_hc.base",
+    "ffn_hc.scale",
+    "input_layernorm.weight",
+    "post_attention_layernorm.weight",
 )
 
 
@@ -105,3 +120,15 @@ def engram_weights(loader: DeepseekV4WeightLoader, layer_idx: int) -> dict:
     (see :mod:`.engram_lookup`)."""
     prefix = f"layers.{layer_idx}.engram."
     return {k: dequantized(loader, prefix + k) for k in ("wkv.weight", "q_weight", "k_weight")}
+
+
+def decoder_layer_weights(loader: DeepseekV4WeightLoader, layer_idx: int, config) -> dict:
+    """Lazy fp32 weights of decoder layer ``layer_idx``, as thunks: :func:`attention_weights` under
+    ``self_attn.``, :func:`moe_weights` under ``mlp.``, :func:`engram_weights` under ``engram.`` (Engram
+    layers only), and the hyper-connections and norms under the V4 decoder layer's HF names."""
+    weights = {k: dequantized(loader, f"layers.{layer_idx}.{k}", True) for k in _V4_DECODER_LAYER_KEYS}
+    weights.update({f"self_attn.{k}": v for k, v in attention_weights(loader, layer_idx).items()})
+    weights.update({f"mlp.{k}": v for k, v in moe_weights(loader, layer_idx).items()})
+    if layer_idx in config.engram_layer_ids:
+        weights.update({f"engram.{k}": v for k, v in engram_weights(loader, layer_idx).items()})
+    return weights

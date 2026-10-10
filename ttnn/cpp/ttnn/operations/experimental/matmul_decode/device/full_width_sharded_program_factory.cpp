@@ -723,8 +723,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
     const uint32_t split_H = num_senders / 2;
 
+    // A replicated A skips the gather (see the reader's IN0_REPLICATED path), so one core is enough.
     TT_FATAL(
-        num_receivers >= 2 && hub0_logical != hub1_logical,
+        in0_rm_hs || (num_receivers >= 2 && hub0_logical != hub1_logical),
         "full_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {

@@ -60,9 +60,10 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         socket_core: tuple = ROWS_SOCKET_CORE,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
-        thunks); ``device`` a 1x1 mesh. One socket page is one user's rows, and the socket's L1 FIFO on
-        ``socket_core`` holds ``fifo_pages`` of them. The socket allocates L1, so build the layer before any
-        trace capture on ``device``.
+        thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
+        ``fifo_pages`` of them. A socket feeds a single device, so each device of the ``device`` mesh gets its
+        own and the layer runs replicated (a TP stage's streams are). The sockets allocate L1, so build the
+        layer before any trace capture on ``device``.
         """
         cache = _as_cache(cache)
         self.layer_idx = layer_idx
@@ -95,30 +96,39 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.socket = ttnn.H2DSocket(
-            device,
-            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*socket_core)),
-            ttnn.BufferType.L1,
-            fifo_pages * self.page_bytes,
-            ttnn.H2DMode.HOST_PUSH,
-        )
-        self.socket.set_page_size(self.page_bytes)
+        self.sockets = [
+            ttnn.H2DSocket(
+                device,
+                ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(*socket_core)),
+                ttnn.BufferType.L1,
+                fifo_pages * self.page_bytes,
+                ttnn.H2DMode.HOST_PUSH,
+            )
+            for coord in ttnn.MeshCoordinateRange(device.shape)
+        ]
+        for socket in self.sockets:
+            socket.set_page_size(self.page_bytes)
 
     def write_rows(self, rows: torch.Tensor) -> None:
-        """Push one step's rows ``[B, kin]`` (or ``[B, 1, kin]``, bf16) into the socket.
+        """Push one step's rows ``[B, kin]`` (or ``[B, 1, kin]``, bf16) into every device's socket.
 
-        Each write is consumed by exactly one :meth:`forward` (eager call or trace replay). Dispatch that
-        forward first: a write blocks while the FIFO is full, until the device drains it.
+        Each write is consumed by exactly one :meth:`forward` (eager call or trace replay). Write before
+        dispatching the step that runs it: its ``recv_async_h2d`` stalls the device queue until the rows
+        arrive, so a host sync anywhere in that step (a blocking write, a read, a CCL's first-call setup)
+        would wait forever on rows sent after it. A write blocks while the FIFO is full, until the device
+        drains a page an earlier, already dispatched step consumes.
         """
         rows = rows.reshape(self.batch, self.kin).to(torch.bfloat16).contiguous()
-        # The socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
-        self.socket.write_tensor(rows.view(torch.int16))
+        for socket in self.sockets:
+            # The socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
+            socket.write_tensor(rows.view(torch.int16))
 
     def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
         """``streams`` ``[B, 1, hc, D]`` (TILE) -> the same shape and dtype, with this step's rows written in."""
         b, hc, d = self.batch, self.hc, self.dim
         assert tuple(streams.shape) == (b, 1, hc, d), tuple(streams.shape)
-        ttnn.experimental.recv_async_h2d(self.rows, self.socket)
+        for socket in self.sockets:
+            ttnn.experimental.recv_async_h2d(self.rows, socket)
         kv = ttnn.to_layout(self.wkv(ttnn.to_layout(self.rows, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
         # Split in row-major, where the [1, 1, B, *] -> [B, 1, *, D] reshapes are views.
         key = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, b, hc * d]), [b, 1, hc, d])
