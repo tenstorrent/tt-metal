@@ -16,7 +16,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
     PACK_UNTILIZE_INIT,
     TILE_COUNT,
 )
@@ -40,7 +39,6 @@ def test_perf_matmul_pack_untilize(perf_report, init):
         templates=[MATH_FIDELITY(MathFidelity.LoFi), PACK_UNTILIZE_INIT(init)],
         runtimes=[
             NUM_BLOCKS(BLOCKS),
-            NUM_TILES_IN_BLOCK(1),
             TILE_COUNT(BLOCKS),
             LOOP_FACTOR(32),
         ],
