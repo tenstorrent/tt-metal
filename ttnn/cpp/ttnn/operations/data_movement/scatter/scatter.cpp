@@ -3,11 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
+#include <utility>
 #include <enchantum/enchantum.hpp>
 
 #include "scatter.hpp"
+#include "scatter_force.hpp"
 
 #include "device/scatter_device_operation.hpp"
+#include "codegen/scatter_codegen_device_operation.hpp"
+#include "codegen/scatter_codegen_program_factory.hpp"
+#include "codegen/scatter_codegen_supported.hpp"
 
 #include "slice/slice.hpp"
 #include "tt_stl/small_vector.hpp"
@@ -151,10 +156,16 @@ Tensor pad_rank_up_to_4d(const Tensor& input_tensor) {
                                                      : input_tensor;
 }
 
+// `force_row_major` is the only difference between the native and codegen legs' normalization:
+// native's device operation (device/scatter_program_factory.cpp) only ever builds a ROW_MAJOR
+// program, so it forces ROW_MAJOR before transposing regardless of the caller's layout; the codegen
+// legs (the TILE and ROW_MAJOR program factories) each address the caller's own layout directly, so
+// the codegen leg keeps it unchanged instead of paying an extra untilize.
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor,
     const int8_t dim,
     const bool is_dim_last_idx,
+    const bool force_row_major,
     const std::optional<Shape>& index_shape = std::nullopt) {
     // Shape{1} is deliberately not short-circuited: this runs once per operand, and every operand
     // has to reach the kernel at the same rank (#56876). The Shape{0} arm is inert - a zero last
@@ -164,14 +175,17 @@ Tensor pre_scatter_transform_tensor(
     }
 
     Tensor processed_tensor = input_tensor;
-    if (index_shape.has_value()) {
+    // Only materialize the source-prefix slice when source is actually wider than index on some
+    // axis -- when the shapes already match this is an identity slice that would still dispatch a
+    // real data-movement kernel over the whole tensor for no effect.
+    if (index_shape.has_value() && processed_tensor.logical_shape() != index_shape.value()) {
         const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
         const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
         const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
         processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
     }
     // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)
-    if (processed_tensor.layout() != Layout::ROW_MAJOR) {
+    if (force_row_major && processed_tensor.layout() != Layout::ROW_MAJOR) {
         processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
@@ -186,7 +200,8 @@ Tensor post_scatter_transform_tensor(
     const int32_t dim,
     const bool is_dim_last_idx,
     const Shape& original_logical_shape,
-    const Layout& original_layout) {
+    const Layout& original_layout,
+    const bool force_row_major) {
     const auto orig_rank = original_logical_shape.rank();
 
     // Only the padding applied on the way in needs undoing; rank >= 4 went through untouched.
@@ -207,8 +222,10 @@ Tensor post_scatter_transform_tensor(
         output_tensor.logical_shape(),
         original_logical_shape);
 
-    // if the output tensor's original layout is not row-major, convert the output tensor back
-    if (original_layout != Layout::ROW_MAJOR) {
+    // The codegen leg never left the caller's own layout (pre_scatter_transform_tensor with
+    // force_row_major=false), so there is nothing to restore; the native leg forced ROW_MAJOR and
+    // must convert back.
+    if (force_row_major && original_layout != Layout::ROW_MAJOR) {
         output_tensor = ttnn::to_layout(output_tensor, original_layout);
     }
 
@@ -235,19 +252,60 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
     return scatter::ScatterReductionType::INVALID;
 }
 
+// The codegen kernels' own reduction_mode convention (scatter_common.hpp's scatter_reduce_value):
+// 0=replace, 1=add, 2=multiply. Derived from the one string parser this file has rather than
+// re-parsing the string, so a reduce the parser knows but the kernels do not (amax/amin) can never be
+// read as a plain overwrite. ttnn::scatter() consults this through codegen_can_serve() BEFORE
+// validate_inputs() runs, so an unsupported string must fail here on its own. ScatterReductionType's
+// ordinals do not match the kernel convention, so the two are never interconverted by casting.
+uint32_t scatter_reduction_mode(const std::optional<std::string>& opt_reduction_string) {
+    if (!opt_reduction_string.has_value()) {
+        return 0;
+    }
+    switch (get_scatter_reduction_type_from_string(opt_reduction_string)) {
+        case scatter::ScatterReductionType::ADD: return 1;
+        case scatter::ScatterReductionType::MULTIPLY: return 2;
+        default:
+            TT_THROW(
+                "scatter: reduce must be either 'add' or 'multiply' (case-sensitive), got {}", *opt_reduction_string);
+    }
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 }  // namespace ttnn::operations::data_movement
 
-namespace ttnn {
+namespace ttnn::operations::data_movement::detail {
 
-// Writes all values from the tensor src into self at the indices specified in the index tensor.
-// For each value in src, its output index is specified by its index in src for dimension != dim and by the
-// corresponding value in index for dimension = dim. self, index and src (if it is a Tensor) should all have the same
-// number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
-// index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
-Tensor scatter(
+// Internal to this file. `detail` is shared across the whole data_movement library and this is a
+// unity-build target, so unprefixed helper names must not have external linkage.
+namespace {
+
+namespace scatter_ns = ttnn::operations::data_movement::scatter;
+using namespace ttnn::operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
+
+// Whether the codegen path can serve this call. Evaluated on the ORIGINAL (pre
+// pre_scatter_transform_tensor) tensors and the caller's raw dim -- the same attributes the supported
+// scope is expressed in -- before any transpose/4D-fold. Correctness and caller-controlled output
+// placement only; perf demotion is a separate, routing-only question.
+bool codegen_can_serve(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::string>& opt_reduction_string) {
+    const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
+    const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
+    return scatter_ns::supported_execution_controls(input_tensor, output_mem_config, std::nullopt) &&
+           scatter_ns::supported_by_codegen(input_tensor, dim, index_tensor, source_tensor, reduction_mode);
+}
+
+// The existing native implementation, unconditionally. Callers that have already been routed here
+// enter this rather than re-entering ttnn::scatter, so a call routed to native cannot be routed a
+// second time and land on codegen.
+Tensor scatter_native(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -258,9 +316,6 @@ Tensor scatter(
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
-    using namespace operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
-
-    // Normalize negative dimension before any helper indexes shapes with dim
     const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
     TT_FATAL(
         normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
@@ -277,25 +332,23 @@ Tensor scatter(
     }
     const auto original_layout = input_tensor.layout();
 
-    // index and source tensors should have same rank as input tensor
     const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
 
-    // tensors sent to the device operation must be:
-    // - row-major
-    // - transposed to have the last dimension as last axis
-    // - unsqueezed to 4D if of a lower rank (a higher rank is passed through as-is)
-    Tensor transformed_input_tensor =
-        pre_scatter_transform_tensor(input_tensor, normalized_dim, input_tensor_is_dim_last_idx);
-
-    Tensor transformed_index_tensor =
-        pre_scatter_transform_tensor(index_tensor, normalized_dim, input_tensor_is_dim_last_idx);
-
+    // tensors sent to the native device operation must be row-major, transposed to have the last
+    // dimension as last axis, and unsqueezed to 4D if of a lower rank.
+    Tensor transformed_input_tensor = pre_scatter_transform_tensor(
+        input_tensor, normalized_dim, input_tensor_is_dim_last_idx, /*force_row_major=*/true);
+    Tensor transformed_index_tensor = pre_scatter_transform_tensor(
+        index_tensor, normalized_dim, input_tensor_is_dim_last_idx, /*force_row_major=*/true);
     Tensor transformed_source_tensor = pre_scatter_transform_tensor(
-        source_tensor, normalized_dim, input_tensor_is_dim_last_idx, index_tensor.logical_shape());
+        source_tensor,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        /*force_row_major=*/true,
+        index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
-
     const auto reduction = get_scatter_reduction_type_from_string(opt_reduction_string);
 
     Tensor output = ttnn::prim::scatter(
@@ -306,9 +359,179 @@ Tensor scatter(
         final_memory_config,
         reduction,
         sub_core_grid);
-    output = post_scatter_transform_tensor(
-        output, normalized_dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_layout);
-    return output;
+    return post_scatter_transform_tensor(
+        output,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        original_input_tensor_lshape,
+        original_layout,
+        /*force_row_major=*/true);
+}
+
+// The generated implementation. Unlike scatter_native, this keeps the caller's own layout through the
+// transpose/4D-fold sandwich (the TILE and ROW_MAJOR program factories each address that layout
+// directly), so a TILE input never pays native's forced untilize -> scatter(ROW_MAJOR) -> tilize
+// round trip -- except for the low-tile-row reroute below, which pays the equivalent round trip
+// deliberately because the TILE factories' per-tile-row work split leaves most cores idle at that tile-row count.
+Tensor scatter_codegen_dispatch(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
+    const auto input_tensor_rank = input_tensor.logical_shape().rank();
+
+    const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
+    TT_FATAL(
+        normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
+        "scatter: dim {} is out of range for tensor rank {}",
+        dim,
+        input_tensor_rank);
+
+    check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
+    validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
+
+    // No empty-shape passthrough here: supported_by_codegen() already rejects rank <= 0 (an empty
+    // ttnn::Shape{} has rank 0), so an empty-shape call never reaches this function through the
+    // auto route's codegen_can_serve() gate, and scatter_force_codegen() must TT_FATAL on it rather
+    // than silently answering from host state -- a passthrough here would swallow that forced call
+    // without ever invoking ttnn::prim::scatter_codegen. The passthrough itself lives in
+    // scatter_native() only.
+    const auto original_layout = input_tensor.layout();
+
+    const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
+
+    Tensor transformed_input_tensor = pre_scatter_transform_tensor(
+        input_tensor, normalized_dim, input_tensor_is_dim_last_idx, /*force_row_major=*/false);
+    Tensor transformed_index_tensor = pre_scatter_transform_tensor(
+        index_tensor, normalized_dim, input_tensor_is_dim_last_idx, /*force_row_major=*/false);
+    Tensor transformed_source_tensor = pre_scatter_transform_tensor(
+        source_tensor,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        /*force_row_major=*/false,
+        index_tensor.logical_shape());
+
+    const MemoryConfig final_memory_config{
+        output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
+    const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
+
+    const bool rerouted_to_row_major = ttnn::operations::data_movement::scatter::prefers_row_major_strategy(
+        transformed_input_tensor,
+        transformed_index_tensor,
+        transformed_source_tensor,
+        transformed_input_tensor.logical_shape(),
+        transformed_index_tensor.logical_shape(),
+        final_memory_config);
+    if (rerouted_to_row_major) {
+        transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
+        transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
+        transformed_source_tensor = ttnn::to_layout(transformed_source_tensor, Layout::ROW_MAJOR);
+    }
+
+    auto params = ttnn::prim::build_scatter_codegen_params(
+        transformed_input_tensor,
+        transformed_index_tensor,
+        transformed_source_tensor,
+        reduction_mode,
+        final_memory_config,
+        sub_core_grid);
+    Tensor output = ttnn::prim::scatter_codegen(
+        params, transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
+    if (rerouted_to_row_major) {
+        output = ttnn::to_layout(output, Layout::TILE);
+    }
+    return post_scatter_transform_tensor(
+        output,
+        normalized_dim,
+        input_tensor_is_dim_last_idx,
+        original_input_tensor_lshape,
+        original_layout,
+        /*force_row_major=*/false);
+}
+
+}  // namespace
+
+Tensor scatter_force_native(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    return scatter_native(
+        input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string, sub_core_grid);
+}
+
+Tensor scatter_force_codegen(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    TT_FATAL(
+        codegen_can_serve(input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string),
+        "scatter_force_codegen invoked for a case the codegen path does not support (requires a single shared "
+        "layout -- TILE or ROW_MAJOR -- across bfloat16 input/src and an int32/uint32 index, all non-sharded and "
+        "non-empty, an untransposed default tile when that layout is TILE, no reduction other than add/multiply (and "
+        "only on ROW_MAJOR), an unsharded output placement that on ROW_MAJOR shares the input's buffer type, and "
+        "enough per-core L1 for the codegen plan; see supported_by_codegen() and supported_execution_controls()). "
+        "This entry never "
+        "falls back to native, because a forced leg that quietly served native would make any comparison against "
+        "native vacuous. Use ttnn::scatter if you want the case routed.");
+    return scatter_codegen_dispatch(
+        input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string, sub_core_grid);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+// Writes all values from the tensor src into self at the indices specified in the index tensor.
+// For each value in src, its output index is specified by its index in src for dimension != dim and by the
+// corresponding value in index for dimension = dim. self, index and src (if it is a Tensor) should all have the same
+// number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
+// index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
+Tensor scatter(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    namespace detail = ttnn::operations::data_movement::detail;
+    namespace scatter_ns = ttnn::operations::data_movement::scatter;
+
+    const MemoryConfig final_memory_config{
+        output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
+    const bool use_codegen =
+        detail::codegen_can_serve(
+            input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
+        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config);
+
+    return use_codegen ? detail::scatter_codegen_dispatch(
+                             input_tensor,
+                             dim,
+                             index_tensor,
+                             source_tensor,
+                             output_memory_config,
+                             opt_reduction_string,
+                             sub_core_grid)
+                       : detail::scatter_native(
+                             input_tensor,
+                             dim,
+                             index_tensor,
+                             source_tensor,
+                             output_memory_config,
+                             opt_reduction_string,
+                             sub_core_grid);
 }
 
 Tensor scatter_add(
