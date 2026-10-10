@@ -4479,6 +4479,12 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
         for (const auto& exit_node : exit_nodes) {
+            // Ranks on one machine share a PSD host key, so this host's exit-node list also carries cables
+            // whose src chip belongs to a sibling rank; this rank's cluster cannot resolve those ASIC ids
+            // (gather_intermesh_cables_for_exit_nodes applies the same ownership filter).
+            if (physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.src_exit_node) != my_rank) {
+                continue;
+            }
             FabricNodeId src_fn = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
             if (src_fn.mesh_id != my_mesh_id) {
                 continue;
