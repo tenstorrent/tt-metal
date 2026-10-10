@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "internal/risc_attribs.h"
 #include <tt-metalium/constants.hpp>
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 using namespace tt::constants;
 
