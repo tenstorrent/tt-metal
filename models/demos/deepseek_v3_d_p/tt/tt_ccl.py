@@ -618,6 +618,8 @@ def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            # Half a galaxy carved as a 4x4 (one pipeline stage when a galaxy runs two stages).
+            16: "BHGLX_HALF",
             32: "BHGLX",
         }
     elif "wormhole_b0" in arch_name:
@@ -661,6 +663,7 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         "P150x8": (2, 2),
         "P300": (2, 2),
         "BHGLX": (2, 2),  # NOTE: Possible increase to 4 when it's enabled
+        "BHGLX_HALF": (2, 2),  # same per-link wiring as the full galaxy
         "TG": (4, 4),
         "N150x4": (1, 1),
     }

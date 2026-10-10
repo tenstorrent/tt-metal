@@ -1,0 +1,18 @@
+# Two adjacent rows of a Blackhole Galaxy as one 2x4 mesh: "a Galaxy playing a LoudBox".
+#
+# device_topology [2,4] [LINE, LINE]: both axes lines: the wrap links exist but the fabric does not use them, so this is the LoudBox 2x4 exactly (A/B baseline for the ring variant).
+#
+# Usage: one process, TT_VISIBLE_DEVICES = the 8 chips of rows 2k, 2k+1 of the live 8x4 mesh
+# (models/demos/deepseek_v3_d_p/utils/galaxy_carve.py 2x4 prints them; the map is per-Galaxy), select this file with
+# TT_MESH_GRAPH_DESC_PATH, open a (2,4) mesh with FabricConfig.FABRIC_2D. Unpinned: the placement solver picks the
+# embedding among the visible chips. RELAXED, 2 channels per axis, as the LoudBox (p150_x8) descriptor.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
