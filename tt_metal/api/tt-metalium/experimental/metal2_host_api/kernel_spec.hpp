@@ -62,7 +62,7 @@ namespace tt::tt_metal::experimental {
 //   runtime arguments (see ProgramRunArgs) — so sibling instances can do different
 //   work from the same binary.
 //
-// PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+// PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
 // ============================================================================
 
@@ -100,8 +100,8 @@ struct KernelSpec {
     // Kernel threading: the number of SPMD threads this kernel has.
     //
     // The legality rules for num_threads are architecture and kernel-type dependent:
-    //  - Gen1 architectures (Wormhole, Blackhole) support single-threaded kernels only.
-    //  - Gen2 architectures (Quasar) support num_threads > 1.
+    //  - 1st-gen architectures (1xx; Wormhole, Blackhole) support single-threaded kernels only.
+    //  - 2nd-gen architectures (2xx; Quasar) support num_threads > 1.
     //    Different rules apply for compute vs data-movement kernels.
     uint32_t num_threads = 1;
 
@@ -120,7 +120,6 @@ struct KernelSpec {
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
-        // Can add more options here as needed
     };
     CompilerOptions compiler_options = {};
 
@@ -152,7 +151,7 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the binding token: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
@@ -183,11 +182,6 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
-    // Additional program parameter binding types (coming soon):
-    //  - GlobalSemaphore bindings
-    //  - GlobalDataflowBuffer bindings
-    //  - MeshBuffer bindings
-
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
     //////////////////////////////////////////////////////////////////////////////
@@ -197,7 +191,6 @@ struct KernelSpec {
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
-    // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)

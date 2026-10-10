@@ -16,28 +16,17 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 // Phase 1 -- "Name -> spec lookups". Builds every *_by_name map.
-// Establishes: the *_by_name invariants (non-null values, key == unique_id, and the
-// cross_node_dfb_by_name <-> dfb_by_name link). Name uniqueness falls out of try_emplace.
+// Establishes: the *_by_name invariants (non-null values, key == unique_id). Name uniqueness falls
+// out of try_emplace.
 void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
     for (const auto& kernel : spec.kernels) {
         auto [it, inserted] = collected.kernel_by_name.try_emplace(kernel.unique_id, &kernel);
         TT_FATAL(inserted, "Duplicate KernelSpec name '{}'", kernel.unique_id);
     }
 
-    // Local DFBs.
     for (const auto& dfb : spec.dataflow_buffers) {
         auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
-    }
-
-    // Cross-node DFBs share the DFB name space with local DFBs, since kernel bindings
-    // refer to either kind by the same DFBSpecName.
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
-        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &cross_node_dfb.dfb_spec);
-        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and cross-node DFBs)", name);
-        auto [it2, inserted2] = collected.cross_node_dfb_by_name.try_emplace(name, &cross_node_dfb);
-        TT_FATAL(inserted2, "Duplicate CrossNodeDataflowBufferSpec name '{}'", name);
     }
 
     for (const auto& semaphore : spec.semaphores) {
@@ -93,8 +82,7 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
         TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
-    // dfb_endpoints invariant: every local DFB has an entry. (The cross-node equivalent is in
-    // ValidateProgramMisc.)
+    // dfb_endpoints invariant: every DFB has an entry.
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
