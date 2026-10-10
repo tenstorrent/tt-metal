@@ -10,6 +10,7 @@ from helpers.llk_params import (
     DestSync,
     GoldenType,
     ReduceDimension,
+    ReducePool,
     Tilize,
 )
 from helpers.tile_shape import TileShape
@@ -50,6 +51,14 @@ class L1Operation:
         for node in self.math_nodes:
             if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
                 return node.fpu.reduce_dim
+        return None
+
+    @property
+    def reduce_pool(self) -> Optional[ReducePool]:
+        for node in self.math_nodes:
+            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
+                # Block-max variants have a fixed MAX operation instead of a reduce_pool member.
+                return getattr(node.fpu, "reduce_pool", ReducePool.Max)
         return None
 
     @property
@@ -291,7 +300,7 @@ class L1Operation:
         init_code = config.sentinel.hw_configure_pack(config, self, pack_only)
         if hoist_reconfig and pack_only:
             init_code += config.sentinel.configure_pack(config, self, pack_only[0])
-        init_code += pack_common.pack_reduce_mask_config(self)
+        init_code += pack_common.pack_reduce_mask_config(self, pack_only[0])
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(self, config, None)

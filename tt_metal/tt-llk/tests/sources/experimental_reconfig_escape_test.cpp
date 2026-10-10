@@ -304,7 +304,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // reduce_block_max_row (FORWARD-only, so it is always run 0) emits a masked (REDUCE_ROW)
         // scalar; mask so the discarded polluter output packs without asserting, then clear it
         // before the victim pack.
-        _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>();
+        _llk_pack_reduce_mask_config_<PoolType::MAX, ReduceDim::REDUCE_ROW>(formats.pack_dst);
     }
 
     // ---- Run 0: pack the discarded result to buffer_Res[0] (overwritten by run 1) ----
