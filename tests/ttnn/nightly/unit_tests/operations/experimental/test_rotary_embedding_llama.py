@@ -420,6 +420,13 @@ def run_test_row_major_rotary_embedding_llama(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.parametrize("seq_len", (64, 256), ids=("prefill_64", "prefill_256"))
+@pytest.mark.parametrize("n_heads, n_kv_heads, head_dim", ((8, 1, 128), (16, 4, 256), (32, 8, 128)))
+def test_rotary_embedding_llama_prefill_head_split(seq_len, n_heads, n_kv_heads, head_dim, device):
+    """Short prefill: a few sequence tiles leave most cores idle, so the op also splits heads across cores."""
+    run_test_rotary_embedding_llama(device, 1, seq_len, 0.9997, n_heads, n_kv_heads, head_dim, max(4096, seq_len))
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
