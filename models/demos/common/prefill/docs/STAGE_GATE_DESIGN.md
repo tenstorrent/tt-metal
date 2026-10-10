@@ -554,11 +554,21 @@ multicast and `data_ready` (§3.3). It polls the termination word, so teardown w
 4. [done, passing on a 2x2 Blackhole mesh, 2026-10-09] gtests in `tests/ttnn/unit_tests/gtests/tensor/test_d2d_stream_service.cpp`:
    `StageGateDisabledByDefault`, `StageGateRequiresMetadata`, `StageGateDescriptorSingleChipPair`,
    `StageGateSemanticsSingleChipPair`, `StageGateSemanticsRowPair`,
-   `StageGatePerCoordIndependenceRowPair`, `StageGateRemoteFabricOpener`. Semantics covers: held while
+   `StageGatePerCoordIndependenceRowPair`, `StageGateRemoteFabricOpener`, `StageGateRejectsBadOffsets`,
+   `StageGateApiRejectsOutOfRange`, `StageGateRecordReachesWorkersSingleChipPair`,
+   `StageGateHostForceCloseSingleChipPair`, `StageGateLeaseModeSingleChipPair`, `StageGateLeaseModeRowPair`.
+   Semantics covers: held while
    closed, release on open, CloseOnTransit closes, multi-transfer burst through one open, sentinel
    slot passes, Bypass passes, teardown while gated. A mutation run (gate wait forced to pass) fails
    `StageGateSemanticsSingleChipPair`, so the test catches a gate that never holds. No regressions:
-   `D2DStreamServiceTest.*` and `*StreamPipeline*` show 55 passed and 3 skipped (they need more than 4 chips).
+   `D2DStreamServiceTest.*` and `*StreamPipeline*` show 61 passed and 3 skipped (they need more than 4 chips).
+   Record: the metadata is multicast to the workers only after the gate passes, and the full record
+   (gate_flags included) arrives unchanged. Force-close: a host close of an open gate holds the next
+   transfer (abort, I3). Lease mode: the receiver keeps the link grant while held, so its
+   `wait_for_fabric_links()` kernel (and its CQ) stays blocked until the gate opens and the transfer is
+   consumed (see §6.9); a pre-opened gate passes without waiting. Config: offsets must be distinct,
+   aligned words inside the record. A mutation run (gate wait forced to pass) fails the record,
+   force-close and both lease tests.
    Per-coord independence: opening gate 2 on one receiver coord releases only that coord, and
    CloseOnTransit closes only that coord's gate. Remote opener: a kernel on a third chip
    (`kernels/stage_gate_remote_opener.cpp`) opens the gate over fabric using only the descriptor,

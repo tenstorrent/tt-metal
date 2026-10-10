@@ -1339,6 +1339,10 @@ ReceiverSideResources build_receiver_side(
                 offset,
                 common.metadata_size_bytes);
         }
+        TT_FATAL(
+            gate.slot_id_offset_bytes != gate.gate_flags_offset_bytes,
+            "D2DStreamService: stage-gate slot_id and gate_flags must be distinct metadata words (both at offset {})",
+            gate.slot_id_offset_bytes);
         stage_gate_addrs = allocate_stage_gate_words(mesh, service_cores, gate.num_gates);
     }
 
