@@ -116,7 +116,7 @@ Decoder (reversed `decoder_blocks`), latent 19x34x60 at 1080p/145f. Each conv is
 | total | 42 | | **~747 TFLOP; 23.4 TFLOP per chip on 32 chips** |
 
 - BH peak per chip (about 130 Tensix cores at 1.35 GHz, 4096 FLOP/cycle/core at LoFi): about 720 TFLOPS at LoFi, 360 at HiFi2 and 180 at HiFi4.
-- The decoder convs run at HiFi4 with fp32 dest accumulation.
+- The decoder convs run at HiFi2 with fp32 dest accumulation (bf16 weights; #335 corrected the earlier HiFi4 assumption).
 - Compute floor at HiFi4: 23.4 TFLOP / 180 TFLOPS ≈ **130 ms**; at HiFi2, about 65 ms.
 - Measured conv3d time is 360 ms, which is about **36% of HiFi4 peak**.
 - DRAM traffic is about 10-12 GB per chip at ~512 GB/s, which is about 25 ms. So decode is not DRAM-bound in theory.
@@ -140,9 +140,9 @@ DiffVAE ideas that do not transfer:
 | Rank | Lever | Gain (est.) | Quality risk | Effort |
 |---|---|---|---|---|
 | 1 | **Conv3d kernel efficiency on the three big res_x stages** (603 of 747 TFLOP). First, a 4x8 per-layer profile to see which shapes run below about 30% of HiFi4. Then fix the reader: reuse the L1 input window across the kh/kw taps (a sliding window instead of a re-gather per tap); a larger Cout block for the 128- and 256-channel layers; a T-axis input reuse over the causal 3-frame window; re-tune the blocking per stage, not one global 4,8 (#17 found that one global H16xW2 re-sweep was slower, which says nothing about per-stage tuning). | 100-200 ms (goal: 50-60% of HiFi4) | none if the accumulation order stays the same; otherwise last-bit differences (PCC ≥ 0.9999 vs the unoptimized decode) | high (C++ conv3d reader/compute) |
-| 2 | **HiFi2 for the up-block convs** (`LTX_VAE_CONV_FIDELITY=HiFi2`; the knob exists). Re-measure with the production blocking. #84's LoFi gain (-177 ms) was on the old fallback blocking, at a PSNR minimum of 45 dB. HiFi2 should keep PSNR above 50 dB. Also try `fp32_dest_acc_en=False` for the 128/256-channel stages (more dest tiles, so bigger output blocks). | 20-60 ms | low; numeric change; gate on PSNR ≥ 45 dB vs the HiFi4 decode on 5 seeds, then VBench | low (env A/B) |
+| ~~2~~ | ~~**HiFi2 for the up-block convs**~~ **Tested and rejected by #335.** The bf16 conv3d default already runs at HiFi2 (HiFi4 applies only to fp32 weights on Blackhole). LoFi gains 0.9% (585 vs 591 ms on blx01, relative timings only, 900 MHz clamp) at RGB PSNR 45.3 dB and luma PSNR 43.8 dB, a marginal pass. Dropped from the plan; do not redo. | none | — | — |
 | 3 | **Fold depth-to-space and unpatchify into the conv3d writer** (5 permutes and 5 reshapes = 45.5 ms). The conv after each upsample writes its output channels straight to their spatial positions, so no permute or reshape is needed. | 30-45 ms | bit-identical | medium |
 | 4 | **Residual add in the conv3d epilogue** (20 BinaryNg = 21.5 ms). The second conv of each ResnetBlock adds the skip tensor in the packer instead of running a separate eltwise op. This differs from #99, which fused the norm with the add. | 15-20 ms | near bit-identical (one bf16 rounding less) | medium |
 | 5 | **Hide the ~60 ms VAE stage tail and the audio decode**. Decode in temporal chunks so readback, YUV and export of chunk k overlap the device decode of chunk k+1. Separately, start the 0.39 s audio decode (#208) so it overlaps the video VAE instead of running after it, if a submesh or host split allows. | 40-60 ms (VAE tail); up to 0.39 s e2e (audio) | none (chunked decode with exact halos is bit-identical) | medium-high |
 
-Realistic target: 0.445 s now, about 0.33 s after levers 2-4, and about 0.2-0.25 s with lever 1.
+Realistic target: 0.445 s now, about 0.36 s after levers 3-4, and about 0.2-0.25 s with lever 1. Lever 2 (math fidelity) is out (#335): the conv VAE is limited by data movement, so the remaining focus is data movement (levers 1, 3, 4 and 5).
