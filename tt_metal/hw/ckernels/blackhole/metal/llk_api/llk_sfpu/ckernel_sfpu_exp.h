@@ -149,12 +149,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // _sfpu_exp_21f_bf16_<true> call that NaN was only laundered back to a plausible
     // answer by whatever SFPARECIP happens to do with a NaN.
     //
-    // exponential_part >= 255 names exactly that saturated lane and nothing else:
-    // exexp is an 8-bit field extraction so it cannot exceed 255, and field 255 is
-    // reachable only from the clamp ceiling (val = 88.72 already gives field 254).
-    // Substituted explicitly, in the same shape as the two 21f pow bodies.
-    v_if(exponential_part >= 255) { y = std::numeric_limits<float>::infinity(); }
-    v_endif;
+    // The clamp makes 0x7F803885 the only non-finite y produced by finite input.
+    // SFPSWAP orders that positive artifact above +inf, so min substitutes the
+    // correct infinity while leaving every finite result unchanged.
+    y = sfpi::min(y, std::numeric_limits<float>::infinity());
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.

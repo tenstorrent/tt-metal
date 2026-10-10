@@ -2026,6 +2026,57 @@ def test_expm1_cw_fp32_overflow_edge(fresh_cpp_impl):
     )
 
 
+_SOFTPLUS_BOUNDARY_VALUES = [
+    -100.0,
+    -90.0,
+    -88.5,
+    -40.0,
+    -20.0,
+    -10.0,
+    -5.0,
+    -1.0,
+    0.0,
+    1.0,
+    5.0,
+    19.999998092651367,
+    20.0,
+    20.000001907348633,
+    30.0,
+]
+
+
+@pytest.mark.parametrize(
+    "formats,dest_acc",
+    [
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            DestAccumulation.No,
+        ),
+        (
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+            DestAccumulation.Yes,
+        ),
+        (
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            DestAccumulation.Yes,
+        ),
+    ],
+    ids=["bf16-dest16", "bf16-dest32", "fp32-dest32"],
+)
+def test_softplus_boundary_and_negative_tail(formats, dest_acc):
+    """Cover the negative tail and both sides of the default linear threshold."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Softplus,
+        FastMode.No,
+        [32, 32],
+        spec_A=StimuliSpec.custom(values=_SOFTPLUS_BOUNDARY_VALUES),
+    )
+
+
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 @pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
 def test_cast_fp32_to_fp16a_fresh_cpp(fresh_cpp_impl, edge_values):

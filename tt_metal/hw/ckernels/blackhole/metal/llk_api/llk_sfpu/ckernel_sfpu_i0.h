@@ -16,16 +16,15 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-#define POLYVAL10(coef10, coef9, coef8, coef7, coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4)               \
-    ((coef0 +                                                                                                     \
-      (coef1 +                                                                                                    \
-       (coef2 +                                                                                                   \
-        (coef3 +                                                                                                  \
-         (coef4 + (coef5 + (coef6 + (coef7 + (coef8 + (coef9 + coef10 * t4) * t4) * t4) * t4) * t4) * t4) * t4) * \
-            t4) *                                                                                                 \
-           t4) *                                                                                                  \
-          t4) *                                                                                                   \
-     t4)
+// State the intended single-rounding multiply-add explicitly. With an immediate
+// coefficient, the ordinary a * b + c spelling prefers SFPMULI/SFPADDI (two
+// dependent roundings) over SFPMAD. I0's polynomials admit the fused rounding,
+// as verified by their numeric contract, and naming it here keeps that semantic
+// choice local rather than requiring a translation-unit fast-math option.
+sfpi_inline vFloat i0_mad_(vFloat a, vFloat b, float c) {
+    const vFloat addend = c;
+    return __builtin_rvtt_sfpmad(a.get(), b.get(), addend.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+}
 inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 // i0's Maclaurin series above is 11 terms in x^2 and is only useful while the
@@ -55,8 +54,8 @@ inline vFloat calculate_i0_asymptotic_(const vFloat abs_x) {
     const vInt rsqrt_i = sfpi::as<vInt>(sfpi::as<vUInt>(abs_x) >> 1);
     vFloat rsqrt_y     = sfpi::as<vFloat>(vInt(0x5f1110a0) - rsqrt_i);
     vFloat c0          = (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y            = rsqrt_y * (vFloat(2.2825186f) + c0 * (vFloat(2.2533049f) + c0));
-    c0                 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y = rsqrt_y * i0_mad_(c0, vFloat(2.2533049f) + c0, 2.2825186f);
+    c0 = i0_mad_(-rsqrt_y, abs_x * rsqrt_y, 1.0f);
     rsqrt_y            = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
 
     // 1/|x| = (1/sqrt|x|)^2 — reuses the refined rsqrt instead of a reciprocal.
@@ -64,10 +63,10 @@ inline vFloat calculate_i0_asymptotic_(const vFloat abs_x) {
 
     // Q(u) = 1 + u/8 + 9u^2/128 + 225u^3/3072 + 11025u^4/98304, Horner.
     vFloat q = vFloat(0.112152099609375f);
-    q        = q * u + vFloat(0.0732421875f);
-    q        = q * u + vFloat(0.0703125f);
-    q        = q * u + vFloat(0.125f);
-    q        = q * u + vFloat(1.0f);
+    q = i0_mad_(q, u, 0.0732421875f);
+    q = i0_mad_(q, u, 0.0703125f);
+    q = i0_mad_(q, u, 0.125f);
+    q = i0_mad_(q, u, 1.0f);
 
     // (exp(x/2) * 1/sqrt(2*pi*x) * Q) * exp(x/2)
     return ((exp_half * vFloat(0.3989422804f)) * rsqrt_y * q) * exp_half;
@@ -91,19 +90,18 @@ inline void calculate_i0() {
         vFloat abs_x = sfpi::abs(input);
         vFloat x = input * input;
 
-        result = 1.0f + POLYVAL10(
-                            1.50E-22f,
-                            7.24E-20f,
-                            2.90E-17f,
-                            9.39E-15f,
-                            2.40E-12f,
-                            4.71E-10f,
-                            6.78E-08f,
-                            0.000006781684028f,
-                            0.0004340277778f,
-                            0.015625f,
-                            0.25f,
-                            x);
+        vFloat p = vFloat(1.50E-22f);
+        p = i0_mad_(p, x, 7.24E-20f);
+        p = i0_mad_(p, x, 2.90E-17f);
+        p = i0_mad_(p, x, 9.39E-15f);
+        p = i0_mad_(p, x, 2.40E-12f);
+        p = i0_mad_(p, x, 4.71E-10f);
+        p = i0_mad_(p, x, 6.78E-08f);
+        p = i0_mad_(p, x, 0.000006781684028f);
+        p = i0_mad_(p, x, 0.0004340277778f);
+        p = i0_mad_(p, x, 0.015625f);
+        p = i0_mad_(p, x, 0.25f);
+        result = i0_mad_(p, x, 1.0f);
 
         v_if(abs_x > I0_THRESHOLD) {
             // No bound on the argument: every lane with abs_x >= I0_MAX_FINITE
