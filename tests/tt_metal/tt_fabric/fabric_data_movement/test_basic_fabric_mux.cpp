@@ -269,8 +269,9 @@ void create_mux_kernel(
     tt::tt_metal::Program& program_handle) {
     const auto src_device_id = device->get_device_ids()[0];
     const auto dst_device_id = dest_device->get_device_ids()[0];
-    const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device_id);
-    const auto dst_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_device_id);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device_id);
+    const auto dst_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_device_id);
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
         !available_links.empty(),

@@ -33,7 +33,6 @@ HostMemDeviceCommand build_go_signal_sequence(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count);
 
@@ -45,7 +44,6 @@ void write_go_signal_sequence(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count);
 

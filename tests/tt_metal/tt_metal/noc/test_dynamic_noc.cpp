@@ -173,11 +173,15 @@ void build_and_run_program(
 
 void build_and_run_program_ethernet(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool /*slow_dispatch*/,
+    bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
+    if (not slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+        return;
+    }
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
