@@ -13,8 +13,24 @@ real 2.5 conv VAE, seed0 latent; arm A table, arm B patched; bit-identity/PCC/PS
 Marker /var/tmp/fasth3/t363/drv363.done; job list t363/jobs.txt; results t363/res/ (sweep JSONs,
 run_<name>_job<ID>.log, winners.txt).
 
+## Sweep results (jobs 457 s2_res, 462 s3_res, 463 s3_chg, 465 s1_res; blx01, 900 MHz clamp, relative)
+Blocking = (Cin_blk, Cout_blk, T, H, W); halo sweep on create_submesh(2,4) of the opened 4x8.
+| layer  | key (Cin,Cout,T,H,W)      | old (table)     | old us | new             | new us | delta | output |
+| s1_res | 512,512,39,17,15          | 64,256,1,4,8    | 2863   | 64,256,2,2,8    | 2435   | -15%  | md5 identical |
+| s2_res | 512,512,75,34,30          | 64,256,1,8,4    | 17343  | 64,256,2,4,4    | 16319  | -6%   | md5 identical |
+| s3_res | 256,256,147,34,30         | 64,256,1,8,4    | 7481   | 64,256,2,4,4    | 6372   | -15%  | md5 identical |
+| s3_chg | 256,512,147,34,30         | 64,256,1,8,4    | 14469  | 64,256,2,4,4    | 11904  | -18%  | md5 identical |
+Cin_blk 32 and Cout_blk 128 variants were all 1.4-2.5x slower; T=4 never beat T=2.
+Code commit ced1ac7f2bd: table entries + CPU test + sweep candidates gain T=2/4.
+
+## A/B attempts
+- 468 (12:18 PDT): failed in the test's _latent (seed0.pt is a BCTHW tensor, not a dict). Fixed.
+- 473: ran on a stale tree (a killed first launch left a t48 copy at bf7db12a14 with a _ttnn.so, so the
+  build was skipped); ImportError vae_key_map. Driver now stamps finished builds (.t363_built).
+- drv363c (started 12:26 PDT): drv363b.sh, builds t48 tip 20b40f459a9 (fetch), A/B job, cleanup.
+  retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t363/detach/drv363c
+  Marker /var/tmp/fasth3/t363/drv363b.done, log drv363b.log, result res/run_ab_job*.log ("AB RESULT").
+
 ## Next step
-Read drv363.done, jobs.txt, res/*.json, res/run_ab_job*.log. If winners pass A/B: put them in
-_BLOCKINGS (models/tt_dit/utils/conv3d.py ~486-496), commit, cherry-pick to -land, ttp push --detach.
-If none win: report failed/done with the per-layer table, no table change.
-Prior: #100 found T>1 slower (T in 3,5 only); T=2/4 untested until now.
+Read drv363b.done and the "AB RESULT" line. If PCC>=0.999/PSNR>=45 (expect identical): git switch -c
+<branch>-land origin/ttp/t48-ltx25-integrated, cherry-pick ced1ac7f2bd, ttp push --detach.
