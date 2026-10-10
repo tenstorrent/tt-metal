@@ -245,6 +245,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }
