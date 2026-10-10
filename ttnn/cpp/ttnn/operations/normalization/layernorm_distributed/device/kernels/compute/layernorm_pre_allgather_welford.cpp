@@ -190,9 +190,6 @@ void kernel_main() {
             }
             if constexpr (!welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
-                if constexpr (welford_unpack_fp32_active) {
-                    welford_init<WelfordInitMode::PreserveStats>();
-                }
             }
             for (auto i : block.local()) {
                 if constexpr (welford_rerecord_per_tile) {
