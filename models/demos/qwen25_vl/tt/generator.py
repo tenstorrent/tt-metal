@@ -705,10 +705,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             sin = torch.cat([sin, sin[:, :, -1:, :].expand(-1, -1, pad_rows, -1)], dim=2)
             rot_mats = (cos, sin)
         num_blocks = num_blocks_in_seq(end, block_size)
-        page_table_user = page_table[0:1, :]
+        # Only the blocks the prompt owns may be written: a scheduler row can retain a previous
+        # request's block IDs past the prompt, and the padded suffix must not land in them. Pad with
+        # -1, which paged_fill_cache treats as "skip" (same rule as the shared generator's
+        # _get_prefill_user_page_table).
+        owned_blocks = num_blocks_in_seq(seq_len, block_size)
+        page_table_user = page_table[0:1, :owned_blocks]
         if page_table_user.shape[1] < num_blocks:
             page_table_user = torch.cat(
-                [page_table_user, torch.zeros(1, num_blocks - page_table_user.shape[1], dtype=page_table_user.dtype)],
+                [
+                    page_table_user,
+                    torch.full((1, num_blocks - page_table_user.shape[1]), -1, dtype=page_table_user.dtype),
+                ],
                 dim=-1,
             )
         chunk_size = (
