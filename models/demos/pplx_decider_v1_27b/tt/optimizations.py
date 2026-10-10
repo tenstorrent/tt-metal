@@ -85,7 +85,13 @@ class PrecisionPolicy:
 
 @dataclass
 class LinearOptimizations:
-    """Per-role matmul configs for prefill-shaped [B, S, K] x [K, N] projections."""
+    """Per-role matmul configs for prefill-shaped [B, S, K] x [K, N] projections.
+
+    Program configs are per projection, keyed by the stored weight shape (K, N); every text-layer
+    projection has a distinct shape except attention o_proj and the GDN out_proj, which share one.
+    A shape missing from the tables (the decision-head readout) keeps the stage-2 behaviour.
+    The configs were selected in stage 3A (doc/optimized_decoder/work_log.md).
+    """
 
     compute_kernel_cfg: dict  # role -> compute kernel config
     output_dtype: ttnn.DataType
@@ -94,6 +100,50 @@ class LinearOptimizations:
     # minimal_matmul for long prefill rows; below the threshold ttnn.linear auto-configures.
     minimal_min_rows: int
     minimal_config: object
+    # (K, N) -> MinimalMatmulConfig for rows >= minimal_min_rows (the 1024 / 2048 chunks).
+    minimal_configs: dict = field(default_factory=dict)
+    # Short rows (the 128 bucket): at most this many rows use the short-row tables below.
+    short_max_rows: int = 0
+    # (K, N) -> (per_core_N, in0_block_w) of a 1D in0-multicast ttnn.linear on the interleaved weight.
+    short_mcast1d: dict = field(default_factory=dict)
+    # (M_block, K_block, N_block, subblock_h, subblock_w) of the fused-SwiGLU minimal_matmul for short
+    # rows; its grid height is cut to the row tiles (fewer idle receivers of each weight multicast).
+    short_swiglu_blocks: tuple | None = None
+
+    def minimal_config_for(self, k: int, n: int):
+        return self.minimal_configs.get((k, n), self.minimal_config)
+
+    def short_program_config(self, k: int, n: int, m_tiles: int):
+        """1D in0-multicast program config for a short-row projection, or None for ttnn.linear auto."""
+        entry = self.short_mcast1d.get((k, n))
+        if entry is None:
+            return None
+        per_core_n, in0_block_w = entry
+        subblock_w = max(d for d in range(1, 5) if per_core_n % d == 0)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=subblock_w,
+            out_block_h=m_tiles,
+            out_block_w=per_core_n,
+            per_core_M=m_tiles,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def short_swiglu_config(self, m_tiles: int):
+        m_block, k_block, n_block, sub_h, sub_w = self.short_swiglu_blocks
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=m_block,
+            K_block_size=k_block,
+            N_block_size=n_block,
+            subblock_h=sub_h,
+            subblock_w=sub_w,
+            compute_with_storage_grid_size=(self.core_grid.x, max(2, min(self.core_grid.y, m_tiles))),
+        )
 
 
 @dataclass
@@ -161,6 +211,10 @@ class Optimizations:
                 subblock_w=4,
                 compute_with_storage_grid_size=(grid.x, grid.y),
             ),
+            minimal_configs={shape: _minimal_cfg(blocks, grid) for shape, blocks in _MINIMAL_BLOCKS.items()},
+            short_max_rows=128,
+            short_mcast1d=dict(_SHORT_MCAST1D),
+            short_swiglu_blocks=(4, 32, 8, 1, 4),
         )
         norm = NormOptimizations(
             compute_kernel_cfg=_compute_cfg(policy.norm_fidelity),
@@ -273,6 +327,45 @@ class VisionOptimizations:
             k_chunk_size=self.sdpa_k_chunk,
             exp_approx_mode=False,
         )
+
+
+# Stage 3A matmul geometry (one p150a, 13x10 grid, BFP8 weights, HiFi2 + fp32 accumulation; the
+# fp32 dest holds 4 tiles, so subblock_h * subblock_w <= 4). minimal_matmul puts N on the 13 grid
+# columns when M <= N, so an N block equal to the per-core N tiles (or half of it) avoids a ragged
+# last block. Measured per shape at M = 1024 and 2048: work_log.md, "Matmul sweep".
+_MINIMAL_BLOCKS = {
+    # (K, N): (M_block, K_block, N_block, subblock_h, subblock_w)
+    (5120, 8192): (4, 8, 10, 4, 1),  # attention q|k|v (20 N tiles per core)
+    (5120, 6144): (4, 8, 8, 4, 1),  # attention output gate
+    (6144, 5120): (4, 8, 13, 4, 1),  # attention o_proj and GDN out_proj (13 N tiles per core)
+    (5120, 10240): (4, 8, 13, 4, 1),  # GDN in-projection q|k|v (25 N tiles per core)
+    (5120, 6272): (4, 8, 8, 1, 4),  # GDN in-projection z|b|a
+    (5120, 34816): (4, 32, 8, 1, 4),  # MLP gate|up, fused SwiGLU
+    (17408, 5120): (4, 16, 7, 4, 1),  # MLP down (13 N tiles per core)
+}
+# Short rows (128 bucket): ttnn.linear auto picks a small in0 block and is weight-read bound at
+# 42-68 % DRAM. A 1D in0-multicast config with a wider K block reads the same interleaved weight
+# faster. (K, N): (per_core_N, in0_block_w). The GDN q|k|v projection keeps ttnn.linear auto (no
+# 1D config beat it).
+_SHORT_MCAST1D = {
+    (5120, 8192): (4, 4),
+    (5120, 6144): (3, 8),
+    (6144, 5120): (2, 8),
+    (5120, 6272): (2, 4),
+    (17408, 5120): (2, 8),
+}
+
+
+def _minimal_cfg(blocks, grid):
+    m_block, k_block, n_block, sub_h, sub_w = blocks
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=k_block,
+        N_block_size=n_block,
+        subblock_h=sub_h,
+        subblock_w=sub_w,
+        compute_with_storage_grid_size=(grid.x, grid.y),
+    )
 
 
 def _compute_cfg(fidelity: str, *, fp32_dest_acc: bool = True):
