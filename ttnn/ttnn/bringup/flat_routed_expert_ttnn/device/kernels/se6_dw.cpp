@@ -118,7 +118,9 @@ void kernel_main() {
             l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(src + blk(b + i) * slot * tile_bytes, l1[i], slot * tile_bytes);
+#endif
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             y_poll();

@@ -36,8 +36,18 @@ struct SeCmbDone {
                 left[d.eid[a]] += d.subs[a];
             }
         }
+#ifdef SE_CMB_EARLY  // (perf probe: every step reported at launch, combine runs ungated beside the flat expert)
+        for (uint32_t e = 0; e < ne; ++e) {
+            left[e] = 0;
+        }
+        report();
+#endif
     }
-    void wrote(uint32_t e) { --left[e]; }
+    void wrote(uint32_t e) {
+#ifndef SE_CMB_EARLY
+        --left[e];
+#endif
+    }
     // Report every step whose expert this core has finished (all earlier ones too). `barrier`: wait for this core's
     // writes to land first (false: the caller knows they have, the row-major y writer's flushed transaction ids).
     void report(bool barrier = true) {

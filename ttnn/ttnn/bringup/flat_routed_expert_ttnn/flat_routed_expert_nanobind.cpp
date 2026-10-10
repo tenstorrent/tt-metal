@@ -84,6 +84,18 @@ nb::dict plan_dict(
     d["gu"] = cores(p->gu);
     d["relays"] = cores(p->relays);
     d["down"] = cores(p->down);
+    {  // the wiring, for NoC models: reader tails (reader, chain tail), down chains (down -> successor)
+        nb::list rdn, succ;
+        for (const auto& [r, t] : p->rdn) {
+            rdn.append(nb::make_tuple(r, t));
+        }
+        for (const auto& [a, b] : p->d_succ) {
+            succ.append(nb::make_tuple(a, b));
+        }
+        d["rdn"] = rdn;
+        d["d_succ"] = succ;
+        d["col0s"] = p->col0s;
+    }
     return d;
 }
 }  // namespace

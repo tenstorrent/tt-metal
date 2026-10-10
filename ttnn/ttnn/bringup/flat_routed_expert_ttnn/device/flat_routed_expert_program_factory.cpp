@@ -127,6 +127,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (p.nsg > 1) {
         dyn_def["SE_SG"] = std::to_string(p.nsg);
     }
+    // perf probe (read at program build): MIMO_FL_W_NOREAD=1 - the weight readers skip their DRAM reads (garbage
+    // weights), every other transfer stays: the flat expert's NoC pattern without most of its DRAM traffic
+    if (std::getenv("MIMO_FL_W_NOREAD")) {
+        dyn_def["SE_W_NOREAD"] = "1";
+    }
     if (PIN) {
         dyn_def["SE_PIN_MIN"] = std::to_string(PIN);
         dyn_def["SE_PIN_SMALL"] = "2";
@@ -190,7 +195,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         return args;
     };
-    const Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
+    Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
+    if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
+        cmb_def["SE_CMB_EARLY"] = "1";
+    }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);
         for (const auto& [i, s, off] : args.addr) {

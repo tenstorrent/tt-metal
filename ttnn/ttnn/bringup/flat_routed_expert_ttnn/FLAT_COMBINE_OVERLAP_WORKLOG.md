@@ -225,17 +225,74 @@ writes take a VC argument. Default now VC 0 for both (`CMBF2D_RD_VC` / `CMBF2D_W
 - Flat solo, down-core sensitivity on the full layout (MIMO_FL_ND): Kimi bal / hot 26 down 932 / 1055, 21 down
   1028 / 1222.
 
-### 6.6 Current best (overlap, us; all bit-identical, 10240/10240)
+### 6.6 Where it stands: one configuration per model (rule: no hot / balanced specific setups)
+Routing is only known on device, so a result counts only as one program per model across both routing cases
+(runtime scheduling on device is allowed). Overlap us, pin 1, combine reader on VC 0, bit-identical:
 
-| Case | np 2, rows 1-9 | 64 gu + 19 down | flat 110 then combine | best vs baseline |
+| Config | Kimi bal | Kimi hot | GLM bal | GLM hot |
 |---|---|---|---|---|
-| Kimi bal | **1147.4** (pin 0) | 1564.8 | 1457.4 | -21% |
-| Kimi hot | 2182.3 | **1803.6** | 1829.9 | -1% |
-| GLM bal | **824.0** (pin 0) | 883.8 | 1032.9 | -20% |
-| GLM hot | 1763.8 | **1549.0** | 1735.0 | -11% |
+| np 2, rows 1-9 (default) | 1222.4 (-16%) | 2182.3 (+19%) | 897.2 (-13%) | 1763.8 (+2%) |
+| 64 gu + 19 down | 1564.8 (+7%) | 1803.6 (-1%) | 894.8 (-13%) | 1549.0 (-11%) |
+| flat on 110 cores, then combine (baseline) | 1457.4 | 1829.9 | 1032.9 | 1735.0 |
 
-Balanced routing wants np 2 (more down cores), a hot expert wants np 1 (full math rate); routing is only known on
-device, so one fixed program cannot pick. pin 1 is better for hot, pin 0 for balanced. Combine is 25-64% hidden.
+Per model today: GLM 64 gu + 19 down (-13% / -11%); Kimi has no config that wins both (np 2 loses the hot case,
+the 19-down layout the balanced one). Earlier "best per case" tables mixed configs and are not achievable.
+
+### 6.7 Where combine actually loses time (NoC model + discriminating probes)
+**Static link-load model** (`flat_combine_tools/noc_model.py` + `dump_plan.py`: every flow routed on the
+17 x 12 physical torus, NoC 0 +x then +y, NoC 1 -y then -x, harvest mask 192: logical x 0-5 -> physical 1-6, 6-10 ->
+11-15, DRAM columns 0 and 9, eth row 1, workers rows 2-11; DRAM ports per NoC from the soc descriptor). Kimi
+balanced, rows 1-9 layout, per layer: no link above ~54% of capacity averaged over the layer. The hottest links are
+the DRAM ports' NoC 0 egress (e.g. (9,11)E, (0,11)E: flat's weight read responses 46 MB + combine's reads 8 MB);
+next the NoC 1 west links between the east readers and the west rectangle (weight forwarding 31 MB). Combine's own
+links are light (<= 9%).
+Found on the way: **the fabric router writes received packets to local memory on NoC 1, VC 2 + link % 2**
+(`DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1`, `edm_noc_vc`), i.e. on flat's y-write VC (2) and weight-forward VC (3),
+and from the eth row a NoC 1 write to any worker or DRAM port goes north first: it wraps through row 0 / row 11
+and climbs the eth core's column (flat's gate/up columns) before turning west.
+
+**First hypothesis, DRAM bandwidth, looked right and was wrong.** Overlap time matched flat's time scaled by total
+DRAM bytes (Kimi bal 1182 predicted / 1147 measured, GLM 862 / 824), but the probe below shows flat is not DRAM bound
+(no weight reads: 966 -> 869 us only) and removing ~300 MB/chip of flat's DRAM reads moved the gated overlap little.
+
+**Probes** (`MIMO_FL_W_NOREAD`: flat's weight readers skip their DRAM reads, everything else unchanged;
+`MIMO_FL_XRD_SKIP`: no x reads; `MIMO_FL_CMB_EARLY`: every step reported at launch, combine runs ungated). Overlap
+us (share of combine hidden), pin 1, rows 1-9:
+
+| Probe | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| normal | 1222 (48%) | 2183 (16%) | 893 (42%) | 1766 (33%) |
+| no weight reads | 1037 (66%) | 2160 (16%) | 812 (59%) | 1735 (36%) |
+| no weight + x reads | 999 (71%) | 2153 (16%) | 784 (63%) | 1727 (37%) |
+| combine released at launch | 1147 (63%) | 1628 (95%) | 830 (60%) | 1408 (95%) |
+| released at launch + no weight / x reads | 872 (97%) | 1572 (100%) | 672 (95%) | 1368 (99%) |
+
+What this says:
+- **Hot expert: the whole loss is release timing.** Ungated, combine is 95% hidden beside the full flat expert;
+  gated, 16-33%. The hot expert's tokens (2878 of one chip's) are released only when the whole expert is done (pin 1
+  even finishes it last), and every chip's step waits on it. Fix: release a large expert's rows progressively
+  (per sub-block / chunk, as the PR does for the unified pass) and walk in flat's completion order: runtime
+  scheduling, so allowed. Ceiling from the probe: Kimi hot ~1630 (-11% vs baseline), GLM hot ~1410 (-19%).
+- **Balanced: two parts.** Gating costs 75 us (Kimi) / 63 us (GLM) on top; the rest is interference with flat's
+  DRAM reads: with them removed and combine ungated it is 97% hidden. Whether the shared resource is the DRAM banks
+  or the DRAM ports' NoC links cannot be told apart by these probes (both go away together); the model says no
+  link is saturated on average, so it is the read responses sharing the port egress links / bank queues in bursts.
+- So the slowdown is not "going to DRAM" as such: the hot case is the release pattern, the balanced case is
+  combine's traffic meeting flat's weight-read traffic at the DRAM ports.
+
+**What this means for the L1 idea.** Moving combine's buffers into L1 only helps by taking its traffic off the
+DRAM ports, and only if the new paths avoid flat's busy links. Landing forwarded tokens in row-0 L1 would make every
+fabric write (NoC 1, north first) climb the eth core's whole column through flat's gate/up columns (11 hops) on
+flat's VCs 2/3, likely worse than today. Better options, in order:
+1. **No landing at all for forwarded tokens:** send each token over the fabric to its destination chip
+   (multi-hop routing; the routers forward eth to eth along the eth row, which flat does not use) and write it
+   straight into the destination's output, as combine already does for the last hop. Removes the forwarding
+   buffer's DRAM write + read (~41 MB/chip, 53% of combine's DRAM bytes) and the readers' re-forward work.
+2. **y from L1:** down cores write y rows into the senders' rings (NoC 1 from a down core goes north to row 0, then
+   west along combine's row: off flat's busy links) instead of DRAM + combine's DRAM read (~34 MB/chip). Harder:
+   a token row is assembled from every down core's columns.
+3. If a landing buffer is needed, put it where the fabric's NoC 1 write is short: the bottom row (2 hops from the
+   eth row through the wrap), west of the eth core; row 0 reads it back in 3 hops on NoC 0 through the wrap.
 
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
@@ -244,27 +301,20 @@ device, so one fixed program cannot pick. pin 1 is better for hot, pin 0 for bal
 - Row-major y overlap with pin 1: largest-expert chunking delays slot-prefix releases.
 - `MIMO_FL_ND=15` on the full layout: 2329 / 4138 us (uneven column split; not representative).
 - A merge of PR #58093 into our branch (conflicts in core files and combine): based the work on the PR tree instead.
+- DRAM-bandwidth explanation of the balanced loss (6.7): fitted the totals, but flat is not DRAM bound and removing
+  its weight reads changed the gated overlap little.
 
-## 8. Next ideas (rough order)
-1. **Combine's forwarding buffer in L1** (row-0 reader/sender cores) as a ring with credits to the upstream sender,
-   instead of DRAM sized for the whole launch. Removes ~40 MB of DRAM write + read per chip (Kimi: ~1.1 intermediate
-   hops per token on the 8-ring), the bulk of combine's avoidable DRAM traffic. Combine-only change.
-2. **More combine reads in flight** (`NUM_L1_SLOTS` 8 -> 16, batch 4 -> 8; arena room on row 0 is free now): cheap
-   probe of how latency-bound the readers are beside flat.
-3. **Pipelined local-phase copies** (today one read, barrier, write, barrier per token through one slot).
-4. **y never through DRAM:** combine's readers read y rows from the down cores' L1 (or down cores write into the
-   senders' staging), the down core frees its output buffer once combine took the expert. Removes ~36 MB of DRAM per
-   chip but couples flat's down pipeline to combine's pace.
-5. **Release order = combine walk order:** have combine (and the collector's steps) walk experts in flat's completion
-   order (pinned schedule: s1 .. s(K-1), B, sK ..), computable from the replicated counts, so pin 1 keeps its flat
-   gain without holding back combine. Or order both by descending count so the combine tail is the smallest expert.
-6. **One layout for both regimes:** a third small gate/up rectangle (64th gu core fed by an existing relay) so np 1
-   keeps more down cores; better down-core rule (K3's sensitivity); try the readers' down columns (`MIMO_FL_PCD_R`)
-   to offload the down cores in the 19-down layout.
-7. **Galaxy (12 x 10 with dispatch, east readers in column 7):** measure the east-shifted layout; the 12th column
-   should ease the down-core shortage that forces the np 1 / np 2 trade.
-8. Combine sender's fabric-side VC (inside the fabric API, not tried); collector placement off the sender row if it
-   ever blocks a free cell.
+## 8. Next ideas (rough order, after 6.7)
+1. **Progressive release + completion-order walk** (hot case: ungated ceiling 95% hidden). Writers report per
+   sub-block (or chunk) of a large expert, the collector releases row ranges, readers gate per page; combine walks
+   experts in the order flat finishes them (computable on device from the replicated counts).
+2. **Forwarded tokens without landing:** fabric multi-hop to the destination chip, final write into its output.
+3. **y from L1** into the senders' rings (see 6.7).
+4. **Fabric local writes off flat's VCs:** flat's y and weight forwarding could move to VCs 0/1 classes the fabric
+   does not use, or the fabric's `edm_noc_vc` changed; measure with the probes above.
+5. **One layout per model that wins both regimes** (Kimi): third gate/up rectangle so np 1 keeps more down cores,
+   reader down columns, better down-core rule; Galaxy 12 x 10 should ease it.
+6. More combine reads in flight; pipelined local copies (cheap probes).
 
 ## 9. How to run (PR tree)
 ```
@@ -277,5 +327,6 @@ scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v3_d_p/tests/op_unit_
 ```
 Knobs: `FLAT_CMB_YRM` (default 1), `FLAT_CMB_PIN` (default 1), `FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9` (110-core
 baseline), `FLAT_CMB_ITERS`, `FLAT_CMB_LOG`, `TT_CMBF2D_IDLE`, `CMBF2D_RD_VC` / `CMBF2D_WR_VC`, `MIMO_FL_ROWS`,
-`MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`. Profile: `TT_METAL_DEVICE_PROFILER=1
+`MIMO_FL_RD_SAMECOL`, `MIMO_FL_XDOWN`, `MIMO_FL_ND`, probes `MIMO_FL_W_NOREAD`, `MIMO_FL_XRD_SKIP`,
+`MIMO_FL_CMB_EARLY` (garbage output, perf only). Profile: `TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1`, then `cmb_timeline.py <csv> <run group>` / `cmb_split.py`.
