@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
+#include "ttnn/operations/experimental/quasar/untilize/device/factories/untilize_multi_core_program_factory.hpp"
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -26,6 +27,13 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
     const auto& input_mesh_tensor = input.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    // Unpadding only the last tile row's height is untilize that drops those rows: it takes the
+    // 4-reader / 2-writer implicit-sync untilize path when the tensors fit it.
+    if (!operation_attributes.sub_core_grids.has_value()) {
+        if (auto split = create_untilize_split_rows_program(input, output, fp32_dest_acc_en)) {
+            return std::move(*split);
+        }
+    }
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
