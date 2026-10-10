@@ -248,10 +248,13 @@ void kernel_main() {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 #ifdef ARCH_BLACKHOLE
-    // Subblock and inner block shapes where the block run reads slower keep the per-tile pack.
+    // The block run reads slower for short one-column subblocks and, without L1 accumulate, for two-tile rows or
+    // columns, rows over ten or more inner blocks, columns over fewer than nine and two columns over fewer than six.
     constexpr bool tile_pack_subblocks =
         (out_subblock_w == 1 && in0_block_w < 4) ||
-        (out_subblock_w == 2 && !packer_l1_acc && (out_subblock_h == 1 || in0_block_w < 6));
+        (!packer_l1_acc && (((out_subblock_h == 1 || out_subblock_w == 1) && out_subblock_num_tiles <= 2) ||
+                            (out_subblock_h == 1 && in0_num_blocks_w >= 10) ||
+                            (out_subblock_w == 1 && in0_block_w < 9) || (out_subblock_w == 2 && in0_block_w < 6)));
 #endif
 
     uint32_t bias_block_offset = 0;
