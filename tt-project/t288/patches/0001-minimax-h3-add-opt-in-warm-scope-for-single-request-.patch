@@ -1,0 +1,245 @@
+From 22fcacb6b199e8b01bb9a4d776dcaa7d0fb3eaab Mon Sep 17 00:00:00 2001
+From: Steve Marton <smarton@tenstorrent.com>
+Date: Sat, 10 Oct 2026 12:12:51 +0000
+Subject: [PATCH] minimax-h3: add opt-in warm scope for single-request turbo
+ runs
+
+warm_rungs binds only the listed rungs (plus the top one) and
+warm_canvases warms only the keyframe layouts of the listed canvases
+(plus the 16:9 warm canvas). Both default to None, which warms the full
+envelope as before. The turbo test exposes them as
+MINIMAX_H3_TURBO_WARM_RUNGS and MINIMAX_H3_TURBO_WARM_USED_LAYOUTS, and
+adds MINIMAX_H3_TURBO_CACHE_ONLY to write the weight caches and the
+precomputed AdaLN table without warming or generating.
+
+A request outside warm_rungs raises when denoise is traced and logs
+otherwise; on the untraced 4x8 preset the untimed priming call compiles
+it. served_keyframe_layouts is unchanged (checked against the old code
+for alignments 32-1024).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../minimax_h3/pipeline_minimax_h3.py         | 42 +++++++++++++++++--
+ models/tt_dit/pipelines/minimax_h3/policy.py  | 25 ++++++-----
+ .../test_pipeline_turbo_minimax_h3.py         | 24 ++++++++++-
+ 3 files changed, 77 insertions(+), 14 deletions(-)
+
+diff --git a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+index 5efac456b40..fe60f1c986b 100644
+--- a/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
++++ b/models/tt_dit/pipelines/minimax_h3/pipeline_minimax_h3.py
+@@ -129,6 +129,7 @@ from .policy import (
+     align_num_frames,
+     decodable_canvases,
+     get_num_frames,
++    keyframe_layout_key,
+     served_canvases,
+     served_envelope,
+     served_reference_image_sizes,
+@@ -505,6 +506,8 @@ class MiniMaxH3Pipeline:
+         vae_output_type: str = "yuv420",
+         adaln_slot_roles: tuple[str, ...] | None = None,
+         warmup: bool = True,
++        warm_rungs: Sequence[int] | None = None,
++        warm_canvases: Sequence[tuple[int, int]] | None = None,
+     ) -> None:
+         self.mesh_device = mesh_device
+         self.weights_dir = Path(weights_dir)
+@@ -591,6 +594,14 @@ class MiniMaxH3Pipeline:
+             bucket_ladder = preset["bucket_ladder"][task]
+         self.bucket_ladder = tuple(bucket_ladder)
+         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
++        self.warm_rungs = None
++        if warm_rungs is not None:
++            unknown = sorted(set(warm_rungs) - set(self.bucket_ladder))
++            if unknown:
++                raise ValueError(f"warm_rungs {unknown} are not in the ladder {self.bucket_ladder}")
++            # The full walk binds the top rung first; keeping it keeps that allocation order.
++            self.warm_rungs = frozenset(warm_rungs) | {self.bucket_ladder[-1]}
++        self.warm_canvases = None if warm_canvases is None else frozenset(map(tuple, warm_canvases))
+         self.arena_caps = arena_caps or preset.get(f"{task}_arena_caps") or MiniMaxH3ArenaCaps.for_task(task)
+         self.arena_caps.validate()
+         self.presentation_ladder = tuple(
+@@ -753,6 +764,8 @@ class MiniMaxH3Pipeline:
+         vae_output_type: str = "yuv420",
+         adaln_slot_roles: tuple[str, ...] | None = None,
+         warmup: bool = True,
++        warm_rungs: Sequence[int] | None = None,
++        warm_canvases: Sequence[tuple[int, int]] | None = None,
+         coresident: bool | None = None,
+         **subclass_kwargs,
+     ) -> "MiniMaxH3Pipeline":
+@@ -764,6 +777,10 @@ class MiniMaxH3Pipeline:
+         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
+         `arena_caps` and `adaln_slot_roles` default to the task's envelope. `subclass_kwargs` go to the constructor of
+         whichever subclass is being built.
++
++        `warm_rungs` and `warm_canvases` narrow construction warmup to the rungs and keyframe canvases a known request
++        reaches, for a run that serves only that request: see `_warm_denoise_buckets` and
++        `_warm_prompt_encoder_envelope`. The default warms everything a served request can reach.
+         """
+         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+         weights_dir = resolve_weights_dir(
+@@ -795,6 +812,8 @@ class MiniMaxH3Pipeline:
+             vae_output_type=vae_output_type,
+             adaln_slot_roles=adaln_slot_roles,
+             warmup=warmup,
++            warm_rungs=warm_rungs,
++            warm_canvases=warm_canvases,
+             coresident=coresident,
+             **subclass_kwargs,
+         )
+@@ -1485,7 +1504,14 @@ class MiniMaxH3Pipeline:
+             if seq_len > rung:
+                 raise ValueError(f"forced bucket {rung} is smaller than the packed length {seq_len}")
+             return rung
+-        return select_bucket(seq_len, self.bucket_ladder)
++        rung = select_bucket(seq_len, self.bucket_ladder)
++        if self.warm_rungs is not None and rung not in self.warm_rungs and not self._warming:
++            message = f"packed length {seq_len} lands on rung {rung}, outside warm_rungs {sorted(self.warm_rungs)}"
++            # A program first compiled under live traces can corrupt a replay.
++            if self.trace_denoise:
++                raise ValueError(message)
++            self._host_log(f"{message}: this call compiles its programs")
++        return rung
+ 
+     @staticmethod
+     def _pad_host_rows(rows: torch.Tensor, capacity: int) -> torch.Tensor:
+@@ -2281,7 +2307,7 @@ class MiniMaxH3Pipeline:
+         fitted: dict[int, dict] = {}
+         shrunk = generation_kwargs
+         host = _is_host_rank()
+-        bind_rungs = sorted(self.bucket_ladder, reverse=True)
++        bind_rungs = sorted(self.bucket_ladder if self.warm_rungs is None else self.warm_rungs, reverse=True)
+         if host:
+             _tqdm_spacer()
+         for rung in tqdm.tqdm(
+@@ -2381,12 +2407,22 @@ class MiniMaxH3Pipeline:
+         warm_image = Image.new("RGB", (64, 64), (127, 127, 127))
+         before = self.mesh_device.num_program_cache_entries()
+         tower_sizes = set()
++        layouts = list(served_envelope(self.task, patch_alignment=alignment))
++        if self.warm_canvases is not None:
++            # `_warmup_on_init` generates on the 16:9 canvas with one or two keyframes.
++            canvases = self.warm_canvases | {resolve_canvas_size(16, 9)}
++            wanted = {keyframe_layout_key(n, canvas, alignment) for n in (1, 2) for canvas in canvases}
++            layouts = [
++                (n_keyframes, canvas)
++                for n_keyframes, canvas in layouts
++                if canvas is None or keyframe_layout_key(n_keyframes, canvas, alignment) in wanted
++            ]
+ 
+         host = _is_host_rank()
+         if host:
+             _tqdm_spacer()
+         for n_keyframes, canvas in tqdm.tqdm(
+-            list(served_envelope(self.task, patch_alignment=alignment)),
++            layouts,
+             desc="Warming prompt encoder keyframe layouts",
+             disable=not host,
+             file=sys.stderr,
+diff --git a/models/tt_dit/pipelines/minimax_h3/policy.py b/models/tt_dit/pipelines/minimax_h3/policy.py
+index 454c53fea67..979a3920acc 100644
+--- a/models/tt_dit/pipelines/minimax_h3/policy.py
++++ b/models/tt_dit/pipelines/minimax_h3/policy.py
+@@ -288,25 +288,30 @@ MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES = max(
+ )
+ 
+ 
+-def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
+-    """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
++def _keyframe_patches(canvas: tuple[int, int]) -> int:
++    return 4 * (canvas[0] // MINIMAX_H3_CANVAS_MULTIPLE) * (canvas[1] // MINIMAX_H3_CANVAS_MULTIPLE)
++
++
++def keyframe_layout_key(n_keyframes: int, canvas: tuple[int, int], patch_alignment: int) -> tuple[int, bool]:
++    """The vision tower's program key for `n_keyframes` keyframes on `canvas`: `(padded patches, ring)`.
+ 
+     The tower pads the patch count to `patch_alignment`. It runs ring attention only for one keyframe
+     that needs no pad; everything else is windowed, and windowed programs depend only on the padded
+     size (the window count is kept out of the key).
+     """
+-    canvases = decodable_canvases()
+-    multiple = MINIMAX_H3_CANVAS_MULTIPLE
++    total = n_keyframes * _keyframe_patches(canvas)
++    padded = -(-total // patch_alignment) * patch_alignment
++    return padded, n_keyframes == 1 and padded == total
+ 
+-    def patches(canvas: tuple[int, int]) -> int:
+-        return 4 * (canvas[0] // multiple) * (canvas[1] // multiple)
+ 
++def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
++    """One `(n_keyframes, canvas)` per vision-tower program set (`keyframe_layout_key`) an fl2va
++    request can reach."""
++    canvases = decodable_canvases()
+     by_key: dict[tuple[int, bool], tuple[int, tuple[int, int]]] = {}
+     for n_keyframes in (1, 2):
+-        for canvas in sorted(canvases, key=lambda canvas: (patches(canvas), canvas)):
+-            total = n_keyframes * patches(canvas)
+-            padded = -(-total // patch_alignment) * patch_alignment
+-            by_key.setdefault((padded, n_keyframes == 1 and padded == total), (n_keyframes, canvas))
++        for canvas in sorted(canvases, key=lambda canvas: (_keyframe_patches(canvas), canvas)):
++            by_key.setdefault(keyframe_layout_key(n_keyframes, canvas, patch_alignment), (n_keyframes, canvas))
+     return tuple(by_key[key] for key in sorted(by_key))
+ 
+ 
+diff --git a/models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py b/models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py
+index fac2c88b0d1..d72dcdfe4ed 100644
+--- a/models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py
++++ b/models/tt_dit/tests/models/minimax_h3/test_pipeline_turbo_minimax_h3.py
+@@ -38,7 +38,7 @@ from PIL import Image
+ import ttnn
+ from models.perf.benchmarking_utils import BenchmarkProfiler
+ 
+-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
++from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+ from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
+ from ....pipelines.minimax_h3.policy import align_num_frames
+ from ....utils import tensor as tt_tensor
+@@ -80,6 +80,16 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
+ # One adapter file serves both; the keyframe is the only difference between the two tasks.
+ TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
+ 
++# Opt-in warm scope for a run that only ever serves this test's request, e.g. a timed A/B on a
++# clock-clamped box. WARM_RUNGS lists the rungs to bind (comma-separated; the top rung is always
++# kept); WARM_USED_LAYOUTS=1 warms only the keyframe layouts of this canvas and keyframe. Neither
++# changes what is generated: the untimed priming call compiles anything they leave out.
++# CACHE_ONLY=1 builds the pipeline without warmup, which writes the weight caches (and the
++# precomputed AdaLN table), and stops.
++WARM_RUNGS = [int(rung) for rung in os.environ.get("MINIMAX_H3_TURBO_WARM_RUNGS", "").split(",") if rung.strip()]
++WARM_USED_LAYOUTS = os.environ.get("MINIMAX_H3_TURBO_WARM_USED_LAYOUTS") == "1"
++CACHE_ONLY = os.environ.get("MINIMAX_H3_TURBO_CACHE_ONLY") == "1"
++
+ # 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
+ DEVICE_BOUND_TARGETS = 52 * 4
+ 
+@@ -145,6 +155,9 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
+     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+     keyframe = Image.open(keyframe_path).convert("RGB") if TASK == "fl2va" else None
+     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
++    warm_canvases = None
++    if WARM_USED_LAYOUTS:
++        warm_canvases = [(HEIGHT, WIDTH)] + ([resolve_canvas_size(*keyframe.size)] if keyframe is not None else [])
+ 
+     pipeline = MiniMaxH3TurboPipeline.create_pipeline(
+         mesh_device=mesh_device,
+@@ -154,7 +167,16 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
+         lora_path=lora_path,
+         video_shift=VIDEO_SHIFT,
+         audio_shift=AUDIO_SHIFT,
++        warmup=not CACHE_ONLY,
++        warm_rungs=WARM_RUNGS or None,
++        warm_canvases=warm_canvases,
+     )
++    if CACHE_ONLY:
++        if pipeline._precomputed_adaln():
++            # The table is otherwise built on the first denoise; this writes its disk cache too.
++            pipeline._prepare_adaln(pipeline.adaln_slot_roles)
++        logger.info("MINIMAX_H3_TURBO_CACHE_ONLY=1: weight caches written, skipping generation")
++        return
+ 
+     # Construction warms the 5 s rung only, and the 4x8 preset does not bucket or trace, so a longer
+     # clip would otherwise pay its kernel compiles inside the measured call.
+-- 
+2.34.1
+
