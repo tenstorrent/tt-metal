@@ -14,6 +14,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_reduce_block.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
@@ -36,12 +37,8 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
-
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): the caller sets it to preserve,
+    // or a datum whose low byte is zero would be flushed to 0 mid-reduction.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -70,9 +67,6 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-
-    // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -124,7 +118,23 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
 }
 
 /**
- * @brief Advance the dest counter past the current face row so the next row writes to the correct offset.
+ * @brief Pool one row of faces and release the source banks of every face.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @param num_faces_c_dim: Number of column faces in the row.
+ */
+template <PoolType type, bool high_fidelity>
+inline void reduce_row_pool_all_faces_release(const std::uint32_t num_faces_c_dim)
+{
+    for (std::uint32_t col_num = 0; col_num < num_faces_c_dim; col_num++)
+    {
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+    }
+}
+
+/**
+ * @brief Advance the dest counter to the next face row without releasing the source banks.
  *
  * @param is_narrow_tile: True when tile width < tile height (num_faces_c < num_faces_r), halving the stride.
  */
@@ -136,7 +146,7 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 }
 
 /**
@@ -273,15 +283,24 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-            reduce_row_perform_transpose<is_int_fpu_en>();
-
+            // The pools run under the operand default of the Src zero flag and the transposes under preserve: both face
+            // rows are pooled first, so the flag changes twice per tile; the last face's banks stay for the transposes.
+            math::_configure_default_zero_flag_state_();
             if (tensor_shape.num_faces_r_dim > 1)
             {
+                reduce_row_pool_all_faces_release<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_advance_dest(is_narrow_tile);
-                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-                reduce_row_perform_transpose<is_int_fpu_en>();
             }
+            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+
+            math::_configure_preserve_zero_flag_state_();
+            if (tensor_shape.num_faces_r_dim > 1)
+            {
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                reduce_row_perform_transpose<is_int_fpu_en>();
+                reduce_row_advance_dest(is_narrow_tile);
+            }
+            reduce_row_perform_transpose<is_int_fpu_en>();
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
         else
@@ -309,6 +328,11 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
+        if constexpr (type == PoolType::MAX)
+        {
+            // GMPOOL takes the max with the scratch row; a tile copied into DST leaves it 0, not undefined (minus infinity)
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4);
+        }
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
             // Wait and pool
@@ -352,6 +376,73 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             }
             TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
+    }
+}
+
+/**
+ * @brief Reduce a block of tiles on the math thread, the counterpart of @ref _llk_unpack_AB_reduce_block_.
+ *
+ * A stride of 0 accumulates the block into one tile. With @ref reduce_block_holds_scaler the scaler stays in SrcA for a
+ * chunk of @ref REDUCE_BLOCK_MAX_TILES tiles, so each tile releases only SrcB and the chunk releases SrcA once.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @param dst_index: Destination tile of the first tile of the block.
+ * @param num_tiles: Number of tiles in the block.
+ * @param dst_stride: Destination tile step between consecutive tiles of the block.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
+ */
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+inline void _llk_math_reduce_block_(
+    const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)
+{
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
+
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
+    {
+        if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape))
+        {
+            constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
+            const std::uint32_t replay_start = ckernel::math::replay_buf_offset;
+            std::uint32_t dst                = dst_index;
+
+            while (num_tiles > 0)
+            {
+                const std::uint32_t chunk = num_tiles < REDUCE_BLOCK_MAX_TILES ? num_tiles : REDUCE_BLOCK_MAX_TILES;
+                for (std::uint32_t tile = 0; tile < chunk; tile++)
+                {
+                    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst);
+                    // The init's MVMUL record, with the source release narrowed to the data bank (SrcB)
+                    if constexpr (high_fidelity)
+                    {
+                        for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
+                        {
+                            lltt::replay(replay_start, 8);
+                        }
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                    else
+                    {
+                        lltt::replay(replay_start, 7);
+                        TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    dst += dst_stride;
+                }
+                TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                num_tiles -= chunk;
+            }
+            return;
+        }
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index + tile * dst_stride, tensor_shape);
     }
 }
 
@@ -507,4 +598,5 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
  */
 inline void _llk_math_reduce_uninit_()
 {
+    math::_configure_default_zero_flag_state_();
 }

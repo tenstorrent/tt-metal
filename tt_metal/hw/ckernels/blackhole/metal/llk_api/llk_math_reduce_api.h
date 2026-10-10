@@ -59,6 +59,42 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
     _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
 }
 
+// Block of num_tiles tiles: tile i goes to dst_index + i * dst_stride (0 accumulates into one tile).
+template <
+    PoolType type,
+    ReduceDim dim,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    bool is_int_fpu_en = false>
+inline void llk_math_reduce_block(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t dst_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t dst_stride) {
+    LLK_ASSERT(
+        (num_tiles == 0) || (dst_index + (num_tiles - 1) * dst_stride <
+                             get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "");
+
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    // One execute per tile; the state is identical for every tile, so it is restated once.
+    SAN_HOOK(execute<OperationFpuReduce>(
+        StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
+        StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),
+        StateVal<OperationFpuReduce::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuReduce::NumFacesRDim>(tensor_shape.num_faces_r_dim),
+        StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(is_fp32_dest_acc_en),
+        StateDiscard<bool>(is_int_fpu_en)));
+
+    _llk_math_reduce_block_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(
+        dst_index, num_tiles, dst_stride, tensor_shape);
+}
+
 // Unified init core (explicit shape), shared by the CB-id API and the LLKOperand API (experimental/2_0/).
 // Reduce math is FORMAT-FREE: it consumes only operand A's tile geometry. The reduce math EXECUTE already has
 // an explicit-shape overload (llk_math_reduce(dst_index, tensor_shape)) reused directly by the id-free path.

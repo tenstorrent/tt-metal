@@ -1,8 +1,16 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""Perf sweep of the block reduce (_llk_unpack_AB_reduce_block_, _llk_math_reduce_block_).
+
+REDUCE_ROW and REDUCE_SCALAR accumulate eight input tiles into one output tile, REDUCE_COL writes one output tile per input
+tile; block_ct_dim is the number of tiles per call, 1 being the per tile calls, so each configuration carries its own
+reference row. tile_cnt counts input tiles.
+"""
+
 import pytest
-from helpers.format_config import DataFormat
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
@@ -11,16 +19,14 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
 )
-from helpers.param_config import (
-    input_output_formats,
-    parametrize,
-)
+from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    REDUCE_BLOCK_CT_DIM,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
 )
@@ -31,58 +37,48 @@ REDUCE_MATHOP = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-# ttnn reduce accumulates in fp32 DEST by default, so same-format pairs are swept in both DEST modes.
-_DEST_ACC_FORMATS = {
-    (DataFormat.Float16_b, DataFormat.Float16_b),
-    (DataFormat.Float32, DataFormat.Float32),
-}
-
 
 def _dest_accs(formats):
-    if (formats.input_format, formats.output_format) in _DEST_ACC_FORMATS:
+    if formats.input_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    if formats.input_format == DataFormat.Float16_b:
         return [DestAccumulation.No, DestAccumulation.Yes]
     return [DestAccumulation.No]
 
 
-def _fidelities(formats, pool_type):
-    """GMPOOL (MAX) has no fidelity phases; SUM and AVG sweep the fidelities on the bf16 pair only."""
+def _fidelities(pool_type):
     if pool_type == ReducePool.Max:
         return [MathFidelity.HiFi4]
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and formats.output_format == DataFormat.Float16_b
-    ):
-        return [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4]
-    return [MathFidelity.HiFi4]
+    return [MathFidelity.LoFi, MathFidelity.HiFi4]
 
 
+@skip_for_wormhole
+@skip_for_quasar
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Bfp8_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
     dest_acc=_dest_accs,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    pool_type=[ReducePool.Max, ReducePool.Sum],
     math_fidelity=_fidelities,
+    block_ct_dim=[1, 2, 4, 8],
 )
-def test_perf_reduce(
+def test_perf_reduce_block(
     perf_report,
     formats,
     dest_acc,
     reduce_dim,
     pool_type,
     math_fidelity,
+    block_ct_dim,
 ):
-
     tile_count = 16
     configuration = PerfConfig(
-        "sources/reduce_perf.cpp",
+        "sources/reduce_block_perf.cpp",
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,
@@ -95,6 +91,7 @@ def test_perf_reduce(
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
             MATH_FIDELITY(math_fidelity),
+            REDUCE_BLOCK_CT_DIM(block_ct_dim),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(

@@ -23,6 +23,19 @@
 
 namespace ckernel {
 
+// SUM and AVG with a power of two scaler (1.0 included) give the same bits at fewer fidelity phases: on Blackhole the
+// REDUCE_ROW scaler is in SrcA, read by phases 0 and 2, the COL and SCALAR scaler in SrcB, read by phases 0 and 1.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+constexpr MathFidelity reduce_math_fidelity(MathFidelity kernel_fidelity) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (pow2_scaler && reduce_type != PoolType::MAX) {
+        constexpr MathFidelity exact = reduce_dim == ReduceDim::REDUCE_ROW ? MathFidelity::HiFi3 : MathFidelity::HiFi2;
+        return static_cast<std::uint8_t>(kernel_fidelity) > static_cast<std::uint8_t>(exact) ? exact : kernel_fidelity;
+    }
+#endif
+    return kernel_fidelity;
+}
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
@@ -60,9 +73,16 @@ namespace ckernel {
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
+ *
+ * pow2_scaler (template, default false): every scaler is a power of two, 1.0 included; on Blackhole SUM and AVG then
+ * run at the fewest fidelity phases that keep the bits. Pass the same value to reduce_tile and reduce_block.
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_init(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
@@ -78,7 +98,11 @@ ALWI void reduce_init(
     state_configure(icb, icb_scaler, ocb, call_line);
 #endif
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
@@ -151,11 +175,19 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
@@ -165,16 +197,18 @@ ALWI void reduce_tile(
 
 // clang-format off
 /**
- * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
- * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
- * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
- * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
- * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing the
+ * result of tile i to DST register slot `start_idst + i * idst_stride`. This is the uniform block entry point for the
+ * reduce op group: it has `reduce_tile`'s semantics and requires the same initialization (`reduce_init`) to have been
+ * called first. The scaling-factor tile (`itile_scaler`) is reused for every tile in the block. The `ntiles` tiles must
+ * not wrap around the end of the CB. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
  * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: On Blackhole the block is one LLK call per thread, and a block of bfp tiles overwrites the unpacker scratch
+ * register a tilize init sets: call that init again.
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
  * state to default.
  *
@@ -189,21 +223,37 @@ ALWI void reduce_tile(
  * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
- * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + (ntiles - 1) * idst_stride < acquired DST REG size | True     |
+ * | Function   | idst_stride  | DST REG slot step between consecutive tiles (0 accumulates)      | uint32_t  | 0 or more (default 1)                          | False    |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_block(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
     std::uint32_t start_itile,
     std::uint32_t itile_scaler,
     std::uint32_t start_idst,
-    std::uint32_t ntiles) {
+    std::uint32_t ntiles,
+    std::uint32_t idst_stride = 1) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_block<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
+        icb, icb_scaler, start_idst, ntiles, idst_stride)));
+    UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
+#else
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
-            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en, pow2_scaler>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i * idst_stride);
     }
+#endif
 }
 
 // clang-format off
