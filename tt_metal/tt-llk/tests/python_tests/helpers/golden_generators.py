@@ -4027,7 +4027,20 @@ class EltwiseBinaryGolden(FidelityMasking):
         # Compute in float32 to match the SFPU divide path, with the final cast modelling the
         # rounding on store to Dest. IEEE 754 division already produces the special-case
         # results the SFPU helper branches on (0/0 -> NaN, x/0 -> +/-inf, x/x -> 1.0).
-        return (t1.to(torch.float32) / t2.to(torch.float32)).to(t1.dtype)
+        #
+        # A subnormal operand is flushed to a sign-preserving zero first. The SFPU reaches the
+        # quotient through a multiply, which reads a subnormal as zero, so the hardware answers
+        # a subnormal dividend over a zero divisor with NaN rather than the infinity IEEE asks
+        # for on the unflushed value. That is the contract the ttnn suite asserts too, in
+        # test_div_fp32_special_values; without the flush here this golden claims an answer the
+        # divide has never given.
+        tiny = torch.finfo(torch.float32).tiny
+
+        def flush(t):
+            f = t.to(torch.float32)
+            return torch.where(f.abs() < tiny, torch.copysign(torch.zeros_like(f), f), f)
+
+        return (flush(t1) / flush(t2)).to(t1.dtype)
 
     def _gt_int(self, t1, t2):
         return (t1 > t2).to(torch.int32)
