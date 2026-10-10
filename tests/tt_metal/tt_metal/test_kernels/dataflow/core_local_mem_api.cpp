@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "hw/inc/api/compile_time_args.h"
-#include "hw/inc/api/dataflow/dataflow_api.h"
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
-#include "hw/inc/internal/tt-1xx/risc_common.h"
+#include "internal/tt-1xx/risc_common.h"
 
 template <bool use_legacy_api>
 void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations, volatile uint64_t* results) {

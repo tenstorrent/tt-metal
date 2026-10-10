@@ -12,7 +12,7 @@
 #include "llrt/hal.hpp"
 #include "mesh_device.hpp"
 #include "impl/threading/thread_pool.hpp"
-#include "tools/profiler/event_metadata.hpp"
+#include "internal/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
@@ -58,9 +58,9 @@
 #include <umd/device/arch/wormhole_implementation.hpp>
 #include "device/device_manager.hpp"
 #include "tt_cluster.hpp"
-#include "tools/profiler/perf_counters.hpp"
+#include "internal/profiler/perf_counters.hpp"
 #include "debug/noc_debugging.hpp"
-#include "tools/profiler/noc_debugging_metadata.hpp"
+#include "internal/profiler/noc_debugging_metadata.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
