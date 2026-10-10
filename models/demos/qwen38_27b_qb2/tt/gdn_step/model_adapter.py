@@ -23,6 +23,7 @@ def step_from_flat(
     raw_output=False,
     flat_prepare_outputs=None,
     compact_qkv=False,
+    compact_gates=False,
 ):
     """Consume only token zero of [B,T,H*128] and update [B,HV,128,128].
 
@@ -35,8 +36,10 @@ def step_from_flat(
     optionally supplies persistent FP32 values/gates for direct tiled preparation."""
     import ttnn
 
-    if type(compact_qkv) is not bool:
-        raise ValueError("compact_qkv must be Boolean")
+    if type(compact_qkv) is not bool or type(compact_gates) is not bool:
+        raise ValueError("compact_qkv and compact_gates must be Boolean")
+    if compact_gates and not compact_qkv:
+        raise ValueError("Compact gates require compact Q/K/V")
     if len(q.shape) != 3:
         raise ValueError("Unsupported single-token GDN model geometry")
     if compact_qkv:
@@ -55,7 +58,7 @@ def step_from_flat(
         or tuple(v.shape) != ((1, batch, value_heads * 128) if compact_qkv else (batch, time_rows, value_heads * 128))
         or tuple(state.shape) != (batch, value_heads, 128, 128)
         or value_heads % heads
-        or tuple(log_decay.shape) != (batch, time_rows, value_heads)
+        or tuple(log_decay.shape) != ((1, batch, value_heads) if compact_gates else (batch, time_rows, value_heads))
         or tuple(beta.shape) != tuple(log_decay.shape)
     ):
         raise ValueError("Unsupported single-token GDN model geometry")
@@ -77,7 +80,7 @@ def step_from_flat(
             raise ValueError("Direct preparation requires persistent Q/K and value/gate pairs")
         # Preserve native exp and all recurrence arithmetic. Only the surrounding
         # tilize/untilize/reshape/concat traffic is replaced by the direct reader.
-        decay = ttnn.exp(log_decay[:, :1, :])
+        decay = ttnn.exp(log_decay if compact_gates else log_decay[:, :1, :])
         prepare(
             q,
             k,
@@ -87,6 +90,7 @@ def step_from_flat(
             *shared_qk_outputs,
             *flat_prepare_outputs,
             **({"compact_qkv": True} if compact_qkv else {}),
+            **({"compact_gates": True} if compact_gates else {}),
         )
         op.step(
             *shared_qk_outputs,

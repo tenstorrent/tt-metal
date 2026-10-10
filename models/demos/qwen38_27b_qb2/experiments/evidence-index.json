@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T20:48:13.533625+00:00",
+  "generated_at": "2026-10-10T20:59:51.425449+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -138,6 +138,11 @@
       "sha256": "d5ea1af215fa7a0d56166516fc103abf0debe07753def52e0da9b8747faa9028"
     },
     {
+      "path": "demo/run_gdn_compact_gates.py",
+      "bytes": 5529,
+      "sha256": "f4e5f2e32aff0592d004ea2d7651b1c9d415cc36c33e012100205b1d9c8ced7e"
+    },
+    {
       "path": "demo/run_gdn_epilogue.py",
       "bytes": 6486,
       "sha256": "a8ba02ea58cf4b4780aab54197674476d46c6a63893276261c39925ef023809e"
@@ -204,13 +209,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 178032,
-      "sha256": "89820aebbadca2624a4d5ebefa02c54ebd941be4fdfe2486ae41bf82dcbeedff"
+      "bytes": 180809,
+      "sha256": "75bacc3c4a02ca0fbf36d3731213fa18d4e44739c75e73d716bfe7267e673580"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 25518,
-      "sha256": "5f431177c580d5ef16981d13cfb0128b577eefcc2b3366b91d4ff85cfa0cf2c1"
+      "bytes": 25975,
+      "sha256": "48ef04ab1861cb4ebf046f9dc8705a4ad42863d85dacb81d922a16d4f85015e3"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -2180,6 +2185,66 @@
       "path": "galaxy-evidence/compact-followup-v2/stage-followup.py.gz",
       "bytes": 3068,
       "sha256": "24e6399b5c52a90b1a356ce62c829e6eb07af04ee1f0e969c00e63307ba04e52"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/README.md",
+      "bytes": 3831,
+      "sha256": "242393d309d66bc89a1d865fa7a7b281f309c7557c6b0df17802907c3ec36865"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/capture.json",
+      "bytes": 2968,
+      "sha256": "6022aae500bd1a39084ab0b5f897e8c2ea3670d1824809b781c66e304fdb9e97"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json",
+      "bytes": 176,
+      "sha256": "b762d837c2a6258227571670a1ad0b1de535e54372154382ed2fc3b62dfac8ac"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json",
+      "bytes": 1472,
+      "sha256": "92ce8366444b2fb4685ed2c00d0cd16ea174435f418bd249b0adab5c0b4f275b"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/launch-unit.json",
+      "bytes": 132,
+      "sha256": "2264a626b0d5739cdb98748eda2f193d49590d98267c142d742da4c62ea9494a"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/launch.json",
+      "bytes": 2244,
+      "sha256": "d5770ba99bc2e163f317f86342e55e14afa946f3f17136d92ec2a367ed95940b"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/preflight.log.gz",
+      "bytes": 386,
+      "sha256": "c60286b1fb6b91e8fbddf29f0fbe036ef004cea21a2b79d73d1e175f3a8c44f6"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/source-manifest.json",
+      "bytes": 28866,
+      "sha256": "94cebbb2d36cdb8c6ab697aee08b9f1badcc8937270f842182030c25a65448f1"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-control-v1/unit.xml.gz",
+      "bytes": 11138,
+      "sha256": "bfd017ff33157f29f85eb360c0478e6d919220263b6718d2a4e7b1cdfc9247f8"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/gdn-compact-gates-v1/queue.json",
+      "bytes": 620,
+      "sha256": "84f358f95777c63eb49cbf4e2be2b8892b667ac62ef162da3220c1f8803bf7ca"
+    },
+    {
+      "path": "galaxy-evidence/compact-gates-v1/units.json",
+      "bytes": 859,
+      "sha256": "04b46b990b3d0cc7db8005f7e061f335526ea99546094b0ed9c0f5e9db064da0"
     },
     {
       "path": "galaxy-evidence/compact-gdn-launch-v1/README.md",
@@ -11551,6 +11616,11 @@
       "sha256": "fe05c2da5a0f9fedb6a87bc09fddeb603bbaf45e2d4087f5a5eb96bb688031b8"
     },
     {
+      "path": "tests/gdn_compact_gates.py",
+      "bytes": 3354,
+      "sha256": "e37feb0e49f6cfcb182fb86b39e5e4a77c6391e4e1505158b728733d5f15cbe4"
+    },
+    {
       "path": "tests/gdn_epilogue.py",
       "bytes": 2124,
       "sha256": "6bf53dca7ef576b9eca251a915481b85c4129086a4f83ac030658386ac0ab3cf"
@@ -11634,6 +11704,11 @@
       "path": "tests/test_full_trace_profile.py",
       "bytes": 10246,
       "sha256": "c73aef6019ca2fc20bc202ca75b83a494e04072e2dd67d3ec1448623dc68b87f"
+    },
+    {
+      "path": "tests/test_gdn_compact_gates.py",
+      "bytes": 11460,
+      "sha256": "4328705ee89cab4bc75e773d57fa8e05a4142ad025e3c4d4a74a5c8b79663763"
     },
     {
       "path": "tests/test_gdn_epilogue.py",
@@ -11731,6 +11806,11 @@
       "sha256": "509422a5eb93b4fc2a890f94fb3651c1ad6f20d66c6ecc41fde46aebe6f43b24"
     },
     {
+      "path": "tests/unit/test_gdn_compact_gates.py",
+      "bytes": 6778,
+      "sha256": "9185a2eba5335ec6c0d52875d3cd4ec36320be375cf44e630065fa69fc04ef46"
+    },
+    {
       "path": "tests/unit/test_gdn_decode_integration.py",
       "bytes": 15454,
       "sha256": "ef1cc7e6b27252b351abf2a61b8cb45d1726344d7d5a1944a213bbff7ffa21e3"
@@ -11812,8 +11892,8 @@
     },
     {
       "path": "tt/decoder.py",
-      "bytes": 53999,
-      "sha256": "0d8dc58bcafa75eb860fabf8e5406b2db981bef965b928f2662b86e1f1ae7e11"
+      "bytes": 54212,
+      "sha256": "65ff46c0d0ac50284cc7edb74f59e305aa47e3406ce76c2f22de15d19437a7fa"
     },
     {
       "path": "tt/decoder_tp.py",
@@ -11847,18 +11927,23 @@
     },
     {
       "path": "tt/gdn_step/flat_prepare.py",
-      "bytes": 4934,
-      "sha256": "0e8abc89cf6126a6efabc263a2214fb9a3389526041f3c8b55578b27f1276632"
+      "bytes": 5164,
+      "sha256": "cd499c6bebbc135e9e91c7440607ff051f31e3e76c923e6e81f9462608954d0b"
     },
     {
       "path": "tt/gdn_step/flat_prepare_reader.cpp",
-      "bytes": 5730,
-      "sha256": "bbbcbb7fad128f39fa105e7a57f3ed68ada87a8de0484b4b146850acc18f7e40"
+      "bytes": 6311,
+      "sha256": "be264c13a36103b35465a6ac8810956ba3d6341747b77fb26ce05f47608eafd5"
+    },
+    {
+      "path": "tt/gdn_step/gates.py",
+      "bytes": 972,
+      "sha256": "6983542e80f98bf169672841982aaf53c3e02f3b3cb05049331a094c030a0737"
     },
     {
       "path": "tt/gdn_step/model_adapter.py",
-      "bytes": 6179,
-      "sha256": "b872ca310ce15741a17a778710dac8251a786d0b1d864ed73dc2e5df0066b069"
+      "bytes": 6509,
+      "sha256": "390c6b56c7d7fd2a0cfedb97e58a1662b50126194d410cbb273131efd751be45"
     },
     {
       "path": "tt/gdn_step/op.py",

@@ -4,7 +4,8 @@
 
 void kernel_main() {
     constexpr bool compact = get_compile_time_arg_val(0) != 0;
-    constexpr auto qa = TensorAccessorArgs<1>();
+    constexpr bool compact_gates = get_compile_time_arg_val(1) != 0;
+    constexpr auto qa = TensorAccessorArgs<2>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -44,9 +45,14 @@ void kernel_main() {
                 noc_async_read(k.get_noc_addr(page, row_pair + face * 512), scratch + 512 + offset, compact ? 64 : 32);
             }
         }
-        // The twelve gates fit in face zero of one padded tile per user.
-        noc_async_read(decay.get_noc_addr(batch), scratch + 2048, 64);
-        noc_async_read(beta.get_noc_addr(batch), scratch + 2112, 32);
+        // Compact gates keep users in rows of one tile. FP32 face rows are
+        // 64-byte aligned; BF16 odd rows require reading their aligned pair.
+        // Both layouts preserve the existing native gate arithmetic.
+        const uint32_t gate_page = compact_gates ? 0 : batch;
+        const uint32_t decay_offset = compact_gates ? (batch / 16) * 2048 + (batch % 16) * 64 : 0;
+        const uint32_t beta_offset = compact_gates ? (batch / 16) * 1024 + ((batch % 16) / 2) * 64 : 0;
+        noc_async_read(decay.get_noc_addr(gate_page, decay_offset), scratch + 2048, 64);
+        noc_async_read(beta.get_noc_addr(gate_page, beta_offset), scratch + 2112, compact_gates ? 64 : 32);
         noc_async_read_barrier();
         const auto* raw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch);
         auto* qc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(0));
@@ -84,7 +90,7 @@ void kernel_main() {
             const auto* raw_beta = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 2112);
             auto* output_g = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 2176);
             output_g[0] = raw_decay[local_head];
-            output_g[1] = static_cast<uint32_t>(raw_beta[local_head]) << 16;
+            output_g[1] = static_cast<uint32_t>(raw_beta[local_head + (compact_gates ? (batch % 2) * 16 : 0)]) << 16;
             for (uint32_t i = 2; i < 8; ++i) {
                 output_g[i] = 0;
             }

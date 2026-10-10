@@ -76,6 +76,12 @@ reference claim. A register-resident recurrence experiment follows it, with
 independent dense-reference and before/candidate/after physical tests. Its two
 simulator attempts stopped at unsupported SETDVALID behavior before numerical
 comparison; no correctness or speedup is claimed for that candidate.
+An additional default-off packed-gate layout experiment follows the recurrence
+test. It preserves native gate math while eliminating the remaining per-user
+gate tile expansion. Its target is 0.5-1.5 ms per step, overlapping the gate
+layout/fusion allowance below. CPU preflight passed; physical B1/16/17/31/32
+L1/DRAM checks and real-weight B16/B32 recurrence checks remain queued.
+[Implementation and queue](../galaxy-evidence/compact-gates-v1/README.md).
 
 ## Matmuls are optimized, with uneven remaining room
 

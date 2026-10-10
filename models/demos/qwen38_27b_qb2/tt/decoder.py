@@ -23,6 +23,7 @@ from models.demos.qwen38_27b_qb2.tt.decode_attention import paged_decode
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
 from models.demos.qwen38_27b_qb2.tt.gdn_epilogue.op import epilogue as gdn_epilogue
 from models.demos.qwen38_27b_qb2.tt.gdn_frontend.op import convolution as compact_gdn_convolution
+from models.demos.qwen38_27b_qb2.tt.gdn_step.gates import from_packed as gdn_gates_from_packed
 from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
     SHARED_QK_POLICIES,
@@ -868,11 +869,13 @@ class Qwen38Decoder(LightweightModule):
         )
         return self._attention_output(attention, gate)
 
-    def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False, compact_qkv=False):
+    def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False, compact_qkv=False, compact_gates=False):
         b, hv = q.shape[1 if compact_qkv else 0], self.config.linear_num_value_heads
         recurrence = self.policy.get("decode_recurrence", "native")
         if compact_qkv and (not decode or recurrence != "single_step_compact_gdn" or b not in (16, 32)):
             raise ValueError("Compact QKV is restricted to the experimental B16/B32 decode policy")
+        if compact_gates and not compact_qkv:
+            raise ValueError("Compact gates require the compact decode path")
         if decode and recurrence in SINGLE_STEP_POLICIES:
             if not hasattr(self, "gdn_decode_workspace"):
                 raise RuntimeError("Allocate the layer's GDN state before decode/trace capture")
@@ -887,6 +890,8 @@ class Qwen38Decoder(LightweightModule):
                 options["flat_prepare_outputs"] = self.gdn_decode_workspace.flat_outputs(b)
             if compact_qkv:
                 options["compact_qkv"] = True
+            if compact_gates:
+                options["compact_gates"] = True
             return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b), **options)
         # Native chunked scan remains the prefill path, including one-token
         # prefill continuations. Its independent batch axis is split to fit one
@@ -919,9 +924,9 @@ class Qwen38Decoder(LightweightModule):
         """Experimental complete GDN boundary with users packed into tile rows.
 
         Weight projections and TP reduction retain the selected native kernels.
-        Only the small a/b gates expand to public rows; packed QKV/z, convolution
-        outputs and normalized output stay compact. Arithmetic and FP32 state
-        remain identical to the direct-preparation/epilogue policy.
+        The small a/b gates expand to public rows unless compact_gdn_gates is
+        selected. Packed QKV/z, convolution outputs and normalized output stay
+        compact. Native gate arithmetic and FP32 state remain unchanged.
         """
         if self.policy.get("split_attention", False) or not self.policy.get("dram", False):
             raise ValueError("Compact GDN requires the packed DRAM projection path")
@@ -929,17 +934,20 @@ class Qwen38Decoder(LightweightModule):
         packed = self._linear(x, "linear_attn.packed", keep_sharded=True)
         packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
         packed = ttnn.reshape(packed, [1, batch, 4160])
-        # Expand only 64 gate channels, not all 4160 projection channels.
-        gates = ttnn.reshape(packed[:, :, 4096:4160], [batch, 1, 64])
-        beta = ttnn.sigmoid(gates[:, :, :12])
-        a = ttnn.typecast(gates[:, :, 32:44], ttnn.float32)
-        g = ttnn.mul(
-            self.a_neg,
-            ttnn.add(a, self.dt_bias),
-            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
-        )
+        compact_gates = self.policy.get("compact_gdn_gates", False)
+        g, beta = gdn_gates_from_packed(packed, self.a_neg, self.dt_bias, compact=compact_gates)
         compact_gdn_convolution(packed, state.conv, self.conv_taps, (q, k, v), compact_input=True)
-        output = self._delta_recurrence(q, k, v, g, beta, state, decode=True, compact_qkv=True)
+        output = self._delta_recurrence(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            state,
+            decode=True,
+            compact_qkv=True,
+            **({"compact_gates": True} if compact_gates else {}),
+        )
         gdn_epilogue(
             output,
             packed,

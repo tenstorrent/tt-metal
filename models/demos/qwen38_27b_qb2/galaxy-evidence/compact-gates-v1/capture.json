@@ -1,0 +1,51 @@
+{
+  "captured_at": "2026-10-10T20:58:16.807214+00:00",
+  "scope": "Read-only snapshot; partial GPQA score is not final; candidate hardware experiment is waiting",
+  "files": {
+    "gdn-compact-gates-control-v1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/launch.json",
+      "uncompressed_bytes": 2244,
+      "uncompressed_sha256": "d5770ba99bc2e163f317f86342e55e14afa946f3f17136d92ec2a367ed95940b"
+    },
+    "gdn-compact-gates-control-v1/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/run.log",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gdn-compact-gates-control-v1/preflight.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/preflight.log",
+      "uncompressed_bytes": 1925,
+      "uncompressed_sha256": "f12d3631d8fee7d0df7df6c0a1644baa7796e415bf54ba0a493392e5c0c7de55"
+    },
+    "gdn-compact-gates-control-v1/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/unit.xml",
+      "uncompressed_bytes": 191763,
+      "uncompressed_sha256": "b98297d3bbece53ea7b213344935500bd4c5307173533ae0b46dce038e74cd5b"
+    },
+    "gdn-compact-gates-control-v1/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/source-manifest.json",
+      "uncompressed_bytes": 28866,
+      "uncompressed_sha256": "94cebbb2d36cdb8c6ab697aee08b9f1badcc8937270f842182030c25a65448f1"
+    },
+    "gdn-compact-gates-control-v1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1/launch-unit.json",
+      "uncompressed_bytes": 132,
+      "uncompressed_sha256": "2264a626b0d5739cdb98748eda2f193d49590d98267c142d742da4c62ea9494a"
+    },
+    "gdn-compact-gates-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1/queue.json",
+      "uncompressed_bytes": 620,
+      "uncompressed_sha256": "84f358f95777c63eb49cbf4e2be2b8892b667ac62ef162da3220c1f8803bf7ca"
+    },
+    "compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json",
+      "uncompressed_bytes": 176,
+      "uncompressed_sha256": "b762d837c2a6258227571670a1ad0b1de535e54372154382ed2fc3b62dfac8ac"
+    },
+    "compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json",
+      "uncompressed_bytes": 1472,
+      "uncompressed_sha256": "92ce8366444b2fb4685ed2c00d0cd16ea174435f418bd249b0adab5c0b4f275b"
+    }
+  }
+}

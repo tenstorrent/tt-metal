@@ -10,15 +10,17 @@ Compact convolution input is experimental; all outputs are caller-owned.
 from models.demos.qwen38_27b_qb2.tt.gdn_step.op import HERE, kernel_source, work_items
 
 
-def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates, *, compact_qkv=False):
+def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates, *, compact_qkv=False, compact_gates=False):
     import ttnn
 
     tensors = [q, k, v, decay, beta, normalized_q, normalized_k, values, gates]
     mesh = q.device()
     if "BLACKHOLE" not in str(mesh.arch()).upper():
         raise ValueError("Direct GDN preparation currently targets Blackhole only")
-    if type(compact_qkv) is not bool:
-        raise ValueError("compact_qkv must be a Boolean")
+    if type(compact_qkv) is not bool or type(compact_gates) is not bool:
+        raise ValueError("compact_qkv and compact_gates must be Boolean")
+    if compact_gates and not compact_qkv:
+        raise ValueError("Compact gates require compact Q/K/V")
     if len(q.shape) != 3 or q.shape[2] != 512:
         raise ValueError("Q/K require three-dimensional 512-channel inputs")
     batch = q.shape[1] if compact_qkv else q.shape[0]
@@ -31,7 +33,7 @@ def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates, *, 
             (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16),
         )
     ):
-        compact = compact_qkv and index < 3
+        compact = compact_qkv and index < 3 or compact_gates and index >= 3
         shapes = ((1, batch, width),) if compact else ((batch, 1, width), (batch, 32, width))
         padded = (1 if compact else batch, 32, (width + 31) // 32 * 32)
         if (
@@ -84,7 +86,7 @@ def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates, *, 
             (
                 (HERE / "flat_prepare_reader.cpp").read_text(),
                 read,
-                [int(compact_qkv), *accessors([*tensors[:5], values, gates])],
+                [int(compact_qkv), int(compact_gates), *accessors([*tensors[:5], values, gates])],
                 ttnn.ReaderConfigDescriptor(),
             ),
             (kernel_source("prepare_compute.cpp"), compute, [], config),
