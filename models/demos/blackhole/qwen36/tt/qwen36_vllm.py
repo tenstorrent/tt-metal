@@ -184,7 +184,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             name_or_path = snapshot_download(name_or_path, local_files_only=offline)
         args, model, _ = create_tt_model(
-            mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
+            mesh_device,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            hf_model=name_or_path,
+            # vLLM does not drive spec decode yet (vllm-tt-plugin#110): skip the MTP head, its weights and its KV cache.
+            enable_mtp=False,
         )
         # Attach the TT vision tower so prefill can splice image/video embeddings (multimodal path).
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
@@ -504,7 +509,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
-        # Each width keeps its own trace metadata, inputs, and output.
+        # Each width keeps its own trace metadata, inputs, output, and pre-capture staged inputs.
         tokens = _read("tokens", 0)
         if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and tokens is not None:
             start_pos = _read("start_pos", 1)
@@ -531,8 +536,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if store is None:
                 store = self._bucket_trace_store = {}
             if B not in store:
-                store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
-            self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
+                store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None), {})
+            (
+                self.trace_ids_decode,
+                self.trace_inputs_decode,
+                self.trace_output_decode,
+                self._prepared_decode_traces,
+            ) = store[B]
             # Key the sampling trace by bucket width too: Generator binds it to one logits tensor
             # by identity, and each decode-bucket width has its own.
             for _m in self.model:
@@ -549,14 +559,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
-        # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
-        # pre-compiled programs (compile-clobbers-trace fix). Guard name must match the plugin's reset.
+        # The eager call (enable_trace=False) allocates and compiles everything; the traced call only
+        # records, so nothing persistent is allocated once a trace is live (#56474).
+        # Guard name must match the plugin's reset.
         self._decode_bucket_last = None
-        if not enable_trace:
+        model = self.model[0]
+        if enable_trace and model._chunked_trace_id is not None:
             return
-        if getattr(self, "already_warmed_up_prefill", False):
-            return
-        self.already_warmed_up_prefill = True
         # Size the chunk-trace page table to the full KV cache (not a hardcoded 4096) so served ISL
         # isn't capped; still captures one chunk — just a bigger page-table tensor.
         if kv_cache:
@@ -565,7 +574,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         else:
             num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        model = self.model[0]
         # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
         # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
         # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
@@ -573,26 +581,28 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # buffers are restored before the decode-trace warmup captures at [B,...].
         batched = model.num_devices > 1 and model.args.max_batch_size > 1
         logger.info(
-            f"Starting Qwen prefill warmup: chunk-prefill trace{' (batched, B=1 scratch)' if batched else ''} "
-            f"(chunk={_PREFILL_WARMUP_CHUNK}, page_table_blocks={num_blocks})..."
+            f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
+            f"page_table_blocks={num_blocks}{', batched B=1 scratch' if batched else ''}"
         )
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
-            model.capture_prefill_trace_chunked(
-                self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=True
-            )
-            # Traced short prefill for ANY prompt length < 2048 (QWEN36_PREFILL_BUCKET_TRACE, default 1): one B=1 trace
-            # per bucket (QWEN36_PREFILL_TRACE_BUCKETS, default 128,256,512,1024,2048; 2048 serves lengths 1025..2047,
-            # exactly 2048 tokens keeps the chunk trace). Captured HERE, with the SAME GDN binding the requests run
-            # with (the scratch when batched, the decode buffers at max_batch_size==1), and only because this call
-            # has enable_trace=True (the plugin's trace_mode == "all"). Block 0 is vLLM's null block, never
-            # allocated to a request: padded K/V writes of a bucket land there.
-            if model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded:
-                model.prefill_trash_block = 0
-                model.capture_prefill_traces_short(self.mesh_device, page_table)
+            model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+            if enable_trace:
+                model.record_prefill_trace_chunked(self.mesh_device)
+                # Traced short prefill for ANY prompt length < 2048 (QWEN36_PREFILL_BUCKET_TRACE, default 1): one B=1 trace
+                # per bucket (QWEN36_PREFILL_TRACE_BUCKETS, default 128,256,512,1024,2048; 2048 serves lengths 1025..2047,
+                # exactly 2048 tokens keeps the chunk trace). Captured HERE, with the SAME GDN binding the requests run
+                # with (the scratch when batched, the decode buffers at max_batch_size==1), and only because this call
+                # has enable_trace=True (the plugin's trace_mode == "all"). Block 0 is vLLM's null block, never
+                # allocated to a request: padded K/V writes of a bucket land there.
+                if model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded:
+                    model.prefill_trash_block = 0
+                    model.capture_prefill_traces_short(self.mesh_device, page_table)
         finally:
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
+        if batched:
+            model.warmup_gdn_slot_ops()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.

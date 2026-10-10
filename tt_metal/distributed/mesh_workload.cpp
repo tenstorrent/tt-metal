@@ -97,7 +97,6 @@ void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB, int mes
         auto& program_impl = program.impl();
         metadata.num_program_devices += device_range.shape().mesh_size();
         metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
-        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
 
         const auto& program_config_sizes = program_impl.get_program_config_sizes();
         if (metadata.program_config_sizes.empty()) {
@@ -253,6 +252,38 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     }
 }
 
+std::shared_ptr<MeshBuffer> MeshWorkloadImpl::prepare_for_command_list(MeshCommandQueue& mesh_cq) {
+    auto* mesh_device = mesh_cq.device();
+    TT_FATAL(mesh_device != nullptr, "Cannot prepare a MeshWorkload using a command queue without a MeshDevice");
+    TT_FATAL(!programs_.empty(), "Cannot prepare an empty MeshWorkload for a command list");
+
+    for (const auto& [device_range, program] : programs_) {
+        TT_FATAL(
+            program.impl().created_from_spec(),
+            "Command lists only support Metal 2.0 programs; program {} on mesh range {} was not created from a "
+            "ProgramSpec",
+            program.impl().get_id(),
+            device_range);
+    }
+
+    compile(mesh_device);
+
+    const ProgramBinaryStatus binary_status = get_program_binary_status(mesh_device->id());
+    TT_FATAL(
+        binary_status != ProgramBinaryStatus::InFlight,
+        "Cannot prepare MeshWorkload {} for a command list while its kernel binaries are in flight",
+        id);
+
+    if (binary_status == ProgramBinaryStatus::NotSent) {
+        load_binaries(mesh_cq);
+        mesh_cq.finish();
+        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::Committed);
+    }
+
+    generate_dispatch_commands(mesh_cq);
+    return kernel_bin_buf_;
+}
+
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
     if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
@@ -288,10 +319,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     return get_finalized_metadata().runs_on_noc_multicast_only_cores;
-}
-
-bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 // kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this

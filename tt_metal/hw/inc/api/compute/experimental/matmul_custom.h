@@ -19,6 +19,17 @@
 
 namespace ckernel {
 
+/**
+ * Set the distance, in tiles, between streamed columns of matmul's second input.
+ * Use after matmul init/reinit, with ct_dim >= rt_dim and no in1 kernel broadcast.
+ * Does not change tile geometry or the starting tile index of a matmul call.
+ * The tile-size times stride must fit the 16-bit unpacker address-step register.
+ * Restore with stride_tiles=1 before another operation uses the unpacker.
+ */
+ALWI void matmul_set_in1_column_stride(uint32_t in1_cb_id, uint32_t stride_tiles) {
+    UNPACK((llk_unpack_AB_matmul_set_in1_column_stride(in1_cb_id, stride_tiles)));
+}
+
 // clang-format off
 /**
  * Short initialization for the no-MOP matmul block operation. Configures only the unpacker and math

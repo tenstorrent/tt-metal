@@ -27,7 +27,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, K3KdaChunk, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
@@ -482,28 +482,35 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        for local_idx, layer in enumerate(self.layers):
-            ctx = K3AttnContext(
-                rope_tensors=rope_tensors,
-                kvpe_cache=kvpe_cache,
-                cache_layer_idx=self.schedule.kv_slot(local_idx),
-                cache_user_id=cache_user_id,
-                actual_start=actual_start,
-                actual_end=actual_end,
-                metadata=metadata,
-            )
-            layer.forward(
-                residual,
-                ctx,
-                d2h_service=d2h_service,
-                metadata_msg=metadata_msg,
-                on_layer_complete=on_layer_complete,
-                actual_end=actual_end,
-                actual_isl=actual_isl,
-                padding_side=padding_side,
-            )
-            if layer_tap is not None and not layer.kv_only:
-                layer_tap(local_idx, residual.current())
+        # Eager chunks build the KDA bounds and selection table once and share them across the KDA layers.
+        kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
+        try:
+            for local_idx, layer in enumerate(self.layers):
+                ctx = K3AttnContext(
+                    rope_tensors=rope_tensors,
+                    kvpe_cache=kvpe_cache,
+                    cache_layer_idx=self.schedule.kv_slot(local_idx),
+                    cache_user_id=cache_user_id,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    metadata=metadata,
+                    kda_chunk=kda_chunk,
+                )
+                layer.forward(
+                    residual,
+                    ctx,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    actual_end=actual_end,
+                    actual_isl=actual_isl,
+                    padding_side=padding_side,
+                )
+                if layer_tap is not None and not layer.kv_only:
+                    layer_tap(local_idx, residual.current())
+        finally:
+            if kda_chunk is not None:
+                kda_chunk.release()
 
         if self.kv_only_last_layer:
             # Nothing downstream reads the output; the walk's remaining sites go unconsumed.

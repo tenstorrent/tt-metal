@@ -6,6 +6,7 @@
 
 #include <ostream>
 #include <cstdint>
+#include <stdexcept>
 
 namespace tt::tt_metal {
 
@@ -58,7 +59,3 @@ enum class UnpackMode : uint8_t { UnpackToSrc, UnpackToDest };
 enum class Precision : uint8_t { Approximate, Precise };
 
 }  // namespace tt::tt_metal
-
-// Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
-using MathFidelity [[deprecated("Use tt::tt_metal::MathFidelity")]] = tt::tt_metal::MathFidelity;
-using UnpackToDestMode [[deprecated("Use tt::tt_metal::UnpackToDestMode")]] = tt::tt_metal::UnpackToDestMode;

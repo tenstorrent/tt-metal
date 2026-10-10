@@ -133,7 +133,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260929-17-gdc0d2c494ce"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -551,6 +551,9 @@ done
 # Quiesce all expected cross-host Ethernet ports (from the FSD) before a reset. Mirrors the
 # run_cluster_validation launcher below (docker keyed on -n "$DOCKER_IMAGE"), just swapping the
 # validation args for --cross-host-port-down, which makes the binary port-down and exit.
+# Backstop so a hung port down (e.g. an unanswered ETH mailbox) ends in the cleanup reset below
+# instead of stalling recovery forever.
+CROSS_HOST_PORT_DOWN_TIMEOUT_S=300
 run_cross_host_port_down() {
     if [[ -n "$DOCKER_IMAGE" ]]; then
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -561,6 +564,7 @@ run_cross_host_port_down() {
             "${DOCKER_ARG_FLAGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
+            --timeout "$CROSS_HOST_PORT_DOWN_TIMEOUT_S" \
             ./build/tools/scaleout/run_cluster_validation \
             "${DESCRIPTOR_ARGS[@]}" \
             --cross-host-port-down
@@ -569,7 +573,7 @@ run_cross_host_port_down() {
         _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
             "${DESCRIPTOR_ARGS[@]}" \
             --cross-host-port-down)
-        mpirun --host "$HOSTS" \
+        timeout --signal=TERM --kill-after=30s "$CROSS_HOST_PORT_DOWN_TIMEOUT_S" mpirun --host "$HOSTS" \
             --mca btl_tcp_if_include "$MPI_IF" \
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"

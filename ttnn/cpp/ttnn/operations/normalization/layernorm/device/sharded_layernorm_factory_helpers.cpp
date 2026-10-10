@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>
@@ -512,7 +513,8 @@ DFBSizeParams::Sizes DFBSizeParams::compute() const {
     uint32_t in0_block_tiles = block_wt * block_ht;
 
     sizes.in0_dfb_size = in0_block_tiles * in_single_tile_size;
-    sizes.in1_dfb_size = sizes.in0_dfb_size;
+    sizes.in1_dfb_size =
+        in0_block_tiles * (residual_single_tile_size != 0 ? residual_single_tile_size : in_single_tile_size);
     sizes.in2_dfb_size = bfloat16_tile_size;
     sizes.in3_dfb_size = bfloat16_tile_size;
     sizes.in5_dfb_size = in0_block_tiles * gamma_single_tile_size / block_ht;
@@ -632,13 +634,15 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
     // Residual shard for the fused pre-add. The post-all-gather compute kernel has no pre-add, so it
     // never reads a residual even when one is supplied.
     if (c.has_b && !c.is_post_all_gather) {
-        add_dfb(spec, IN1, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, RESIDUAL);
+        // The residual may have its own dtype (validation and the docs allow it); declare the view with the
+        // residual's format and tile size, not the input's, or the unpacker misreads its shard.
+        add_dfb(spec, IN1, sizes.in1_dfb_size, c.residual_single_tile_size, c.residual_data_format, RESIDUAL);
     }
 
     // Pre-all-gather pre-add destination. It borrows the *input* tensor, so a + b is written back
     // over a's own shard.
     if (c.is_pre_all_gather && c.has_b) {
-        add_dfb(spec, IN_PRE_ADD, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+        add_dfb(spec, IN_PRE_ADD, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
     }
 
     if (!c.use_welford) {
@@ -1238,6 +1242,11 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
+    // Only config_1xx is set: it carries the WH/BH placement (explicit RISC-V core + the mcast-specific
+    // reader/writer NOCs) and is ignored on Quasar (Gen2), where the framework places the kernel and
+    // picks the NOC; config_2xx stays unset so every bound DFB keeps implicit sync ON. That is what the
+    // mcast reduction needs: the reader_sender's remote mcast write posts the receivers' input DFB via
+    // implicit-sync txn tracking (a receiver cannot explicitly push data it did not produce).
     const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementHardwareConfig{
         .config_1xx =
             m2::DataMovementHardwareConfig::DataMovement1XXConfig{
