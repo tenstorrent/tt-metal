@@ -492,6 +492,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (p.gu_l1acc) {
             cdef["SE_GU_L1ACC"] = "1";
         }
+        if (std::getenv("MIMO_FL_NO_ACT")) {  // probe: no gate/up activation (wrong h), the bare matmul + pack
+            cdef["SE_NO_ACT"] = "1";
+        }
         const auto kc =
             cp("se3_compute.cpp",
                p.gu,

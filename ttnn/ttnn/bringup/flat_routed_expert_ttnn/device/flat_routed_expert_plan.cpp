@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
 #include <cstdlib>
 #include "flat_routed_expert_plan.hpp"
 
@@ -233,8 +234,27 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // subgrids: 2 for It <= 16 (TP4-like), 3 for It <= 32 (TP2-like), else 1
     p.nsg = p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1);
     p.n_rd_sg = p.nsg > 1 ? (p.nsg == 2 ? 8 : 4) : 16;
+    // MIMO_FL_ROWS=y0,y1 (probe): plan on grid rows [y0, y1] only, leaving the rest of the chip to another op (e.g.
+    // combine_fabric2d's senders / untilizers on rows 0-1, next to the eth cores). One subgrid only.
+    // A grid of fewer than 10 rows (dispatch on a row: 12 x 9 on a p150) plans on all of its rows the same way.
+    const uint32_t grid_rows = device->compute_with_storage_grid_size().y;
+    uint32_t row0 = 0, row1 = std::min(grid_rows, 10u) - 1;
+    const bool rows_cap = std::getenv("MIMO_FL_ROWS") != nullptr || grid_rows < 10;
+    if (std::getenv("MIMO_FL_ROWS")) {
+        TT_FATAL(
+            std::sscanf(std::getenv("MIMO_FL_ROWS"), "%u,%u", &row0, &row1) == 2 && row0 <= row1 &&
+                row1 < std::min(grid_rows, 10u),
+            "MIMO_FL_ROWS: y0,y1");
+    }
+    if (rows_cap) {
+        TT_FATAL(p.nsg == 1, "MIMO_FL_ROWS: one subgrid only (It {})", p.It);
+    }
+    const uint32_t nrows = row1 - row0 + 1;
+    // with the rows capped, the east gate/up rectangle may use every column east of the east readers (4 on a 12-wide
+    // grid: 64 gate/up cores fit in 8 rows)
+    const uint32_t bw_max = rows_cap ? std::min(4u, uint32_t(device->compute_with_storage_grid_size().x) - 8) : 3u;
     if (p.nsg == 1) {
-        p.rects = {{2, 5, 0, 9}, {8, 10, 0, 7}};
+        p.rects = {{2, 5, row0, row1}, {8, 10, row0, row0 + std::min(nrows, 8u) - 1}};
     } else if (p.nsg == 2) {
         p.rects = {{2, 5, 0, 3}, {8, 9, 0, 7}};
     } else {
@@ -253,7 +273,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     bool found = false;
     uint32_t best_cores = 0;
     for (uint32_t xs : {24u, 16u, 12u}) {
-        const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, 64, p.gu_fp32, p.x_tile)
+        const uint32_t gu_cells = 4 * nrows + bw_max * std::min(nrows, 8u);  // 64 on the full grid
+        const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, gu_cells, p.gu_fp32, p.x_tile)
                                       : gu_split(p.It, p.Ht, p.w_tile, xs, p.n_rd_sg, min_rect, p.gu_fp32, p.x_tile);
         if (split) {
             const uint32_t cores = p.It / split->first * split->second;
@@ -270,6 +291,27 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
     }
     TT_FATAL(found, "flat_routed_expert: no gate/up split for {} tile columns", p.It);
+    if (rows_cap) {  // rectangles of exactly the split's cores (4 columns x hA + bw columns x hB), the rest is down
+                     // work
+        const uint32_t want = p.It / p.np * p.g;
+        bool shaped = false;
+        int best = 1 << 30;
+        for (uint32_t bw = 1; bw <= bw_max; ++bw) {
+            for (uint32_t hb = 1; hb <= std::min(nrows, 8u); ++hb) {
+                if (want < bw * hb || (want - bw * hb) % 4 || (want - bw * hb) / 4 > nrows || want - bw * hb == 0) {
+                    continue;
+                }
+                const int ha = (want - bw * hb) / 4;
+                const int imb = std::abs(4 * ha - int(bw * hb));
+                if (imb < best) {
+                    best = imb;
+                    p.rects = {{2, 5, row0, row0 + ha - 1}, {8, 8 + bw - 1, row0, row0 + hb - 1}};
+                    shaped = true;
+                }
+            }
+        }
+        TT_FATAL(shaped, "MIMO_FL_ROWS: no rectangle pair of {} gate/up cores in {} rows", want, nrows);
+    }
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst(p.np, p.Ht, p.x_slots, p.gu_fp32);
     const uint32_t mt_cap = p.g * std::min(p.dst_tiles / (2 * p.np), MT_MAX / p.g);
     p.mt = std::min(mt_cap, std::max(p.g, p.m / 32 / p.g * p.g));
@@ -311,10 +353,42 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
 
     // ---- layout ----
     const auto grid = device->compute_with_storage_grid_size();
-    const auto opt = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    // With dispatch on a row (12 x 9 on a p150) the driver's DRAM-optimal assignment names cores of the dispatch row
+    // and throws; the p150's column-dispatch assignment is the same physical placement (rows 0-8 and the first 11
+    // columns map identically), and the reader relocation below moves the ones on the missing row.
+    std::vector<Core> opt;
+    try {
+        opt = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    } catch (const std::exception&) {
+        TT_FATAL(rows_cap, "flat_routed_expert: no DRAM-optimal worker assignment on a full-height grid");
+        opt = {Core(0, 9), Core(0, 0), Core(0, 7), Core(0, 3), Core(6, 9), Core(6, 1), Core(6, 6), Core(6, 4)};
+    }
     p.readers = opt;
     for (const auto& c : opt) {
         p.readers.emplace_back(c.x + 1, c.y);
+    }
+    if (rows_cap) {  // a bank's reader outside the rows moves to the nearest free row of its column
+        std::set<std::pair<uint32_t, uint32_t>> used;
+        for (const auto& c : p.readers) {
+            if (c.y >= row0 && c.y <= row1) {
+                used.insert({c.x, c.y});
+            }
+        }
+        for (auto& c : p.readers) {
+            if (c.y >= row0 && c.y <= row1) {
+                continue;
+            }
+            uint32_t best_y = 1000;
+            for (uint32_t y = row0; y <= row1; ++y) {
+                if (!used.contains({c.x, y}) &&
+                    (best_y == 1000 || std::abs(int(y) - int(c.y)) < std::abs(int(best_y) - int(c.y)))) {
+                    best_y = y;
+                }
+            }
+            TT_FATAL(best_y != 1000, "MIMO_FL_ROWS: no row for a reader in column {}", c.x);
+            c = Core(c.x, best_y);
+            used.insert({c.x, c.y});
+        }
     }
     std::set<uint32_t> rcols;
     for (const auto& c : p.readers) {
@@ -327,7 +401,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     const uint32_t east = rcols.size() == 4 ? *std::next(rcols.begin(), 2) : 0;
     TT_FATAL(
         rcols.size() == 4 && *rcols.begin() == 0 && *std::next(rcols.begin()) == 1 && east >= 6 &&
-            *rcols.rbegin() == east + 1 && grid.x >= 11 + (east - 6) && grid.y >= 10,
+            *rcols.rbegin() == east + 1 && grid.x >= 11 + (east - 6) && grid.y >= (rows_cap ? 8u : 10u),
         "flat_routed_expert: laid out for Blackhole grids with DRAM readers in columns 0, 1 and E, E + 1 (E >= 6) and "
         "room for the east rectangle; got a {} x {} grid with readers in columns {}",
         grid.x,
@@ -380,6 +454,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     } else {
         auto first_free = [&](uint32_t x, std::initializer_list<uint32_t> ys) {
             for (uint32_t y : ys) {
+                if (y >= row0 && y <= row1 && !taken.contains({x, y})) {
+                    return Core(x, y);
+                }
+            }
+            for (uint32_t y = row0; y <= row1; ++y) {
                 if (!taken.contains({x, y})) {
                     return Core(x, y);
                 }
@@ -399,8 +478,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             taken.insert({b.x, b.y});
         }
     }
-    for (uint32_t y = 0; y < grid.y; ++y) {
-        for (uint32_t x = 0; x < grid.x; ++x) {
+    // MIMO_FL_COLS=n (probe): down cores only in columns [0, n), e.g. 11 on a 12-column grid to reproduce the 11 x 10
+    const uint32_t cols_cap = std::getenv("MIMO_FL_COLS") ? std::atoi(std::getenv("MIMO_FL_COLS")) : grid.x;
+    for (uint32_t y = row0; y <= std::min(row1, uint32_t(grid.y) - 1); ++y) {
+        for (uint32_t x = 0; x < std::min(cols_cap, uint32_t(grid.x)); ++x) {
             if (!taken.contains({x, y})) {
                 p.down.emplace_back(x, y);
             }
@@ -468,6 +549,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             for (const auto& l : parts) {
                 p.down.insert(p.down.end(), l.begin(), l.end());
             }
+        }
+    }
+    if (const char* ndc = std::getenv("MIMO_FL_ND")) {  // (perf probe: cap the down cores; the rest stay idle)
+        const uint32_t cap = static_cast<uint32_t>(std::atoi(ndc));
+        if (cap > 0 && cap < p.down.size()) {
+            p.down.resize(cap);
         }
     }
     uint32_t ND = p.down.size();
