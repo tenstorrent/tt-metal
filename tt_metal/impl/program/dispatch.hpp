@@ -198,25 +198,21 @@ void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id);
 
 TraceNode create_trace_node(
@@ -273,9 +269,6 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
 
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
-
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id);
@@ -292,7 +285,6 @@ std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
     uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state);
 
