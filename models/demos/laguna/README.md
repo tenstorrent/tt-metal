@@ -21,8 +21,8 @@ Through the vLLM server, batch 1, versus the first version of this branch (2026-
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (24-30 vs 18-20 tok/s/user).
-- Not met: batch-1 decode (76-81 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding: 4.7x faster than on 2026-10-09 (25 -> 118 tok/s on AIME24, 21-25 -> 86-94 tok/s on
+- Not met: batch-1 decode (80-86 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
+- DFlash speculative decoding: 5.4x faster than on 2026-10-09 (25 -> 135 tok/s on AIME24, 21-25 -> 88-93 tok/s on
   real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
   input tokens.
 
@@ -36,10 +36,10 @@ through the traced decode path the server runs (token picked on device). `tests/
 
 | Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
 |---|---:|---:|---:|---:|---:|---:|
-| 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.98 | 0.97 |
-| 235 tokens | 32 | 0.98 | 1.00 | 1.00 | 0.97 | 0.97 |
-| 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.97 | 0.97 |
-| 128 tokens | 32 | 0.96 | 1.00 | 1.00 | 0.96 | 0.97 |
+| 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.97 | 0.97 |
+| 235 tokens | 32 | 0.98 | 1.00 | 1.00 | 0.98 | 0.97 |
+| 128 tokens | 1 | 0.95 | 1.00 | 1.00 | 0.96 | 0.97 |
+| 128 tokens | 32 | 0.97 | 1.00 | 1.00 | 0.97 | 0.97 |
 | Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
 ### Performance
@@ -53,11 +53,11 @@ Decode, tok/s per user (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 80.6 / 158 | 29.9 / 20 |
-| 1,024 | 77.9 / 157 | 28.0 / 20 |
-| 2,048 | 77.3 / 156 | 27.0 / 19 |
-| 4,096 | 77.0 / 155 | 26.3 / 19 |
-| 8,192 | 76.2 / 152 | 24.0 / 18 |
+| 128 | 85.6 / 158 | 30.1 / 20 |
+| 1,024 | 82.6 / 157 | 29.1 / 20 |
+| 2,048 | 82.0 / 156 | 28.6 / 19 |
+| 4,096 | 81.4 / 155 | 26.4 / 19 |
+| 8,192 | 80.5 / 152 | 24.2 / 18 |
 
 Time to first token (measured / target):
 
@@ -65,23 +65,23 @@ Time to first token (measured / target):
 |---:|---:|---:|
 | 128 | 60.6 ms / 66 ms | 0.42 s / 0.066 s |
 | 1,024 | 140 ms / 66 ms | 2.89 s / 0.39 s |
-| 2,048 | 238 ms / 66 ms | 5.82 s / 0.78 s |
-| 4,096 | 387 ms / 66 ms | 11.6 s / 1.60 s |
-| 8,192 | 713 ms / 103 ms | 23.4 s / 3.31 s |
+| 2,048 | 238 ms / 66 ms | 5.83 s / 0.78 s |
+| 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
+| 8,192 | 715 ms / 103 ms | 23.4 s / 3.31 s |
 
-DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 76-81 tok/s at these lengths). A round
+DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 80-86 tok/s at these lengths). A round
 drafts 15 tokens, then checks the first 5 in Laguna in one step and keeps the matching ones plus one of Laguna's
-own: 26-28 ms per round (draft 4.3-4.7 ms, check 21.2-22.9 ms) vs 12.4-13.1 ms per token for normal decode, so
-DFlash wins when more than ~1.1 drafts per round are accepted:
+own: 25-27 ms per round (draft 4.3-4.7 ms, check 19.9-21.7 ms) vs 11.7-12.4 ms per token for normal decode, so
+DFlash wins when more than ~1.2 drafts per round are accepted:
 
 | Prompt | Input tokens | Decode, tok/s | Drafts accepted per round |
 |---|---:|---:|---:|
-| AIME24 | 235 | 118.0 | 2.2 |
-| Real text | 128 | 89.3 | 1.5 |
-| Real text | 1,024 | 94.0 | 1.6 |
-| Real text | 2,048 | 90.8 | 1.5 |
-| Real text | 4,096 | 85.7 | 1.4 |
-| Real text | 8,192 | 88.4 | 1.5 |
+| AIME24 | 235 | 134.7 | 2.5 |
+| Real text | 128 | 92.8 | 1.4 |
+| Real text | 1,024 | 90.0 | 1.4 |
+| Real text | 2,048 | 91.2 | 1.5 |
+| Real text | 4,096 | 89.1 | 1.4 |
+| Real text | 8,192 | 88.2 | 1.4 |
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
