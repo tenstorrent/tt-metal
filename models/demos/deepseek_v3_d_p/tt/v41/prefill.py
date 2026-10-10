@@ -135,6 +135,15 @@ class V41Prefill:
         self._embed = None
         self.kv_actual = 0
 
+    def reset(self) -> None:
+        """A new prompt (one slot): every attention state's counters back to 0. Path B's masks are built from the counters
+        (entries / window rows past them read -inf, chunk 0's carry columns are masked), so no device contents need to
+        be cleared; V4.1's non-overlap compressor carries no state between chunks."""
+        states = [b.state for b in self.blocks] + ([self.kv_state] if self.kv_attn is not None else [])
+        for st in states:
+            st.kv_actual, st.entry_count = 0, 0
+        self.kv_actual = 0
+
     # ---- host-side inputs ---------------------------------------------------------------------------------------
     def _embedding(self) -> torch.Tensor:
         if self._embed is None:
