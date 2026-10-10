@@ -25,6 +25,7 @@ inline void mask_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 namespace mask_detail {
 // One DEST tile is 64 rows for the SFPU load and store address field, in both DEST widths.
 constexpr std::uint32_t dst_tile_rows = 64;
+constexpr std::uint32_t row_instructions = 5;
 }  // namespace mask_detail
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
@@ -32,7 +33,7 @@ inline void calculate_mask(
     const std::uint32_t dst_index_data, const std::uint32_t dst_index_mask, const std::uint32_t /* dst_index_out */) {
     const std::uint32_t data_addr = dst_index_data * mask_detail::dst_tile_rows;
     const std::uint32_t mask_addr = dst_index_mask * mask_detail::dst_tile_rows;
-    TTI_REPLAY(0, 5, 1, 1);
+    TTI_REPLAY(0, mask_detail::row_instructions, 1, 1);
     TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, mask_addr);
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, data_addr);
@@ -40,7 +41,7 @@ inline void calculate_mask(
     TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, 5, 0, 0);
+        TTI_REPLAY(0, mask_detail::row_instructions, 0, 0);
     }
 }
 
@@ -49,7 +50,7 @@ inline void calculate_int_mask(
     const std::uint32_t dst_index_data, const std::uint32_t dst_index_mask, const std::uint32_t /* dst_index_out */) {
     const std::uint32_t data_addr = dst_index_data * mask_detail::dst_tile_rows;
     const std::uint32_t mask_addr = dst_index_mask * mask_detail::dst_tile_rows;
-    TTI_REPLAY(0, 5, 1, 1);
+    TTI_REPLAY(0, mask_detail::row_instructions, 1, 1);
     TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, mask_addr);
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TT_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, data_addr);
@@ -57,7 +58,7 @@ inline void calculate_int_mask(
     TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, 5, 0, 0);
+        TTI_REPLAY(0, mask_detail::row_instructions, 0, 0);
     }
 }
 
@@ -68,7 +69,7 @@ inline void calculate_mask_posinf(
     const std::uint32_t mask_addr = dst_index_mask * mask_detail::dst_tile_rows;
     // +infinity as a bf16 immediate in the high half of the register.
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);
-    TTI_REPLAY(0, 5, 1, 1);
+    TTI_REPLAY(0, mask_detail::row_instructions, 1, 1);
     TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, mask_addr);
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, data_addr);
@@ -76,7 +77,7 @@ inline void calculate_mask_posinf(
     TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, 5, 0, 0);
+        TTI_REPLAY(0, mask_detail::row_instructions, 0, 0);
     }
 }
 
