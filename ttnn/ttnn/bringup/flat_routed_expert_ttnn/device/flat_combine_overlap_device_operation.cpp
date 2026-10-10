@@ -44,6 +44,10 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
         for (const auto& [k, v] : flat_schedule_defines(p.flat, make_flat_routed_expert_plan(t.x.device(), p.flat))) {
             schedule_defines.push_back(k + "=" + v);
         }
+        // a pinned expert's entries are released one by one (MIMO_FL_CMB_NOPROG=1, probe: whole experts only)
+        if (!std::getenv("MIMO_FL_CMB_NOPROG")) {
+            schedule_defines.push_back("CMBF2D_PROGRESSIVE=1");
+        }
     }
     // combine as the hybrid's overlap builds it, one pass (threshold 0), its L1 in the arena
     const cmb::CombineFabric2dParams cp{

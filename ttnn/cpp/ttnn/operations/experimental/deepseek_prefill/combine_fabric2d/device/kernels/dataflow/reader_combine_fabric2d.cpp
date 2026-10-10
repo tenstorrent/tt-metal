@@ -124,6 +124,13 @@ volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
 // the ring: a relay sizes the chunks it forwards from the origin chip's order.
 static_assert(ct.experts_per_chip <= SE_MAX_E, "combine_fabric2d: more local experts than the flat schedule holds");
 uint8_t flat_walk[ct.dispatch_group_size * ct.experts_per_chip];
+#ifdef CMBF2D_PROGRESSIVE
+// Progressive release (this chip only): a step whose expert the flat schedule splits into several entries (pinning)
+// is released entry by entry; own_chunk_start[s][c] is entry c's first row relative to the expert's region.
+constexpr uint32_t PROG_MAX_CHUNKS = 16;
+uint8_t own_nchunks[ct.experts_per_chip];
+uint32_t own_chunk_start[ct.experts_per_chip][PROG_MAX_CHUNKS];
+#endif
 
 void build_flat_walk(const ::cmbf2d::ControlTables& ctl) {
     for (uint32_t dg = 0; dg < ct.dispatch_group_size; dg++) {
@@ -134,6 +141,19 @@ void build_flat_walk(const ::cmbf2d::ControlTables& ctl) {
         for (uint32_t s = 0; s < ct.experts_per_chip; s++) {
             flat_walk[dg * ct.experts_per_chip + s] = order[s];
         }
+#ifdef CMBF2D_PROGRESSIVE
+        if (dg == ct.my_dg_index) {
+            for (uint32_t s = 0; s < ct.experts_per_chip; s++) {
+                uint32_t n = 0;
+                for (uint32_t a = 0; a < d.n_act; a++) {
+                    if (d.eid[a] == order[s] && n < PROG_MAX_CHUNKS) {
+                        own_chunk_start[s][n++] = d.off[a];  // built with region 0: rows within the expert
+                    }
+                }
+                own_nchunks[s] = static_cast<uint8_t>(n);
+            }
+        }
+#endif
     }
 }
 
@@ -331,7 +351,7 @@ struct Reader {
         return untilized.take(walk, p);
 #else
 #ifdef CMBF2D_READY_SEM
-        gate();
+        gate(p);
 #endif
 #ifdef CMBF2D_NO_DRAM_READ  // (perf probe: payload from local L1 scratch)
         (void)p;
@@ -351,7 +371,37 @@ struct Reader {
         step = s;
         step_ready = false;
     }
-    void gate() {
+    void gate(uint32_t page) {
+#ifdef CMBF2D_PROGRESSIVE
+        if (!step_ready && own_nchunks[step] >= 2) {
+            // Several entries: this page's entry may already be out while the expert is not.
+            DeviceZoneScopedN("CMB-GATE");
+            const uint32_t rel = page - ctl.region[expert_of(ctl, ct.my_dg_index, step)];
+            uint32_t c = 0;
+            while (c + 1 < own_nchunks[step] && rel >= own_chunk_start[step][c + 1]) {
+                c++;
+            }
+            volatile tt_l1_ptr uint32_t* ready =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_READY_SEM));
+            volatile tt_l1_ptr uint32_t* progress =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_PROGRESS_SEM));
+            invalidate_l1_cache();
+            while (true) {
+                if (*ready >= step + 1) {
+                    step_ready = true;
+                    return;
+                }
+                // the collector's progress word: (its step << 24) | (rows << 16) | done-chunk mask; it only moves
+                // to a later step once this one is out
+                const uint32_t pr = *progress;
+                if ((pr >> 24) > step || ((pr >> 24) == step && (pr & (1u << c)) != 0)) {
+                    return;
+                }
+                invalidate_l1_cache();
+            }
+        }
+#endif
+        (void)page;
         if (!step_ready) {
             DeviceZoneScopedN("CMB-GATE");
 #ifdef CMBF2D_FLAT_ORDER

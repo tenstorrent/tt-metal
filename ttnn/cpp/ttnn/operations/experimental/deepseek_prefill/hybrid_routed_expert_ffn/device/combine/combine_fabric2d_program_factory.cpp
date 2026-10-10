@@ -507,6 +507,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             for (const auto& kv : args.routed_expert_schedule_defines) {
                 const auto eq = kv.find('=');
                 rdr.defines.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
+                if (kv.substr(0, eq) == "CMBF2D_PROGRESSIVE") {  // the collector's per-chunk progress word
+                    rdr.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
+                }
             }
         }
         if (!sems.has_untilizers()) {

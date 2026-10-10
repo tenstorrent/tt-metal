@@ -95,7 +95,9 @@ void kernel_main() {
             }
             if (newly != 0) {
                 done_mask |= newly;
-                *progress = (s << 24) | (rows << 16) | done_mask;
+                // 8 bits of chunk size: a writer that never writes it (the flat expert's entries) leaves stale L1
+                // here, which would otherwise spill into the step field and release this step's chunks early
+                *progress = (s << 24) | ((rows & 0xFF) << 16) | done_mask;
                 for (uint32_t t = 0; t < num_targets; t++) {
                     const uint32_t noc_x = kernel_compile_time_args[targets_base + 2 * t];
                     const uint32_t noc_y = kernel_compile_time_args[targets_base + 2 * t + 1];

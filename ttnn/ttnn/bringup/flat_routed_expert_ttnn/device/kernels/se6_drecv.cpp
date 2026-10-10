@@ -227,6 +227,7 @@ void kernel_main() {
             ++out_done;
 #ifdef SE_CMB_DONE_RT
             cmb.wrote(dyn.eid[yw.done_a]);
+            cmb.wrote_entry(dyn, yw.done_a);
             cmb.report(false);
 #endif
         }

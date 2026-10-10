@@ -216,6 +216,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // row-major y, slot order with bfp8 tiles (combine's untilizers) or the MIMO_FL_CMB_SLOT_ORDER probe
     if (cfg.cmb_rt && (!cfg.y_row_major || std::getenv("MIMO_FL_CMB_SLOT_ORDER"))) {
         cmb_def["SE_CMB_SLOT_ORDER"] = "1";
+    } else if (cfg.cmb_rt && !std::getenv("MIMO_FL_CMB_NOPROG")) {  // (flat_combine_overlap passes the same switch)
+        cmb_def["SE_CMB_PROGRESSIVE"] = "1";
     }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);

@@ -378,6 +378,32 @@ It worked: -4..-12% everywhere; the 19-down layout is now one config per model t
 Kimi and GLM. Remaining gap to the ungated ceiling is largest on the hot expert (its rows are still released only
 when the whole expert is done): next, progressive release (1b).
 
+### 6.10 Progressive release of a pinned expert (idea 1b)
+- Writers (`SeCmbDone::wrote_entry`, `SE_CMB_PROGRESSIVE`) count sub-blocks left per schedule entry; the last one of
+  an entry of a multi-entry (pinned) expert bumps (step, chunk = the entry's rank) in the collector's chunk counts
+  (the PR's `hybrid_expert_done.hpp` layout). Readers (`CMBF2D_PROGRESSIVE`) keep their own chip's entry boundaries
+  from the rebuilt schedule and gate per page on such a step: the page's entry bit in the collector's progress
+  word, or the whole step. `MIMO_FL_CMB_NOPROG=1` turns it off on both sides.
+- **Bug found on the way (in the PR's collector):** the progress word is `step << 24 | chunk_rows << 16 | mask`, and
+  `chunk_rows` is neither zeroed nor masked; our writers never write it, so stale L1 spilled into the step field and
+  released a whole chunk early (GLM hot: 9882/10240, deterministic). Fixed by masking it to 8 bits.
+- **The test hid it on the second call:** a later overlap call read rows the earlier call had already written
+  correctly. Every accuracy call now gets a freshly poisoned y (`y_out` filled with 7777); with combine released at
+  launch (`MIMO_FL_CMB_EARLY`) both calls now fail (697-3688 / 10240), the real configuration passes both.
+
+| overlap us (vs row-major baseline) | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| np 2, completion order | 1136 | 1922 | 840 | 1693 |
+| np 2, + progressive | 1136 (-20%) | 1900 (+9%) | 839 (-16%) | 1628 (-0.5%) |
+| 64 gu + 19 down, completion order | 1350 | 1739 | 885 | 1510 |
+| **64 gu + 19 down, + progressive** | **1350 (-5.3%)** | **1702 (-2.6%)** | **885 (-11.6%)** | **1479 (-9.6%)** |
+| ungated ceiling (np 2, 6.7) | 1149 | 1628 | 830 | 1409 |
+
+Worked, modestly, and only where expected (hot: -1..-4%; balanced has no multi-entry expert). Why not more: by the
+time combine reaches the pinned expert's step (it finishes last among the small ones) most of its entries are
+already out, so per-entry release only overlaps its last entry; and a reader blocks on the first unreleased page
+in its schedule order, holding up the forwarded chunks behind it.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.

@@ -162,7 +162,29 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
 
     sems = []
 
-    def overlapped():
+    def poisoned_y():
+        # a fresh y full of a value no row of the expert produces: a combine read that runs ahead of the flat expert's
+        # write then shows up as a mismatch instead of returning a previous call's (correct) rows
+        rows, h = list(tt_x.shape)[-2], list(tt_x.shape)[-1]
+        if _YRM:
+            return ttnn.from_torch(
+                torch.full((rows, h), 7777.0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        return ttnn.from_torch(
+            torch.full((rows, h), 7777.0),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def overlapped(y_out=None):
         if not sems:
             grid = mesh_device.compute_with_storage_grid_size()
             allc = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -192,6 +214,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
             activation=flat.act,
             pin=flat.pin,
             y_row_major=_YRM,
+            y_out=y_out,
         )
 
     ref = []
@@ -252,6 +275,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
         flat_solo=flat_solo,
         combine=combine,
         overlapped=overlapped,
+        poisoned_y=poisoned_y,
         validate=validate,
         composer=get_ep_mesh_composer(mesh_device),
         experts_per_chip=experts_per_chip,
@@ -272,7 +296,8 @@ def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id
     # back to back first (the reference rewrites the host dispatch buffer in place, so the device runs first)
     y = c["flat_solo"]()
     seq_out = ttnn.to_torch(c["combine"](_combine_input(y)), mesh_composer=c["composer"])
-    ov = [ttnn.to_torch(c["overlapped"](), mesh_composer=c["composer"]) for _ in range(2)]  # 2nd: a cache hit
+    # every call on a freshly poisoned y (2nd: a cache hit): a read ahead of the write cannot hide behind earlier rows
+    ov = [ttnn.to_torch(c["overlapped"](c["poisoned_y"]()), mesh_composer=c["composer"]) for _ in range(2)]
     for i, o in enumerate(ov):
         same = torch.equal(o, seq_out)
         logger.info(
