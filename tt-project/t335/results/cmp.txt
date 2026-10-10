@@ -1,0 +1,10 @@
+CMP HiFi2 vs default seed0: identical=True pcc=1.000000 psnr=inf psnr_y=inf psnr_min_frame=inf max_abs=0
+CMP HiFi2 vs default seed1: identical=True pcc=1.000000 psnr=inf psnr_y=inf psnr_min_frame=inf max_abs=0
+CMP HiFi2 vs default seed2: identical=True pcc=1.000000 psnr=inf psnr_y=inf psnr_min_frame=inf max_abs=0
+CMP HiFi2 vs default seed3: identical=True pcc=1.000000 psnr=inf psnr_y=inf psnr_min_frame=inf max_abs=0
+CMP HiFi2 vs default seed4: identical=True pcc=1.000000 psnr=inf psnr_y=inf psnr_min_frame=inf max_abs=0
+CMP LoFi vs default seed0: identical=False pcc=0.999916 psnr=45.96 psnr_y=44.53 psnr_min_frame=45.28 max_abs=39
+CMP LoFi vs default seed1: identical=False pcc=0.999915 psnr=45.42 psnr_y=44.00 psnr_min_frame=44.90 max_abs=42
+CMP LoFi vs default seed2: identical=False pcc=0.999916 psnr=45.28 psnr_y=43.84 psnr_min_frame=44.71 max_abs=40
+CMP LoFi vs default seed3: identical=False pcc=0.999915 psnr=46.32 psnr_y=44.88 psnr_min_frame=45.47 max_abs=52
+CMP LoFi vs default seed4: identical=False pcc=0.999916 psnr=45.52 psnr_y=44.01 psnr_min_frame=44.79 max_abs=49

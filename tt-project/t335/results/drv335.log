@@ -1,0 +1,14 @@
+2026-10-10 06:32:41 driver start; /dev/mapper/ubuntu--vg-ubuntu--lv  894G  453G  439G  51% /
+2026-10-10 06:32:41 adopting job 374 for hifi2
+2026-10-10 06:32:41 pair=hifi2 attempt=1 job=374
+2026-10-10 06:33:36 pair=hifi2 job=374 status=completed T335_EXIT=0 leftover:
+2026-10-10 06:33:36 health: busy
+2026-10-10 06:34:06 health: busy
+2026-10-10 06:34:36 health: busy
+2026-10-10 06:35:07 health: busy
+Job 377 queued (position: 0)
+Log: /var/log/tt-device-broker/2026-10-10_063537_377.log
+2026-10-10 06:35:37 pair=lofi attempt=1 job=377
+2026-10-10 06:37:17 pair=lofi job=377 status=completed T335_EXIT=0 leftover:
+2026-10-10 06:38:11 cmp: 10 lines
+exit=0 06:38:11
