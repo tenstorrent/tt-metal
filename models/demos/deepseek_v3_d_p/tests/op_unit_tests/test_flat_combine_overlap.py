@@ -10,7 +10,16 @@ untilizer cores): the flat expert is planned below combine's sender row 0 (MIMO_
 is built). FLAT_CMB_YRM=0: bfp8 y tiles, combine untilizes them on rows 0-1, the flat expert on rows 2-9. The
 back-to-back baseline runs the same flat expert. Accuracy: the overlap's combine output against flat then
 combine_fabric2d back to back (bit-exact: combine reads the same rows either way) and against the PyTorch reference
-(per-slot PCC, as the hybrid's test). Perf: every program replayed from a trace."""
+(per-slot PCC, as the hybrid's test). Perf: every program replayed from a trace.
+
+Galaxy (BH 8 x 4, torus both ways): the `8x1-galaxy` cases open the whole mesh on FABRIC_2D_TORUS_XY and run on one
+(8, 1) column, comparable to the LoudBox 8 x 1 cases. Do NOT set TT_MESH_GRAPH_DESC_PATH (the LoudBox ring descriptor):
+  scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py \
+      -k "8x1-galaxy and not perf"                                 # accuracy (random weights, poisoned y)
+  scripts/run_safe_pytest.sh --run-all <same> -k "8x1-galaxy and perf"            # serial + overlap, fake weights
+  FLAT_CMB_NO_OVERLAP=1 <same> -k "8x1-galaxy and perf"   # serial baseline only (flat on its full-grid default plan)
+  FLAT_CMB_ONLY=overlap <same> -k "8x1-galaxy and perf"   # overlap only (sweeps)
+and the PR's hybrid on the same column: test_hybrid_routed_expert_combine.py -k "8x1-galaxy"."""
 
 import os
 
@@ -63,6 +72,9 @@ def _device_params():
     return params
 
 
+_GALAXY = (8, 4)
+
+
 def _params():
     out = []
     for model_id in ("kimi-k27", "glm-53"):
@@ -73,11 +85,33 @@ def _params():
                     _device_params(),
                     threshold_id,
                     model_id,
+                    "8x1",
                     marks=pytest.mark.requires_mesh_topology(mesh_shape=_MESH, topology="ring"),
                     id=f"{model_id}-8x1-{threshold_id}",
                 )
             )
+    # The (8, 1) ring on a Galaxy (as test_hybrid_routed_expert_combine.py's 8x1-galaxy): an (8, 1) fabric cannot come
+    # up alone (every router handshakes with a live partner), so the whole (8, 4) mesh opens on its native torus and
+    # the ops run on one column: 8 chips, one dispatch group, the same model scaling and routing as the LoudBox 8 x 1
+    # (no mesh graph descriptor needed). Grid 12 x 10: the flat expert's default rows 1-9 plan is np 1, 64 gu + 24 down.
+    for model_id in ("kimi-k27", "glm-53"):
+        for threshold_id in ("balanced", "hot-expert"):
+            out.append(
+                pytest.param(
+                    _GALAXY,
+                    hyb._device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
+                    threshold_id,
+                    model_id,
+                    "8x1-galaxy",
+                    marks=pytest.mark.requires_mesh_topology(mesh_shape=_GALAXY, topology="mesh-8x4"),
+                    id=f"{model_id}-8x1-galaxy-{threshold_id}",
+                )
+            )
     return out
+
+
+def _mesh_for(mesh_device, variant):
+    return mesh_device.create_submesh(ttnn.MeshShape(8, 1)) if variant == "8x1-galaxy" else mesh_device
 
 
 def _build_case(mesh_device, device_params, threshold_id, model_id, fake_weights=False):
@@ -306,9 +340,12 @@ def _combine_input(y):
 
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only")
 @pytest.mark.parametrize(
-    "mesh_device, device_params, threshold_id, model_id", _params(), indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _params(),
+    indirect=["mesh_device", "device_params"],
 )
-def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id):
+def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id, variant):
+    mesh_device = _mesh_for(mesh_device, variant)
     c = _build_case(mesh_device, device_params, threshold_id, model_id)
     # back to back first (the reference rewrites the host dispatch buffer in place, so the device runs first)
     y = c["flat_solo"]()
@@ -330,9 +367,12 @@ def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only")
 @pytest.mark.parametrize(
-    "mesh_device, device_params, threshold_id, model_id", _params(), indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, threshold_id, model_id, variant",
+    _params(),
+    indirect=["mesh_device", "device_params"],
 )
-def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id):
+def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id, variant):
+    mesh_device = _mesh_for(mesh_device, variant)
     # perf only needs the weights' layout, not their values: fake (uninitialised) weights skip the host packing
     # (FLAT_CMB_REAL_WEIGHTS=1: the real path). FLAT_CMB_ONLY=overlap: time the overlap only (sweeps).
     c = _build_case(
