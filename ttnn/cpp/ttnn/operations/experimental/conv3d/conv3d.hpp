@@ -35,6 +35,8 @@ ttnn::Tensor conv3d(
     uint32_t logical_w_mask = 0,
     const std::optional<ttnn::Tensor>& pad_offset_tensor = std::nullopt,
     uint32_t output_pad_h = 0,
-    uint32_t output_pad_w = 0);
+    uint32_t output_pad_w = 0,
+    const std::array<uint32_t, 3>& output_depth_to_space = std::array<uint32_t, 3>{1, 1, 1},
+    uint32_t output_trim_t_front = 0);
 
 }  // namespace ttnn::experimental

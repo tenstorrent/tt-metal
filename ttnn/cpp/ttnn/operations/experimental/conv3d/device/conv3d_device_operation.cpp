@@ -157,6 +157,38 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             args.output_channels);
     }
 
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        TT_FATAL(
+            d2s[0] > 0 && d2s[1] > 0 && d2s[2] > 0 && args.output_channels % d2s_factor == 0,
+            "Depth-to-space ({}, {}, {}) must divide output_channels ({})",
+            d2s[0],
+            d2s[1],
+            d2s[2],
+            args.output_channels);
+        const uint32_t d2s_C = args.output_channels / d2s_factor;
+        const uint32_t c_out_block = args.config.C_out_block;
+        TT_FATAL(
+            d2s_C % tt::constants::TILE_WIDTH == 0 && c_out_block > 0 && args.output_channels % c_out_block == 0 &&
+                (c_out_block % d2s_C == 0 || d2s_C % c_out_block == 0),
+            "Depth-to-space output needs a tile-aligned group size ({}) and a C_out_block ({}) that divides "
+            "output_channels ({}) and nests with the group size",
+            d2s_C,
+            c_out_block,
+            args.output_channels);
+        TT_FATAL(
+            args.output_pad_h == 0 && args.output_pad_w == 0,
+            "Depth-to-space output does not support padded-output mode");
+        const auto [T_out_conv, H_out_conv, W_out_conv] = detail::compute_output_dims(
+            input_shape[1], input_shape[2], input_shape[3], args.padding, args.stride, args.kernel_size, args.dilation);
+        TT_FATAL(
+            args.output_trim_t_front < T_out_conv * d2s[0],
+            "output_trim_t_front ({}) must leave at least one output frame ({} after depth-to-space)",
+            args.output_trim_t_front,
+            T_out_conv * d2s[0]);
+    }
+
     // Validate weight shape and config arguments
     const auto patch_size =
         args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2] * input_tensor_a.logical_shape()[4];
@@ -299,6 +331,17 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     H_out += 2 * args.output_pad_h;
     W_out += 2 * args.output_pad_w;
 
+    // Depth-to-space output: the writer scatters each (p1, p2, p3) channel group to its spatial slot.
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        C_out /= d2s_factor;
+        padded_C_out = C_out;
+        T_out = T_out * d2s[0] - args.output_trim_t_front;
+        H_out *= d2s[1];
+        W_out *= d2s[2];
+    }
+
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
@@ -385,7 +428,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     uint32_t logical_w_mask,
     const std::optional<Tensor>& pad_offset_tensor,
     uint32_t output_pad_h,
-    uint32_t output_pad_w) {
+    uint32_t output_pad_w,
+    const std::array<uint32_t, 3>& output_depth_to_space,
+    uint32_t output_trim_t_front) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -409,7 +454,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .logical_h_mask = logical_h_mask,
         .logical_w_mask = logical_w_mask,
         .output_pad_h = output_pad_h,
-        .output_pad_w = output_pad_w};
+        .output_pad_w = output_pad_w,
+        .output_depth_to_space = output_depth_to_space,
+        .output_trim_t_front = output_trim_t_front};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",

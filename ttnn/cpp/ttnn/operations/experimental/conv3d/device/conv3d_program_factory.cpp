@@ -929,7 +929,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         weights_mcast_receiver_sem_id,
         static_cast<uint32_t>(enable_streaming_output),
         operation_attributes.output_pad_h,
-        operation_attributes.output_pad_w};
+        operation_attributes.output_pad_w,
+        operation_attributes.output_depth_to_space[0],
+        operation_attributes.output_depth_to_space[1],
+        operation_attributes.output_depth_to_space[2],
+        operation_attributes.output_trim_t_front};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)

@@ -273,9 +273,13 @@ class LTXCausalConv3d(Module):
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
+        output_depth_to_space: tuple[int, int, int] | None = None,
+        output_trim_t_front: int = 0,
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
+        # output_depth_to_space: conv3d writes each (p1, p2, p3) channel group to its depth-to-space
+        # slot (per device), dropping the first output_trim_t_front frames.
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         fold_time_pad = self.fold_time_pad and not causal
@@ -381,6 +385,12 @@ class LTXCausalConv3d(Module):
                     logical_w=(logical_w if fold_w_mask else 0),
                 )
 
+        d2s_kwargs = {}
+        if output_depth_to_space is not None:
+            d2s_kwargs = dict(
+                output_depth_to_space=list(output_depth_to_space), output_trim_t_front=output_trim_t_front
+            )
+
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
@@ -395,9 +405,21 @@ class LTXCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
             **halo_kwargs,
+            **d2s_kwargs,
         )
 
         return x_BTHWC
+
+    def can_fold_depth_to_space(self, stride: tuple[int, int, int]) -> bool:
+        """conv3d's depth-to-space output needs tile-aligned groups that nest with C_out_block."""
+        group = self.out_channels // math.prod(stride)
+        c_out_block = self.conv_config.C_out_block or self.out_channels
+        return (
+            group % 32 == 0
+            and self.out_channels % c_out_block == 0
+            and (c_out_block % group == 0 or group % c_out_block == 0)
+            and c_out_block // group <= 8
+        )
 
 
 def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -600,6 +622,9 @@ class LTXDepthToSpaceUpsample(Module):
             conv_dims=conv_dims,
             depth_to_space_stride=stride,
         )
+        # On by default (LTX_VAE_FOLD_D2S=0 turns it off): conv3d writes its output straight to the
+        # depth-to-space layout and drops the causal first frame, replacing reshape+permute+reshape+slice.
+        self.fold_d2s = os.environ.get("LTX_VAE_FOLD_D2S", "1") != "0" and self.conv.can_fold_depth_to_space(stride)
 
     def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
         """Depth-to-space in BTHWC, channel order C,p1,p2,p3: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C).
@@ -635,14 +660,24 @@ class LTXDepthToSpaceUpsample(Module):
             if p1 == 2:
                 x_in = x_in[:, 1:, :, :, :]
 
-        x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-
-        # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
-        x = depth_to_space_channels_last(x_BTHWC, self.stride)
-
         # Remove first frame if temporal upsampling (causal padding artifact)
-        if p1 == 2:
-            x = x[:, 1:, :, :, :]
+        trim_t = 1 if p1 == 2 else 0
+        if self.fold_d2s:
+            x = self.conv(
+                x_BTHWC,
+                causal=causal,
+                logical_h=logical_h,
+                logical_w=logical_w,
+                output_depth_to_space=self.stride,
+                output_trim_t_front=trim_t,
+            )
+        else:
+            x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+
+            # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
+            x = depth_to_space_channels_last(x_BTHWC, self.stride)
+            if trim_t:
+                x = x[:, trim_t:, :, :, :]
 
         if self.residual:
             x = ttnn.add(x, x_in)

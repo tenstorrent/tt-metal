@@ -68,7 +68,9 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("logical_w_mask") = 0u,
         nb::arg("pad_offset_tensor") = nb::none(),
         nb::arg("output_pad_h") = 0u,
-        nb::arg("output_pad_w") = 0u);
+        nb::arg("output_pad_w") = 0u,
+        nb::arg("output_depth_to_space") = std::array<uint32_t, 3>{1, 1, 1},
+        nb::arg("output_trim_t_front") = 0u);
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(
