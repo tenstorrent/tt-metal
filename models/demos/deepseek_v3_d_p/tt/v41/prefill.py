@@ -287,13 +287,19 @@ class V41Prefill:
         streams = self._streams(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
-        rows = engram_host.rows_for(self.slot, part, start) if (self.engrams and engram_host is not None) else {}
+        rows = {}
+        if self.engrams and engram_host is not None:
+            # layer 14's rows are only needed at block 14: gather them in the background while blocks 0..13 run
+            fetch = getattr(engram_host, "rows_async", None)
+            rows = fetch(self.slot, part, start) if fetch is not None else engram_host.rows_for(self.slot, part, start)
         mark("engram.host")
         owned = True
         for blk in self.blocks:
             L = blk.layer
             if L in self.engrams:
-                rd = self.engrams[L].upload_rows(rows[L], self.chunk)
+                r = rows[L].result() if hasattr(rows[L], "result") else rows[L]
+                mark("engram.wait")
+                rd = self.engrams[L].upload_rows(r, self.chunk)
                 new = self.engrams[L](streams, rd)
                 ttnn.deallocate(rd)
                 if owned:
