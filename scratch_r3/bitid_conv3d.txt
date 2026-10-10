@@ -1,0 +1,1 @@
+conv3d_fp32_amp384 conv3d_fp32_amp768 conv3d_fp32_ups0
