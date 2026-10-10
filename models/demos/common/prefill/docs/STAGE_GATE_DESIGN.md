@@ -1,6 +1,7 @@
 # Pipeline-Stage Gate (Hybrid Page Pool, fine-grain slot eviction)
 
-Status: **DRAFT — design under review, no implementation yet.**
+Status: **D2D entry gate implemented and tested (§8); H2D ingress and runner/engine wiring pending.**
+Visual overview (diagrams, interactive stage timeline): [`stage_gate_overview.html`](stage_gate_overview.html).
 Branch: `snijjar/hybrid-page-pool-stage-gate-support`
 
 ## 0. Decisions log
@@ -503,6 +504,12 @@ multicast and `data_ready` (§3.3). It polls the termination word, so teardown w
    done in the socket; it needs an in-graph gate op (Q7).
 7. **Sentinels**: shutdown / warm-up must carry `GATE_NONE`, otherwise teardown deadlocks.
 8. **Termination**: `WAIT_GATE` must poll `termination_semaphore` like every other wait.
+9. **CQ ordering (deadlock hazard)**: while a transfer is held, the stage's consumer op (and, in LEASE
+   mode, the `wait_for_fabric_links()` spin kernel) spins on that stage's CQ, so everything enqueued
+   behind it on the same CQ is stuck. The copy-in and the gate open for a held slot must therefore NOT
+   be enqueued on that stage's CQ behind the consumer. Valid transports: host-direct PCIe writes, a
+   kernel on another CQ / chip / host (tested by `StageGateRemoteFabricOpener`), or ops enqueued on the
+   same CQ *ahead* of the consumer op.
 
 ## 7. Open questions
 
