@@ -810,7 +810,7 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
 
     auto load_if_regular_file = [](const std::filesystem::path& path) -> std::optional<PhysicalGroupingDescriptor> {
         if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
-            log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
+            log_debug(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
             return PhysicalGroupingDescriptor(path);
         }
         return std::nullopt;
