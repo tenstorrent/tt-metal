@@ -19,10 +19,23 @@
   tenants. Lint rc 0 for both. retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t373/drv373b
   Marker: /var/tmp/fasth3/t373/drv373b.done; logs run_m_job<id>.log, run_w_job<id>.log.
 
+## Run 1445 (2026-10-10 15:30 PDT)
+- drv373b done: job 535 (m, timing) and 538 (w, plain) both completed at e823d13b945, blx01 900 MHz clamp (relative only).
+  mp4 md5 1340be4d394e1a37575d6cc275a4a113 for all four gens (timing spans bit-identical). No drops.
+  Warm gen#1 VAE split (ms, job 535): upload 14.8 | device decode 420.8 | unpatch+yuv device 6.5 | readback 30.9 |
+  host assemble (C++ planar concat, HAS_CPP_PLANAR_CONCAT True) 30.3 | TOTAL 509.9. Plain table (538 gen#1): VAE 0.50 s,
+  Audio 0.47 s, Total 7.23 s. Excerpts: tt-project/t373/results/job535_m_excerpt.txt, job538_w_excerpt.txt.
+- Biggest host slices: readback 31 and assemble 30 ms. wide_rows (ad2792e70b0) needs T<=32 (we have T=145 per shard),
+  so it does not apply. Deferred assembly already existed (LTX_AUDIO_OVERLAP=1, opt-in) but the fused-YUV default
+  branch ignored defer_yuv. fe19a6634ee threads defer through the fused path (+unit test); bf45db27371 makes
+  LTX_AUDIO_OVERLAP default on (=0 restores eager). Unit tests: test_yuv_d2h_timing.py + test_yuv_video_export.py 9 pass.
+- drv373c (pid on blx01, ttp detach --dir /var/tmp/fasth3/t373): checks out bf45db27371 in t373/b (py-only diff, build
+  reused), jobs dm (timing) then dw (plain headline), -t 570 each. Marker drv373c.done; logs run_dm_job*.log, run_dw_job*.log.
+  retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t373/drv373c
+
 ## Next step
-1. Read run_m_job*.log: the VAE decode breakdown rows and the TT_DIT_STAGE_LOG ms lines for gens #1/#2
-   (upload / device decode / yuv device / readback / host assemble / other) and "[t373] planar concat" line.
-2. Port from ad2792e70b0 only the part that the biggest host slice maps to (wide_rows writer -> device yuv/readback;
-   deferred readback -> readback; AVX2 planar concat -> host assemble). A/B in one job, md5 must match, keep if >= 15 ms.
-3. Land code commits on t48 via a -land branch + ttp push --detach; headline = plain standard run quoted verbatim.
-4. Clean /var/tmp/fasth3/t373 on blx01 at the end.
+1. Read drv373c.done; dw md5 must be 1340be4d394e1a37575d6cc275a4a113; compare VAE row dw vs 538 (0.50 s) and dm decode
+   TOTAL vs 535 (509.9 ms); check Total and "Video export:" lines (assembly now on the export thread, overlapping audio).
+2. Keep if VAE row drops >= 15 ms and md5 same: land fe19a6634ee + bf45db27371 on t48 via a -land branch + ttp push --detach.
+   Headline = dw table verbatim.
+3. Clean /var/tmp/fasth3/t373 on blx01 at the end (git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t373/b).

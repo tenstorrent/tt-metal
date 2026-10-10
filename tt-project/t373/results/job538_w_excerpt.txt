@@ -1,0 +1,121 @@
+2026-10-10 22:19:30.106 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1267 -   shapes: vN=9728(real=9690 grid=9690 decode=9690 kv_logical=9690 ref=0), aN=256(real=151) [sp=8]
+2026-10-10 22:19:30.139 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1393 -   denoise init (latent/prompt/mask uploads): 32 ms [cond 0, statics 0, prompt 25, noise 4, upload 3 ms]
+2026-10-10 22:19:30.139 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1403 -   ancestral Euler on-device (eta=1.0) noise_seed=10010
+2026-10-10 22:19:30.139 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-10 22:19:42.573 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 1/8: σ 1.0000 → 0.9937 ENQUEUE_MS=12433.5
+2026-10-10 22:19:42.584 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 2/8: σ 0.9937 → 0.9875 ENQUEUE_MS=9.1
+2026-10-10 22:19:42.594 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 3/8: σ 0.9875 → 0.9812 ENQUEUE_MS=9.6
+2026-10-10 22:19:42.610 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 4/8: σ 0.9812 → 0.9750 ENQUEUE_MS=15.3
+2026-10-10 22:19:42.625 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 5/8: σ 0.9750 → 0.9094 ENQUEUE_MS=14.5
+2026-10-10 22:19:42.641 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 6/8: σ 0.9094 → 0.7250 ENQUEUE_MS=16.1
+2026-10-10 22:19:42.658 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 7/8: σ 0.7250 → 0.4219 ENQUEUE_MS=15.9
+2026-10-10 22:19:42.659 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 8/8: σ 0.4219 → 0.0000 ENQUEUE_MS=1.3
+2026-10-10 22:19:45.296 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2149 - Stage 1 denoise: 15.2s
+2026-10-10 22:19:45.479 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2191 - Latent upsample: 0.2s
+2026-10-10 22:19:45.480 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2195 - S1->S2 hand-off: 183.7 ms [stats 0.0, upsampler prep 0.0, upsample 183.7]
+2026-10-10 22:19:45.480 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2201 - Stage 2: 1088x1920, 3 steps
+2026-10-10 22:19:45.480 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1218 -   conditioning path: scalar (trace family s2)
+2026-10-10 22:19:45.480 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1267 -   shapes: vN=38912(real=38760 grid=38760 decode=38760 kv_logical=38760 ref=0), aN=256(real=151) [sp=8]
+2026-10-10 22:19:45.493 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1393 -   denoise init (latent/prompt/mask uploads): 13 ms [cond 0, statics 0, prompt 0, noise 4, upload 9 ms]
+2026-10-10 22:19:45.493 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-10 22:19:57.672 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 1/3: σ 0.9094 → 0.7250 ENQUEUE_MS=12179.0
+2026-10-10 22:19:57.674 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 2/3: σ 0.7250 → 0.4219 ENQUEUE_MS=1.4
+2026-10-10 22:19:57.676 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 3/3: σ 0.4219 → 0.0000 ENQUEUE_MS=1.2
+2026-10-10 22:20:00.692 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2226 - Stage 2 denoise: 15.2s
+2026-10-10 22:20:01.192 | INFO     | models.tt_dit.utils.progress:__exit__:62 - vae decode: done in 0s
+2026-10-10 22:20:01.192 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2319 - VAE decode (forward): 0.5s — (145, 1632, 1920)
+2026-10-10 22:20:01.735 | INFO     | models.tt_dit.utils.progress:__exit__:62 - audio decode (mel-VAE + vocoder): done in 1s
+2026-10-10 22:20:01.736 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx:decode_audio:2102 - Audio decoded on device: (2, 288480) (6.01s @ 48000Hz)
+2026-10-10 22:20:01.736 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2358 - Audio decode: 0.5s
+2026-10-10 22:20:01.855 | INFO     | models.tt_dit.utils.video:finish:275 - Saved: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_0.mp4 (145f @ 24.0fps, yuv420p fast path)
+2026-10-10 22:20:01.856 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2377 - Video export: 0.1s
+2026-10-10 22:20:01.856 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2378 - Total (compute): 31.9s | Output: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_0.mp4
+2026-10-10 22:20:02.083 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-10 22:20:03.899 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:240 - E2E_WALL_S gen#0: 34.060
+2026-10-10 22:20:03.900 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:241 - Saved video to: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_0.mp4
+2026-10-10 22:20:03.900 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:test_pipeline_distilled:456 - === traced steady-state pass (gen #1, seed 10, pure replay) ===
+2026-10-10 22:20:03.901 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:218 - Running LTX AV Fast: 'A confident rapper in a black leather jacket and gold chain leans toward camera ...'
+2026-10-10 22:20:03.901 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:219 - Config: 1088x1920, 145 frames @ 24.0fps (6.0417s)
+2026-10-10 22:20:04.158 | INFO     | models.tt_dit.utils.progress:__exit__:62 - gemma text-encode: done in 0s
+2026-10-10 22:20:04.158 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:1997 - Encoding (device): 0.3s
+2026-10-10 22:20:04.158 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2117 - Stage 1: 544x960, 8 steps
+2026-10-10 22:20:04.158 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1218 -   conditioning path: scalar (trace family s1)
+2026-10-10 22:20:04.159 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1267 -   shapes: vN=9728(real=9690 grid=9690 decode=9690 kv_logical=9690 ref=0), aN=256(real=151) [sp=8]
+2026-10-10 22:20:04.218 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1393 -   denoise init (latent/prompt/mask uploads): 59 ms [cond 0, statics 0, prompt 53, noise 3, upload 3 ms]
+2026-10-10 22:20:04.218 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1403 -   ancestral Euler on-device (eta=1.0) noise_seed=10010
+2026-10-10 22:20:04.236 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 1/8: σ 1.0000 → 0.9937 ENQUEUE_MS=16.8
+2026-10-10 22:20:04.247 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 2/8: σ 0.9937 → 0.9875 ENQUEUE_MS=10.6
+2026-10-10 22:20:04.264 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 3/8: σ 0.9875 → 0.9812 ENQUEUE_MS=16.9
+2026-10-10 22:20:04.280 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 4/8: σ 0.9812 → 0.9750 ENQUEUE_MS=15.3
+2026-10-10 22:20:04.296 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 5/8: σ 0.9750 → 0.9094 ENQUEUE_MS=15.5
+2026-10-10 22:20:04.313 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 6/8: σ 0.9094 → 0.7250 ENQUEUE_MS=16.1
+2026-10-10 22:20:04.330 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 7/8: σ 0.7250 → 0.4219 ENQUEUE_MS=16.6
+2026-10-10 22:20:04.332 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 8/8: σ 0.4219 → 0.0000 ENQUEUE_MS=1.3
+2026-10-10 22:20:06.950 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2149 - Stage 1 denoise: 2.8s
+2026-10-10 22:20:07.127 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2191 - Latent upsample: 0.2s
+2026-10-10 22:20:07.127 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2195 - S1->S2 hand-off: 177.4 ms [stats 0.0, upsampler prep 0.0, upsample 177.4]
+2026-10-10 22:20:07.127 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2201 - Stage 2: 1088x1920, 3 steps
+2026-10-10 22:20:07.128 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1218 -   conditioning path: scalar (trace family s2)
+2026-10-10 22:20:07.128 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1267 -   shapes: vN=38912(real=38760 grid=38760 decode=38760 kv_logical=38760 ref=0), aN=256(real=151) [sp=8]
+2026-10-10 22:20:07.135 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1393 -   denoise init (latent/prompt/mask uploads): 7 ms [cond 0, statics 0, prompt 0, noise 4, upload 3 ms]
+2026-10-10 22:20:07.137 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 1/3: σ 0.9094 → 0.7250 ENQUEUE_MS=1.7
+2026-10-10 22:20:07.139 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 2/3: σ 0.7250 → 0.4219 ENQUEUE_MS=1.3
+2026-10-10 22:20:07.141 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 3/3: σ 0.4219 → 0.0000 ENQUEUE_MS=1.3
+2026-10-10 22:20:10.158 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2226 - Stage 2 denoise: 3.0s
+2026-10-10 22:20:10.663 | INFO     | models.tt_dit.utils.progress:__exit__:62 - vae decode: done in 1s
+2026-10-10 22:20:10.663 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2319 - VAE decode (forward): 0.5s — (145, 1632, 1920)
+2026-10-10 22:20:11.142 | INFO     | models.tt_dit.utils.progress:__exit__:62 - audio decode (mel-VAE + vocoder): done in 0s
+2026-10-10 22:20:11.142 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx:decode_audio:2102 - Audio decoded on device: (2, 288480) (6.01s @ 48000Hz)
+2026-10-10 22:20:11.142 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2358 - Audio decode: 0.5s
+2026-10-10 22:20:11.277 | INFO     | models.tt_dit.utils.video:finish:275 - Saved: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_1.mp4 (145f @ 24.0fps, yuv420p fast path)
+2026-10-10 22:20:11.278 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2377 - Video export: 0.1s
+2026-10-10 22:20:11.278 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2378 - Total (compute): 7.2s | Output: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_1.mp4
+2026-10-10 22:20:11.278 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:240 - E2E_WALL_S gen#1: 7.377
+2026-10-10 22:20:11.278 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:241 - Saved video to: /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_1.mp4
+2026-10-10 22:20:11.279 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:check_output_with_clip:386 - RUN_CLIP=0, skipping CLIP score check
+2026-10-10 22:20:11.279 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:check_output_with_vbench:323 - RUN_VBENCH=0, skipping VBench quality gate
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_pipeline_ltx_distilled.py[0m  [1mtest_pipeline_distilled[0m  [2m(blackhole, bh_4x8sp1tp0_ring, True)[0m
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_0.mp4      │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├────────────────────────────────────────────────────────────────┬─────────┤
+│ Stage                                                          │    Time │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Encoder                                                        │  0.27 s │
+│ Stage 1 denoise                                                │ 15.19 s │
+│ Latent upsample                                                │  0.18 s │
+│ Stage 2 denoise                                                │ 15.21 s │
+│ VAE decode                                                     │  0.50 s │
+│ Audio decode                                                   │  0.50 s │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Total                                                          │ 31.85 s │
+└────────────────────────────────────────────────────────────────┴─────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t373/out_w/ltx_av_fast_1920x1088_1.mp4      │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.26 s │
+│ Stage 1 denoise                                                 │ 2.79 s │
+│ Latent upsample                                                 │ 0.18 s │
+│ Stage 2 denoise                                                 │ 3.03 s │
+│ VAE decode                                                      │ 0.50 s │
+│ Audio decode                                                    │ 0.47 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 7.23 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
+PASSED
+==========================================================================
