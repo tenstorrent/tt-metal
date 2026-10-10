@@ -2388,16 +2388,19 @@ void call_ternary_sfpu_operation(
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
 #if defined(ARCH_BLACKHOLE)
-    // where, addcmul, addcdiv and lerp run as one 32-row call on Blackhole, as their compute API entry points do.
-    constexpr bool one_call = OPERATION == SfpuType::where || OPERATION == SfpuType::addcmul || OPERATION == SfpuType::addcdiv || OPERATION == SfpuType::lerp;
-    constexpr int ROWS      = one_call ? 32 : ITERATIONS;
+    // ITERATIONS is the rows per face. A full tile of where, addcmul, addcdiv or lerp runs as one 32-row call on
+    // Blackhole, as their compute API entry points issue it; a partial tile runs per face.
+    constexpr bool one_call =
+        ITERATIONS == 8 && (OPERATION == SfpuType::where || OPERATION == SfpuType::addcmul || OPERATION == SfpuType::addcdiv || OPERATION == SfpuType::lerp);
     if constexpr (one_call)
     {
-        LLK_ASSERT(vector_mode == ckernel::VectorMode::RC, "one 32-row call covers a full tile only");
-        vector_mode = ckernel::VectorMode::None;
+        if (vector_mode == ckernel::VectorMode::RC)
+        {
+            call_ternary_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 32>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value, ckernel::VectorMode::None);
+            return;
+        }
     }
-#else
-    constexpr int ROWS = ITERATIONS;
 #endif
     if constexpr (OPERATION == SfpuType::where)
     {
@@ -2405,7 +2408,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_where_,
-            (APPROX_MODE, MATH_FORMAT, ROWS),
+            (APPROX_MODE, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2418,7 +2421,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_addcmul,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2432,7 +2435,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_addcdiv,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2446,7 +2449,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_lerp,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
