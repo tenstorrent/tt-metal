@@ -588,6 +588,38 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
     assert device.num_program_cache_entries() == entries_after_first, "changing kv_len recompiled"
 
 
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk, head_group",
+    [(32, 32, 0), (32, 32, 8), (32, 128, 0)],
+    ids=["resident", "stream", "chunked_k"],
+)
+def test_indexer_score_runtime_kv_len_multi_band_cells(device, q_chunk, k_chunk, head_group):
+    """A large K capacity (T=4096, up to 128 bands) over few q groups: row blocks replicate the groups and every
+    (block, column) cell walks several round-robin bands. A short kv_len spreads over the cells; each kv_len must
+    match the reference on [0, kv_len) without recompiling."""
+    c = dict(KV_LEN, t=4096)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    g = torch.Generator().manual_seed(29)
+    q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, 1, c["sq"], c["heads"], generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
+    q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
+
+    entries = None
+    for kv_len in (64, 1024, 1056, 4096):
+        out = ttnn.to_torch(
+            ttnn.experimental.indexer_score_dsa(
+                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=kv_len
+            )
+        )
+        assert out.shape == (1, 1, c["sq"], c["t"])
+        ref = indexer_score_dsa_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])
+        assert_indexer_match(out[:, :, :, :kv_len], ref, c["sq"], kv_len, check_neg=True)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == entries, "changing kv_len recompiled"
+
+
 def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     """kv_len must be tile-aligned and within (0, T], rejected on a WARM cache too (it is hash-excluded and
     re-validated on a hit). It need NOT leave room for the causal window, which may end past the prefix --
