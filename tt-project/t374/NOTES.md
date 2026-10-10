@@ -24,3 +24,16 @@ blx01 driver: ttp detach --remote g15blx01 --dir /var/tmp/fasth3/t374/detach drv
    Then land 8a365da8129 on t48 via a -land branch + ttp push (code commit only).
    speedup < 1.15: record and stop (no landing of a non-default flag unless useful).
 3. Clean up blx01: git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t374/b; rm -rf /var/tmp/fasth3/t374.
+
+## Result 1 (job 537, blx01, 900 MHz clamp, relative)
+s3_res: off 6379.5 us, on 7000.5 us -> 0.911x (slower), identical=True (md5, max_abs_diff 0).
+Hypothesis: full-width row gather (32 cols) at the first w_block of each h_block is not overlapped with compute,
+while the default path spreads the gather over 8 w_blocks (144 then 96 sticks each).
+
+## Iteration 2 (started 2026-10-10 15:22 PDT)
+1ac9a44b0fa CODE: rows new to an h_block fill their columns one w_block at a time (cols [c_prev, c_cur)),
+in-bounds gathers skip the per-stick padding check. Kernel-only change: no rebuild; t374/b checked out at
+1ac9a44b0fa, JIT dir wiped. Driver: env SKIP_BUILD=1 JOB_T=120 drv374.sh (job -t 120 = 70 s measured +50%+).
+Old outputs: t374/drv374.{done,log}.job537, detach/old537/.
+check: ttp detach --check --host g15blx01 /var/tmp/fasth3/t374/detach/drv374
+Next: same as above. speedup >= 1.15 -> s2_res, then module A/B, land. Else record, stop, clean up blx01.

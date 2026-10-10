@@ -26,7 +26,7 @@ build() {
   TT_METAL_HOME=$B PYTHONPATH=$B:$B/ttnn:$B/tools python -c "import ttnn; from models.tt_dit.models.vae import vae_ltx; print('IMPORT_OK')" || return 20
 }
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 60 ] || { echo "DISK / $use%" > $M; exit 1; }
-build > $D/build.log 2>&1; brc=$?; log "build rc=$brc"
+if [ -n "$SKIP_BUILD" ]; then brc=0; log "build skipped"; else build > $D/build.log 2>&1; brc=$?; log "build rc=$brc"; fi
 [ $brc = 0 ] || { echo "BUILD_FAILED rc=$brc" > $M; exit 1; }
 st() { tt-device-mcp status -j $1 2>&1 | awk '/^Status:/{print $2}'; }
 waitjob() { for i in $(seq 1 120); do s=$(st $1); case $s in running|queued|pending|"") sleep 30;; *) echo $s; return;; esac; done; echo stillrunning; }
@@ -35,7 +35,7 @@ submit() {  # layer -> job id
     out=$(tt-device-mcp status 2>&1)
     run=$(echo "$out" | sed -n '/^RUNNING/,/^QUEUED/p'); q=$(echo "$out" | sed -n '/^QUEUED/,/^RECENT/p')
     if echo "$out" | grep -qi upgrade || echo "$run$q" | grep -qiE 'hold|health|reset|fabric-check|smarton'; then sleep 30; continue; fi
-    sub=$(tt-device-mcp run-bg "bash $D/run374.sh $1" -w $D -e $D/env374.yaml -t 600 2>&1)
+    sub=$(tt-device-mcp run-bg "bash $D/run374.sh $1" -w $D -e $D/env374.yaml -t ${JOB_T:-600} 2>&1)
     echo "$sub" >> $L; echo "$sub" | grep -oE 'Job [0-9]+' | head -1 | grep -oE '[0-9]+'; return
   done
 }

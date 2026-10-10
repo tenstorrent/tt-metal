@@ -1,6 +1,6 @@
 #!/bin/bash
 # t374: conv3d row ring A/B, bit-exact check + trace timing, one layer per job, 2x4 submesh of the 4x8 mesh,
-# on ttp/t374 8a365da8129 (own Release build in /var/tmp/fasth3/t374/b). Usage: run374.sh <layer: s3_res|s2_res|s4_res>
+# on ttp/t374 1ac9a44b0fa (own Release build in /var/tmp/fasth3/t374/b). Usage: run374.sh <layer: s3_res|s2_res|s4_res>
 # Broker: -e env374.yaml -t 600 (unmeasured).
 if [ -z "$INNER" ]; then
   INNER=1 setsid bash "$0" "$@" & PG=$!
@@ -10,7 +10,7 @@ if [ -z "$INNER" ]; then
 fi
 set -o pipefail
 LAYER=${1:?layer}
-F=/var/tmp/fasth3; T=$F/t374; W=$T/b; WANT=8a365da8129; OUT=$T/out_$LAYER
+F=/var/tmp/fasth3; T=$F/t374; W=$T/b; WANT=1ac9a44b0fa; OUT=$T/out_$LAYER
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 70 ] || { echo "[t374] df / $use% > 70%"; exit 5; }
 gb=$(timeout 120 du -sxBG $F | cut -f1 | tr -dc 0-9); [ "${gb:-999}" -le 150 ] || { echo "[t374] $F ${gb}G > 150G"; exit 5; }
 rm -rf $OUT; mkdir -p $OUT $F/tmp
