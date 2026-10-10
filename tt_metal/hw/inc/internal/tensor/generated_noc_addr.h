@@ -16,8 +16,10 @@
 #include "api/tensor/tensor_accessor.h"
 
 // TT_TA_ADDRGEN_DISABLE (a per-test kernel define) compiles the hardware path out so every transfer address is software
-// to build the software baseline of the AddrGen microbenchmarks
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
+// to build the software baseline of the AddrGen microbenchmarks. ttsim (TT_METAL_TTSIM) doesn't model the address
+// generators, so it always uses software.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_METAL_TTSIM) && \
+    !defined(TT_TA_ADDRGEN_DISABLE)
 #define TT_TA_ADDRGEN_ACTIVE 1
 #endif
 
