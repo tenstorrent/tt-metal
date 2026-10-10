@@ -53,7 +53,8 @@ inline uint64_t transfer_shard_noc_addr(
 // backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
 // Same condition as TT_TA_ADDRGEN_ACTIVE (internal/tensor/generated_noc_addr.h); TT_TA_ADDRGEN_DISABLE only forces the
 // software path for the microbenchmarks' baseline.
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_METAL_TTSIM) && \
+    !defined(TT_TA_ADDRGEN_DISABLE)
 template <typename Accessor, typename = void>
 inline constexpr bool lazy_page_addr_v = false;
 template <typename Accessor>
