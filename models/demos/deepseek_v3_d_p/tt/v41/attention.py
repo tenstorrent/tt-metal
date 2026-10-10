@@ -435,3 +435,154 @@ class V41CSA(_V41QStem, TtCSA):
             name="attn",
         )
         return cls(mesh_device, compressor=comp, indexer=indexer, sparse_path=False, **kw)
+
+
+def _live_width(attn, state, entries: int) -> int:
+    """TtCSA's live-extent width (DS4F-0252) for ``entries`` entries written: a tile multiple rounded up to the live quantum,
+    capped at the capacity -- the width of the selection mask and of the compressed rows its attention reads."""
+    cap = int(state.compressed_kv.shape[2])
+    if not attn.live_extent:
+        return cap
+    w = -(-int(entries) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    if attn.live_quantum > 0:
+        w = -(-w // attn.live_quantum) * attn.live_quantum
+    return min(cap, w)
+
+
+def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
+    out = TtCSA.forward(self, hidden_states, seq_len_actual, state=state, export=export)
+    # what this chunk's consumers read (DS41F-0037): the selection mask over the live entries and those entries
+    w = _live_width(self, state, state.entry_count)
+    comp = (
+        state.compressed_kv
+        if w == int(state.compressed_kv.shape[2])
+        else ttnn.slice(state.compressed_kv, [0, 0, 0, 0], [1, 1, w, self.head_dim])
+    )
+    self.shared = dict(mask_sel=self.debug_last_selection, compressed=comp, width=w, entry_count=state.entry_count)
+    return out
+
+
+V41CSA.forward = _source_forward
+
+
+class V41CSAConsumer(_V41QStem, TtCSA):
+    """V4.1 ``Reuse`` layer (encoder: 3-7, 9-13, 15-19): its own q / window KV / sinks / o-proj, attending over [window |
+    the SOURCE's top-512 of the source's entries] -- model.py's ``shared_attn.compress_kv`` + ``shared_attn.topk_idxs``.
+    The source runs earlier in the same chunk (layers run in order); its ``shared`` dict carries the chunk's selection mask
+    (path B: 0 / -inf over the live entries) and the live entries. No compressor, no indexer, no KV write of its own."""
+
+    def __init__(self, device, *, source: V41CSA, **kwargs):
+        # TtCSA wants a compressor / indexer; the source's give the rate and the tables this layer's masks are sized by
+        super().__init__(device, compressor=source.compressor, indexer=source.indexer, sparse_path=False, **kwargs)
+        self.source = source
+
+    @classmethod
+    def from_weights(
+        cls,
+        mesh_device,
+        cfg,
+        layer: int,
+        w: dict,
+        rotary_emb,
+        *,
+        source: V41CSA,
+        sp_axis=0,
+        tp_axis=1,
+        topology=ttnn.Topology.Linear,
+        weight_cache_path=None,
+    ) -> "V41CSAConsumer":
+        r = cfg.role(layer)
+        assert r.mode == "reuse" and r.kv_source == r.index_source, f"layer {layer} ({r}) is not a plain consumer"
+        kw = _common_kwargs(
+            cfg,
+            w,
+            rotary_emb,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            weight_cache_path=weight_cache_path,
+            layer=layer,
+            name="attn",
+        )
+        return cls(mesh_device, source=source, **kw)
+
+    def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0):
+        from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCAState, _rope_table_tokens
+
+        rate = self.compressor.compress_rate
+        chunk = chunk_tokens or max_seq_len
+        entries = -(-int(max_seq_len) // rate)
+        capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + max(chunk // rate, chunk + 64)
+        capacity = -(-capacity // 128) * 128  # == the source's (TtCSA.alloc_state)
+        self._build_carry_index(chunk)
+        self._build_masks(chunk, capacity)
+        self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
+        self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+        state = TtHCAState(
+            compressed_kv=None,
+            sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+            tail=None,
+            max_seq_len=max_seq_len,
+        )
+        state.entry_count = 0
+        return state
+
+    def forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
+        sh = self.source.shared
+        real_len = hidden_states.shape[2] * self.sp_factor if seq_len_actual is None else int(seq_len_actual)
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        attn, next_carry, slab = self._attention(
+            q,
+            sliding_kv,
+            sh["compressed"],
+            sh["mask_sel"],
+            cos,
+            sin,
+            carry=state.sliding_carry,
+            kv_actual=state.kv_actual,
+            real_len=real_len,
+        )
+        if export is not None:
+            self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
+        state.kv_actual += real_len
+        state.entry_count = sh["entry_count"]
+        self._update_in_place(state.sliding_carry, next_carry)
+        return self._o_proj(attn)
+
+
+def _kv_only(self, hidden_states, seq_len_actual=None, *, state):
+    """Layer 20 in the prefill (DS41F-0037): the decoder's shared KV and index keys from the encoder output -- the window KV
+    stem, the ratio-1 compressor (``norm(wkv(x))`` + RoPE) and the index keys -- written to ``state`` with no attention, no
+    o-proj and no FFN (the ring replays the prompt's tail through layers 20..39 itself)."""
+    real_len = hidden_states.shape[2] * self.sp_factor if seq_len_actual is None else int(seq_len_actual)
+    rate = self.compressor.compress_rate
+    assert state.kv_actual % ttnn.TILE_SIZE == 0 and state.kv_actual + real_len <= state.max_seq_len
+    fwp = state.entry_count * rate
+    cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+    sliding_kv = self._kv_stem(hidden_states, cos, sin)
+    entries, _, _ = self.compressor(hidden_states, real_len, fwp, state.prior_c, need_mask=False)
+    keys, _, _ = self.indexer.compressor(hidden_states, real_len, fwp, state.prior_i, need_mask=False)
+    ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, entries, 0, update_idx=state.entry_count)
+    ttnn.kv_cache.fill_cache_for_user_(state.index_k, keys, 0, update_idx=state.entry_count)
+    if self.sp_factor > 1:
+        sliding_kv = ttnn.experimental.all_gather_async(
+            sliding_kv,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.tp_ccl_topology,
+            cluster_axis=self.sp_axis,
+        )
+    seq_len = int(sliding_kv.shape[2])
+    start, end = self._carry_index[self._carry_key(real_len)]
+    next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+    state.entry_count += real_len // rate
+    state.kv_actual += real_len
+    self._update_in_place(state.sliding_carry, next_carry)
+
+
+V41CSA.kv_only = _kv_only

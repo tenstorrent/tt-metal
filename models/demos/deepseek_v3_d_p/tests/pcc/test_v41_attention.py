@@ -11,6 +11,7 @@ needle-1200 prompt's layer inputs from tt-blaze's per-layer prefill golden (``pr
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 import pytest
 import torch
@@ -20,7 +21,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.tt.v41.attention import V41SWA, v41_hf_config
+from models.demos.deepseek_v3_d_p.tt.v41.attention import V41CSA, V41SWA, V41CSAConsumer, v41_hf_config
 from models.demos.deepseek_v3_d_p.tt.v41.config import V41Config
 from models.demos.deepseek_v3_d_p.tt.v41.weights import checkpoint
 
@@ -41,16 +42,33 @@ _MESH_CONFIGS = [
 ]
 
 
-def _reference_attention(layer_id: int, x_in: torch.Tensor, pre_in: torch.Tensor):
-    """model.py on the host: (attention input [S, d], attention output [S, d]) for the block's golden input."""
+@lru_cache(maxsize=1)
+def _reference_model(n_layers: int):
     from blaze.models.deepseek_v4_1_flash.golden.reference import build_model
 
-    model, *_ = build_model(n_layers=layer_id + 1, max_seq_len=SEQ + 64, threads=16, expert_cache_gb=4.0)
-    layer = model.layers[layer_id]
-    with torch.inference_mode():
-        h = layer.attn_norm(layer.hc_pre(x_in.unsqueeze(0), pre_in.unsqueeze(0)))
-        out = layer.attn(h, 0)
-    return h[0].float(), out[0].float()
+    model, *_ = build_model(n_layers=n_layers, max_seq_len=SEQ + 64, threads=16, expert_cache_gb=4.0)
+    return model
+
+
+def _reference_attention(layers: list[int]):
+    """model.py on the host, ``layers`` IN ORDER (a consumer reads the compressed KV / top-k its source just published
+    through ``shared_attn``): {layer: (attention input [S, d], attention output [S, d])} for each block's golden input.
+    """
+    model = _reference_model(max(layers) + 1)
+    out = {}
+    for lid in layers:
+        t = torch.load(os.path.join(TRACE, f"layer_{lid}.pt"))
+        x_in, pre_in = t["x_in"][:SEQ].float(), t["pre_in"][:SEQ].float()
+        layer = model.layers[lid]
+        with torch.inference_mode():
+            h = layer.attn_norm(layer.hc_pre(x_in.unsqueeze(0), pre_in.unsqueeze(0)))
+            y = layer.attn(h, 0)
+        out[lid] = (h[0].float(), y[0].float())
+        logger.info(
+            f"[v41 attn L{lid}] reference: input rms {h.float().square().mean().sqrt():.4f}, "
+            f"output rms {y.float().square().mean().sqrt():.4f}"
+        )
+    return out
 
 
 def _to_device_hidden(mesh_device, h: torch.Tensor):
@@ -70,25 +88,38 @@ def _to_host_hidden(mesh_device, t) -> torch.Tensor:
     return ttnn.to_torch(t, mesh_composer=comp)[0, 0].float()
 
 
-@pytest.mark.parametrize("layer_id", [0], ids=["swa-layer0"])
-@pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
-def test_v41_attention_vs_model_py(mesh_device, device_params, layer_id):
-    cfg = V41Config.load()
-    rot = DeepseekV4RotaryEmbedding(v41_hf_config(cfg, max_seq=SEQ))
-    t = torch.load(os.path.join(TRACE, f"layer_{layer_id}.pt"))
-    x_in, pre_in = t["x_in"][:SEQ].float(), t["pre_in"][:SEQ].float()
-    h_ref, out_ref = _reference_attention(layer_id, x_in, pre_in)
-    logger.info(
-        f"[v41 attn L{layer_id}] reference: input rms {h_ref.square().mean().sqrt():.4f}, "
-        f"output rms {out_ref.square().mean().sqrt():.4f}"
-    )
+def _check(lid, got, ref):
+    _, pcc = comp_pcc(ref, got)
+    rel = float((got - ref).norm() / ref.norm())
+    logger.info(f"[v41 attn L{lid}] PCC {pcc:.6f}, |dev - ref| / |ref| {rel:.4f}")
+    return pcc
 
-    w = checkpoint().layer(layer_id)
-    attn = V41SWA.from_weights(mesh_device, cfg, layer_id, w, rot)
-    state = attn.alloc_state(SEQ, chunk_tokens=SEQ)
-    y = attn(_to_device_hidden(mesh_device, h_ref), seq_len_actual=SEQ, state=state)
-    got = _to_host_hidden(mesh_device, y)[:SEQ]
-    _, pcc = comp_pcc(out_ref, got)
-    rel = float((got - out_ref).norm() / out_ref.norm())
-    logger.info(f"[v41 attn L{layer_id}] PCC {pcc:.6f}, |dev - ref| / |ref| {rel:.4f}")
-    assert pcc >= PCC, f"layer {layer_id} attention PCC {pcc:.6f} < {PCC}"
+
+# (layers run in order on one chunk; the last is checked, every one is logged)
+#   swa-layer0: sliding window, "main" RoPE
+#   csa-layer2: KV + index source at ratio 2 (V4.1 compressor, latent-derived index keys, 32-head indexer, dense path B)
+#   reuse-layer3: layer 3 over layer 2's entries and top-k (no compressor / indexer of its own)
+@pytest.mark.parametrize("layers", [[0], [2], [2, 3]], ids=["swa-layer0", "csa-layer2", "reuse-layer3"])
+@pytest.mark.parametrize("mesh_device, device_params", _MESH_CONFIGS, indirect=["mesh_device", "device_params"])
+def test_v41_attention_vs_model_py(mesh_device, device_params, layers):
+    cfg = V41Config.load()
+    ref = _reference_attention(layers)
+    ck = checkpoint()
+    mods, states = {}, {}
+    for lid in layers:
+        r = cfg.role(lid)
+        rot = DeepseekV4RotaryEmbedding(v41_hf_config(cfg, max_seq=SEQ))
+        w = ck.layer(lid)
+        if r.mode == "swa":
+            m = V41SWA.from_weights(mesh_device, cfg, lid, w, rot)
+        elif r.mode == "full":
+            m = V41CSA.from_weights(mesh_device, cfg, lid, w, rot)
+        else:
+            m = V41CSAConsumer.from_weights(mesh_device, cfg, lid, w, rot, source=mods[r.kv_source])
+        mods[lid], states[lid] = m, m.alloc_state(SEQ, chunk_tokens=SEQ)
+    pccs = {}
+    for lid in layers:
+        y = mods[lid](_to_device_hidden(mesh_device, ref[lid][0]), seq_len_actual=SEQ, state=states[lid])
+        pccs[lid] = _check(lid, _to_host_hidden(mesh_device, y)[:SEQ], ref[lid][1])
+    lid = layers[-1]
+    assert pccs[lid] >= PCC, f"layer {lid} attention PCC {pccs[lid]:.6f} < {PCC}"
