@@ -14,11 +14,9 @@ leaves it selected (see the header docstrings).
 The C++ source copies two tiles with the per-thread cleanup between them, entered after the first tile (the API's
 precondition) and followed by a re-init on every thread. The golden is the identity of both tiles.
 
-Blackhole-only, and off the simulator, which cannot model the cfg-bank reprogram
-(UnimplementedFunctionality: tensix_cfg_wr32 reg=281).
+Blackhole-only.
 """
 
-import pytest
 import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
@@ -43,10 +41,7 @@ NUM_FACES_VALUE = 4
     dest_acc=[DestAccumulation.No],
     input_dimensions=[[64, 32]],
 )
-def test_hw_cleanup(formats, dest_acc, input_dimensions, request):
-    if request.config.getoption("--run-simulator"):
-        pytest.skip("ttsim cannot model the cfg-bank reprogram (reg 281)")
-
+def test_hw_cleanup(formats, dest_acc, input_dimensions):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
