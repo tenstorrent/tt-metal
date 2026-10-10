@@ -1070,7 +1070,7 @@ class LTXVideoDecoder(Module):
         traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
-        defer_yuv: with "yuv" on the unfused path, return a ``DeferredYuvPlanar`` once the device reads have
+        defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` once the device reads have
             landed; the host assembly runs when its ``result()`` is called.
         """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
@@ -1120,7 +1120,7 @@ class LTXVideoDecoder(Module):
                 else:
                     planes = self._unpatch_yuv_device(sample_tt)
             h_out, w_out = logical_h * self.patch_size, logical_w * self.patch_size
-            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out)
+            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out, defer=defer_yuv)
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large

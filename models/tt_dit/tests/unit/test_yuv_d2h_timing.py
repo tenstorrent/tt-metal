@@ -30,6 +30,7 @@ class _Host:
 class _DevTensor:
     def __init__(self, shards):
         self.shards = shards
+        self.shape = shards[0].shape
 
     def cpu(self, blocking=True):
         return _Host(self.shards)
@@ -95,3 +96,18 @@ def test_untimed_run_records_nothing(monkeypatch, fake_device):
     _run()
     assert dt.root_count() == 0
     assert len(fake_device) == 1  # only the readback's own sync
+
+
+@pytest.mark.parametrize("defer", [False, True])
+def test_planes_to_host_defers_assembly(monkeypatch, fake_device, defer):
+    """The fused-path entry point returns the same bytes eagerly or deferred; deferred skips the host assembly."""
+    monkeypatch.setattr(dt, "ENABLED", True)
+    monkeypatch.setattr(ttnn, "using_distributed_env", lambda: False)
+    planes, expected = _planes()
+    mesh = type("Mesh", (), {"shape": (TP, SP)})()
+    with dt.span(mesh, "decode TOTAL", root=True):
+        out = yuv_d2h.yuv_planes_to_host(planes, mesh, logical_h=H, logical_w=W, defer=defer)
+    assert isinstance(out, yuv_d2h.DeferredYuvPlanar) == defer
+    labels = [c.label for c in dt.roots()[-1].children]
+    assert len(labels) == (1 if defer else 2)
+    np.testing.assert_array_equal(out.result() if defer else out, expected)
