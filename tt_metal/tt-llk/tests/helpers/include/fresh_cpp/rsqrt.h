@@ -69,8 +69,9 @@ __attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
         }
         v_endif;
         // The SFPU arithmetic path flushes subnormals to signed zero.  Make
-        // the pole explicit so -0 and negative subnormals produce -inf.
-        v_if (sfpi::abs(x) < std::numeric_limits<float>::min())
+        // the pole explicit so -0 and negative subnormals produce -inf.  Test
+        // the raw exponent so negative NaNs cannot enter the pole arm.
+        v_if (sfpi::exexp(x, sfpi::ExponentMode::Biased) == 0)
         {
             y = sfpi::copysgn(infinity, x);
         }
