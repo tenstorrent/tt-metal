@@ -1872,7 +1872,15 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=sdpa_ck,
         )  # fmt: skip
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn = self._gate(ttnn.reshape(attn, (1, TILE, cfg.num_heads * cfg.head_dim)), ln_q)
+        attn = ttnn.reshape(attn, (1, TILE, cfg.num_heads * cfg.head_dim))
+        if self._gate_expand is not None:
+            # the prefill gate (softplus(g) expanded to every head column by a 0/1 matmul, one multiply) instead of
+            # the 32-row path's reshapes into heads and back (~75 -> ~35 us per draft layer)
+            g = ttnn.softplus(ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate))
+            attn = ttnn.mul(attn, ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))
+        else:
+            attn = self._gate(attn, ln_q)
         h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
         ln2 = self._rms(h, self.w["post_ln"])
         return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))
