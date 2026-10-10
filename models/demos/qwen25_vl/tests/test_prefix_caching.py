@@ -52,8 +52,19 @@ def _assert_same_next_token(name, full, resumed, min_pcc=0.99):
 
 
 class _Harness:
-    def __init__(self, mesh_device):
+    def __init__(self, mesh_device, monkeypatch):
         max_seq_len = 4096
+        # tt_transformers materializes the (all-zero) paged KV cache through the on-disk weight cache,
+        # keyed by shape. The CI weight cache is shared and may be mounted read-only, and no other
+        # test writes this test's page shape, so keep the KV tensors off the tensor cache.
+        real_as_tensor = ttnn.as_tensor
+
+        def as_tensor_without_kv_cache_file(*args, **kwargs):
+            if "kvcache_" in str(kwargs.get("cache_file_name") or ""):
+                kwargs["cache_file_name"] = None
+            return real_as_tensor(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn, "as_tensor", as_tensor_without_kv_cache_file)
         model_args_list, model_list, _, self.kv_cache_list, self.page_table = prepare_generator_args(
             data_parallel=1,
             mesh_device=mesh_device,
@@ -131,10 +142,10 @@ def _shared_prefix_len(ids_a, ids_b):
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [qwen25_vl_mesh_shape()], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_resumed_prefill_matches_full_prefill(mesh_device, qwen25_vl_mesh_device, device_params):
+def test_resumed_prefill_matches_full_prefill(mesh_device, qwen25_vl_mesh_device, device_params, monkeypatch):
     if not os.environ.get("HF_MODEL"):
         pytest.skip("needs the real checkpoint (HF_MODEL)")
-    h = _Harness(qwen25_vl_mesh_device)
+    h = _Harness(qwen25_vl_mesh_device, monkeypatch)
     bs = h.block_size
 
     # 1) Same prompt: prefill fully, then again from a cached offset inside the context.
