@@ -34,8 +34,11 @@ def test_halo_masks_only_when_shards_overhang():
 def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logical_hw):
     blk = _BLOCKINGS.get((4, 8, C_in, C_out, (3, 3, 3), *key))
     assert blk is not None, f"{name}: no _BLOCKINGS entry for {key}"
-    # The shard overhangs the logical size on both axes, as in production.
-    assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == logical_hw
+    # The key is the exact shard; the swept shard is at least that, and masks only where it overhangs.
+    assert key[1:] == (-(-logical_hw[0] // 2), -(-logical_hw[1] // 4))
+    assert H - 2 >= key[1] and W - 2 >= key[2]
+    masks = halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2)
+    assert masks == tuple(l if (s * f > l) else 0 for l, s, f in zip(logical_hw, (H - 2, W - 2), (2, 4)))
     combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
     assert tuple(blk) in combos
 
