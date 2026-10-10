@@ -9,6 +9,7 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_mask.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
@@ -26,10 +27,8 @@ ALWI void mask_tile_init() {
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  *
- *
- * TODO: fix idst2_mask.
- * currently idst2_mask is not used and (idst_data + 1) is used for mask.
- * because don't know how to use 2 dst register with sfpu.
+ * On Wormhole and Blackhole the mask tile may be any tile of the acquired DST register, before or after the data
+ * tile; on Quasar it must be the tile after the data tile.
  *
  * Return value: None
  *
@@ -41,6 +40,8 @@ ALWI void mask_tile_init() {
  */
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
+#ifdef ARCH_QUASAR
+    // The Quasar bodies read the mask from the tile after the data.
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
@@ -48,11 +49,59 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_for
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_int_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
     }
+#else
+    if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
+        MATH(SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_mask,
+            (true /* APPROXIMATE */),
+            idst_data,
+            idst2_mask,
+            idst_data,
+            VectorMode::RC));
+    } else if (data_format == DataFormat::Int32) {
+#ifdef ARCH_BLACKHOLE
+        // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
+        MATH(SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_int_mask,
+            (true /* APPROXIMATE */, 32 /* ITERATIONS */),
+            idst_data,
+            idst2_mask,
+            idst_data,
+            VectorMode::None));
+#else
+        MATH(SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_int_mask,
+            (true /* APPROXIMATE */),
+            idst_data,
+            idst2_mask,
+            idst_data,
+            VectorMode::RC));
+#endif
+    }
+#endif
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
+#ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask_posinf, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
+#else
+    MATH(SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_mask_posinf,
+        (true /* APPROXIMATE */),
+        idst_data,
+        idst2_mask,
+        idst_data,
+        VectorMode::RC));
+#endif
 }
 
 }  // namespace ckernel
