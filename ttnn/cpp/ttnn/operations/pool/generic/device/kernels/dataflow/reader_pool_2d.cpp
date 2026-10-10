@@ -37,12 +37,10 @@ template <
     uint32_t dilation_w,
     bool zero_pages,
     uint32_t in_cb_sz,
-    uint32_t bf16_init_value>
+    uint32_t bf16_init_value,
+    uint32_t MAX_TILES_PER_REDUCTION>  // channel chunk width chosen by the host, must match the compute kernel
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr uint32_t num_tilized_rows =
@@ -209,7 +207,10 @@ void kernel_main() {
     constexpr uint32_t config_page_size = get_compile_time_arg_val(34);
     constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(35);
     constexpr uint32_t reader_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t reader_tensor_args_index = 55;
+    // Channel chunk width in tiles, chosen by the host (get_factory_parameters, narrowed to 4 for fp32 DEST in
+    // half-sync); the host sizes in_cb and in_nblocks_c with the same value.
+    constexpr uint32_t max_tiles_per_reduction = get_compile_time_arg_val(55);
+    constexpr uint32_t reader_tensor_args_index = 56;
 
     constexpr bool use_split_reader = split_reader;
 
@@ -357,7 +358,8 @@ void kernel_main() {
                 dilation_w,
                 zero_pages,
                 in_cb_sz,
-                bf16_init_value>(ind, in_l1_read_base_addr);
+                bf16_init_value,
+                max_tiles_per_reduction>(ind, in_l1_read_base_addr);
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }

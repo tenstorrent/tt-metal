@@ -282,3 +282,90 @@ def test_global_avg_pool2d_memory_config(device, input_shape, memory_config):
     tt_torch = ttnn.to_torch(tt_output)
     tt_torch = torch.permute(tt_torch, (0, 3, 1, 2))
     assert_with_pcc(torch_expected, tt_torch, 0.999)
+
+
+# With fp32_dest_acc_en in half-sync mode DEST holds 4 fp32 tiles, so the op must reduce at most
+# 4 channel tiles (128 channels) per chunk. 144 to 384 channels per core need several chunks (144, 200
+# and 290 end on a partial tile); 64 and 128 fit in one, and full sync keeps 8-tile chunks.
+@pytest.mark.parametrize("in_c", [64, 128, 144, 160, 200, 256, 290, 384])
+@pytest.mark.parametrize("kernel_size", [(3, 3), (5, 5)])
+@pytest.mark.parametrize("dst_full_sync_en", [False, True])
+def test_avg_pool2d_fp32_dest_acc(device, tensor_map, in_c, kernel_size, dst_full_sync_en):
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=[1, in_c, 32, 32],
+        kernel_size=kernel_size,
+        stride=(1, 1),
+        padding=(0, 0),
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        nightly_skips=False,
+        compute_kernel_config=compute_kernel_config,
+        config_tensor_in_dram=True,
+    )
+
+
+# Same limit when the op picks the shard layout itself.
+@pytest.mark.parametrize("input_shape", [[1, 160, 112, 112], [1, 256, 112, 112], [1, 384, 112, 112], [8, 160, 56, 56]])
+def test_avg_pool2d_fp32_dest_acc_auto_shard(device, tensor_map, input_shape):
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding=(1, 1),
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=None,
+        nightly_skips=False,
+        compute_kernel_config=compute_kernel_config,
+        config_tensor_in_dram=True,
+    )
+
+
+# Block sharding splits the channels over the grid columns; these shapes leave more than 128 channels
+# on each core, so each core still needs several chunks.
+@pytest.mark.parametrize("input_shape", [[1, 1280, 32, 32], [1, 2304, 16, 16]])
+def test_avg_pool2d_fp32_dest_acc_block_sharded(device, tensor_map, input_shape):
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding=(1, 1),
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        nightly_skips=False,
+        compute_kernel_config=compute_kernel_config,
+        config_tensor_in_dram=True,
+    )
