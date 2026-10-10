@@ -4,10 +4,47 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
+
+namespace {
+
+// Lowest semaphore id free on every core of the range, matching CreateSemaphore.
+uint32_t allocate_worker_semaphore(ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value) {
+    constexpr uint32_t kMaxSemaphores = 16;
+    for (uint32_t id = 0; id < kMaxSemaphores; ++id) {
+        bool used = false;
+        for (const auto& sem : desc.semaphores) {
+            if (sem.core_type == tt::CoreType::WORKER && sem.id == id && sem.core_ranges.intersects(cores)) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = cores,
+                .initial_value = initial_value,
+            });
+            return id;
+        }
+    }
+    TT_FATAL(false, "Unable to initialize semaphore on CoreRangeSet {}: all semaphore IDs are in use", cores.str());
+    return 0;
+}
+
+CoreRangeSet to_core_range_set(const std::variant<CoreRange, CoreRangeSet>& spec) {
+    if (const auto* range = std::get_if<CoreRange>(&spec)) {
+        return CoreRangeSet(*range);
+    }
+    return std::get<CoreRangeSet>(spec);
+}
+
+}  // namespace
 
 namespace ttnn::experimental::ccl {
 
@@ -179,6 +216,44 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
     initialized_reduce_scatter = true;
 }
 
+void ReduceScatterFusedOpSignaler::init_reduce_scatter(
+    ProgramDescriptor& program,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+    this->fused_op_receiver_signal_semaphores.push_back(
+        allocate_worker_semaphore(program, to_core_range_set(core_range_to_signal), 0));
+
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    if (this->num_fused_op_cores_to_signal > 1) {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
+    } else {
+        this->fused_op_signaler_mode = FusedOpSignalerMode::SINGLE;
+    }
+
+    initialized_reduce_scatter = true;
+}
+
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
@@ -212,6 +287,37 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
         core_range_to_signal);
 
     this->fused_op_receiver_signal_semaphore = CreateSemaphore(program, core_range_to_signal, 0);
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->initialized = true;
+}
+
+void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
+    ProgramDescriptor& program,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+
+    this->fused_op_receiver_signal_semaphore =
+        allocate_worker_semaphore(program, to_core_range_set(core_range_to_signal), 0);
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     this->initialized = true;
 }
@@ -547,6 +653,42 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
 
+    initialized_fused_op = true;
+}
+
+void MinimalMatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& program,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+    const uint32_t num_signal_semaphores = 2 * this->num_ag_workers + 1;
+    for (uint32_t i = 0; i < num_signal_semaphores; i++) {
+        this->fused_op_receiver_signal_semaphores.push_back(
+            allocate_worker_semaphore(program, to_core_range_set(core_range_to_signal), 0));
+    }
+
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     initialized_fused_op = true;
 }
 
