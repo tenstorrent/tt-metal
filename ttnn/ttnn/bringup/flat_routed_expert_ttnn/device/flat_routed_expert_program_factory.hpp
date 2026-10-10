@@ -40,6 +40,8 @@ struct AddrPatch {
 struct FlatRoutedExpertSharedVariables {
     std::vector<AddrPatch> patches;
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // cfg.cmb_rt: the y writer kernels / cores whose combine report args (cmb_rt .. cmb_rt + 3) the overlap fills
+    std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> cmb_writers;
 };
 
 struct FlatRoutedExpertProgramFactory {

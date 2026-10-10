@@ -29,6 +29,10 @@ public:
     // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
 
+    // Adds a descriptor's circular buffers, semaphores (at their descriptor ids) and kernels to this program, as the
+    // descriptor constructor does; its cores must not overlap what the program already uses.
+    void append(const ProgramDescriptor& descriptor);
+
     // Internal: construct from an already-built ProgramImpl.
     explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
 

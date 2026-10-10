@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
+#include "se_cmb_done.hpp"
 #ifdef SE_Y_RM
 #include "se_yrm.hpp"
 #if !defined(SE_DYN) || !defined(SE_E2E) || defined(SE_SMALL_T)
@@ -105,6 +106,10 @@ void kernel_main() {
 #endif
     const uint64_t gu_base = gu_src, d_base = d_src;
     uint32_t y_a = 0, y_s = 0;
+#ifdef SE_CMB_DONE_RT
+    SeCmbDone cmb;
+    cmb.init(dyn, num_e, !small);
+#endif
 #else
     constexpr uint32_t gu_chunks = gu_chunks_ct, d_blocks = d_blocks_ct, num_v = num_v_ct;
 #endif
@@ -252,14 +257,24 @@ void kernel_main() {
             ++out_done;
             y_pending = false;
 #ifdef SE_DYN
+#ifdef SE_CMB_DONE_RT
+            const uint32_t e_done = dyn.eid[y_a];
+#endif
             if (++y_s == dyn.subs[y_a]) {
                 y_s = 0;
                 ++y_a;
             }
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(e_done);
+            cmb.report();
+#endif
 #endif
         }
 #endif
     }
+#ifdef SE_CMB_DONE_RT
+    cmb.report();  // the experts this core writes nothing of
+#endif
 #ifdef SE9_TRID
     noc_async_read_set_trid(0);
 #endif

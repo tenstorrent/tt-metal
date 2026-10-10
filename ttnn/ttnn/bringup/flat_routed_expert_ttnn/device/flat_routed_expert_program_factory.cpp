@@ -177,6 +177,21 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const std::string sbt = std::to_string(p.sbt);
 
     // ---- kernels + runtime args ----
+    // combine overlap (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the overlap fills
+    TT_FATAL(cfg.cmb_rt == 0 || !cfg.y_row_major, "flat_routed_expert: the combine overlap takes bfp8 y tiles");
+    auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args) {
+        if (cfg.cmb_rt) {
+            TT_FATAL(
+                args.v.size() <= cfg.cmb_rt,
+                "flat_routed_expert: {} writer args > cmb_rt {}",
+                args.v.size(),
+                cfg.cmb_rt);
+            args.v.resize(cfg.cmb_rt + 4, 0);
+            sv.cmb_writers.emplace_back(k, c);
+        }
+        return args;
+    };
+    const Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);
         for (const auto& [i, s, off] : args.addr) {
@@ -268,7 +283,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return d;
     };
     if (p.rdown) {
-        const Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+        Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+        rdn_def.insert(cmb_def.begin(), cmb_def.end());
         const auto k =
             dm("se9_rdown.cpp",
                rdn_cores,
@@ -302,7 +318,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
                 .cat(dyn)
                 .lits(sgx(p.sg_rd(r)));
-            add_rt(k, p.readers[r], a);
+            add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
             SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
         }
     }
@@ -568,7 +584,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,   S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MTD, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync));
+               plus(plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync), cmb_def));
         const auto kw =
             dm("se6_dw.cpp",
                cores,
@@ -603,7 +619,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lits(gu_xy_sg[sg])
                 .cat(dyn)
                 .lits(sgx(sg));
-            add_rt(kr, dc, a);
+            add_rt(kr, dc, add_writer_rt(kr, dc, a));
             Args w;
             w.a(AddrSrc::Down).lit(d % banks).lit((d / banks) * p.wd_region).cat(dyn).lits(sgx(sg));
             if (y_nc) {

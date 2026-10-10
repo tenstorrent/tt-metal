@@ -45,6 +45,9 @@ struct FlatRoutedExpertConfig {
     // (twice the x / h bytes and L1; at LoFi about half the expert's error vs fp32 math on the same weights)
     bool x_bf16 = false;
     bool h_bf16 = false;
+    // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
+    // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
+    uint32_t cmb_rt = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -59,7 +62,8 @@ struct FlatRoutedExpertConfig {
         "down_fp32",
         "pack_stochastic_rounding",
         "x_bf16",
-        "h_bf16");
+        "h_bf16",
+        "cmb_rt");
     auto attribute_values() const {
         return std::forward_as_tuple(
             hidden,
@@ -74,7 +78,8 @@ struct FlatRoutedExpertConfig {
             down_fp32,
             pack_stochastic_rounding,
             x_bf16,
-            h_bf16);
+            h_bf16,
+            cmb_rt);
     }
 };
 
