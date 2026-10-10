@@ -439,8 +439,6 @@ def test_matmul_custom_compressed_single_core(device, M, K, N, formats, impl):
 )
 def test_matmul_custom_compressed_multicore(device, M, K, N_per_core, formats, num_cores, impl):
     """Multicore tests with automatic format assignment across all implementations."""
-    if "runtime" in impl and num_cores == 32 and formats != ["bfp8"]:
-        pytest.skip("FIXME: PCC ERROR")
     if (
         (M, K, N_per_core) == (1, 512, 256)
         and formats != ["bfp8"]
@@ -504,8 +502,6 @@ def test_matmul_custom_compressed_single_core_optimized(device, M, K, N, formats
 )
 def test_matmul_custom_compressed_multicore_optimized(device, M, K, N_per_core, formats, num_cores):
     """Multicore tests with automatic format assignment."""
-    if num_cores == 32 and formats != ["bfp8"]:
-        pytest.skip("FIXME: PCC ERROR")
     _run_matmul_custom_compressed(
         device, M, K, N_per_core * num_cores, impl="new", formats=formats, num_cores=num_cores
     )
