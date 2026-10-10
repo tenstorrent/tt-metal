@@ -736,6 +736,9 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     {
         const perf_counter_scoped<RUN_TYPE, false> counters(get_zone_id(detail::zone_name_hash("INIT")));
         body();
+#if defined(LLK_EXP_SIG_LOOP) // experiment (initpad agent): known INIT work right before the end read, LLK_EXP_SIG_LOOP x (thread + 1) iterations
+        asm volatile("addi sp, sp, -16\n\tsw t0, 0(sp)\n\tli t0, %0\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b\n\tlw t0, 0(sp)\n\taddi sp, sp, 16" ::"i"(LLK_EXP_SIG_LOOP * (COMPILE_FOR_TRISC + 1)) : "memory");
+#endif
         asm volatile(
             ".balign 16\n\tlui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])\n\t"
             "li t0, 2048\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b"
@@ -779,6 +782,12 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
 #if defined(LLK_TRISC_MATH)
         ckernel::icache_prefetch_head_start();
 #endif
+        LLK_EXP_MATH_NOP_AT(2); // experiment hook (mathinit): top of INIT's body, after the head start
+    }
+
+    ~init_measurement_no_zone()
+    {
+        LLK_EXP_MATH_NOP_AT(8); // experiment hook (mathinit): end of INIT's body
     }
 
     init_measurement_no_zone()

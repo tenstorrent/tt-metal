@@ -162,6 +162,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     // Reset address counters for both unpackers
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
