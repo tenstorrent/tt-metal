@@ -13,12 +13,73 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, CANDIDATES, POLICIES, VARIANTS, compare
-from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import run_case
+from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import capture, host_ranks, run_case
+from models.demos.qwen38_27b_qb2.tests.test_gdn_model_adapter import tensor_digest
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 from models.demos.qwen38_27b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
+
+
+def changing_input_comparison(layer, mesh, batch):
+    """Two independent sessions, changing tokens, same real BFP8 weights.
+
+    Both traces own separate recurrent/history allocations. Compare each user
+    on every rank after 1/2/4/8/16/32/64 updates, including actual projected
+    output. A stationary-input recurrence check alone would miss history and
+    stale-input bugs in the new convolution/packed-gate boundary.
+    """
+    rng = torch.Generator().manual_seed(341200 + batch)
+    sources = [
+        ttnn.from_torch(
+            torch.randn(1, 1, batch, 5120, generator=rng).bfloat16(),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        for _ in range(4)
+    ]
+    slots, traces = [], []
+    try:
+        for recurrence in ("single_step_flat_prepare_epilogue", "single_step_compact_gdn"):
+            layer.policy["decode_recurrence"] = recurrence
+            state = layer.allocate_state(batch_size=batch)
+            x = ttnn.clone(sources[0])
+            layer._delta(x, state, decode=True)
+            trace, output = capture(mesh, lambda: layer._delta(x, state, decode=True))
+            traces.append(trace)
+            for value in (state.recurrent, state.conv):
+                ttnn.copy(ttnn.zeros_like(value), value)
+            slots.append((x, state, output))
+        checks = []
+        for step in range(64):
+            source = sources[(step * 7 + step // 3) % len(sources)]
+            observed = []
+            for (x, state, output), trace in zip(slots, traces):
+                ttnn.copy(source, x)
+                ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+                if step + 1 in (1, 2, 4, 8, 16, 32, 64):
+                    # Read before the other trace can reuse shared projection
+                    # scratch or the all-reduce destination.
+                    observed.append(
+                        [
+                            [tensor_digest(v.reshape(batch, -1)) for v in host_ranks(t)]
+                            for t in (state.recurrent, state.conv, output)
+                        ]
+                    )
+            if observed:
+                assert (
+                    observed[0] == observed[1]
+                ), f"Changing-input compact GDN diverged at batch={batch}, step={step+1}"
+                checks.append(dict(step=step + 1, recurrent_conv_projected_sha256=observed[0]))
+        return dict(batch=batch, updates=64, checkpoints=checks, all_ranks_bit_identical=True)
+    finally:
+        for trace in traces:
+            ttnn.release_trace(mesh, trace)
+        layer.policy["decode_recurrence"] = "single_step_compact_gdn"
 
 
 @pytest.mark.skipif(os.getenv("QWEN_GDN_EPILOGUE_LAYER") != "1", reason="explicit allocated-Galaxy experiment")
@@ -31,6 +92,10 @@ def test_gdn_epilogue_layer():
     config = AutoConfig.from_pretrained(checkpoint, local_files_only=True).text_config
     candidate = CANDIDATES[os.getenv("QWEN_GDN_LAYER_CANDIDATE", "epilogue")]
     policies = dict(POLICIES, fused=candidate)
+    if candidate == "single_step_compact_gdn":
+        # Attribute incremental compact-path savings against today's fusion,
+        # without counting direct preparation/epilogue gains a second time.
+        policies["native"] = "single_step_flat_prepare_epilogue"
     precision = load_precision(source / f"config/precision_{candidate}_bfp8_all.json")
     report = dict(
         state="opening",
@@ -66,7 +131,7 @@ def test_gdn_epilogue_layer():
         del setup_state
         gc.collect()
         addresses = {b: layer.gdn_decode_workspace.epilogue_output(b).buffer_address() for b in (16, 32)}
-        for batch in BATCHES:
+        for batch in (16, 32, 8, 1) if candidate == "single_step_compact_gdn" else BATCHES:
             group = []
             for variant in VARIANTS:
                 report.update(state="real_weight_comparison", active_batch=batch, active_variant=variant)
@@ -84,6 +149,13 @@ def test_gdn_epilogue_layer():
             report["comparisons"].append(comparison)
             print("EPILOGUE_REAL_WEIGHT", comparison, flush=True)
             save(path, report)
+        if candidate == "single_step_compact_gdn":
+            report["changing_input_checks"] = []
+            for batch in (16, 32):
+                report.update(state="changing_inputs", active_batch=batch)
+                save(path, report)
+                report["changing_input_checks"].append(changing_input_comparison(layer, mesh, batch))
+                save(path, report)
         report.update(state="completed", passed=True)
     except BaseException as error:
         report.update(state="failed", passed=False, error=dict(type=type(error).__name__, message=str(error)[:3000]))

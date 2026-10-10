@@ -46,6 +46,34 @@ def test_workspace_rejects_unqualified_batches(batch, expect_error):
         DecodeWorkspace(object(), 12).prepare(batch)
 
 
+def test_compact_workspace_keeps_owned_l1_buffers_across_batch_switches(monkeypatch, expect_error):
+    allocations = []
+
+    def allocate(shape, dtype, layout, mesh, memory):
+        tensor = SimpleNamespace(shape=tuple(shape), serial=len(allocations), memory=memory)
+        allocations.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", allocate)
+    workspace = DecodeWorkspace(
+        object(), 12, shared_qk_heads=4, fused_epilogue=True, flat_prepare=True, compact_frontend=True
+    )
+    workspace.prepare(16)
+    buffers = workspace.compact_buffers(16)
+    assert [t.shape for t in buffers] == [(1, 16, w) for w in (512, 512, 1536, 1536)]
+    assert all(t.memory == ttnn.L1_MEMORY_CONFIG for t in buffers)
+    for batch in (32, 8, 16):
+        workspace.prepare(batch)
+    assert workspace.compact_buffers(16) is buffers
+    assert set(workspace.compact_outputs) == {16, 32}
+    count = len(allocations)
+    with expect_error(RuntimeError, "cache allocation"):
+        workspace.compact_buffers(8)
+    assert len(allocations) == count
+    with expect_error(ValueError, "Compact GDN needs"):
+        DecodeWorkspace(object(), 12, compact_frontend=True)
+
+
 def test_shared_workspace_is_persistent_disjoint_and_skips_small_batches(monkeypatch, expect_error):
     allocations = []
 
@@ -74,7 +102,8 @@ def test_shared_workspace_is_persistent_disjoint_and_skips_small_batches(monkeyp
 
 
 @pytest.mark.parametrize(
-    "recurrence", ["single_step", "single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue"]
+    "recurrence",
+    ["single_step", "single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue", "single_step_compact_gdn"],
 )
 def test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step(monkeypatch, recurrence):
     calls = []
@@ -131,8 +160,36 @@ def test_recurrence_policy_is_explicit_and_backward_compatible(expect_error):
     assert decoder_policy(shared, 0)["decode_recurrence"] == "single_step_shared_qk"
     fused = load_precision(dict(policy, decode_recurrence="single_step_shared_qk_epilogue"))
     assert decoder_policy(fused, 0)["decode_recurrence"] == "single_step_shared_qk_epilogue"
+    compact = load_precision(dict(policy, decode_recurrence="single_step_compact_gdn"))
+    assert decoder_policy(compact, 0)["decode_recurrence"] == "single_step_compact_gdn"
     with expect_error(ValueError, "Unsupported decode recurrence"):
         load_precision(dict(policy, decode_recurrence="unknown"))
+
+
+@pytest.mark.parametrize(
+    "batch,decode,selected", [(16, True, True), (32, True, True), (8, True, False), (16, False, False)]
+)
+def test_compact_gdn_only_selected_for_explicit_decode_buckets(batch, decode, selected):
+    class OrdinaryPath(Exception):
+        pass
+
+    def ordinary(*args, **kwargs):
+        raise OrdinaryPath()
+
+    layer = SimpleNamespace(
+        policy={"decode_recurrence": "single_step_compact_gdn"},
+        config=SimpleNamespace(linear_num_key_heads=4, linear_num_value_heads=12, linear_key_head_dim=128),
+        _delta_compact=lambda x, state, b: (state, b),
+        _linear=ordinary,
+    )
+    x = SimpleNamespace(shape=(1, 1, batch, 5120))
+    state = object()
+    try:
+        result = decoder.Qwen38Decoder._delta(layer, x, state, decode=decode)
+    except OrdinaryPath:
+        assert not selected
+    else:
+        assert selected and result == (state, batch)
 
 
 @pytest.mark.parametrize("batch", [1, 16, 32])

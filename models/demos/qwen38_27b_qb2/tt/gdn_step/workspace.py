@@ -7,6 +7,7 @@ SINGLE_STEP_POLICIES = (
     "single_step_shared_qk",
     "single_step_shared_qk_epilogue",
     "single_step_flat_prepare_epilogue",
+    "single_step_compact_gdn",
 )
 SHARED_QK_POLICIES = SINGLE_STEP_POLICIES[1:]
 EPILOGUE_POLICIES = SINGLE_STEP_POLICIES[2:]
@@ -14,12 +15,23 @@ EPILOGUE_BATCHES = (16, 32)
 
 
 def uses_fused_epilogue(recurrence, batch):
-    """Only opt in where the standalone physical comparison found a gain."""
+    """Restrict fused policies to their explicitly targeted batch sizes."""
     return recurrence in EPILOGUE_POLICIES and batch in EPILOGUE_BATCHES
 
 
 class DecodeWorkspace:
-    def __init__(self, mesh, value_heads, *, shared_qk_heads=None, fused_epilogue=False, flat_prepare=False):
+    def __init__(
+        self,
+        mesh,
+        value_heads,
+        *,
+        shared_qk_heads=None,
+        fused_epilogue=False,
+        flat_prepare=False,
+        compact_frontend=False,
+    ):
+        if compact_frontend and (shared_qk_heads != 4 or value_heads != 12 or not fused_epilogue or not flat_prepare):
+            raise ValueError("Compact GDN needs TP4 heads, shared Q/K, flat preparation and fused epilogue")
         self.mesh = mesh
         self.value_heads = value_heads
         self.outputs = {}
@@ -29,6 +41,8 @@ class DecodeWorkspace:
         self.epilogue_outputs = {}
         self.flat_prepare = flat_prepare
         self.prepared_outputs = {}
+        self.compact_frontend = compact_frontend
+        self.compact_outputs = {}
 
     def prepare(self, batch):
         """Setup boundary only; never replace buffers referenced by existing traces."""
@@ -79,6 +93,27 @@ class DecodeWorkspace:
                     )
                     for width in (128, 8)
                 )
+            if self.compact_frontend and size in EPILOGUE_BATCHES and size not in self.compact_outputs:
+                # Q/K/V plus normalized/gated output remain compact in L1.
+                # Allocate once, before any trace can reference these addresses.
+                self.compact_outputs[size] = tuple(
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, size, width]),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh,
+                        ttnn.L1_MEMORY_CONFIG,
+                    )
+                    for width in (512, 512, 1536, 1536)
+                )
+
+    def compact_buffers(self, batch):
+        try:
+            return self.compact_outputs[batch]
+        except KeyError:
+            raise RuntimeError(
+                "Prepare compact GDN scratch during cache allocation before decode/trace capture"
+            ) from None
 
     def flat_outputs(self, batch):
         """Persistent value/gate buffers; small buckets retain their existing path."""

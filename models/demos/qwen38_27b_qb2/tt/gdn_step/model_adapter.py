@@ -11,7 +11,18 @@ from models.demos.qwen38_27b_qb2.tt.gdn_step import op
 
 
 def step_from_flat(
-    q, k, v, log_decay, beta, state, output, *, shared_qk_outputs=None, raw_output=False, flat_prepare_outputs=None
+    q,
+    k,
+    v,
+    log_decay,
+    beta,
+    state,
+    output,
+    *,
+    shared_qk_outputs=None,
+    raw_output=False,
+    flat_prepare_outputs=None,
+    compact_qkv=False,
 ):
     """Consume only token zero of [B,T,H*128] and update [B,HV,128,128].
 
@@ -24,13 +35,24 @@ def step_from_flat(
     optionally supplies persistent FP32 values/gates for direct tiled preparation."""
     import ttnn
 
-    batch, time_rows, qwidth = q.shape
+    if type(compact_qkv) is not bool:
+        raise ValueError("compact_qkv must be Boolean")
+    if len(q.shape) != 3:
+        raise ValueError("Unsupported single-token GDN model geometry")
+    if compact_qkv:
+        _, batch, qwidth = q.shape
+        time_rows = 1
+        if q.shape[0] != 1 or not 1 <= batch <= 32 or flat_prepare_outputs is None:
+            raise ValueError("Compact GDN requires [1,B,C], batch 1..32 and direct preparation")
+    else:
+        batch, time_rows, qwidth = q.shape
     heads, value_heads = qwidth // 128, v.shape[-1] // 128
     if (
         time_rows not in (1, 32)
+        or heads < 1
         or qwidth != heads * 128
         or tuple(k.shape) != tuple(q.shape)
-        or tuple(v.shape) != (batch, time_rows, value_heads * 128)
+        or tuple(v.shape) != ((1, batch, value_heads * 128) if compact_qkv else (batch, time_rows, value_heads * 128))
         or tuple(state.shape) != (batch, value_heads, 128, 128)
         or value_heads % heads
         or tuple(log_decay.shape) != (batch, time_rows, value_heads)
@@ -56,7 +78,16 @@ def step_from_flat(
         # Preserve native exp and all recurrence arithmetic. Only the surrounding
         # tilize/untilize/reshape/concat traffic is replaced by the direct reader.
         decay = ttnn.exp(log_decay[:, :1, :])
-        prepare(q, k, v, decay, beta, *shared_qk_outputs, *flat_prepare_outputs)
+        prepare(
+            q,
+            k,
+            v,
+            decay,
+            beta,
+            *shared_qk_outputs,
+            *flat_prepare_outputs,
+            **({"compact_qkv": True} if compact_qkv else {}),
+        )
         op.step(
             *shared_qk_outputs,
             *flat_prepare_outputs,

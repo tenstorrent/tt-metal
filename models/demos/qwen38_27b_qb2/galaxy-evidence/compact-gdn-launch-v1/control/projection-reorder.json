@@ -1,0 +1,32 @@
+{
+  "old_unit": "qwen38-projection-sweep-v1-20261010.service",
+  "old_properties": {
+    "MainPID": "3671135",
+    "ActiveState": "active",
+    "SubState": "running",
+    "InvocationID": "998fcce35571487c9eac759638d71013"
+  },
+  "old_receipt": {
+    "state": "waiting",
+    "cleanup_completed": false,
+    "hardware_started": false,
+    "survives_disconnect": true,
+    "resumes_after_reboot": false,
+    "promoted_to_serving": false,
+    "predecessor_unit": "qwen38-b16-priority-v2-20261010.service",
+    "predecessor_invocation": "f5b0da5649614052ba7b8ddf37b466d5",
+    "hardware_lock": "/tmp/tt-device.lock",
+    "started_at": 1791613371.769856,
+    "updated_at": "2026-10-10T06:53:54Z",
+    "predecessor": {
+      "MainPID": "3565241",
+      "Result": "success",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "f5b0da5649614052ba7b8ddf37b466d5"
+    }
+  },
+  "reason": "User prioritizes 30 native TSU big swings; compact block precedes minor projection tuning",
+  "active_hardware_interrupted": false,
+  "stopped_at": 1791615240.9276085
+}

@@ -9,7 +9,10 @@
 
 void kernel_main() {
     constexpr uint32_t epsilon_bits = get_compile_time_arg_val(0);
-    constexpr auto ra = TensorAccessorArgs<1>();
+    constexpr bool compact = get_compile_time_arg_val(1) != 0;
+    constexpr uint32_t heads = get_compile_time_arg_val(2);
+    constexpr uint32_t gate_tile_offset = get_compile_time_arg_val(3);
+    constexpr auto ra = TensorAccessorArgs<4>();
     constexpr auto ga = TensorAccessorArgs<ra.next_compile_time_args_offset()>();
     constexpr auto wa = TensorAccessorArgs<ga.next_compile_time_args_offset()>();
     const auto raw = TensorAccessor(ra, get_arg_val<uint32_t>(0), 512);
@@ -38,10 +41,14 @@ void kernel_main() {
     for (uint32_t i = 0; i < 8 * 512; ++i) {
         g_zero[i] = 0;
     }
-    // CB11 is reader-private staging for one FP32 row.
+    // CB11 stages one FP32 row and eight aligned BF16 row pairs. Blackhole
+    // DRAM reads require equal low six address bits: compact odd users must
+    // read an aligned pair, then select their half in L1.
     const uint32_t scratch = get_write_ptr(11);
     for (uint32_t item = 0; item < count; ++item) {
         const uint32_t head = first + item * stride;
+        const uint32_t user = head / heads;
+        const uint32_t row_pair = (user / 16) * 1024 + ((user % 16) / 2) * 64;
         cb_reserve_back(dfb::x, 4);
         cb_reserve_back(dfb::gate, 4);
         const uint32_t x_base = get_write_ptr(dfb::x);
@@ -49,11 +56,28 @@ void kernel_main() {
         noc_async_read(raw.get_noc_addr(head), scratch, 512);
         for (uint32_t tile = 0; tile < 4; ++tile) {
             for (uint32_t face = 0; face < 2; ++face) {
-                // Each BF16 face contains 256 values; row zero has 16 values.
-                noc_async_read(gate.get_noc_addr(head * 4 + tile, face * 512), g_base + tile * 2048 + face * 512, 32);
+                if constexpr (compact) {
+                    const uint32_t page = gate_tile_offset + (head % heads) * 4 + tile;
+                    noc_async_read(
+                        gate.get_noc_addr(page, row_pair + face * 512), scratch + 512 + (tile * 2 + face) * 64, 64);
+                } else {
+                    noc_async_read(
+                        gate.get_noc_addr(head * 4 + tile, face * 512), g_base + tile * 2048 + face * 512, 32);
+                }
             }
         }
         noc_async_read_barrier();
+        if constexpr (compact) {
+            const auto* pairs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 512);
+            auto* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_base);
+            for (uint32_t tile = 0; tile < 4; ++tile) {
+                for (uint32_t face = 0; face < 2; ++face) {
+                    for (uint32_t word = 0; word < 8; ++word) {
+                        gates[tile * 512 + face * 128 + word] = pairs[(tile * 2 + face) * 16 + (user % 2) * 8 + word];
+                    }
+                }
+            }
+        }
         const auto* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
         auto* tiles = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_base);
         for (uint32_t value = 0; value < 128; ++value) {

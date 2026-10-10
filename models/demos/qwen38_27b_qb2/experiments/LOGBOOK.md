@@ -2033,3 +2033,38 @@ No session connection is needed for that queue to continue.
   gap, useful-byte bandwidth assumptions, larger compact-decoder scope and
   a separate one-draft MTP sensitivity at unchanged B16. Neither the new
   sweep nor incremental savings establish 30 TSU. MTP stays unselected.
+
+## Oct 10, 06:36-06:58 UTC: native-only 30 TSU and complete compact GDN prototype
+
+- User clarified the goal is 30 native TSU at B16/32K, with no speculative
+  decoding. Removed MTP from the active roadmap. The current 60.422 ms step
+  must save another 27.089 ms; this compact prototype targets only 4-6 ms of
+  that gap, within the larger fusion effort, not additive to its broader target.
+- Implemented opt-in compact packed projection, convolution/history, direct
+  preparation and gated epilogue through output projection/TP reduction. QKV/z
+  and gated output stay in compact L1. Native arithmetic and precision remain.
+- Added exact physical geometry and alias validation, aligned odd-user reads,
+  disjoint compact row writes and padding ownership. Added real-weight changing
+  input/state tests and matched full-model controls. Prefill/small-bucket paths
+  are explicitly covered by selection tests. No serving default changed.
+- Local descriptor tests passed. Host preflight: 512 passed, 69 subtests passed,
+  1 unrelated skip; three hardware test entry points collected. These CPU
+  results establish contracts/collection, not kernel numerical correctness.
+- Launched compact-gdn-v1 persistently after the existing B16 priority queue:
+  PID 3704023, invocation 436e57932b7349868ee2d8042b959830. Verified still waiting
+  with hardware_started=false. Stopped only the exact waiting projection-v1
+  follower, preserving its source, and relaunched as projection-v2 behind
+  compact: PID 3704026, invocation 2a7ff1771ed945398736788e16613aa9.
+  Current hardware fusion/GPQA and B16 jobs were not interrupted.
+- Refreshed native-after evidence: 32K/B16 returned to 14.8715 TSU, supporting
+  the current fusion candidate's 11.3% gain. Final 16K control was still running;
+  GPQA remained pending. New compact policy has no physical result yet.
+- Reviewed frozen-source differences: inherited convolution reader change is
+  formatting only; the bounded-runner optional budget does not affect this call.
+  Retain manifest and difference hashes instead of claiming exact checkout identity.
+- Sandbox denied initial SSH and clang-format's temporary Git index. Escalated
+  retries succeeded; formatting modified files and then host preflight passed.
+  A documentation patch had stale context and was reapplied after checking that
+  it made no partial edit. No native install, firmware or NFS changes.
+
+[Launch, source manifest, tests and remaining gates](../galaxy-evidence/compact-gdn-launch-v1/README.md).

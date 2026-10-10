@@ -22,26 +22,57 @@ def source(name):
     return (HERE / name).read_text().replace("// DFB_BINDINGS", bindings)
 
 
-def epilogue(raw, gate, weight, output, *, heads=12, epsilon=1e-6, multiply_z=True):
-    """Write caller-owned BF16 [B,1,H*128] with physically zero padded rows."""
+def epilogue(
+    raw,
+    gate,
+    weight,
+    output,
+    *,
+    heads=12,
+    epsilon=1e-6,
+    multiply_z=True,
+    compact_gate=False,
+    compact_output=False,
+    gate_offset=0,
+):
+    """Normalize one token/user into caller-owned BF16 tiles.
+
+    Public operands use [B,1,H*128]; compact operands use [1,B,H*128].
+    A compact gate may be the whole packed projection, with a tile-aligned
+    gate_offset selecting z without an intermediate slice. Compact users
+    occupy disjoint face rows, including explicitly zeroed output padding.
+    Both layout options are experimental and preserve the arithmetic kernel.
+    """
     import ttnn
 
-    if type(multiply_z) is not bool:
-        raise ValueError("multiply_z must be a Boolean")
+    if any(type(flag) is not bool for flag in (multiply_z, compact_gate, compact_output)):
+        raise ValueError("Layout and multiply_z flags must be Boolean")
     if type(heads) is not int or heads < 1 or not math.isfinite(epsilon) or epsilon <= 0:
         raise ValueError("Require positive head count and finite positive epsilon")
-    if len(gate.shape) != 3 or tuple(gate.shape)[1:] != (1, heads * 128):
-        raise ValueError("Gate must be single-token [B,1,H*128]")
-    batch = gate.shape[0]
+    if type(gate_offset) is not int or gate_offset < 0 or gate_offset % 32 or (gate_offset and not compact_gate):
+        raise ValueError("gate_offset must be nonnegative, tile aligned, and used only with compact gates")
+    if len(gate.shape) != 3:
+        raise ValueError("Gate must be three dimensional")
+    batch = gate.shape[1 if compact_gate else 0]
+    width = gate.shape[-1]
+    if compact_gate:
+        gate_shape = (1, batch, width)
+        if width % 32 or width < gate_offset + heads * 128:
+            raise ValueError("Packed compact gate does not cover the selected heads")
+    else:
+        gate_shape = (batch, 1, heads * 128)
+    if batch < 1 or ((compact_gate or compact_output) and batch > 32):
+        raise ValueError("Compact epilogue requires batch 1..32")
+    output_shape = (1, batch, heads * 128) if compact_output else (batch, 1, heads * 128)
     tensors = [raw, gate, weight, output]
     mesh = raw.device()
     if "BLACKHOLE" not in str(mesh.arch()).upper():
         raise ValueError("Experimental epilogue currently targets Blackhole only")
     contracts = [
         ((batch * heads, 128), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-        ((batch, 1, heads * 128), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (gate_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         ((128,), ttnn.bfloat16, ttnn.TILE_LAYOUT),
-        ((batch, 1, heads * 128), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (output_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ]
     for tensor, (shape, dtype, layout) in zip(tensors, contracts):
         if (
@@ -52,7 +83,11 @@ def epilogue(raw, gate, weight, output, *, heads=12, epsilon=1e-6, multiply_z=Tr
             or tensor.device() != mesh
         ):
             raise ValueError("Epilogue requires matching interleaved tensors with the declared shape/dtype/layout")
-    if len({t.buffer_address() for t in tensors}) != 4:
+    gate_padded = (1, 32, width) if compact_gate else (batch, 32, heads * 128)
+    output_padded = (1, 32, heads * 128) if compact_output else (batch, 32, heads * 128)
+    if tuple(gate.padded_shape) != gate_padded or tuple(output.padded_shape) != output_padded:
+        raise ValueError("Epilogue requires exact physical gate/output padding")
+    if len({(str(t.memory_config().buffer_type), t.buffer_address()) for t in tensors}) != 4:
         raise ValueError("Epilogue inputs and output must not alias")
     grid = mesh.compute_with_storage_grid_size()
     assignments = work_items(batch * heads, grid.x, grid.y)
@@ -77,8 +112,18 @@ def epilogue(raw, gate, weight, output, *, heads=12, epsilon=1e-6, multiply_z=Tr
             config=config,
         )
         for name, args, ctargs, config in (
-            ("reader.cpp", read, [eps_bits, *accessors(tensors[:3])], ttnn.ReaderConfigDescriptor()),
-            ("writer.cpp", write, accessors([output]), ttnn.WriterConfigDescriptor()),
+            (
+                "reader.cpp",
+                read,
+                [eps_bits, int(compact_gate), heads, gate_offset // 32, *accessors(tensors[:3])],
+                ttnn.ReaderConfigDescriptor(),
+            ),
+            (
+                "writer.cpp",
+                write,
+                [int(compact_output), heads, batch, *accessors([output])],
+                ttnn.WriterConfigDescriptor(),
+            ),
             (
                 "compute.cpp",
                 compute,
@@ -105,6 +150,10 @@ def epilogue(raw, gate, weight, output, *, heads=12, epsilon=1e-6, multiply_z=Tr
         ttnn.float32,
     ]
     pages = [8, 8, 4, 4, 1, 1, 4, 8, 1, 1, 4, 1]
+    if compact_output:
+        # Writer-private zero row: never shares the reader's CB11 staging.
+        formats.append(ttnn.bfloat16)
+        pages.append(1)
     cbs = []
     for index, (dtype, count) in enumerate(zip(formats, pages)):
         size = 4096 if dtype == ttnn.float32 else 2048

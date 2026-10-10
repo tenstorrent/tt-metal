@@ -10,6 +10,7 @@ POLICIES = dict(native="single_step_shared_qk", fused="single_step_shared_qk_epi
 CANDIDATES = {
     "epilogue": "single_step_shared_qk_epilogue",
     "flat_prepare": "single_step_flat_prepare_epilogue",
+    "compact": "single_step_compact_gdn",
 }
 
 

@@ -30,9 +30,11 @@ def host_ranks(tensor):
     return values
 
 
-def prepare_reference(inputs, batch):
+def prepare_reference(inputs, batch, *, compact_qkv=False):
     prepared = []
     for q, k, v, g, beta in zip(*(host_ranks(tensor) for tensor in inputs)):
+        if compact_qkv:
+            q, k, v = [raw.reshape(batch, 1, -1) for raw in (q, k, v)]
         vectors = []
         for raw, scale in ((q, 128**-0.5), (k, 1.0)):
             raw = raw[:, 0].reshape(batch, 4, 128)
@@ -88,10 +90,13 @@ def run_case(layer, mesh, batch, *, recurrence="single_step"):
     kernel_inputs = []
     kernel_normalizes = False
     kernel_qk_repeat = 1
+    compact_inputs = False
 
-    def observe(q, k, v, g, beta, current, *, decode=False):
+    def observe(q, k, v, g, beta, current, *, decode=False, compact_qkv=False):
+        nonlocal compact_inputs
+        compact_inputs = compact_qkv
         raw_inputs[:] = [q, k, v, g, beta]
-        return original(q, k, v, g, beta, current, decode=decode)
+        return original(q, k, v, g, beta, current, decode=decode, compact_qkv=compact_qkv)
 
     def observe_step(q, k, v, gates, current, output, **kwargs):
         nonlocal kernel_normalizes, kernel_qk_repeat
@@ -107,8 +112,15 @@ def run_case(layer, mesh, batch, *, recurrence="single_step"):
         # Readback and CPU reference preparation occur outside trace capture.
         for _ in range(5):
             layer._delta(x, state, decode=True)
-        prepared = prepare_reference(raw_inputs, batch)
-        input_hashes = [tensor_digest(value) for tensor in raw_inputs for value in host_ranks(tensor)]
+        prepared = prepare_reference(raw_inputs, batch, compact_qkv=compact_inputs)
+        # Compare logical live operands across layout variants. Native padding
+        # is not consumed by the single-step recurrence; compact has no such
+        # time rows. Hash exactly one token per user for every policy.
+        input_hashes = [
+            tensor_digest(value.reshape(batch, 1, -1) if compact_inputs and index < 3 else value[:, :1])
+            for index, tensor in enumerate(raw_inputs)
+            for value in host_ranks(tensor)
+        ]
         device_prepared = list(zip(*(host_ranks(tensor) for tensor in kernel_inputs)))
         if kernel_qk_repeat != 1:
             device_prepared = [
@@ -157,7 +169,7 @@ def run_case(layer, mesh, batch, *, recurrence="single_step"):
         projected_outputs = host_ranks(output)
         state_hashes = [tensor_digest(value) for value in actual_states]
         output_hashes = [tensor_digest(value) for value in actual_outputs]
-        projected_hashes = [tensor_digest(value) for value in projected_outputs]
+        projected_hashes = [tensor_digest(value.reshape(batch, 5120)) for value in projected_outputs]
         for actual_state, actual_output, gold_state, gold_output in zip(
             actual_states,
             actual_outputs,

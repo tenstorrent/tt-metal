@@ -169,6 +169,12 @@ qualification remain separate release gates.
 
 ## What reaching 30 TSU at B16/32K would require
 
+**Current user requirement: 30 native tokens/s/user at B16/32K; no speculative
+decoding.** This supersedes the earlier conditional MTP scope. Retain BFP8
+weights/KV, BF16 activations and FP32 recurrent state. Historical speculative
+estimates remain archived, but speculative work is not an active experiment or
+an acceptable way to meet this target.
+
 The measured 60.4222-ms candidate must reach 33.3333 ms: another 27.0889 ms
 removed, or 44.83% less step time / 81.27% more output throughput. Native
 20 TSU requires 50 ms, still 10.4222 ms below the candidate. Small independent
@@ -193,20 +199,35 @@ layout/fusion work, not demonstrated savings; alone it gives about 19.8-22.0
 TSU from this candidate. Native 30 therefore also needs substantial improvements
 to matmul, SDPA delivery and remaining recurrence/collective costs.
 
-One-draft-token MTP is a separate possible multiplier at B16: two verification
-positions per user fit 32 projection rows, avoiding the four-position B32
-problem in the earlier scope. The checkpoint contains MTP weights. It still
-needs a correct two-position attention/GDN verifier, per-user commit/rollback,
-sampling semantics and measured acceptance/cycle cost. For one draft,
-`speedup = (1 + acceptance) / (cycle_time / ordinary_step_time)`. An illustrative
-20-TSU native backend, 80% acceptance and a cycle costing 1.2 ordinary steps
-would yield 30 TSU at unchanged B16. Those inputs are unmeasured. From today's
-16.55 TSU the same assumptions yield only 24.83 TSU. Preserve the user rule:
-no speculative default unless aggregate committed throughput improves at the
-same concurrency and model quality passes. This report queues no MTP hardware
-job and changes no precision or serving default.
+At 80% effective useful-byte bandwidth, streaming alone takes about 31.45 ms,
+leaving only 1.88 ms of the 33.33 ms target for unhidden work. At 90%, it takes
+27.96ms, leaving 5.37 ms. These are necessary traffic budgets, not forecasts:
+they omit extra physical traffic and cannot establish actual DRAM utilization.
+The implication is to prioritize complete operator boundaries with compatible
+L1 layouts, fused producer/consumer stages and pipelined delivery. Merely
+placing the existing operators under one launch cannot remove their traffic.
+
+The next implementation milestone is the opt-in `single_step_compact_gdn`
+policy. Packed projection feeds convolution and z directly from compact L1;
+convolution updates disjoint history in place; preparation consumes compact
+Q/K/V; the gated epilogue writes compact L1 output for the existing output
+projection and TP reduction. Only the64 scalar-gate channels still expand to
+public rows. This is a complete GDN boundary prototype, not a megakernel or a
+30-TSU result. Its incremental 4-6 ms target is included in the broader 10-15 ms
+layout/fusion target above; never add the two.
+
+The remaining large intervention is to join compatible stages inside the
+device program: projection output delivery into gating/preparation, recurrent
+output into normalization, and projection/collective/residual boundaries.
+First compare the compact block including all native matmuls and collectives,
+then use the remaining measured stage cost to select the fused boundary.
+Existing baseline family timings alone do not prove another 27 ms recoverable.
+If the remaining target budget is not met, report that gap instead of presenting
+small tuning gains or a speculative multiplier as completion.
 
 The [projection sweep](../galaxy-evidence/projection-sweep-launch-v1/README.md)
-is now a persistent follower behind fusion/GPQA and the original B16 priority
-queue. The larger compact-pipeline work remains the primary native opportunity;
+is a persistent follower behind fusion/GPQA and the original B16 priority
+queue. The [compact-block experiment](../galaxy-evidence/compact-gdn-launch-v1/README.md)
+now precedes the projection follower, preserving its frozen source. The larger
+compact-pipeline work remains the primary native opportunity;
 projection tuning is a bounded supporting experiment, not a promised path to 30.

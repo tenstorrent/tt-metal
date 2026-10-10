@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-compact-gdn-v1-20261010.service",
+  "predecessor_invocation": "436e57932b7349868ee2d8042b959830",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791615240.9993117,
+  "updated_at": "2026-10-10T06:56:21Z",
+  "predecessor": {
+    "MainPID": "3704023",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "436e57932b7349868ee2d8042b959830"
+  }
+}

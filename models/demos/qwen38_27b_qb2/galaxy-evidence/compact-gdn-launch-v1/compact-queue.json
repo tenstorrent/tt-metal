@@ -1,0 +1,23 @@
+{
+  "state": "waiting",
+  "steps": [],
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-b16-priority-v2-20261010.service",
+  "predecessor_invocation": "f5b0da5649614052ba7b8ddf37b466d5",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791615240.9811275,
+  "target_tsu": 30,
+  "speculative_decoding": false,
+  "updated_at": "2026-10-10T06:56:21Z",
+  "predecessor": {
+    "MainPID": "3565241",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "f5b0da5649614052ba7b8ddf37b466d5"
+  }
+}
