@@ -70,6 +70,7 @@ void kernel_main() {
     // E(x^2) in the left most columns per tile.
     const auto stats_tile_offset = get_arg(args::stats_tile_offset);
     const auto y_offset = get_arg(args::y_offset);
+    const auto Wt_full = get_arg(args::Wt_full);  // global row width in tiles (per-row stride, #56908)
 
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
@@ -121,6 +122,9 @@ void kernel_main() {
     constexpr uint32_t dfb_iterations = Wt / dfb_length;
     constexpr uint32_t dfb_leftovers = Wt % dfb_length;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Global rows are Wt_full tiles apart; a core owning >1 row-tile jumps the full-width
+        // stride between rows instead of walking linearly (#56908).
+        inp_tile_idx = tile_offset + ncht * Wt_full;
         // Read stats tiles
         dfb_stats_buf.reserve_back(stats_tiles_cols);
         uint32_t stats_write_offset = 0;
