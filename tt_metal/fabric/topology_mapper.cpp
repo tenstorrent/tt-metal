@@ -826,9 +826,8 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     for (const auto& info : chip_topology_mapping_) {
         // If host_ranks is empty, include all entries.
         // Otherwise, only include entries whose MPI rank is in the list.
-        if (host_ranks.empty()) {
-            entries_to_broadcast.push_back(&info);
-        } else if (info.mpi_rank >= 0 && host_rank_set.contains(static_cast<std::size_t>(info.mpi_rank))) {
+        if (host_ranks.empty() ||
+            (info.mpi_rank >= 0 && host_rank_set.contains(static_cast<std::size_t>(info.mpi_rank)))) {
             entries_to_broadcast.push_back(&info);
         }
     }
