@@ -37,10 +37,8 @@ namespace sfpu {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
- * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
- * where the true result is finite: (-1)**40000 gives NaN rather than 1. The inline claim
- * that "large powers will approach 0/Inf" does not hold when |base| == 1.
+ * Parity: whether pow is an integer, and whether it is odd, is read from its mantissa (see
+ * the body), so a negative base with an integer exponent gets its sign at every magnitude.
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
@@ -121,9 +119,35 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    auto pow_int = sfpi::convert<sfpi::vSMag16>(
-        pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
-    auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
+    // Integer-ness and parity of the exponent, at every magnitude
+    // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
+    // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
+    // base to NaN, where IEEE 754 defines the result.
+    //
+    // Both facts come from the mantissa instead, with no rounding and no branch. Shifting a
+    // mantissa that carries its implicit one left by exp - 23 gives the integer value, as
+    // _float_to_int32_for_exp_21f_ notes; shifting it back recovers the mantissa exactly when
+    // no fractional bits were dropped. A positive shift amount shifts left, a negative one
+    // right (ckernel_sfpu_shift.h).
+    //
+    // Clamping |pow| to [1/2, 2^24] first does two things: it keeps the shift amount in
+    // range, and it lets every exponent at or above 2^24 read as the even integer it must be,
+    // since fp32's spacing there is already 2 or more.
+    sfpi::vFloat pow_clamped = sfpi::min(sfpi::max(sfpi::abs(pow), 0.5f), 16777216.0f);
+    sfpi::vInt pow_e = sfpi::exexp(pow_clamped);
+    sfpi::vInt pow_m = sfpi::exman(pow_clamped, sfpi::MantissaMode::ImplicitOne);
+    // Sequenced so that at most three values are live at once: this kernel is already at the
+    // lreg limit (holding a fourth spills, measured). pow_shift dies into pow_whole, and
+    // pow_m dies into pow_frac, leaving the same two values the previous code carried.
+    sfpi::vInt pow_shift = pow_e - 23;
+    sfpi::vInt pow_whole = sfpi::shft(pow_m, pow_shift, sfpi::ShiftMode::Logical);
+    sfpi::vInt pow_frac = pow_m - sfpi::shft(pow_whole, -pow_shift, sfpi::ShiftMode::Logical);
+    sfpi::vInt pow_int = pow_whole & 1;
+    // The clamp reads a zero exponent as 1/2, so restore it: zero is an even integer, and the
+    // base == 0 guards further down do not cover a negative base with a zero exponent.
+    // Compared on setsgn(pow, 0) because SFPSETCC's contract excludes negative zero.
+    v_if(sfpi::setsgn(pow, 0) == 0.0f) { pow_frac = 0; }
+    v_endif;
 
     v_if(base < 0.0f) {  // negative base
         // If pow is odd integer then result is negative
@@ -131,7 +155,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_frac != 0) {  // negative base and non-integer power => set to NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -195,11 +219,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity limit: the same vSMag16 saturation described on _sfpu_binary_power_21f_ above.
- * In this body it also costs the zero-base sign: a -0 base loses it for odd pow in
- * 32767 < |pow| < 2**24, because the saturated pow reads as non-integer and the
- * negative-base branch overwrites y with a positive NaN before the fills below copy its
- * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
+ * Parity: read from the mantissa, as in _sfpu_binary_power_21f_ above.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -309,19 +329,42 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
-    // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
-    // for a -0 base. Kept on WH too, where it passes only because that conversion happens to
-    // preserve the sign of a -0, which is not a guarantee. Free either way: the zero-base block
-    // below needs |pow|, so this hoist reuses its abs and the instruction count is unchanged.
+    // |pow| is computed once here: the parity test, the zero-exponent restore and the
+    // zero-base block below all read it.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
-        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
+        // Integer-ness and parity of the exponent, at every magnitude
+        // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
+        // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
+        // base to NaN, where IEEE 754 defines the result.
+        //
+        // Both facts come from the mantissa instead, with no rounding and no branch. Shifting a
+        // mantissa that carries its implicit one left by exp - 23 gives the integer value, as
+        // _float_to_int32_for_exp_21f_ notes; shifting it back recovers the mantissa exactly when
+        // no fractional bits were dropped. A positive shift amount shifts left, a negative one
+        // right (ckernel_sfpu_shift.h).
+        //
+        // Clamping |abs_pow| to [1/2, 2^24] first does two things: it keeps the shift amount in
+        // range, and it lets every exponent at or above 2^24 read as the even integer it must be,
+        // since fp32's spacing there is already 2 or more.
+        sfpi::vFloat pow_clamped = sfpi::min(sfpi::max(sfpi::abs(abs_pow), 0.5f), 16777216.0f);
+        sfpi::vInt pow_e = sfpi::exexp(pow_clamped);
+        sfpi::vInt pow_m = sfpi::exman(pow_clamped, sfpi::MantissaMode::ImplicitOne);
+        // Sequenced so that at most three values are live at once: this kernel is already at the
+        // lreg limit (holding a fourth spills, measured). pow_shift dies into pow_whole, and
+        // pow_m dies into pow_frac, leaving the same two values the previous code carried.
+        sfpi::vInt pow_shift = pow_e - 23;
+        sfpi::vInt pow_whole = sfpi::shft(pow_m, pow_shift, sfpi::ShiftMode::Logical);
+        sfpi::vInt pow_frac = pow_m - sfpi::shft(pow_whole, -pow_shift, sfpi::ShiftMode::Logical);
+        sfpi::vInt pow_int = pow_whole & 1;
+        // The clamp reads a zero exponent as 1/2, so restore it: zero is an even integer, and the
+        // base == 0 guards further down do not cover a negative base with a zero exponent.
+        // Compared on setsgn(abs_pow, 0) because SFPSETCC's contract excludes negative zero.
+        v_if(sfpi::setsgn(abs_pow, 0) == 0.0f) { pow_frac = 0; }
+        v_endif;
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
@@ -329,7 +372,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_frac != 0) {  // negative base and non-integer power => set to NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
