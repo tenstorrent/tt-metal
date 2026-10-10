@@ -40,6 +40,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
