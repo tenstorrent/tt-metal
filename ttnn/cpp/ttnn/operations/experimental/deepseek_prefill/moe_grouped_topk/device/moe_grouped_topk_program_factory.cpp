@@ -150,24 +150,30 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     auto cb_group_summed_scores = tt::CBIndex::c_10;
     // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
     // the kernel's rank-tag stable engine keeps its tag inside those bits and is lossless only then.
-    // sort_keys_tf32 certifies it from the modes actually passed for the two CBs the rank-tag sorts
+    // sort_keys_tf32 certifies it from the modes actually passed for the three CBs the rank-tag sorts
     // read (an UnpackToDestFp32 mode there turns it off and the kernel keeps the comparator engine).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };
-    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores);
-    // On Blackhole the one-group expert template (bit 0) and the group template (bit 1) are uint16, so their copies
-    // take SrcA instead of the 32-bit unpack-to-dest handshake; the rank-tag and unstable sorts that read them never
-    // compare index words, and the comparator engine, which does, keeps uint32.
+    auto cb_winning_group_scores = tt::CBIndex::c_13;
+    auto cb_winning_group_indices = tt::CBIndex::c_14;
+    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores) &&
+                                default_unpack(cb_winning_group_scores);
+    // On Blackhole the index tiles no sort compares are uint16 (bit 0 the one-group template, bit 1 the group template,
+    // bit 2 the grouped template and winning-group tiles); the rank-tag sorts get each token's winning groups by id.
+    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
     const bool index_words_compared = operation_attributes.stable_sort && !sort_keys_tf32;
-    const uint32_t index_u16_mask = (device->arch() == tt::ARCH::BLACKHOLE && !index_words_compared) ? 0x3u : 0u;
-    const tt::DataFormat expert_template_format = (operation_attributes.n_groups == 1 && (index_u16_mask & 0x1u) != 0)
-                                                      ? tt::DataFormat::UInt16
-                                                      : tt::DataFormat::UInt32;
+    const uint32_t index_u16_mask = (blackhole && !index_words_compared) ? 0x7u : 0u;
+    const bool winning_groups_by_id = blackhole && operation_attributes.stable_sort && sort_keys_tf32;
+    const uint32_t expert_index_bit = operation_attributes.n_groups == 1 ? 0x1u : 0x4u;
+    const tt::DataFormat expert_template_format =
+        (index_u16_mask & expert_index_bit) != 0 ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
     const tt::DataFormat group_template_format =
         (index_u16_mask & 0x2u) != 0 ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
+    const tt::DataFormat winning_index_format =
+        (index_u16_mask & 0x4u) != 0 ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
 
     auto cb_sorted_group_scores = tt::CBIndex::c_6;
     auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
@@ -189,10 +195,12 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     add_cb(cb_group_summed_scores, compute_page_size, num_group_tiles, compute_data_format);
     add_cb(cb_sorted_group_order, indices_page_size, num_group_tiles, tt::DataFormat::UInt16);
 
-    auto cb_winning_group_scores = tt::CBIndex::c_13;
-    auto cb_winning_group_indices = tt::CBIndex::c_14;
     add_cb(cb_winning_group_scores, compute_page_size, operation_attributes.topk_groups, compute_data_format);
-    add_cb(cb_winning_group_indices, uint32_page_size, operation_attributes.topk_groups, tt::DataFormat::UInt32);
+    add_cb(
+        cb_winning_group_indices,
+        tt::tile_size(winning_index_format),
+        operation_attributes.topk_groups,
+        winning_index_format);
 
     auto cb_reduce_intermediate = tt::CBIndex::c_15;
     auto cb_final_indices_transposed = tt::CBIndex::c_16;
@@ -375,8 +383,10 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
+    if (blackhole) {
         writer_named_compile_time_args.emplace_back("index_u16_mask", index_u16_mask);
+        writer_named_compile_time_args.emplace_back(
+            "winning_groups_by_id", static_cast<uint32_t>(winning_groups_by_id));
     }
     writer_kernel_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
