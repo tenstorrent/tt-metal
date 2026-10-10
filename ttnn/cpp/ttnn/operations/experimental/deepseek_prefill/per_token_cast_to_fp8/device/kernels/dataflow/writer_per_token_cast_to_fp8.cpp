@@ -26,6 +26,10 @@
 #ifdef TOKEN_COUNT_AWARE
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/count_aware_range.hpp"
 #endif
+#ifdef PER_ROW_SCALE
+#include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/per_row_assignment.hpp"
+#endif
 
 // Extract column 0 of one fp32 tile into out[0..tile_h) (one value per block row); face-aware walk.
 template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
@@ -109,6 +113,25 @@ void kernel_main() {
     CircularBuffer cb_region_scratch_obj(cb_region_scratch);
     CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
     CircularBuffer cb_table_scratch_obj(cb_table_scratch);
+#ifdef PER_ROW_SCALE
+    const PerRowAssignment work = per_row_assignment(
+        core_id,
+        count_aware_valid_tile_rows(
+            noc,
+            region,
+            counts,
+            table,
+            cb_region_scratch_obj,
+            cb_counts_scratch_obj,
+            cb_table_scratch_obj,
+            ca_experts_per_chip,
+            ca_max_rows,
+            tile_h),
+        PR_SEGMENTS,
+        PR_GROUP);
+    (void)ca_num_cores;
+    const uint32_t block_offset = 0, num_blocks = 0;  // per-row walks `work` instead
+#else
     const CountAwareRange range = count_aware_block_range(
         noc,
         region,
@@ -120,15 +143,31 @@ void kernel_main() {
         ca_experts_per_chip,
         ca_max_rows,
         tile_h,
-#ifdef PER_ROW_SCALE
-        1,  // work unit = a whole tile-row
-#else
         chunks_per_row,
-#endif
         core_id,
         ca_num_cores);
     const uint32_t block_offset = range.first_block;
     const uint32_t num_blocks = range.num_blocks;
+#endif
+#elif defined(PER_ROW_SCALE)
+    // Plain per-row: runtime args 2 / 3 carry this core's id and the input's tile-row count.
+    const PerRowAssignment work = per_row_assignment(block_offset, num_blocks, PR_SEGMENTS, PR_GROUP);
+#endif
+#ifdef PER_ROW_SCALE
+#ifdef TOKEN_COUNT_AWARE
+    constexpr uint32_t PR_XARGS = 10;  // per-row exchange args follow the count-aware ones
+#else
+    constexpr uint32_t PR_XARGS = 6;
+#endif
+#if PR_SEGMENTS > 1
+    // Partners: the cores holding the other column segments of the same rows. Args: semaphore id, then the
+    // NoC (x, y) of the core holding segment 0 .. PR_SEGMENTS-1 of this core's group (own entry unused).
+    Semaphore<> peers_sem(get_arg_val<uint32_t>(PR_XARGS));
+    CircularBuffer cb_send_obj(PR_CB_SEND);
+    CircularBuffer cb_peers_obj(PR_CB_PEERS);
+    const uint32_t peers_base = cb_peers_obj.get_write_ptr();  // same L1 address on every core
+    const uint32_t partial_bytes = get_tile_size(PR_CB_SEND);
+#endif
 #endif
     CircularBuffer cb_output_e4m3_obj(cb_output_e4m3);
     CircularBuffer cb_scale_tiles_obj(cb_scale_tiles);
@@ -170,14 +209,50 @@ void kernel_main() {
 
     const uint32_t global_block_end = block_offset + num_blocks;
 #ifdef PER_ROW_SCALE
-    // Work unit = one tile-row: PR_CHUNKS e4m3 chunks, then one scale tile (col 0 = 32 row scales).
-    for (uint32_t row_tile = block_offset; row_tile < global_block_end; ++row_tile) {
+    // Work unit = this core's PR_CPS-chunk segment of tile-rows grp, grp + PR_GROUP, ...: the partial-max
+    // exchange (PR_SEGMENTS > 1), the segment's e4m3 chunks, then one scale tile (col 0 = 32 row scales)
+    // whose values only segment 0 writes.
+    (void)global_block_end;
+    for (uint32_t k = 0; k < work.num_rows; ++k) {
+        const uint32_t row_tile = work.grp + k * PR_GROUP;
+#if PR_SEGMENTS > 1
+        {
+            // Send this segment's partial max tile into each partner's cb_peers slot for this row parity,
+            // then credit the partner; wait for all partners' credits and hand cb_peers to compute.
+            cb_send_obj.wait_front(1);
+            const uint32_t src_l1 = cb_send_obj.get_read_ptr();
+            for (uint32_t sp = 0; sp < PR_SEGMENTS; ++sp) {
+                if (sp == work.seg) {
+                    continue;
+                }
+                const uint32_t pos = work.seg < sp ? work.seg : work.seg - 1;  // my slot among sp's peers
+                const uint32_t dst_l1 = peers_base + ((k & 1) * (PR_SEGMENTS - 1) + pos) * partial_bytes;
+                const uint32_t px = get_arg_val<uint32_t>(PR_XARGS + 1 + 2 * sp);
+                const uint32_t py = get_arg_val<uint32_t>(PR_XARGS + 2 + 2 * sp);
+                noc_async_write(src_l1, get_noc_addr(px, py, dst_l1), partial_bytes);
+            }
+            noc_async_write_barrier();
+            for (uint32_t sp = 0; sp < PR_SEGMENTS; ++sp) {
+                if (sp != work.seg) {
+                    peers_sem.up(
+                        noc,
+                        get_arg_val<uint32_t>(PR_XARGS + 1 + 2 * sp),
+                        get_arg_val<uint32_t>(PR_XARGS + 2 + 2 * sp),
+                        1);
+                }
+            }
+            cb_send_obj.pop_front(1);
+            peers_sem.wait_min((PR_SEGMENTS - 1) * (k + 1));
+            cb_peers_obj.reserve_back(PR_SEGMENTS - 1);
+            cb_peers_obj.push_back(PR_SEGMENTS - 1);
+        }
+#endif
         const uint32_t batch = row_tile / row_tiles_per_batch;
         const uint32_t local_row_base = (row_tile % row_tiles_per_batch) * tile_h;
         const uint32_t row_base = batch * rows_per_batch + local_row_base;
         const uint32_t rows_left = rows_per_batch - local_row_base;
         const uint32_t n_rows = rows_left < tile_h ? rows_left : tile_h;
-        for (uint32_t c = 0; c < PR_CHUNKS; ++c) {
+        for (uint32_t c = work.seg * PR_CPS; c < (work.seg + 1) * PR_CPS; ++c) {
             cb_output_e4m3_obj.wait_front(tiles_per_block);
             for (uint32_t r = 0; r < n_rows; ++r) {
                 noc.async_write(
@@ -196,7 +271,8 @@ void kernel_main() {
         cb_scale_tiles_obj.pop_front(1);
         // packed: 16-B write (scale + zero pad) into the row's 64-B tail; else the 4-B [.., 1] scale page
         constexpr uint32_t run = pack_scales_in_row ? 16 : 4;
-        for (uint32_t r = 0; r < n_rows; ++r) {
+        const uint32_t scale_rows = work.seg == 0 ? n_rows : 0;  // every segment holds the same scale
+        for (uint32_t r = 0; r < scale_rows; ++r) {
             tok[r * scale_page_words + 0] = block_scales[0][r];
             tok[r * scale_page_words + 1] = 0;
             tok[r * scale_page_words + 2] = 0;

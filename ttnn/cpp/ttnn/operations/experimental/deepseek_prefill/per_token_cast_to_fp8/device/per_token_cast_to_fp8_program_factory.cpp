@@ -142,8 +142,15 @@ KernelIds build_kernels_and_cbs(
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * tiles_per_block * in_tile_bytes, {{cb_in_idx, input_df}})
-                                         .set_page_size(cb_in_idx, in_tile_bytes);
+    // Per-row scale: the reader keeps whole column segments resident (both passes read them); the compute holds
+    // rows k and k+1 at once (software pipeline), so three segments let the reader run one row ahead.
+    const uint32_t in_block_tiles = attrs.per_row_scale
+                                        ? (chunks_per_row / std::stoul(defines.at("PR_SEGMENTS"))) * tiles_per_block
+                                        : tiles_per_block;
+    const uint32_t in_blocks = attrs.per_row_scale ? 3u : 2u;
+    CircularBufferConfig cb_in_cfg =
+        CircularBufferConfig(in_blocks * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
+            .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
@@ -152,7 +159,14 @@ KernelIds build_kernels_and_cbs(
     make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
     make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);      // col0 = scale, per scale block
     if (attrs.per_row_scale) {
-        make_fp32_tile_cb(CBIndex::c_2, chunks_per_row);  // per-chunk row maxima of one tile-row
+        const uint32_t segments = std::stoul(defines.at("PR_SEGMENTS"));
+        make_fp32_tile_cb(CBIndex::c_2, 2);                           // folded max|x| tile of one segment
+        make_fp32_tile_cb(CBIndex::c_20, chunks_per_row / segments);  // per-chunk max|x| tiles of one segment
+        make_fp32_tile_cb(CBIndex::c_18, 2);                          // own partial row max (rows k and k+1 in flight)
+        if (segments > 1) {
+            make_fp32_tile_cb(CBIndex::c_17, 2);                   // partial row max -> writer -> partners
+            make_fp32_tile_cb(CBIndex::c_19, 2 * (segments - 1));  // partners' partials, double-buffered by row
+        }
     }
     make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
@@ -288,7 +302,12 @@ KernelIds build_kernels_and_cbs(
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
         "compute_per_token_cast_to_fp8.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = defines});
+        ComputeConfig{// x * (1/scale): with a power-of-two scale SrcB carries no low mantissa bits, so HiFi2 is already
+                      // exact and halves the multiply's fidelity phases; arbitrary scales keep HiFi4.
+                      .math_fidelity = round_scale_to_power_of_two ? MathFidelity::HiFi2 : MathFidelity::HiFi4,
+                      .fp32_dest_acc_en = true,
+                      .compile_args = compute_ct_args,
+                      .defines = defines});
 
     return ids;
 }
@@ -335,7 +354,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         row_tiles_per_plane = div_up(rows_per_plane, tile_h);  // tile-rows per plane (R padded up to tile_h)
         total_units = num_planes * row_tiles_per_plane * (attrs.per_row_scale ? 1u : chunks_per_row);
         if (attrs.per_row_scale) {
-            defines["PER_ROW_SCALE"] = "1";  // work unit = one tile-row; two passes over its chunks
+            defines["PER_ROW_SCALE"] = "1";  // work unit = a column segment of a tile-row; two passes over it
             defines["PR_CHUNKS"] = std::to_string(chunks_per_row);
             if (input.dtype() != DataType::FLOAT32) {
                 defines["PR_DIRECT_SCALE"] = "1";  // pass 2 scales straight from the input CB (exact in SrcA)
@@ -356,6 +375,29 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     Program program{};
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
+    // Per-row scale: split each tile-row's width into pr_segments column segments over fixed partner cores
+    // (see kernels/dataflow/per_row_assignment.hpp), so few tile-rows still spread over the grid. A count-aware
+    // expert buffer's row count is only known on device; it is typically above the grid, so use 4 segments.
+    uint32_t pr_segments = 1, pr_group = 0;
+    if (attrs.per_row_scale) {
+        const uint32_t grid = compute_grid.x * compute_grid.y;
+        const uint32_t max_segments = attrs.token_count_aware ? 4u : std::max<uint32_t>(1u, grid / total_units);
+        for (uint32_t d = 1; d <= std::min<uint32_t>(max_segments, 8u); ++d) {
+            if (chunks_per_row % d == 0) {
+                pr_segments = d;
+            }
+        }
+        pr_group = grid / pr_segments;
+        num_cores = grid;
+        all_cores = CoreRangeSet{CoreRange{{0, 0}, {compute_grid.x - 1, compute_grid.y - 1}}};
+        defines["PR_SEGMENTS"] = std::to_string(pr_segments);
+        defines["PR_GROUP"] = std::to_string(pr_group);
+        defines["PR_CPS"] = std::to_string(chunks_per_row / pr_segments);
+        defines["PR_CB_SEND"] = std::to_string(static_cast<uint32_t>(CBIndex::c_17));
+        defines["PR_CB_OWN"] = std::to_string(static_cast<uint32_t>(CBIndex::c_18));
+        defines["PR_CB_PEERS"] = std::to_string(static_cast<uint32_t>(CBIndex::c_19));
+        defines["PR_CB_CHUNK"] = std::to_string(static_cast<uint32_t>(CBIndex::c_20));
+    }
     if (attrs.token_count_aware) {
         // The host does not know the valid prefix: light up the whole grid; each core sizes its slice on device.
         num_cores = compute_grid.x * compute_grid.y;
@@ -383,9 +425,35 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const uint32_t dst_scale_addr = output_scale.buffer()->address();
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
+    // Per-row exchange args (writer): semaphore id, then the NoC (x, y) of each segment's core in this group.
+    const uint32_t peers_sem = attrs.per_row_scale ? CreateSemaphore(program, all_cores, 0) : 0;
+    auto per_row_exchange_args = [&](uint32_t i) {
+        std::vector<uint32_t> args{peers_sem};
+        const uint32_t grp = i % pr_group;
+        for (uint32_t sp = 0; sp < pr_segments; ++sp) {
+            const auto noc = input.device()->worker_core_from_logical_core(all_cores_vec[sp * pr_group + grp]);
+            args.push_back(noc.x);
+            args.push_back(noc.y);
+        }
+        return args;
+    };
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
+        if (attrs.per_row_scale && !attrs.token_count_aware) {
+            // Rows i % group, + group, ... of segment i / group (cores past segments * group idle).
+            const uint32_t grp = i % pr_group;
+            const uint32_t my_rows =
+                (i < pr_segments * pr_group && total_units > grp) ? (total_units - grp + pr_group - 1) / pr_group : 0;
+            SetRuntimeArgs(program, k.reader, core, {src_addr, i, total_units});
+            std::vector<uint32_t> wargs{
+                dst_e4m3_addr, dst_scale_addr, i, total_units, rows_per_plane, row_tiles_per_plane};
+            const auto x = per_row_exchange_args(i);
+            wargs.insert(wargs.end(), x.begin(), x.end());
+            SetRuntimeArgs(program, k.writer, core, wargs);
+            SetRuntimeArgs(program, k.compute, core, {my_rows});
+            continue;
+        }
         const uint32_t core_units = units_for_core_from_split(core, crs1, crs2, upc1, upc2);
         uint32_t num_blocks = 0;
         if (attrs.token_count_aware) {
@@ -398,20 +466,22 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                  tensor_args.expert_token_counts->buffer()->address(),
                  tensor_args.global_expert_idx_table->buffer()->address(),
                  i});
-            SetRuntimeArgs(
-                program,
-                k.writer,
-                core,
-                {dst_e4m3_addr,
-                 dst_scale_addr,
-                 0u,
-                 0u,
-                 rows_per_plane,
-                 row_tiles_per_plane,
-                 tensor_args.expert_region_offsets->buffer()->address(),
-                 tensor_args.expert_token_counts->buffer()->address(),
-                 tensor_args.global_expert_idx_table->buffer()->address(),
-                 i});
+            std::vector<uint32_t> wargs{
+                dst_e4m3_addr,
+                dst_scale_addr,
+                0u,
+                0u,
+                rows_per_plane,
+                row_tiles_per_plane,
+                tensor_args.expert_region_offsets->buffer()->address(),
+                tensor_args.expert_token_counts->buffer()->address(),
+                tensor_args.global_expert_idx_table->buffer()->address(),
+                i};
+            if (attrs.per_row_scale) {
+                const auto x = per_row_exchange_args(i);
+                wargs.insert(wargs.end(), x.begin(), x.end());
+            }
+            SetRuntimeArgs(program, k.writer, core, wargs);
             SetRuntimeArgs(program, k.compute, core, {0u});
             continue;
         }

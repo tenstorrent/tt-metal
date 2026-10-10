@@ -22,8 +22,10 @@ struct CountAwareRange {
     uint32_t num_blocks;
 };
 
+// Valid tile-rows of an expert buffer: max over this chip's experts of region_offset + ceil(count, tile_h),
+// clamped to max_rows, in tile-rows. Reads the three routing tables once.
 template <typename RegionT, typename CountsT, typename TableT>
-inline CountAwareRange count_aware_block_range(
+inline uint32_t count_aware_valid_tile_rows(
     Noc& noc,
     const RegionT& region,
     const CountsT& counts,
@@ -33,10 +35,7 @@ inline CountAwareRange count_aware_block_range(
     CircularBuffer& table_scratch,
     uint32_t experts_per_chip,
     uint32_t max_rows,
-    uint32_t tile_h,
-    uint32_t chunks_per_row,
-    uint32_t core_id,
-    uint32_t num_cores) {
+    uint32_t tile_h) {
     region_scratch.reserve_back(1);
     counts_scratch.reserve_back(1);
     table_scratch.reserve_back(1);
@@ -61,7 +60,27 @@ inline CountAwareRange count_aware_block_range(
     if (valid_rows > max_rows) {
         valid_rows = max_rows;
     }
-    const uint32_t total_blocks = ((valid_rows + tile_h - 1) / tile_h) * chunks_per_row;
+    return (valid_rows + tile_h - 1) / tile_h;
+}
+
+template <typename RegionT, typename CountsT, typename TableT>
+inline CountAwareRange count_aware_block_range(
+    Noc& noc,
+    const RegionT& region,
+    const CountsT& counts,
+    const TableT& table,
+    CircularBuffer& region_scratch,
+    CircularBuffer& counts_scratch,
+    CircularBuffer& table_scratch,
+    uint32_t experts_per_chip,
+    uint32_t max_rows,
+    uint32_t tile_h,
+    uint32_t chunks_per_row,
+    uint32_t core_id,
+    uint32_t num_cores) {
+    const uint32_t valid_tile_rows = count_aware_valid_tile_rows(
+        noc, region, counts, table, region_scratch, counts_scratch, table_scratch, experts_per_chip, max_rows, tile_h);
+    const uint32_t total_blocks = valid_tile_rows * chunks_per_row;
     const uint32_t start = (total_blocks * core_id) / num_cores;
     const uint32_t end = (total_blocks * (core_id + 1)) / num_cores;
     return {start, end - start};
