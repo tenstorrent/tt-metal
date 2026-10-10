@@ -564,8 +564,8 @@ void kernel_main() {
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                        // As for the subblock pack: the block run does not pay off for these subblocks.
-                        if constexpr (out_subblock_w == 1 && in0_block_w < 4) {
+                        // As for the subblock pack, but with packer L1 accumulate the block run still pays off here.
+                        if constexpr (out_subblock_w == 1 && in0_block_w < 4 && !packer_l1_acc) {
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, untilize_mode_out_cb_id);
                             }
