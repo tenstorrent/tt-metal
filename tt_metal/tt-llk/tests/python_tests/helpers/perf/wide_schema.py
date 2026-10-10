@@ -126,6 +126,7 @@ DB_SCHEMA = [
     Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
     Column("partial_a", "bool", True, "configuration"),
+    Column("pack_untilize_init", "string", True, "configuration"),
     Column("partial_b", "bool", True, "configuration"),
     Column("partial_face_math", "bool", True, "configuration"),
     Column("partial_face_pack", "bool", True, "configuration"),

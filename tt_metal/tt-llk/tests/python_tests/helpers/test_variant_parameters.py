@@ -873,6 +873,18 @@ class PERF_RUN_TYPE(TemplateParameter):
 
 
 @dataclass
+class PACK_UNTILIZE_INIT(TemplateParameter):
+    """Where the pack untilize init runs: "once" before the loop, or per block as "standard" (pack_untilize_dest_init)
+    or "custom" (custom_pack_untilize_dest_init)."""
+
+    pack_untilize_init: str = "once"
+
+    def convert_to_cpp(self) -> str:
+        form = ("once", "standard", "custom").index(self.pack_untilize_init)
+        return f"constexpr int PACK_UNTILIZE_INIT = {form};"
+
+
+@dataclass
 class REDUCE_POOL_TYPE(TemplateParameter):
     reduce_pool_type: ReducePool
 
