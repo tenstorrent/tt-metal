@@ -25,3 +25,23 @@ Wait on probe.sh t288-off-b. Then: done markers of all five; out_{on,off}/PASS; 
 PSNR/PCC of out_on vs out_off mp4 (ffmpeg psnr + numpy on decoded frames); still frames;
 copy small artifacts to tt-project/t288/. Cleanup: dit-h3hf/minimax-h3/transformer_precomputed_adaln
 if not kept, hyperflow model if no follow-up needs it.
+
+## 2026-10-10 05:10 PDT (run 1359): blx03 runs all failed, blx03 down, move refused
+- blx03 serial runner (900 MHz clamp), every arm failed on the #286 warm deadline (400 s), none
+  reached denoise, so there are no timings or videos:
+  - t288-off-a broker 853: 395.9 s call, "warm deadline 400 s passed in Initializing bucket buffers".
+  - t288-on-a broker 855: 399.1 s call, "warm deadline 400 s passed in Warming prompt encoder keyframe layouts".
+  - t288-on-b broker 857: 411.9 s call, same bucket-buffer deadline.
+  - t288-on-c broker 860: DROP 06:34:37 UTC (status=killed, chips 12 and 8, trays 1-4), then
+    broker-kill 06:47:43 UTC (chips unknown); T288_EXIT=137. Our job; blx03 later went out of service.
+- Removed our leftovers from the blx03 runner: queue/...t288-off-b.job and running/t288-on-c.{job,state}
+  moved to /var/tmp/fasth3/runner/parked/t288-moved-blx01/ (nothing else touched).
+- blx01 refused (coordinator 05:02 PDT, #330): MiniMax-H3 is 135 GB (blx03), dit-h3hf cache 152 GB;
+  blx01 footprint already ~140 of 150 GB. No weights copied.
+- Branch ttp/t288-adaln-ab pushed to origin at f7266236d90 (ttp push --own passed this time).
+
+## Next step (when blx03 is back: tt-project/state/ready/g14blx03.READY)
+The cold test does not fit 600 s at the 900 MHz clamp: warmup alone passes 400 s. Before requeueing,
+cut warm work so one arm finishes in ~400 s: e.g. init only the 1344x768/5 s bucket buffer instead of
+all 26 buckets, and skip keyframe-layout warmups the fl2va 5 s run does not use (or run at full AICLK).
+Then requeue off then on (on needs its precomputed-AdaLN cache: a cache-only job first, then the timed run).
