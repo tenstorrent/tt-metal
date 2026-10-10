@@ -270,6 +270,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
                     }
+                    // release the dest section as production's tile_regs_release does: every section starts with drained packers
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
