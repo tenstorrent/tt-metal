@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T05:45:38.193475+00:00",
+  "generated_at": "2026-10-10T05:58:05.755142+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -66,6 +66,11 @@
       "path": "demo/probe_gdn_flat_prepare.py",
       "bytes": 7728,
       "sha256": "28384cd1af24ae32dd75b8b5b5e7cfaed28694fe66d9f2eb6013908f2c000539"
+    },
+    {
+      "path": "demo/probe_gdn_frontend.py",
+      "bytes": 9929,
+      "sha256": "dc5140bf02008beba3fed073dc66da726818b8a7bebbc03db853bafbae47bdb4"
     },
     {
       "path": "demo/probe_hf_head.py",
@@ -154,13 +159,13 @@
     },
     {
       "path": "experiments/B16_PRIORITIES.md",
-      "bytes": 12172,
-      "sha256": "b80f0d34802da80bf816687da731188174fcefb992f7e9add951e9f4c6c36b8f"
+      "bytes": 16502,
+      "sha256": "eec24708585f59085aa875234843074fd1a767cdc7c23498dea4f39fcbbbd0f1"
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 143088,
-      "sha256": "7f5293a8a7496394181325e334a2ff3de3048dd9636c1ff91e556dbecf67c3f3"
+      "bytes": 146225,
+      "sha256": "276cde8cd577743d1481f125b273af1846503b78e830257d5253d38131a74f5f"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -3362,6 +3367,166 @@
       "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/simulator-unit.txt",
       "bytes": 92,
       "sha256": "ea0db5098c663e25392630f289e0eeea73b470d718a15566d487588268c126cb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/README.md",
+      "bytes": 2575,
+      "sha256": "cd49b6327c7b1287164ad2995d7f0316751f8337f6cb367752afb110248cc3af"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/launch.json",
+      "bytes": 2186,
+      "sha256": "9accb68cb739fc9a53d8c8cdfecf7d564051593b363fdbf7348ce883ac4749ad"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/preflight.log.gz",
+      "bytes": 371,
+      "sha256": "9f38a6430512d4a62c6355aa4d12bea492b1499f610c0f1d276a98c91f4c2305"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/probe-source.py.gz",
+      "bytes": 2727,
+      "sha256": "baa6c33f3e822ce2688a69c82624583897bc76af17df3c023a04b4384896d6fe"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/probe.json",
+      "bytes": 409,
+      "sha256": "25babbfb5ce2564e807ede2e5d76f87690ebfbf8c84fa6543f6a80eb37a9ff83"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/run.log.gz",
+      "bytes": 5554,
+      "sha256": "8a26e4b4c9f38ff34d6584cedc4744d2dcea766be2670525550e5a712771b2d2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/source-manifest.json",
+      "bytes": 905,
+      "sha256": "38c5eda8a6789487577c934c07fe95eb3dd3f43527544cb04a59972735ac885a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-1/terminal-observation.json",
+      "bytes": 391,
+      "sha256": "98a6555ed4e2d3685f25d49ed431ff5a27812da0ef8334f1afedffad668dea5b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/launch.json",
+      "bytes": 2186,
+      "sha256": "11a76acba63dbc55d8bd88185561eeba9e482bce45c7a24311521e8124c297a0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/preflight.log.gz",
+      "bytes": 371,
+      "sha256": "d25791eaf96b7b110566cb933c299932f820ca0d321655f8d6ff34fb033f32fc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/probe-source.py.gz",
+      "bytes": 2812,
+      "sha256": "ec1860d2a518939100382f942e4d4af8850787a25d90f1ce43e6f9723c4950b6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/probe.json",
+      "bytes": 476,
+      "sha256": "47b9e15d6cbb392bf60cfa9eb6aeaf72f7e4d12da76f55adddb7890946862b6b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/run.log.gz",
+      "bytes": 5790,
+      "sha256": "82bfb1ce8d7ccb88fc130848419843080fbab12be57770dd2ece714aed998d50"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/source-manifest.json",
+      "bytes": 905,
+      "sha256": "5ae1d1e5488fc6f5d99b48c066d750f44871d0197c7e1e4ead5c87c504f5b704"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-2/terminal-observation.json",
+      "bytes": 391,
+      "sha256": "30d6f0738537b8d5269de19cd126cf9d90e29b75f261fd695714b64e07360602"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/launch.json",
+      "bytes": 2186,
+      "sha256": "1d8eae3d4217984a53ae7328f4e541839f72def9df3e1ae0c85b59bf4351ddd2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/preflight.log.gz",
+      "bytes": 370,
+      "sha256": "276ecd6d851346fc71192ea2500c70fbec88c52ec1c751ea2652a5fd730dd467"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/probe-source.py.gz",
+      "bytes": 3054,
+      "sha256": "3ef319a8f4123df07e0206ba469823c88cd23fccff89bc5ec3cd9afe1248f393"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/probe.json",
+      "bytes": 486,
+      "sha256": "d5c7342c25a91ee263f11570ebcd5e6aa9c4e3ae2d5cac59b4da552a2f683041"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/run.log.gz",
+      "bytes": 5795,
+      "sha256": "cdf2e5bc1ddd5ae6f0256f637c86a32ba14aa8dcbec1ce9631c0adea207d1b6b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/source-manifest.json",
+      "bytes": 905,
+      "sha256": "72796df32d5b1cff56965d33ddb8223f560e511fe23737bb76f6123521389114"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-3/terminal-observation.json",
+      "bytes": 391,
+      "sha256": "2290617f09b919872dd21a4cd41481d2989e124f5799d476861b67113c61a145"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/launch.json",
+      "bytes": 2186,
+      "sha256": "0cad1cd24f32ed9b727e8ea894e1972efa14447634eaa2e276f8f93f771ea334"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/preflight.log.gz",
+      "bytes": 370,
+      "sha256": "d77a809ede59600f24e094fd85098c4ef60d7c75cf60e1b141161f9b08dd54ed"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/probe-source.py.gz",
+      "bytes": 3076,
+      "sha256": "08f96c508ac281f058d8aa1d988571c4ff42a23d12df666243d76f1f9939b1e8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/probe.json",
+      "bytes": 476,
+      "sha256": "af347d506a9f14889ac73c635f5e59aabe82886772d6a24fb4379187613dcbf1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/run.log.gz",
+      "bytes": 5791,
+      "sha256": "6b0034b819333a49d427704cf053cb17db57f01eefde9987ff33cbb18134d306"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/source-manifest.json",
+      "bytes": 905,
+      "sha256": "633fd2dbcfb1128594c84ff023b74dde58a72e6a36630edded15ea608e567768"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/attempt-4/terminal-observation.json",
+      "bytes": 391,
+      "sha256": "9f3a2f3cc6e2fdbb6fd477ef2612d65c3bd72c3f0c97012403be5dece5807a5b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/launch.json",
+      "bytes": 2186,
+      "sha256": "9accb68cb739fc9a53d8c8cdfecf7d564051593b363fdbf7348ce883ac4749ad"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/preflight.log.gz",
+      "bytes": 371,
+      "sha256": "9f38a6430512d4a62c6355aa4d12bea492b1499f610c0f1d276a98c91f4c2305"
+    },
+    {
+      "path": "galaxy-evidence/gdn-frontend-sim-launch-v1/source-manifest.json",
+      "bytes": 905,
+      "sha256": "38c5eda8a6789487577c934c07fe95eb3dd3f43527544cb04a59972735ac885a"
     },
     {
       "path": "galaxy-evidence/gdn-fusion-progress-v1/README.md",

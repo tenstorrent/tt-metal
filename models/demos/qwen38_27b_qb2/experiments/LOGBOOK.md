@@ -1941,3 +1941,48 @@ No session connection is needed for that queue to continue.
   collected raw CSVs locally and published lossless compressed chunks with
   original hashes/reconstruction order. Broader P0 gate remains incomplete,
   but this requested full-model timing reconciliation is complete.
+
+## Oct 10, 05:49 UTC: consume convolution output in its compact layout
+
+- User asked whether transformations can happen while output streams. Audited
+  producer/reader code: current packed convolution retains one of four rows,
+  then untilizes/slices/tilizes each Q/K/V output. The compact prototype writes
+  one row per user directly; its direct-preparation reader handles the layout.
+  It still uses two programs and is not concurrent producer/consumer pipelining.
+- Estimated removable output tilization cost is 3.5 ms/model step, about 5.5%
+  throughput over the control if no replacement cost, or 6.1% over projected
+  combined fusion. This is part of the broader front-end target, not additive.
+- Added CPU-only simulator probe and launched persistent unit
+  qwen38-gdn-frontend-sim-v1-20261010, PID3632342, invocation
+  eec01e6cb8374e278d0eca85641f38cd. B16 public/compact and B32 compact compare
+  exact BF16 native convolution, FP32 prepared outputs, host history chronology,
+  nonaliasing allocations and changed-input rebinding. Synthetic inputs and
+  slow dispatch; physical timing/trace tests remain queued separately.
+- Preflight imports and repository checks passed. The simulator was verified
+  live with a 60-minute timeout, 16-GiB memory limit and two-core CPU quota.
+  Initial local SSH-helper execution was blocked by the sandbox; the explicit
+  escalated retry launched it. Only task-owned host disk/memory was changed.
+- Fusion hardware comparison remains live; B16 prefill/compact-hardware follower
+  waits on its original exact predecessor. No in-flight hardware source changed.
+
+## Oct 10, 05:57 UTC: pipeline scope and simulator boundary
+
+- User asked to overlap matmul and transforms. Confirmed Metal's circular-buffer
+  reader/compute/writer pipeline and existing fused activation/output packing;
+  cross-op overlap still requires explicit compatible programs/buffering.
+  Fusion removes traffic; it does not guarantee all layout work is hideable.
+- Isolated packed GDN projection in the candidate's representative-layer profile:
+  68.95 us matmul plus 55.87 us surrounding reshaping/slicing/redistribution,
+  extrapolating the latter to 2.68 ms over48layers. This is an opportunity pool,
+  not a proven saving, and belongs within the broader front-end estimate.
+- Four CPU-only simulator attempts exited with unsupported SETDVALID/implied
+  source-format handling. The final explicitly fenced diagnostic completed the
+  compact convolution call, then failed in compact FP32 preparation. Phase-only
+  labels in earlier attempts did not prove executed-kernel attribution; the
+  provisional native-layout explanation was not established. No simulator or
+  native runtime edits, no numerical pass, and no hardware speed claim.
+- Retained each failed source/log/receipt and external service terminal status.
+  Fatal simulator exits bypassed Python finalization, leaving stale running
+  receipts; terminal service observations supersede them. Hardware full-model
+  comparison and the B16 follower are both still active with their original
+  identities. B32/32K candidate completed its first two measured repeats.

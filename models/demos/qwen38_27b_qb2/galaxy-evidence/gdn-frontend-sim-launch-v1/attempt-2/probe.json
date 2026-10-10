@@ -1,0 +1,18 @@
+{
+  "state": "running",
+  "passed": false,
+  "cleanup_completed": false,
+  "cases": [],
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "scope": "Synthetic BF16 convolution taps/activations, exact native arithmetic and FP32 preparation on one virtual chip",
+  "updated_at": "2026-10-10T05:53:27Z",
+  "active_case": [
+    16,
+    false,
+    "dram"
+  ],
+  "active_phase": "native_input_layout",
+  "active_allocation": 0
+}

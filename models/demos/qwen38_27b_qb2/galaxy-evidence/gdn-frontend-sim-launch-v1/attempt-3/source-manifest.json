@@ -1,0 +1,9 @@
+{
+  "models/demos/qwen38_27b_qb2/demo/probe_gdn_frontend.py": "0220e5cfbce27171559b14328203aa5c213527fb749a80fdef979aa07421aeae",
+  "models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py": "0e8abc89cf6126a6efabc263a2214fb9a3389526041f3c8b55578b27f1276632",
+  "models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp": "bbbcbb7fad128f39fa105e7a57f3ed68ada87a8de0484b4b146850acc18f7e40",
+  "models/demos/qwen38_27b_qb2/tt/gdn_frontend/op.py": "0ab52f0345bd133ec0b5ef536b63bd7444b14297cb45267fda8b913a8c2a5d75",
+  "models/demos/qwen38_27b_qb2/tt/gdn_frontend/reader.cpp": "58126174d4232fb8457ce46d9894737339e6d3f35b90e117c84c825e9c06f482",
+  "models/demos/qwen38_27b_qb2/tt/gdn_frontend/compute.cpp": "dd70841da8058264a5ef179516e4a79123a170797e75fa4a936559c6ad4b1259",
+  "models/demos/qwen38_27b_qb2/tt/gdn_frontend/writer.cpp": "6330d7833351d2452467559504ed28e22d008c0fa3c56e7f8687c50a043c3120"
+}

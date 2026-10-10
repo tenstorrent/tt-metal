@@ -1,0 +1,11 @@
+{
+  "observed_at": "2026-10-10T05:58:05.347310+00:00",
+  "unit": "qwen38-gdn-frontend-sim-v1-20261010.service",
+  "InvocationID": "eec01e6cb8374e278d0eca85641f38cd",
+  "MainPID": 0,
+  "ActiveState": "failed",
+  "Result": "exit-code",
+  "ExecMainStatus": 1,
+  "probe_state_is_stale": true,
+  "reason": "Simulator fatal UnsupportedFunctionality bypassed Python cleanup/receipt finalization"
+}

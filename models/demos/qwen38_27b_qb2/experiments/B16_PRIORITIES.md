@@ -160,6 +160,72 @@ current6.8-ms fusion projection is part of those savings, not additive to
 them. P0 determines which costs can be eliminated or overlapped before
 assigning the next implementation. Profiling itself has zero direct speedup.
 
+### Completed full-model reconciliation
+
+The P0 timing capture completed at 05:39:31 UTC after CPU-only export recovery;
+no second hardware capture was needed. All 64 layers, four ranks and three
+replays are present. Longest device spans agree with the corresponding fenced
+host steps within 0.403-0.461%. Profiled and unprofiled output hashes match.
+The unprofiled step is 67.24 ms; profiling adds 7.46% median overhead.
+
+Profiled kernel-family medians are 22.58 ms for layout/padding/slicing/conversion,
+18.89 ms for matmuls, 12.63 ms for SDPA and 14.82 ms for other kernels. These
+are kernel sums, not a disjoint wall-time budget. Only 0.336 ms is uncovered
+between operations. Prioritize eliminating intermediate device work over
+reducing launch gaps. This does not establish hardware DRAM utilization or
+NoC saturation. [Full capture and recovery](../galaxy-evidence/p0-priority-v1/README.md).
+
+### Transforming data while producing or consuming tiles
+
+Fold local layout changes into a producer's pack/write path or its consumer's
+reader instead of materializing an intermediate tensor and converting it in a
+separate operation. Direct preparation already expands BF16 to FP32 and packs
+head vectors in its reader. The next compact convolution prototype computes
+only the retained row per user and writes compact tiled Q/K/V directly; its
+preparation reader consumes that representation. L1 output is one test variant,
+not a qualified model placement. Separate programs still have a dispatch
+boundary: this prototype does not pipeline their execution concurrently.
+
+The three current convolution-output tilizations cost about 73 us per GDN
+layer in the bounded profile, or 3.5 ms over 48 layers. Removing that cost
+without replacement work projects about 5.5% decode throughput gain over the
+67.24-ms control, or about 6.1% over the projected 60.44-ms fusion candidate.
+Do not double-count it within the broader 10-20% front-end target. Additional
+history/concat/slice savings and the compact kernel's own cost need measurement.
+Cross-core redistribution and normalization reductions still require explicit
+communication/synchronization; fusing layouts does not make those costs free.
+
+The bounded CPU-only simulator screen is designed to test B16 public/compact inputs
+and B32 compact inputs, DRAM/L1, alternating allocations, changed inputs,
+exact native convolution/preparation outputs and independent host history
+chronology. It uses synthetic taps/activations and cannot qualify performance,
+trace replay, TP4 communication or full-model accuracy. The existing physical
+test retains those device-specific checks. Simulation does not take the Galaxy
+hardware lock or replace the queued physical comparison. All four attempts
+exited on an unsupported SETDVALID/source-format interaction; the explicitly
+fenced attempt located it in compact preparation after convolution. No
+numerical comparison completed. Physical qualification remains pending.
+
+The next producer/consumer boundary is the packed GDN projection. Its B16
+candidate profile contains 68.95 us of matmul and 55.87 us of surrounding
+reshape/slice/redistribution per representative layer. Scaling the latter by
+48 gives 2.68 ms/model step, an opportunity pool rather than a promised saving
+(about 4.2% throughput if removed completely from the 67.24-ms control).
+Consume compact projection tiles directly and fuse any unavoidable packing
+into the writer/reader before attempting cross-program overlap. This cost is
+distinct from the three convolution-output tilizations but both belong within
+the broader front-end target; do not add their percentage estimates.
+
+Metal's reader, matrix compute and writer already permit tile pipelining via
+circular buffers. Matmul also has existing fused activation/output-packing
+implementations, but those are not a blanket capability of every DRAM-sharded
+configuration. Extending the current path requires compatible tile ownership,
+precision/rounding and persistent buffer lifetime. Extra transforms contend for
+pack/SFPU/register/NoC capacity; reductions still wait for their input groups.
+Separate programs do not overlap merely because they are captured in a trace.
+Acceptance must measure the complete producer-to-consumer region, including
+communication, backpressure and drains, with the same BF16/FP32 boundaries.
+
 ## Queued work and scope
 
 `qwen38-b16-priority-v2-20261010.service` waits for the exact invocation of
