@@ -1249,7 +1249,12 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
 
-    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
+    corner_cases = [0, 1, -1, 2147483647, -2147483647]
+    if not is_wormhole_b0():
+        # INT32_MIN wraps to 0 in the Wormhole SFPU (see test_unary_int32.py, logical_not note);
+        # on Blackhole it is a real value and gtz/lez used to compare it wrong.
+        corner_cases.append(-2147483648)
+    corner_cases = torch.tensor(corner_cases, dtype=torch.int32)
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
