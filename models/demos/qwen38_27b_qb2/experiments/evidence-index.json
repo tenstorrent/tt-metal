@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:46:32.594498+00:00",
+  "generated_at": "2026-10-10T18:47:59.793104+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -194,8 +194,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 169368,
-      "sha256": "cf32197ec92d88d248b6b7d54863566ac347d70c4a2651515b263d2950bf644f"
+      "bytes": 169715,
+      "sha256": "69a84ae53dcf623fbc34ccd2c85433891fc164dbf10725a69a6d434510a4d026"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -2148,13 +2148,23 @@
     },
     {
       "path": "galaxy-evidence/compact-long-horizon-v2/README.md",
-      "bytes": 3138,
-      "sha256": "aea3900cf4ed1f671e2a4805b67dbdd998384001682b69f0a8d5920d31607b52"
+      "bytes": 3434,
+      "sha256": "7e649ac55dbc9451c096d5bcf9f0390ef6604366bcc91708b24b927e8a302fac"
     },
     {
       "path": "galaxy-evidence/compact-long-horizon-v2/frozen-gdn-reader.cpp.gz",
       "bytes": 1189,
       "sha256": "76bda242e9ff4deaca501088ef6080f3bfd5c01ebc26248fb935d8669bf16264"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-gdn-v3/before/sweep.json",
+      "bytes": 16917,
+      "sha256": "7ceea33567abf2f58656a28e617bbcf9c11fa174268f350d212b6e4a021e9251"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-gdn-v3/queue.json",
+      "bytes": 3059,
+      "sha256": "dc8871e530eccef7d30756cf688dfaa94368c9bce8693a44bf57fe54ed01f9c6"
     },
     {
       "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v1/preflight.log.gz",

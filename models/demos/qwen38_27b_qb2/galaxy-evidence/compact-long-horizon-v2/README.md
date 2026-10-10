@@ -49,3 +49,8 @@ checkout: the frozen convolution reader predates clang-format. The retained
 diff contains only line wrapping; all other model/config hashes match. The
 exact frozen reader is archived with its hash for replay. Active and follow-up
 model sources still match each other exactly; neither was edited.
+
+The retained compact-v3 before-control snapshot completed its32K cell at
+16.583725 TSU /60.300082ms and95.996245s median TTFT. Its16K cell was still
+pending, so the arm and full comparison were incomplete. This repeats the
+qualified baseline; no compact full-model speedup is established by it.
