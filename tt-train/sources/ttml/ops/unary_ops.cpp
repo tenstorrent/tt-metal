@@ -76,11 +76,12 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
 }
 
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
-    auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
+    const auto normalized_dim = static_cast<int>(ttnn_fixed::normalize_dim(tensor->get_value().logical_shape(), dim));
+    auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), normalized_dim);
     auto out = autograd::create_tensor(log_softmax);
-    autograd::GradFunction grad = [tensor, out, dim]() {
+    autograd::GradFunction grad = [tensor, out, normalized_dim]() {
         auto softmax = ttnn::exp(out->get_value());
-        auto sum_grad_over_dim = ttnn_fixed::sum_over_dim(out->get_grad(), dim);
+        auto sum_grad_over_dim = ttnn_fixed::sum_over_dim(out->get_grad(), normalized_dim);
         auto grad = ttnn::subtract(out->get_grad(), ttnn::multiply(softmax, sum_grad_over_dim));
         tensor->add_grad(grad);
     };
@@ -89,9 +90,10 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
+    const auto normalized_dim = static_cast<int>(ttnn_fixed::normalize_dim(tensor->get_value().logical_shape(), dim));
     auto log_softmax = ttnn::moreh_softmax(
         tensor->get_value(),
-        /* axis */ dim,
+        /* axis */ normalized_dim,
         /* output */ std::nullopt,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
@@ -99,11 +101,11 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
     auto out = autograd::create_tensor(log_softmax);
 
-    autograd::GradFunction grad = [tensor, out, dim]() {
+    autograd::GradFunction grad = [tensor, out, normalized_dim]() {
         auto grad = ttnn::moreh_softmax_backward(
             out->get_value(),
             out->get_grad(),
-            /* axis */ dim,
+            /* axis */ normalized_dim,
             /* output */ std::nullopt,
             ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::LOGSOFTMAX,
             ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
