@@ -43,7 +43,81 @@ struct ControlTables {
         return dg_index + 1 < dispatch_group_size ? offsets[(dg_index + 1) * num_routed_experts + e]
                                                   : region[e] + counts[e];
     }
+
+#ifdef CMBF2D_OVERLAPPED
+    // This ring's rows of global_expert_idx_table, one per chip, `expert_row_words` apart.
+    volatile tt_l1_ptr uint32_t* expert_ids;
+    uint32_t expert_row_words;
+
+    // The global id of the expert in slot `local` of ring chip `dg_index`.
+    uint32_t expert_id(uint32_t dg_index, uint32_t local) const {
+        return expert_ids[dg_index * expert_row_words + local];
+    }
+#endif
 };
+
+#ifdef CMBF2D_OVERLAPPED
+#include "api/debug/assert.h"
+
+// The global expert a chip handles at walk step `step`, in the order the routed expert finishes them. The
+// routed expert runs two passes, every expert with count > threshold then the rest, each in ascending
+// index, so combine walks that order too and each expert is picked up as soon as it is ready. With no
+// threshold there is only the first pass and the order is the identity.
+//
+// The test is on the RAW count, exactly the routed expert's count_in_band: a different reading here would
+// put an expert in the other pass and combine would read that expert's rows before they are written.
+// Built from the replicated counts, so any core can compute it for any chip: a relay sizes a chunk with its
+// ORIGIN chip's order, not its own.
+// Whether the routed expert runs the expert in slot `local` of ring chip `dg_index` in its fused pass, which
+// runs second.
+inline bool in_fused_pass(const ControlTables& ctl, uint32_t dg_index, uint32_t threshold, uint32_t local) {
+    return threshold != 0 && ctl.counts[ctl.expert_id(dg_index, local)] <= threshold;
+}
+
+// The slot, not the global id, of the expert walked at `step`.
+inline uint32_t local_at_step(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t threshold, uint32_t step) {
+    uint32_t seen = 0;
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        for (uint32_t local = 0; local < experts_per_chip; local++) {
+            if (in_fused_pass(ctl, dg_index, threshold, local) == (pass == 1)) {
+                if (seen == step) {
+                    return local;
+                }
+                seen++;
+            }
+        }
+    }
+    ASSERT(false);
+    return step;
+}
+
+inline uint32_t expert_at_step(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t threshold, uint32_t step) {
+    return ctl.expert_id(dg_index, local_at_step(ctl, dg_index, experts_per_chip, threshold, step));
+}
+
+// The `ready` value that says the routed expert has written the expert in slot `local` of THIS chip. Every
+// routed-expert writer reports once per slot it walks, in every pass, and the collector publishes how many
+// walked slots all of them have passed. So an unfused expert is ready once the unified pass has walked past
+// its slot, and a fused one once the unified pass has walked all of them and the fused pass past its slot.
+inline uint32_t ready_target(
+    const ControlTables& ctl, uint32_t dg_index, uint32_t experts_per_chip, uint32_t threshold, uint32_t local) {
+    if (in_fused_pass(ctl, dg_index, threshold, local)) {
+        return experts_per_chip + local + 1;
+    }
+    return local + 1;
+}
+
+// Blocks until this core's `ready` count reaches `target`.
+inline void wait_for_ready(uint32_t ready_sem, uint32_t target) {
+    volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem));
+    invalidate_l1_cache();
+    while (*ready < target) {
+        invalidate_l1_cache();
+    }
+}
+#endif
 
 class GroupWalk {
 public:

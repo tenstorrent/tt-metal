@@ -41,7 +41,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -57,8 +57,9 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 # slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# Both generations carry FABRIC_PAYLOAD_SIZE = 7168, so one device_params axis serves both.
-_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE
+# Both generations carry FABRIC_PAYLOAD_SIZE = EMB_SIZE = 7168, so one device_params axis serves both. This test
+# drives TtMoe through run_model, so on Blackhole it opens room for the overlap instead; see moe_fabric_payload.
+_FABRIC_PAYLOAD_SIZE = moe_fabric_payload(KimiK27Config)
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
 # forward at 896 experts dispatches far more, and records arrive asynchronously from the receiver

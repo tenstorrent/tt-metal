@@ -421,7 +421,10 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    append(descriptor);
+}
 
+void Program::append(const ProgramDescriptor& descriptor) {
     if (descriptor.reload_table.has_value()) {
         internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
     }

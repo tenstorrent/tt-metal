@@ -21,6 +21,7 @@
 // reads' waits poll the y writer (CT 10 Y_MT: row tiles per virtual expert, 11 PCD, 12 HT; RT after the se_dyn.hpp
 // args: y address, first y tile column)
 #include "se_yrm.hpp"
+#include "se_cmb_done.hpp"  // (combine overlap: this core's y writer reports to combine's collector)
 #endif
 
 void kernel_main() {
@@ -84,9 +85,20 @@ void kernel_main() {
         get_compile_time_arg_val(12)>
         yw(get_arg_val<uint32_t>(ya), get_arg_val<uint32_t>(ya + 1));
     uint32_t y_done = 0;
+#ifdef SE_CMB_DONE_RT
+    SeCmbDone cmb;
+    cmb.init(dyn, num_e, true);
+#endif
     auto y_poll = [&]() {
         yw.issue(dyn);
-        y_done += yw.retire(dyn);
+        if (yw.retire(dyn)) {
+            ++y_done;
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(dyn.eid[yw.done_a]);
+            cmb.wrote_entry(dyn, yw.done_a);
+            cmb.report(false);
+#endif
+        }
     };
 #else
     auto y_poll = []() {};
@@ -107,7 +119,9 @@ void kernel_main() {
             l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
+#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
             noc_async_read(src + blk(b + i) * slot * tile_bytes, l1[i], slot * tile_bytes);
+#endif
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {
             y_poll();
@@ -144,6 +158,9 @@ void kernel_main() {
         y_poll();
     }
     noc_async_write_barrier();
+#ifdef SE_CMB_DONE_RT
+    cmb.report();  // the experts this core writes nothing of
+#endif
     noc_async_write_set_trid(0);  // (the next program's plain writes carry ID 0)
 #endif
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean

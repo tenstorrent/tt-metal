@@ -57,6 +57,8 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    moe_overlaps_routed_expert_with_combine = True
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------

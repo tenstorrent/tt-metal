@@ -176,6 +176,10 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
+        # MoE layer. Created on first use; see get_combine_overlap_semaphores.
+        self.combine_overlap_semaphores = None
+
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
         key = (
             tuple(x.shape),
@@ -203,6 +207,21 @@ class TT_CCL:
         index = resources["next"]
         resources["next"] = 1 - index
         return resources["pairs"][index]
+
+    def get_combine_overlap_semaphores(self):
+        """(fwd_arrived, final_arrived, expert_go) for hybrid_routed_expert_moe overlapped with combine.
+
+        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh,
+        shared by all MoE layers, which run one after another and each leave the counts as they found them. On every
+        worker core, so the address is uniform across the mesh and covers both ops' rows.
+        """
+        if self.combine_overlap_semaphores is None:
+            self.combine_overlap_semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)
+            )
+            # Every chip must have zeroed its copies before any neighbour bumps them.
+            ttnn.synchronize_device(self.mesh_device)
+        return self.combine_overlap_semaphores
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.

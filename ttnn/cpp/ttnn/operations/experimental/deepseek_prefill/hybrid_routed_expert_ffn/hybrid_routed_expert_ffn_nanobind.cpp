@@ -28,6 +28,16 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         Each expert is routed at runtime from the device-resident token counts against
         hybrid_token_threshold: at or below it the expert runs on the fused implementation,
         above it on the unified one. One program, so the layer can be overlapped with combine.
+
+        Passing dispatched_metadata overlaps combine_fabric2d in the same program and returns
+        combine's output. dispatched_buffer must then be bfloat16 ROW_MAJOR (the routed expert hands
+        combine bfloat8_b tiles, as the two ops do back to back), and expert_offsets,
+        replicated_global_expert_idx_table (the full table on every device), expert_region_offsets,
+        combine_axis, combine_num_links, num_experts_per_tok and seq_len_per_chip are combine's.
+        The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore and expert_go_semaphore:
+        global semaphores created once, initialised to zero, and passed on every call, since
+        neighbouring chips bump them across launches. Everything else it places in L1 is freed when
+        the call returns.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -44,7 +54,17 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("activation") = RoutedExpertActivation::Silu,
         nb::arg("gate_biases") = nb::none(),
         nb::arg("up_biases") = nb::none(),
-        nb::arg("down_biases") = nb::none());
+        nb::arg("down_biases") = nb::none(),
+        nb::arg("dispatched_metadata") = nb::none(),
+        nb::arg("expert_offsets") = nb::none(),
+        nb::arg("replicated_global_expert_idx_table") = nb::none(),
+        nb::arg("combine_axis") = 0,
+        nb::arg("combine_num_links") = 2,
+        nb::arg("num_experts_per_tok") = 0,
+        nb::arg("seq_len_per_chip") = 0,
+        nb::arg("fwd_arrived_semaphore") = nb::none(),
+        nb::arg("final_arrived_semaphore") = nb::none(),
+        nb::arg("expert_go_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail
