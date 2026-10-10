@@ -102,10 +102,18 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // (see the stamp block in kernels/compute/topk.cpp). The value-side intermediates switch to raw
     // Float32 transport so the tag bits (and exact bf16 bits) survive the pack/unpack round trips,
     // exactly like the fused-key engine's packed CBs.
-    const bool rank_stamped_stable = args.stable && !is_fp32_input && !uint16_output;
+    // On Blackhole a uint16 index output with K <= 128 also takes this engine, its 32-bit index intermediates narrowed
+    // to uint16 at the final pack; at K 128 its CBs take 52 KB more.
+    const bool rank_stamped_stable =
+        args.stable && !is_fp32_input &&
+        (!uint16_output || (tensor_args.input.device()->arch() == tt::ARCH::BLACKHOLE && Ktiles <= 4));
     const tt::DataFormat sort_val_cb_data_format =
         rank_stamped_stable ? tt::DataFormat::Float32 : compute_cb_data_format;
     const uint32_t sort_val_tile_size = tile_size(sort_val_cb_data_format);
+    const bool narrow_indices_at_output = rank_stamped_stable && uint16_output;
+    const tt::DataFormat sort_ind_cb_data_format =
+        narrow_indices_at_output ? tt::DataFormat::UInt32 : output_ind_cb_data_format;
+    const uint32_t sort_ind_tile_size = tile_size(sort_ind_cb_data_format);
 
     // Pipeline Flow:
     // Input DFB -> Reader Kernel -> Transposed DFBs -> Compute Kernel -> Result Prep DFBs -> Output DFBs -> Writer
@@ -154,9 +162,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDEX_DFB,
-        .entry_size = index_tile_size,
+        .entry_size = sort_ind_tile_size,
         .num_entries = input_cb_tile_count,
-        .data_format_metadata = output_ind_cb_data_format,
+        .data_format_metadata = sort_ind_cb_data_format,
     });
 
     // Uses bf16 when input is bfp8/bfp4 so that the insertion sort operates at higher
@@ -170,9 +178,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = TRANSPOSED_IND_DFB,
-        .entry_size = index_tile_size,
+        .entry_size = sort_ind_tile_size,
         .num_entries = transposed_cb_tile_count,
-        .data_format_metadata = output_ind_cb_data_format,
+        .data_format_metadata = sort_ind_cb_data_format,
     });
 
     // Uses bf16 when input is bfp8/bfp4 (same rationale as TRANSPOSED_VAL_DFB).
@@ -185,9 +193,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = RESULT_PREP_IND_DFB,
-        .entry_size = index_tile_size,
+        .entry_size = sort_ind_tile_size,
         .num_entries = result_prep_cb_tile_count,
-        .data_format_metadata = output_ind_cb_data_format,
+        .data_format_metadata = sort_ind_cb_data_format,
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -250,7 +258,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 // Index width must match the index tensor dtype: fp32 requires 32-bit iota.
                 // 16-bit iota packs two indices per word, producing incorrect INT32 reads.
                 {"uint16_output",
-                 static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
+                 static_cast<uint32_t>(sort_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -388,6 +396,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"largest", static_cast<uint32_t>(args.largest)},     // Sort order: largest (true) or smallest (false)
                 {"stable_sort", static_cast<uint32_t>(args.stable)},  // Stable sort: ties keep the lowest index
                 {"rank_stamped", static_cast<uint32_t>(rank_stamped_stable)},
+                {"narrow_indices_at_output", static_cast<uint32_t>(narrow_indices_at_output)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core"}},
         // A 32-bit dest register is needed in two independent cases: a UInt32 index output (wide
@@ -395,7 +404,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         // precision through it. double_buffer_dest is the inverse of the legacy dst_full_sync_en flag.
         .hw_config =
             ComputeHardwareConfig{
-                .enable_32_bit_dest = !uint16_output || is_fp32_input,
+                .enable_32_bit_dest = !uint16_output || is_fp32_input || rank_stamped_stable,
                 .double_buffer_dest = true,
                 .unpack_modes = std::move(compute_unpack_modes),
             },

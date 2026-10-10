@@ -244,7 +244,13 @@ void process_and_sort_tiles(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
+#ifdef ARCH_BLACKHOLE
+        // Only the sorted scores leave this sort (its index tiles are popped unread), and they do not depend on
+        // how equal keys are ordered, so stable_sort runs the plain network here.
+        gate_topk_local_sort</*stable_sort=*/false, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
+#else
         gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
+#endif
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);

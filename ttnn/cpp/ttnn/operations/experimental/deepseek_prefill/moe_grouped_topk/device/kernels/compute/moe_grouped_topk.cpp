@@ -56,6 +56,13 @@ void kernel_main() {
     // Rank-tag stable engine only when the factory certifies TF32 sort keys (see GATE_TAG_BITS).
     constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
     constexpr bool rank_tag = stable_sort && sort_keys_tf32;
+#ifdef ARCH_BLACKHOLE
+    // The writer gathers each token's winning groups in id order (its winning_groups_by_id), so the final top-k's
+    // positional rank tags order ties by expert index.
+    constexpr bool final_rank_tag = rank_tag;
+#else
+    constexpr bool final_rank_tag = false;
+#endif
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
 
     constexpr uint32_t end_phase = log_group_size - 1;
@@ -104,8 +111,7 @@ void kernel_main() {
                 cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
             blocks::topk_group_scores<stable_sort, rank_tag>(
                 cb_group_summed_scores, cb_group_index_template, cb_sorted_group_order, false, false, log_n_groups - 1);
-            // Winning-group tiles arrive in group-sum order, so positional rank tags are not an option here.
-            blocks::topk<stable_sort, /*indices_pretransposed=*/false, /*rank_tag=*/false>(
+            blocks::topk<stable_sort, /*indices_pretransposed=*/false, final_rank_tag>(
                 cb_winning_group_scores,
                 cb_winning_group_indices,
                 cb_final_indices_transposed,

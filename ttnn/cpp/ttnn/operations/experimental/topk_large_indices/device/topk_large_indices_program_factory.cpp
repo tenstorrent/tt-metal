@@ -128,6 +128,10 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
 }
 
+bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim) {
+    return tt::div_up(input_last_dim, to_uint32(snap_to_llk_target_k(k))) >= 2;
+}
+
 std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
     const auto work_split = tt::tt_metal::split_work_to_cores(core_grid, num_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
@@ -181,6 +185,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
     // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
+    // Blackhole's segmented K' 2048 body holds its unfused accumulator here while a later segment is split across the
+    // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back.
+    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -213,6 +220,17 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
     }
 
+    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
+    const bool has_acc = input.device()->arch() == tt::ARCH::BLACKHOLE && llk_target_k == LlkTargetK::K2048 &&
+                         body_mode == ComputeBodyMode::FusedSegmented && multi_chunk_rows(k, input.logical_shape()[-1]);
+    if (has_acc) {
+        const uint32_t acc_tile_bytes = tt::tile_size(tt::DataFormat::UInt32);
+        const auto acc_cb_config = tt::tt_metal::CircularBufferConfig(
+                                       2 * tiles_per_sequence * acc_tile_bytes, {{cb_acc, tt::DataFormat::UInt32}})
+                                       .set_page_size(cb_acc, acc_tile_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, acc_cb_config);
+    }
+
     const bool has_meta = tensor_args.has_valid_length_metadata();
     if (has_meta) {
         auto meta_cb_config =
@@ -239,10 +257,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
-    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
+    compute_compile_args.push_back(multi_chunk_rows(k, input.logical_shape()[-1]) ? 1u : 0u);
+    compute_compile_args.push_back(has_acc ? cb_acc : 0u);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
