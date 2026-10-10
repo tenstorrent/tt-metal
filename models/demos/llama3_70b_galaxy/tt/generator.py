@@ -23,6 +23,7 @@ from models.common.sampling import (
 )
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
+from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
@@ -669,6 +670,21 @@ class Generator(WarmupForwardMixin):
 
         if do_device_sampling and use_batched_prefill:
             self.tt_logits_accumulated_batched = []
+
+        # Qwen context-parallel long prefill (tt/qwen_cp_prefill.py; QWEN_CP_LAYER_MAJOR=0 disables): every user of
+        # this call is one CP prefill of the same padded length; run them layer-major (each layer's weights gathered
+        # once for all users) and fill the sampling buffers from a last-token window instead of the full-S output.
+        if (
+            not use_batched_prefill
+            and not group_mixed_128_prefill
+            and qwen_cp_prefill.layer_major_applies(
+                self.model, batch, prefill_seq_lens, num_cached_tokens_list, page_table, do_device_sampling
+            )
+        ):
+            self._qwen_cp_layer_major_prefill(
+                tokens, page_table, kv_cache, prompt_lens, prefill_seq_lens[0], empty_slots[:batch]
+            )
+            prefill_work_items = []
 
         for work_use_batched_prefill, request_indices, request_slots in prefill_work_items:
             request_idx = request_indices[0]
@@ -2108,6 +2124,50 @@ class Generator(WarmupForwardMixin):
         generation = self.tokenizer.decode(tokens)
 
         return CompletionPrediction(generation=generation)
+
+    def _qwen_cp_layer_major_prefill(self, tokens, page_table, kv_cache, prompt_lens, prefill_seq_len, slots):
+        """Layer-major CP prefill of len(slots) users (qwen_cp_prefill.layer_major_prefill), then each user's
+        last-token logits into self.tt_logits_accumulated[slot] for the on-device sampling that follows."""
+        model = self.model
+        users = []
+        for request_idx, slot in enumerate(slots):
+            user_id = int(slot)
+            seq_len = int(prompt_lens[request_idx])
+            logger.info(
+                f"Prefilling User {user_id}, use_batched_prefill: False, prompt_lens: {seq_len}, "
+                f"prefill_seq_len: {prefill_seq_len}, num_cached_tokens: 0 (Qwen CP layer-major)"
+            )
+            prefill_ids = torch.cat(
+                [tokens[request_idx : request_idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()],
+                dim=-1,
+            )
+            page_table_user = self._get_prefill_user_page_table(
+                page_table[[request_idx], :], kv_cache, prefill_seq_len, user_id, False, real_seq_lens=[seq_len]
+            )
+            # Fresh device inputs per user (prepare_inputs_prefill reuses one cached set, and every user's page
+            # table must stay alive until the last layer).
+            host_inputs = model.prepare_prefill_inputs_host(
+                prefill_ids, user_id=user_id, page_table=page_table_user[user_id : user_id + 1, :]
+            )
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            x, tt_user_id, tt_page_table = model.transform_prefill_inputs_device(*device_inputs)[:3]
+            users.append(
+                dict(
+                    h=qwen_cp_prefill.model_entry(model, x),
+                    user_id=tt_user_id,
+                    page_table=tt_page_table,
+                    last_idx=seq_len - 1,
+                    slot=user_id,
+                )
+            )
+        windows = qwen_cp_prefill.layer_major_prefill(model, users, model.get_or_create_prefill_rot_mats(), kv_cache)
+        for u, window in zip(users, windows):
+            tt_logits_list = model.process_output_prefill_logits(
+                window, last_token_idx=u["last_idx"] % qwen_cp_prefill.EXIT_WINDOW
+            )
+            ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[u["slot"]])
+            del tt_logits_list
+            ttnn.deallocate(window)
 
     def _get_prefill_user_page_table(
         self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False, real_seq_lens=None

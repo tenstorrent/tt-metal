@@ -533,10 +533,13 @@ def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
     return out
 
 
-def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_table=None, kv_cache=None):
-    """One decoder layer in layout B. h: residual [1, 1, S/32, 5120] bf16 (deallocated). Returns the new residual."""
+def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_table=None, kv_cache=None, w=None):
+    """One decoder layer in layout B. h: residual [1, 1, S/32, 5120] bf16 (deallocated). Returns the new residual.
+    w: this layer's gathered weights (gather_layer_weights); gathered and freed here when None."""
     ckc = layer.args.compute_kernel_config_hifi2
-    w = gather_layer_weights(tt_ccl, layer.attention, layer.feed_forward)
+    own_w = w is None
+    if own_w:
+        w = gather_layer_weights(tt_ccl, layer.attention, layer.feed_forward)
     xn = local_norm(layer.attention_norm, h, ckc)
     a = attention_prefill(ctx, tt_ccl, layer.attention, xn, rot_mats, w, user_id, page_table, kv_cache)
     h2 = ttnn.add(h, a, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
@@ -547,7 +550,8 @@ def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_
     out = ttnn.add(h2, f, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(h2)
     ttnn.deallocate(f)
-    free_weights(w)
+    if own_w:
+        free_weights(w)
     return out
 
 
@@ -572,3 +576,89 @@ def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None)
     out = exit_natural(ctx, model.tt_ccl, h)
     ttnn.deallocate(h)
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Generator driver: layer-major over the users of one prefill call (design B slice 6)
+# ---------------------------------------------------------------------------------------------------------------
+def layer_major_enabled() -> bool:
+    """QWEN_CP_LAYER_MAJOR=0 sends every user through the per-user forward (model_prefill) instead."""
+    return os.environ.get("QWEN_CP_LAYER_MAJOR", "1") == "1"
+
+
+def layer_major_applies(model, batch, prefill_seq_lens, num_cached_tokens, page_table, do_device_sampling) -> bool:
+    """The generator's prefill_forward_text call can run layer-major: every user is a CP prefill of one padded
+    length (> 8192, no prefix cache), paged KV cache, on-device sampling (the logits go to the sampling buffers)."""
+    if not (layer_major_enabled() and do_device_sampling and page_table is not None and batch >= 1):
+        return False
+    if any(num_cached_tokens[:batch]) or len(set(prefill_seq_lens[:batch])) != 1:
+        return False
+    S = int(prefill_seq_lens[0])
+    return (S // (ROWS * COLS)) % EXIT_WINDOW == 0 and cp_prefill_applies(
+        model.args, model.use_prefetcher, model.prefetcher_setup, "prefill", 1, 0, S
+    )
+
+
+def model_entry(model, x):
+    """Natural embedding x [1, 1, S, 1280] (deallocated) -> residual [1, 1, S/32, 5120]."""
+    ctx = get_context(model.tt_ccl, model.mesh_device, int(x.shape[-2]))
+    h = entry(ctx, model.tt_ccl, x)
+    x.deallocate(True)
+    return h
+
+
+EXIT_WINDOW = 128  # rows of the last-token window: the smallest prefill length the model's output norm runs at
+
+
+def exit_last_token(ctx: CPContext, tt_ccl, h, idx: int):
+    """Residual [1, 1, S/32, 5120] -> the aligned EXIT_WINDOW-row window of natural positions that holds idx, hidden
+    quarter c per column: [1, 1, EXIT_WINDOW, 1280], idx at row idx % EXIT_WINDOW (needs S/32 % EXIT_WINDOW == 0).
+    Exact copies: the owner device's window is gathered over the rows and the columns and picked by static slices."""
+    lay = ctx.lay
+    n = EXIT_WINDOW
+    assert lay.s32 % n == 0, (lay.S, n)
+    r, c, o = lay.owner(idx)
+    w0 = (o // n) * n
+    W = int(h.shape[-1])
+    win = ttnn.slice(h, [0, 0, w0, 0], [1, 1, w0 + n, W], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    g0 = _ag(tt_ccl, win, 2, 0)  # [1, 1, ROWS * n, W]
+    ttnn.deallocate(win)
+    p0 = ttnn.slice(g0, [0, 0, n * r, 0], [1, 1, n * (r + 1), W], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(g0)
+    g1 = _ag(tt_ccl, p0, 2, 1)  # [1, 1, COLS * n, W]
+    ttnn.deallocate(p0)
+    p1 = ttnn.slice(g1, [0, 0, n * c, 0], [1, 1, n * (c + 1), W], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(g1)
+    out = ttnn.mesh_partition(p1, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(p1)
+    return out
+
+
+def layer_major_prefill(model, users, rot_mats, kv_cache):
+    """users: list of dicts with h (model_entry residual), user_id, page_table (device, as prepare_inputs_prefill
+    builds it), last_idx. Runs every layer for all users before the next layer: the layer's weights are gathered
+    once per layer instead of once per user. Returns one exit_last_token window per user (h deallocated)."""
+    S = int(users[0]["h"].shape[-2]) * ROWS * COLS
+    ctx = get_context(model.tt_ccl, model.mesh_device, S)
+    hs = [u["h"] for u in users]
+    for i, layer in enumerate(model.layers):
+        w = gather_layer_weights(model.tt_ccl, layer.attention, layer.feed_forward)
+        for k, u in enumerate(users):
+            hs[k] = decoder_prefill(
+                ctx,
+                model.tt_ccl,
+                layer,
+                hs[k],
+                rot_mats,
+                u["user_id"],
+                u["page_table"],
+                kv_cache[i] if kv_cache is not None else None,
+                w=w,
+            )
+        free_weights(w)
+    windows = []
+    for k, u in enumerate(users):
+        windows.append(exit_last_token(ctx, model.tt_ccl, hs[k], int(u["last_idx"])))
+        ttnn.deallocate(hs[k])
+        u["h"] = None
+    return windows
