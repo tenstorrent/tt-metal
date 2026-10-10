@@ -1431,6 +1431,9 @@ class TestConfig:
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
             OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            # experiment hook (prodpf): extra compile flags for the TRISC threads
+            if os.environ.get("LLK_EXP_CFLAGS"):
+                OPTIONS_COMPILE += os.environ["LLK_EXP_CFLAGS"] + " "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1862,11 +1865,24 @@ class TestConfig:
                 str(assembly),
             ]
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-            text = assembly.read_text()
+            if os.environ.get("LLK_EXP_COMPILE_CACHE"):
+                # experiment hook (speed agent): content-addressed cache of this compile, see compile_cache.py
+                from .compile_cache import compile_assembly
+
+                text = compile_assembly(
+                    TestConfig.GXX,
+                    compile_flags,
+                    TestConfig.TESTS_WORKING_DIR,
+                    source,
+                    assembly,
+                    {variant_dir: "VARIANT", TestConfig.TESTS_WORKING_DIR: "TESTS"},
+                )
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+                text = assembly.read_text()
             with gzip.open(assembly.with_suffix(".s.gz"), "wt") as f:
                 f.write(text)
-            assembly.unlink()
+            assembly.unlink(missing_ok=True)
         else:
             with gzip.open(assembly.with_suffix(".s.gz"), "rt") as f:
                 text = f.read()
@@ -1929,6 +1945,27 @@ class TestConfig:
         os.environ.get("LLK_PERF_INIT_LAUNCH", "1") == "1"
     )
 
+    @staticmethod
+    def _layout_shared_root() -> Path:
+        """experiment hook (speed agent): with LLK_EXP_LAYOUT_CACHE a persistent layout cache shared by builds"""
+        if not os.environ.get("LLK_EXP_LAYOUT_CACHE"):
+            return TestConfig.ARTEFACTS_DIR / "layout_shared"
+        from .compile_cache import layout_context
+        from .perf import layout
+
+        sources = [
+            layout.__file__,
+            __file__,
+            *sorted(Path(TestConfig.LINKER_SCRIPTS).glob("*.ld")),
+        ]
+        words = shlex.split(
+            f"{TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} "
+            f"{TestConfig.INITIAL_OPTIONS_COMPILE} {os.environ.get('LLK_EXP_CFLAGS', '')}"
+        )
+        return Path(os.environ["LLK_EXP_LAYOUT_CACHE"]) / layout_context(
+            TestConfig.GXX, TestConfig.ARCH_COMPUTE, sources, words
+        )
+
     def _layout_elf_dir(self, build: bool) -> Path:
         """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
@@ -1970,7 +2007,7 @@ class TestConfig:
                         log=os.environ.get("LLK_LAYOUT_LOG"),
                         # variants whose thread compiles to the same code share the layout work
                         shared=(
-                            TestConfig.ARTEFACTS_DIR / "layout_shared",
+                            TestConfig._layout_shared_root(),
                             TestConfig._code_key(variant_dir / "obj" / f"{t}.s.gz"),
                         ),
                     )
