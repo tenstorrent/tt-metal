@@ -20,10 +20,11 @@ from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunP
 
 
 class DeepSeekV41FlashConfig:
-    """The dimensions the generic runner reads (``runner_utils.open_mesh_device``: the fabric payload, = EMB as V4-Flash)."""
+    """The dimensions the generic runner reads (``runner_utils.open_mesh_device``: the fabric router payload). 14 KB = the
+    Blackhole maximum (``moe.init_helpers.MAX_PAYLOAD_SIZE_BH``), what every V4.1 prefill test opened its mesh with."""
 
     EMB_SIZE = 5120
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE
+    FABRIC_PAYLOAD_SIZE = 14 * 1024
 
 
 class DeepSeekV41FlashAdapter(PrefillModelAdapter):
