@@ -1431,6 +1431,9 @@ class TestConfig:
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
             OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            # experiment hook (init-opt2): extra flags, e.g. the INIT NOP hooks -DLLK_EXP_NOP_PACK_INIT=4
+            if os.environ.get("LLK_EXP_CFLAGS"):
+                OPTIONS_COMPILE += os.environ["LLK_EXP_CFLAGS"] + " "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1617,7 +1620,15 @@ class TestConfig:
 
         return header_content
 
-    def generate_build_header(self) -> str:
+    def generate_build_header(self, speed_of_light: bool | None = None) -> str:
+        """The variant's build.h. speed_of_light (default: this run's mode) writes it as a --speed-of-light run does:
+        every runtime parameter, tile size, operand address and format a constant. The Wormhole INIT measurement build
+        takes that header in every run (_init_build_dir).
+        """
+        sol = TestConfig.SPEED_OF_LIGHT if speed_of_light is None else speed_of_light
+        # a speed-of-light run already holds its runtimes in templates (and none in runtimes), in this order
+        templates = self.templates + self.runtimes if sol else self.templates
+        compile_time_formats = self.compile_time_formats or sol
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             sfpu_types_include = ""
         else:
@@ -1650,7 +1661,7 @@ class TestConfig:
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
         ] + (
             FORMATS_CONFIG_STRUCT_COMPILETIME
-            if self.compile_time_formats
+            if compile_time_formats
             else FORMATS_CONFIG_STRUCT_RUNTIME
         )
 
@@ -1663,7 +1674,7 @@ class TestConfig:
                 f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.extend(
                 [
                     f"constexpr std::uint32_t TILE_SIZE_PACK = {self.pack_size};",
@@ -1677,13 +1688,13 @@ class TestConfig:
                     self.variant_stimuli.generate_stimuli_header_addresses()
                 )
 
-        for parameter in self.templates:
+        for parameter in templates:
             header_content.append(parameter.convert_to_cpp())
 
-        if self.compile_time_formats:
+        if compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.append("struct RuntimeParams {};")
         else:
             header_content.extend(self.runtime_arguments_struct)
@@ -1743,7 +1754,11 @@ class TestConfig:
             TestConfig.KERNEL_COMPONENTS.index(name)
         )
 
-        if not self.compile_time_formats:
+        if init_only:
+            # the INIT measurement build compiles as a speed-of-light run (_init_build_dir): no runtime formats
+            if not TestConfig.SPEED_OF_LIGHT:
+                optional_kernel_flags += " -DSPEED_OF_LIGHT"
+        elif not self.compile_time_formats:
             optional_kernel_flags += " -DRUNTIME_FORMATS"
 
         # Only TRISC0 has the vector unit on Quasar. The flag is after
@@ -1848,7 +1863,7 @@ class TestConfig:
             return
 
         # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread
-        assembly = variant_dir / ("obj_init" if init_only else "obj") / f"{name}.s"
+        assembly = (elf_dir if init_only else variant_dir / "obj") / f"{name}.s"
         assembly.parent.mkdir(parents=True, exist_ok=True)
         if pads is None:
             compile_command = [
@@ -1862,11 +1877,26 @@ class TestConfig:
                 str(assembly),
             ]
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-            text = assembly.read_text()
-            with gzip.open(assembly.with_suffix(".s.gz"), "wt") as f:
-                f.write(text)
-            assembly.unlink()
+            if os.environ.get("LLK_EXP_COMPILE_CACHE"):
+                # experiment hook (speed agent): content-addressed cache of this compile, see compile_cache.py
+                from .compile_cache import compile_assembly
+
+                text = compile_assembly(
+                    TestConfig.GXX,
+                    compile_flags,
+                    TestConfig.TESTS_WORKING_DIR,
+                    source,
+                    assembly,
+                    {variant_dir: "VARIANT", TestConfig.TESTS_WORKING_DIR: "TESTS"},
+                )
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+                text = assembly.read_text()
+            # kept for the padded copies; the INIT measurement build is never padded
+            if not init_only:
+                with gzip.open(assembly.with_suffix(".s.gz"), "wt") as f:
+                    f.write(text)
+            assembly.unlink(missing_ok=True)
         else:
             with gzip.open(assembly.with_suffix(".s.gz"), "rt") as f:
                 text = f.read()
@@ -1887,6 +1917,13 @@ class TestConfig:
         ]
         logger.trace(" ".join(shlex.quote(part) for part in link_command))
         run_shell_command(link_command, TestConfig.TESTS_WORKING_DIR, text)
+        if init_only:
+            # one INIT ELF set per runtime configuration: without its debug sections (90 % of the file) it is a tenth
+            # of the size; the loaded sections and the symbols stay as they are
+            run_shell_command(
+                [TestConfig.OBJCOPY, "--strip-debug", str(elf_dir / f"{name}.elf")],
+                TestConfig.TESTS_WORKING_DIR,
+            )
 
     # Threads that run INIT out of line (LLK_PERF_OOL): math and the unpackers whose loop code GCC ties to INIT's code.
     # The others keep INIT inline, so their loop code is the one built without the barrier.
@@ -1929,14 +1966,33 @@ class TestConfig:
         os.environ.get("LLK_PERF_INIT_LAUNCH", "1") == "1"
     )
 
+    @staticmethod
+    def _layout_shared_root() -> Path:
+        """experiment hook (speed agent): with LLK_EXP_LAYOUT_CACHE a persistent layout cache shared by builds"""
+        if not os.environ.get("LLK_EXP_LAYOUT_CACHE"):
+            return TestConfig.ARTEFACTS_DIR / "layout_shared"
+        from .compile_cache import layout_context
+        from .perf import layout
+
+        sources = [
+            layout.__file__,
+            __file__,
+            *sorted(Path(TestConfig.LINKER_SCRIPTS).glob("*.ld")),
+        ]
+        words = shlex.split(
+            f"{TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} "
+            f"{TestConfig.INITIAL_OPTIONS_COMPILE} {os.environ.get('LLK_EXP_CFLAGS', '')}"
+        )
+        return Path(os.environ["LLK_EXP_LAYOUT_CACHE"]) / layout_context(
+            TestConfig.GXX, TestConfig.ARCH_COMPUTE, sources, words
+        )
+
     def _layout_elf_dir(self, build: bool) -> Path:
         """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
         """
         if getattr(self, "init_launch", False):
-            return (
-                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "init_elf"
-            )
+            return self._init_elf_dir(build)
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self._wormhole_perf_barrier():
             return variant_dir / "elf"
@@ -1970,7 +2026,7 @@ class TestConfig:
                         log=os.environ.get("LLK_LAYOUT_LOG"),
                         # variants whose thread compiles to the same code share the layout work
                         shared=(
-                            TestConfig.ARTEFACTS_DIR / "layout_shared",
+                            TestConfig._layout_shared_root(),
                             TestConfig._code_key(variant_dir / "obj" / f"{t}.s.gz"),
                         ),
                     )
@@ -2025,10 +2081,96 @@ class TestConfig:
                         failed.touch()
         return layout_dir / "elf" if done.exists() else variant_dir / "elf"
 
+    def _builds_init_launch(self) -> bool:
+        """Wormhole perf builds whose INIT perf/core.py measures in the INIT launch (the fuser has none)"""
+        return (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and not self.skip_build_header
+        )
+
+    def _init_build_dir(self) -> Path:
+        """Directory of the INIT measurement build (counters.h LLK_PERF_INIT_ONLY) for the current runtime arguments.
+
+        That build always takes the speed-of-light header (generate_build_header): the formats and every runtime
+        parameter are constants, as tt-metal compiles a kernel's formats, so INIT's code does not branch on them. A
+        run without --speed-of-light therefore builds one INIT ELF set per runtime configuration (identical headers
+        share it); the measured kernels keep their runtime arguments.
+        """
+        key = sha256(
+            self.generate_build_header(speed_of_light=True).encode()
+        ).hexdigest()
+        return (
+            TestConfig.ARTEFACTS_DIR
+            / self.test_name
+            / self.variant_id
+            / f"init_{key[:16]}"
+        )
+
+    def init_meta_id(self) -> str:
+        """Profiler metadata id of the INIT launch (Profiler.get_data)"""
+        return f"{self.variant_id}_{self._init_build_dir().name}"
+
+    def _init_elf_dir(self, build: bool) -> Path:
+        """ELF dir of the INIT launch for the current runtime arguments; build makes it when missing."""
+        init_dir = self._init_build_dir()
+        elf_dir, done = init_dir / "elf", init_dir / ".build_complete"
+        if done.exists():
+            return elf_dir
+        if not build:
+            raise RuntimeError(
+                f"{init_dir} was not built: run the producer for this test"
+            )
+        with FileLock(TestConfig.SYNC_DIR / f"{self.variant_id}-{init_dir.name}.lock"):
+            if done.exists():
+                return elf_dir
+            create_directories([elf_dir])
+            (init_dir / "build.h").write_text(
+                self.generate_build_header(speed_of_light=True)
+            )
+            with ThreadPoolExecutor(
+                max_workers=len(TestConfig.KERNEL_COMPONENTS)
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        self._build_kernel_part,
+                        name,
+                        init_dir,
+                        elf_dir,
+                        None,
+                        init_only=True,
+                    )
+                    for name in TestConfig.KERNEL_COMPONENTS
+                ]
+                for fut in futures:
+                    fut.result()
+            if self.profiler_build == ProfilerBuild.Yes:
+                meta_dir = (
+                    TestConfig.PROFILER_META / self.test_name / self.init_meta_id()
+                )
+                meta_dir.mkdir(exist_ok=True, parents=True)
+                for component in TestConfig.KERNEL_COMPONENTS:
+                    run_shell_command(
+                        [
+                            TestConfig.OBJCOPY,
+                            "-O",
+                            "binary",
+                            "-j",
+                            ".profiler_meta",
+                            str(elf_dir / f"{component}.elf"),
+                            str(meta_dir / f"{component}.meta.bin"),
+                        ],
+                        TestConfig.TESTS_WORKING_DIR,
+                    )
+            done.touch()
+        return elf_dir
+
     def build_elfs(self):
         self._build_variant_elfs()
         if not TestConfig.INFRA_TESTING:
             self._layout_elf_dir(build=True)
+            if self._builds_init_launch():
+                self._init_elf_dir(build=True)
 
     def _build_variant_elfs(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -2099,36 +2241,6 @@ class TestConfig:
                         ],
                         TestConfig.TESTS_WORKING_DIR,
                     )
-
-            # Wormhole perf builds: the INIT measurement ELFs (LLK_PERF_INIT_ONLY, unpadded) and their profiler metadata
-            # under <variant>_init, for the INIT launch of perf/core.py
-            if self._wormhole_perf_barrier() and TestConfig.PERF_INIT_LAUNCH:
-                init_elf_dir = VARIANT_DIR / "init_elf"
-                create_directories([init_elf_dir])
-                for name in TestConfig.KERNEL_COMPONENTS:
-                    self._build_kernel_part(
-                        name, VARIANT_DIR, init_elf_dir, None, init_only=True
-                    )
-                if self.profiler_build == ProfilerBuild.Yes:
-                    meta_dir = Path(
-                        TestConfig.PROFILER_META
-                        / self.test_name
-                        / f"{self.variant_id}_init"
-                    )
-                    meta_dir.mkdir(exist_ok=True, parents=True)
-                    for component in TestConfig.KERNEL_COMPONENTS:
-                        run_shell_command(
-                            [
-                                TestConfig.OBJCOPY,
-                                "-O",
-                                "binary",
-                                "-j",
-                                ".profiler_meta",
-                                str(init_elf_dir / f"{component}.elf"),
-                                str(meta_dir / f"{component}.meta.bin"),
-                            ],
-                            TestConfig.TESTS_WORKING_DIR,
-                        )
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
