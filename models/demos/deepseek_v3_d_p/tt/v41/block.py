@@ -18,6 +18,7 @@ Streams: a LIST of 4 bf16 ``[1, 1, S_l, D_l]`` (SP on S, TP on D), as V4-Flash.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import torch
@@ -36,14 +37,74 @@ HC = M.HC
 
 class V41HyperConnection(TtHyperConnection):
     """``mixes(streams) -> (pre_row, post_row, comb_row)`` and ``collapse(streams, pre_row) -> bf16 [1, 1, S_l, D_l]``;
-    ``mix`` (the hc_post) is inherited."""
+    ``mix`` (the hc_post) is inherited.
+
+    DS41F-0037 C-P1 (the prefill is host-issue bound): STACKED is the default (``V41_MHC_STACKED=0`` = per-stream ops;
+    a warm 1536-token chunk 2.7 -> 1.9 s, worst export PCC 0.978315 -> 0.978125). ``V41_MHC_HOST_SINKHORN=1``: the
+    device computes the TP-reduced logit row, the host the rest of ``mixes`` (affine, sigmoid, softmax, 20 Sinkhorn
+    iterations: ~90 tiny programs on the device) on the 8 SP shards, and uploads pre / post / comb."""
+
+    def __init__(self, device, *, fn, base, scale, hidden, hc_eps=1e-6, **kw):
+        super().__init__(device, fn=fn, base=base, scale=scale, hidden=hidden, hc_eps=hc_eps, **kw)
+        self.stacked = os.environ.get("V41_MHC_STACKED", "1") == "1"
+        self.host_sinkhorn = os.environ.get("V41_MHC_HOST_SINKHORN", "0") == "1"
+        if self.host_sinkhorn:
+            W = M.prep_hyper_connection(fn, base, scale, int(hidden))
+            K = M.sinkhorn_constants(float(hc_eps))
+            self._h = {k: W[k].float() for k in ("SV", "BV", "COMB_MASK", "ONE_COL", "R_SOFT")}
+            self._h.update({k: K[k].float() for k in ("R_AUG", "C_AUG", "EPS_COMB")})
+
+    def _host_rows(self, t) -> torch.Tensor:
+        """[S, 32] fp32: the SP shards of a TP-replicated [1, 1, S_l, 32] row tensor, in SP order (TP replica 0)."""
+        rows, cols = (int(v) for v in self.device.shape)
+        devs = ttnn.get_device_tensors(t)
+        if self.sp_axis == 0:
+            pick = [devs[r * cols] for r in range(rows)]
+        else:
+            pick = [devs[c] for c in range(cols)]
+        return torch.cat([ttnn.to_torch(d).float().reshape(-1, M.ROW) for d in pick], dim=0)
+
+    def _upload_rows(self, x: torch.Tensor):
+        """[S, 32] fp32 host -> [1, 1, S_l, 32] fp32 TILE, SP-sharded on the rows, replicated over TP."""
+        return ttnn.from_torch(
+            x.reshape(1, 1, -1, M.ROW).contiguous(),
+            device=self.device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+            mesh_mapper=self._mesh_mapper(sp_dim=2),
+        )
+
+    def _mixes_host(self, mix):
+        """The device formulas of ``mixes`` below on the host, in fp32 (same constants, same order)."""
+        h = self._h
+        aff = self._host_rows(mix) * h["SV"] + h["BV"]
+        ttnn.deallocate(mix)
+        sig = torch.sigmoid(aff)
+        pre = sig + self.hc_eps
+        post = sig * 2.0
+        E = torch.exp(aff.clamp(-M.EXP_CLAMP, M.EXP_CLAMP)) * h["COMB_MASK"] + h["ONE_COL"]
+        X = E / (E @ h["R_SOFT"])
+        X = X + h["EPS_COMB"]
+        X = X / (X @ h["C_AUG"])
+        for _ in range(self.sinkhorn_iters - 1):
+            X = X / (X @ h["R_AUG"])
+            X = X / (X @ h["C_AUG"])
+        return self._upload_rows(pre), self._upload_rows(post), self._upload_rows(X)
 
     def mixes(self, streams: list):
-        assert len(streams) == HC and not self.stacked
-        xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
-        mix = self._mix_row(xf)
-        for x in xf:
-            ttnn.deallocate(x)
+        assert len(streams) == HC
+        if self.stacked:  # PREFILL_MHC_STACKED=1: the norm-folded logit row in 5 programs instead of 5 per stream
+            Xf = self._stack(streams)
+            mix = self._mix_row_stacked(Xf)
+            ttnn.deallocate(Xf)
+        else:
+            xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
+            mix = self._mix_row(xf)
+            for x in xf:
+                ttnn.deallocate(x)
+        if self.host_sinkhorn:
+            return self._mixes_host(mix)
         aff = ttnn.add(ttnn.multiply(mix, self.SV), self.BV)
         sig = ttnn.sigmoid(aff)
         pre = ttnn.add(sig, self.hc_eps)
@@ -58,6 +119,14 @@ class V41HyperConnection(TtHyperConnection):
         return pre, post, X
 
     def collapse(self, streams: list, pre_row):
+        if (
+            self.stacked
+        ):  # one broadcast multiply + one stream-dim reduce instead of a slice / multiply / add per stream
+            Xf = self._stack(streams)
+            w = self._select_cols(pre_row, list(range(M.PRE0, M.PRE0 + HC)))
+            out = ttnn.typecast(self._weighted_sum_stacked(w, Xf), streams[0].dtype)
+            ttnn.deallocate(Xf)
+            return out
         xf = [ttnn.typecast(x, ttnn.float32) for x in streams]
         out = ttnn.typecast(self._weighted_sum(pre_row, M.PRE0, xf), streams[0].dtype)
         for x in xf:
