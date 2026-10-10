@@ -14,7 +14,8 @@ and labeled measured Galaxy throughput. This continues the Metal path.
 - New direct-preparation/epilogue candidate: three completed B16/32K measurements
   give 60.422 ms/token, 16.550 tokens/s/user and 264.80 aggregate decode
   tokens/s. The completed after-control drift is +0.003082% with identical
-  output hashes; full GPQA remains pending. This is not a promoted configuration.
+  output hashes. Full GPQA subsequently passed at 177/198 (89.39%); six output
+  cutoffs remain incorrect in the denominator. Serving promotion remains separate.
   [Raw candidate snapshot](../galaxy-evidence/operator-scope-v1/candidate-sweep.json)
   retains source/config hashes and every measured sample.
 - Full timing profile covers 64 layers, four ranks, three replays and all
@@ -42,6 +43,17 @@ is TP8 and mixed BFP4/BFP8; its 16.84 client TSU at C15/32K is not a matched
 comparison with our BFP8 TP4 B16 16.55 native TSU. Its partial benchmark run
 does not qualify accuracy. These follow-ups have not replaced the active
 compact-GDN/projection queue or changed the qualified serving launch.
+
+The [October 10 recovery receipt](../galaxy-evidence/compact-recovery-v2/README.md)
+records completed fusion GPQA and the prefill-budget A/B. Compact GDN passed
+stationary block checks but its changing-input harness allocated persistent
+state after a live trace. Preallocating/warming both sessions fixed that
+failure without changing kernel code or exact-equality checks. B16 real-weight
+block time is 567.18 -> 350.97 us; the 10.38-ms saving across 48 layers is an
+extrapolation, not a full-model win. Corrected full-model controls are running
+persistently, followed by the recovered projection sweep. This supersedes the
+older integration-pending status and 4-6-ms initial compact estimate below;
+the measured block still overlaps the broader fusion budget.
 
 ## Matmuls are optimized, with uneven remaining room
 

@@ -25,7 +25,8 @@ from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precis
 def changing_input_comparison(layer, mesh, batch):
     """Two independent sessions, changing tokens, same real BFP8 weights.
 
-    Both traces own separate recurrent/history allocations. Compare each user
+    Both traces own separate recurrent/history allocations created before
+    either trace captures scratch addresses. Compare each user
     on every rank after 1/2/4/8/16/32/64 updates, including actual projected
     output. A stationary-input recurrence check alone would miss history and
     stale-input bugs in the new convolution/packed-gate boundary.
@@ -48,17 +49,35 @@ def changing_input_comparison(layer, mesh, batch):
             layer.policy["decode_recurrence"] = recurrence
             state = layer.allocate_state(batch_size=batch)
             x = ttnn.clone(sources[0])
+            zeros = tuple(ttnn.zeros_like(value) for value in (state.recurrent, state.conv))
+            slots.append(dict(recurrence=recurrence, x=x, state=state, zeros=zeros))
+        # Allocating session B after capturing A lets B's persistent inputs or
+        # state reuse A's transient scratch addresses. Warm both complete
+        # graphs and their reset copies before either capture, just as serving
+        # must warm prefill and decode before reserving trace scratch.
+        for slot in slots:
+            layer.policy["decode_recurrence"] = slot["recurrence"]
+            x, state = slot["x"], slot["state"]
             layer._delta(x, state, decode=True)
+            for zero, value in zip(slot["zeros"], (state.recurrent, state.conv)):
+                ttnn.copy(zero, value)
+        ttnn.synchronize_device(mesh)
+        for slot in slots:
+            layer.policy["decode_recurrence"] = slot["recurrence"]
+            x, state = slot["x"], slot["state"]
             trace, output = capture(mesh, lambda: layer._delta(x, state, decode=True))
             traces.append(trace)
-            for value in (state.recurrent, state.conv):
-                ttnn.copy(ttnn.zeros_like(value), value)
-            slots.append((x, state, output))
+            slot["output"] = output
+        for slot in slots:
+            state = slot["state"]
+            for zero, value in zip(slot["zeros"], (state.recurrent, state.conv)):
+                ttnn.copy(zero, value)
         checks = []
         for step in range(64):
             source = sources[(step * 7 + step // 3) % len(sources)]
             observed = []
-            for (x, state, output), trace in zip(slots, traces):
+            for slot, trace in zip(slots, traces):
+                x, state, output = slot["x"], slot["state"], slot["output"]
                 ttnn.copy(source, x)
                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
                 if step + 1 in (1, 2, 4, 8, 16, 32, 64):
@@ -75,7 +94,13 @@ def changing_input_comparison(layer, mesh, batch):
                     observed[0] == observed[1]
                 ), f"Changing-input compact GDN diverged at batch={batch}, step={step+1}"
                 checks.append(dict(step=step + 1, recurrent_conv_projected_sha256=observed[0]))
-        return dict(batch=batch, updates=64, checkpoints=checks, all_ranks_bit_identical=True)
+        return dict(
+            batch=batch,
+            updates=64,
+            checkpoints=checks,
+            all_ranks_bit_identical=True,
+            persistent_sessions_precede_trace_capture=True,
+        )
     finally:
         for trace in traces:
             ttnn.release_trace(mesh, trace)

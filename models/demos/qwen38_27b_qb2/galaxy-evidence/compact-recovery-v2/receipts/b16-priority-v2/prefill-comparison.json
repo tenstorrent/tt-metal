@@ -1,0 +1,98 @@
+{
+  "arms": {
+    "budget32-before": [
+      {
+        "input_tokens": 32768,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5322.2430255268155,
+        "ttft_s": 98.66133917821571,
+        "decode_tsu": 14.869537053015346,
+        "output_tps_including_prefill": 19.10406886485507,
+        "request_elapsed_s": 107.20229363115504,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+        ]
+      },
+      {
+        "input_tokens": 16384,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5746.763998257649,
+        "ttft_s": 45.76611064514145,
+        "decode_tsu": 16.339681150912934,
+        "output_tps_including_prefill": 38.25295944430767,
+        "request_elapsed_s": 53.53834134014323,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+        ]
+      }
+    ],
+    "budget64": [
+      {
+        "input_tokens": 32768,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5639.980124230229,
+        "ttft_s": 93.08687855210155,
+        "decode_tsu": 14.879304150050428,
+        "output_tps_including_prefill": 20.1530715550153,
+        "request_elapsed_s": 101.62222638912499,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+        ]
+      },
+      {
+        "input_tokens": 16384,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5942.322492089477,
+        "ttft_s": 44.252455620095134,
+        "decode_tsu": 16.327424145260455,
+        "output_tps_including_prefill": 39.36116414097702,
+        "request_elapsed_s": 52.03098141774535,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+        ]
+      }
+    ],
+    "budget32-after": [
+      {
+        "input_tokens": 32768,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5322.509178248553,
+        "ttft_s": 98.64929815987125,
+        "decode_tsu": 14.869978657195777,
+        "output_tps_including_prefill": 19.106202824313478,
+        "request_elapsed_s": 107.1903202761896,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "e4e6c79ebddeabad0c92c826571bf9f586ea18b23a85800442880708c596a2be"
+        ]
+      },
+      {
+        "input_tokens": 16384,
+        "batch": 16,
+        "output_tokens": 128,
+        "prefill_input_tps": 5746.029885411525,
+        "ttft_s": 45.75654327403754,
+        "decode_tsu": 16.34043096582373,
+        "output_tps_including_prefill": 38.25983062331091,
+        "request_elapsed_s": 53.52872625505552,
+        "repeatable_tokens": true,
+        "output_sha256": [
+          "cc7af7e8c0e1ce0e8d5be02534f583ac10cecc3de3bfbe3651e700071341fb58"
+        ]
+      }
+    ]
+  },
+  "is_serving_benchmark": false,
+  "larger_budget_quality_qualified": false,
+  "automatic_promotion": false,
+  "updated_at": "2026-10-10T09:54:02Z"
+}

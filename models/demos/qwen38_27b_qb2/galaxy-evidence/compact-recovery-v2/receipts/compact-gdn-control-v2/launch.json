@@ -1,0 +1,62 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-compact-gdn-v2-20261010",
+    "--property=RuntimeMaxSec=38h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=192G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v2/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v2/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v2",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v2",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_compact_gdn",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v2",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v2/source-manifest.json",
+    "--after-unit",
+    "qwen38-b16-priority-v2-20261010.service",
+    "--after-invocation",
+    "f5b0da5649614052ba7b8ddf37b466d5",
+    "--after-receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/b16-priority-v2/queue.json"
+  ],
+  "source_parent": "f6be84a4c00",
+  "created_at": 1791655253.4736938,
+  "physical_stages": [
+    "26 compact epilogue cases",
+    "real-weight GDN B16/B32/B8/B1 + changing inputs",
+    "B16 32K/16K control/compact/control full-model sweeps"
+  ],
+  "primary_target_tsu": 30,
+  "speculative_decoding": false,
+  "estimated_incremental_step_saving_ms": [
+    4,
+    6
+  ],
+  "expected_gain_is_estimate": true,
+  "estimated_physical_minutes": [
+    90,
+    180
+  ],
+  "full_gpqa_qualified": false,
+  "source_manifest_sha256": "c7c14b4153b6783f87b63d1ab1ad9a39252c35b1df9c857b130ef5c903498a10",
+  "changed_files": [
+    "models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py"
+  ],
+  "reason": "Preallocate and warm both independent test sessions before either trace captures scratch; retain exact checks",
+  "kernel_code_changed": false,
+  "root_cause_proven": false
+}

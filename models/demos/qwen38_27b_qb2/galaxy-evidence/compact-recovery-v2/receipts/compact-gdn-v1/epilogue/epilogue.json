@@ -1,0 +1,2651 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "cases": [
+    {
+      "batch": 16,
+      "placement": "l1",
+      "mode": [
+        false,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.868911772966385,
+            62.91116587817669,
+            62.87903059273958,
+            62.881032936275005,
+            62.88493983447552
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            62.96105217188597,
+            62.90297023952007,
+            62.897359021008015,
+            62.88363132625818,
+            62.87252064794302
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.92609963566065,
+            62.92939651757479,
+            62.891850247979164,
+            62.88063246756792,
+            62.86640651524067
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 62.88298638537526,
+        "fused_us": 62.897359021008015,
+        "control_drift_fraction": 0.00017202821262696233,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9997714906340034,
+        "projected_48_layer_saving_ms": -0.0006898865103721619,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "l1",
+      "mode": [
+        false,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.95515224337578,
+            63.026752322912216,
+            63.02333902567625,
+            62.96725943684578,
+            62.95633967965841
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            65.54907187819481,
+            65.62948226928711,
+            65.61425980180502,
+            65.71100559085608,
+            65.59523288160563
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.95164115726948,
+            63.01272660493851,
+            62.986090779304504,
+            62.98799067735672,
+            62.97658197581768
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 62.98133637756109,
+        "fused_us": 65.61425980180502,
+        "control_drift_fraction": 0.0002990656196115715,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9598726948654613,
+        "projected_48_layer_saving_ms": -0.1263803243637085,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "l1",
+      "mode": [
+        true,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.808929942548275,
+            62.85398732870817,
+            62.8537917509675,
+            62.88033910095692,
+            62.86299787461758
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            63.53162229061127,
+            63.571976497769356,
+            63.56836762279272,
+            63.59180901199579,
+            63.59351333230734
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.81854119151831,
+            62.857503071427345,
+            62.8456799313426,
+            62.82735150307417,
+            62.82364018261433
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 62.84973584115505,
+        "fused_us": 63.571976497769356,
+        "control_drift_fraction": 0.0004237730455302069,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9886390089406825,
+        "projected_48_layer_saving_ms": -0.03466755151748657,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.984381802380085,
+            63.03226109594107,
+            63.04949056357145,
+            63.01133427768946,
+            63.006519339978695
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            66.35347846895456,
+            66.35157857090235,
+            66.34125951677561,
+            66.35688245296478,
+            66.32122676819563
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.96645849943161,
+            62.99260072410107,
+            63.09835705906153,
+            63.00061009824276,
+            62.99059838056564
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 63.00356471911073,
+        "fused_us": 66.35157857090235,
+        "control_drift_fraction": 0.00029730450565979005,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9495413082265408,
+        "projected_48_layer_saving_ms": -0.16070466488599777,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.933601438999176,
+            62.995608896017075,
+            62.96695675700903,
+            63.07683419436216,
+            62.95683793723583
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            66.34656805545092,
+            66.38322956860065,
+            66.38712715357542,
+            66.4150808006525,
+            66.3539906963706
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.9463279619813,
+            63.00912704318762,
+            63.01452871412039,
+            62.96195089817047,
+            62.96045612543821
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 62.96445382758975,
+        "fused_us": 66.38322956860065,
+        "control_drift_fraction": 7.949977410970366e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9484994062020148,
+        "projected_48_layer_saving_ms": -0.1641012355685234,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "dram",
+      "mode": [
+        false,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.7226208820939,
+            64.72321227192879,
+            64.77999966591597,
+            64.7725909948349,
+            65.16138091683388
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            64.74505178630352,
+            64.80874959379435,
+            64.75496105849743,
+            64.75747097283602,
+            64.74955938756466
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.76018112152815,
+            64.77438844740391,
+            64.80393931269646,
+            64.79732226580381,
+            64.76456765085459
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.7734897211194,
+        "fused_us": 64.75496105849743,
+        "control_drift_fraction": 2.7750203309695465e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.0002861350284071,
+        "projected_48_layer_saving_ms": 0.0008893758058547974,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "dram",
+      "mode": [
+        false,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.71561267971992,
+            64.68546111136675,
+            64.73123095929623,
+            64.70749154686928,
+            64.69546817243099
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            66.44702050834894,
+            66.48307666182518,
+            66.4594303816557,
+            66.42899010330439,
+            66.44051056355238
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.67343773692846,
+            64.68765903264284,
+            64.6727392449975,
+            64.73011802881956,
+            64.95967973023653
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.70147985965014,
+        "fused_us": 66.44702050834894,
+        "control_drift_fraction": 0.000306494870258911,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9737303398204366,
+        "projected_48_layer_saving_ms": -0.08378595113754272,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "dram",
+      "mode": [
+        true,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.75315894931555,
+            64.7928286343813,
+            64.75656758993864,
+            64.77669347077608,
+            64.76046983152628
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            65.46854041516781,
+            65.49707613885403,
+            65.4881726950407,
+            65.4844706878066,
+            65.48908073455095
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.72872104495764,
+            64.75286092609167,
+            64.75536152720451,
+            64.83037024736404,
+            65.15556946396828
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.75851871073246,
+        "fused_us": 65.4881726950407,
+        "control_drift_fraction": 7.887997624256293e-05,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9888582326505577,
+        "projected_48_layer_saving_ms": -0.035023391246795654,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.8006284609437,
+            64.85111080110073,
+            64.82427008450031,
+            64.80823736637831,
+            64.78101015090942
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            67.29179993271828,
+            67.34858267009258,
+            67.59696174412966,
+            67.66666192561388,
+            67.29199085384607
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.74495399743319,
+            64.82336670160294,
+            64.78069815784693,
+            64.77269344031811,
+            64.89947903901339
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.804432913661,
+        "fused_us": 67.34858267009258,
+        "control_drift_fraction": 0.00042493376846053366,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9622241529729867,
+        "projected_48_layer_saving_ms": -0.12211918830871582,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 16,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "f1ea1fb3b07026f1645b8fe92e814ff6c448540f96900992f7d5b861400a175a",
+            "b8ebb8c5ca4572145aaef3af29b4ea5729f70d2c1e68dd803850d9f6153f6e64",
+            "5f797e669bbbc521cf9182bc9df81152ae2debac1fb50de0840ee1780ddfe689",
+            "d78fb51451a96032a4c76b7bdb84075eadbb07e1a982a25cbe2fb2a15fecc8a3"
+          ],
+          "output_sha256": [
+            "0a9c2710bbcbab10e58b11a089550fa73b27b62102ba7a45b2fbf9cca27e88c3",
+            "b25bb25e354cc98568568380bb500ce31f23d1229f9aa1eefbe7a8489ae9ec3c",
+            "aa230b553febb9abffd23d0999169d5d1d9a31785f0f6e6416dbc8476febb172",
+            "6383aceb65229940c9075e9a93260583f09c513bb20e90780be679f22a0480e0"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "587d45b0725d337b4165b2cf4a2402f969087e98ec4e07d52ce186cbb491deb3",
+            "8d093a29473227fbaafe585a745a1fcf847389d6aae6c8dc4be753fdada5bacd",
+            "fcb0c529b8737e2ba617b6a4a0b6d3b84913c94b9ca89f1dab773521eecaab07",
+            "d47c3455331b681af3cfe0ca1b7cd7ff570c6cb348ea391520fb05ade21281a7"
+          ],
+          "output_sha256": [
+            "8fdc4b0dd44af4f14667b2a818771f308a40610956d4b5bfc7926af9916021bd",
+            "002702942ca0fccdd72c7c70d8173c3eaab3d2a8465619013b12d889ab414428",
+            "2c457864fd0b049daa314036c4e984041cd822d8ae7a11d349e804baf5316a61",
+            "b39dcdd6a6e02af9aa9f053cbe2a9ac3154c0d1f76a2e2495ec33f7367219938"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.77829068899155,
+            64.73914254456758,
+            64.87755104899406,
+            64.75967355072498,
+            64.79181814938784
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            67.27896630764008,
+            67.27657280862331,
+            67.28018168359995,
+            67.24822800606489,
+            67.25173909217119
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.75426256656647,
+            64.7645816206932,
+            64.73403889685869,
+            64.75375965237617,
+            64.76637907326221
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.7621275857091,
+        "fused_us": 67.27657280862331,
+        "control_drift_fraction": 0.0003709286270062728,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9626252480181047,
+        "projected_48_layer_saving_ms": -0.12069337069988251,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "l1",
+      "mode": [
+        false,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            82.95716717839241,
+            82.99352135509253,
+            82.99802895635366,
+            82.98169821500778,
+            82.9906202852726
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            83.08056276291609,
+            83.05543102324009,
+            83.04511196911335,
+            83.04680697619915,
+            83.53163953870535
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.053819835186,
+            83.05391296744347,
+            83.11370387673378,
+            83.09198077768087,
+            83.02677888423204
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.01240392029285,
+        "fused_us": 83.05543102324009,
+        "control_drift_fraction": 0.0007626486216552042,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9994819471476201,
+        "projected_48_layer_saving_ms": -0.002065300941467285,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "l1",
+      "mode": [
+        false,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.07734970003366,
+            83.11360608786345,
+            83.08395743370056,
+            83.06993637233973,
+            83.09948723763227
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            83.10150355100632,
+            83.10460019856691,
+            83.1308402121067,
+            83.15596729516983,
+            83.10950361192226
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.21035653352737,
+            83.18071253597736,
+            83.12392979860306,
+            83.12853053212166,
+            83.43769703060389
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.11876794323325,
+        "fused_us": 83.10950361192226,
+        "control_drift_fraction": 0.0011645461442302274,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.0001114713830352,
+        "projected_48_layer_saving_ms": 0.0004446879029273987,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "l1",
+      "mode": [
+        true,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            82.99923967570066,
+            83.01916997879744,
+            83.09978991746902,
+            83.31321179866791,
+            83.25972594320774
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            83.70189927518368,
+            84.18512996286154,
+            84.2268904671073,
+            84.21998005360365,
+            83.84210988879204
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.0693356692791,
+            83.05701892822981,
+            83.06694217026234,
+            83.065340295434,
+            83.06283038109541
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.06614123284817,
+        "fused_us": 84.18512996286154,
+        "control_drift_fraction": 0.00041455726987082997,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9867080002073167,
+        "projected_48_layer_saving_ms": -0.053711459040641785,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            82.98860862851143,
+            83.13263300806284,
+            83.01306050270796,
+            83.03719107061625,
+            82.96568877995014
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            83.79573933780193,
+            83.77151098102331,
+            83.831287920475,
+            83.83029140532017,
+            84.25892796367407
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.09307042509317,
+            83.05101189762354,
+            83.03529117256403,
+            83.44411384314299,
+            83.56568869203329
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.04410148411989,
+        "fused_us": 83.83029140532017,
+        "control_drift_fraction": 0.0009638233056423751,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9906216487140783,
+        "projected_48_layer_saving_ms": -0.03773711621761322,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            82.95075967907906,
+            82.95637089759111,
+            82.96598680317402,
+            83.01977068185806,
+            82.9622708261013
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            83.86394008994102,
+            83.9323503896594,
+            83.96129123866558,
+            84.30069778114557,
+            84.36370175331831
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.02737958729267,
+            83.09388067573309,
+            83.45592767000198,
+            83.54696910828352,
+            83.54465942829847
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.02357513457537,
+        "fused_us": 83.96129123866558,
+        "control_drift_fraction": 0.005950377671501306,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9888315664247624,
+        "projected_48_layer_saving_ms": -0.04501037299633026,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "dram",
+      "mode": [
+        false,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.1286482065916,
+            85.13845968991518,
+            85.18524002283812,
+            85.19685827195644,
+            85.57883091270924
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.1769233122468,
+            85.21348237991333,
+            85.17852984368801,
+            85.17642039805651,
+            85.14908142387867
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.20567789673805,
+            85.16449946910143,
+            85.1510837674141,
+            85.17282083630562,
+            85.19284892827272
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 85.17903042957187,
+        "fused_us": 85.1769233122468,
+        "control_drift_fraction": 0.00014579035674688878,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.0000247381244018,
+        "projected_48_layer_saving_ms": 0.00010114163160324097,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "dram",
+      "mode": [
+        false,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.19495837390423,
+            85.25053970515728,
+            85.26967372745275,
+            85.2244021371007,
+            85.22330317646265
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.33115964382887,
+            85.39094123989344,
+            85.3657117113471,
+            85.35960223525763,
+            85.32424923032522
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.18204092979431,
+            85.19275113940239,
+            85.15408728271723,
+            85.15188936144114,
+            85.14919318258762
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 85.19385475665331,
+        "fused_us": 85.35960223525763,
+        "control_drift_fraction": 0.0008250554139452859,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9980582444825891,
+        "projected_48_layer_saving_ms": -0.007955878973007202,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "dram",
+      "mode": [
+        true,
+        false,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.11312771588564,
+            85.13746317476034,
+            85.13436187058687,
+            85.06705984473228,
+            85.05593985319138
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.8814874663949,
+            85.91233752667904,
+            85.89682169258595,
+            85.82240901887417,
+            85.82921233028173
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.01918986439705,
+            85.0645499303937,
+            85.0738724693656,
+            85.08579339832067,
+            85.08868981152773
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 85.07983293384314,
+        "fused_us": 85.8814874663949,
+        "control_drift_fraction": 0.00046121259520714997,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.990665572334603,
+        "projected_48_layer_saving_ms": -0.03847941756248474,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        0
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.06265003234148,
+            85.0614532828331,
+            85.13736072927713,
+            85.0983103737235,
+            85.06315294653177
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.89740842580795,
+            85.92406287789345,
+            85.99325083196163,
+            85.94457991421223,
+            85.89492179453373
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.13446897268295,
+            85.13917215168476,
+            85.0976025685668,
+            85.08900180459023,
+            85.07487829774618
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 85.09330218657851,
+        "fused_us": 85.92406287789345,
+        "control_drift_fraction": 0.0004049887741250924,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9903314547346821,
+        "projected_48_layer_saving_ms": -0.03987651318311691,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 32,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "eaf85ea664097ab710703d2a23e2003777d6e0786d3b26f38323e016f632fcfd",
+            "b06bcd080fd23e7bee86d10482fad0039794d253ded1170701b181bd11b79941",
+            "4af8c07c4d46321bbdd644217e2e23aac2591c6b0e64d545d89521a3473be65c",
+            "e55ef22ea111e0b45b020c0544aa1ca68fe017a4185a7bea199ade37c9b1ba2e"
+          ],
+          "output_sha256": [
+            "0892bcabbaffdb549a6edcb722cdb7859bb2913f47b8db3d7b0e3ab12ac13112",
+            "6e6c9693a3550d0f7cfe0852d310f3ff775467d570bc23940b0fa4542e80c440",
+            "d584391cd5e8571e73e39beba1cf6964d56703d342b8f149bff877d73d18a707",
+            "b8502e289a71f8a41ebd2e6cbd9fb23214af09504fb4c4e0da48b41ad9a6b67c"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "54d6488dec7406c971c7b7c39210e327925ebca467e35b6cee56600ec131e8c8",
+            "b1da992788b7edc8350e28d5583810cdcca596809fda868239504605a271c28c",
+            "3df8d66db88ace6fb575c34fc2ee9e832d687feef00477f1f8cfc4a235506a32",
+            "11e1198688394848b279bb620630f2538580c9f70594ae4b892666546b1baa5e"
+          ],
+          "output_sha256": [
+            "741e9c02ea6c95f3ee8a453431b9832aad33ae6080abd312aea2f69f3140b1f2",
+            "9a789b42f433650c1426722616b6b8098c20abada0b1e423b051385655dd8788",
+            "6d788a4bd480d2aefa34c390192b390f3e0229cfda37c80511806e09ff8171de",
+            "3352cc98c813f91248bb25125f0bb91c8871323b15893bb73ab562bceea7bebd"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.06255224347115,
+            85.14197077602148,
+            85.12954693287611,
+            85.09110193699598,
+            85.41749324649572
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.95380000770092,
+            86.00017055869102,
+            86.01830340921879,
+            86.39377076178789,
+            86.50433272123337
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            85.19574999809265,
+            85.54398082196712,
+            85.6653694063425,
+            85.63532028347254,
+            85.64914111047983
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 85.30662162229419,
+        "fused_us": 86.01830340921879,
+        "control_drift_fraction": 0.005941219809324494,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9917263912595569,
+        "projected_48_layer_saving_ms": -0.03416072577238083,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 1,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "cd9fad0045318a85f5ca755be80241779be24f63f6603fb152f7a5d2e4d8002e",
+            "50e0ebb36824d7fdc2c5c0b6822ba62528efda475cfae54e9c47edc648218208",
+            "fcb04c6dde4e921bb36ea8a6c35eb060a0c279a9373ec43780864839927b3f58",
+            "dfc05c4ce31b7f06a0cf88d1855de590d0a52b76e7901bd502134ea699c5d192"
+          ],
+          "output_sha256": [
+            "c896e7f0cec87bbce8d88f1a9b2c83cc76ec194e32fbbc77166eb493ef384aa1",
+            "a01f3764650223c32b0d738ca72e856b8f2f691f4d42ce5fe7a134530c256817",
+            "0a545c75587a1ec3b19d8f5af7a859e054a10857d92aa6b0e4776e30e0f420b1",
+            "c6faa7a159fba8a218c2dccb44bbc2b43b96901178b5d3a777706b8b776fce56"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "d040205280cf6d493f8b9278c2c53b29e185d407afeb0ca8b00351287b3a731f",
+            "f641fa184c98c7d74b17214625d2322958612e6cbbd0f07a96ff08eb79b91872",
+            "f8409ba6f73223c49fabb0b8f38f271c775c62aad4390aa72f1e3b118e7d5182",
+            "a9dcb205283d77df1925febb5b86ad237158006648a528b0dae8d4a4242328bd"
+          ],
+          "output_sha256": [
+            "0290b21fc161b6b1fc94966b3e31f2ff230ba1c5c720b74d4e5ba6c196c951f0",
+            "1d19b5d07ab673fe4fb77dbba6f16a3b4152fafec78d54a1f84f29bb0b3ff18a",
+            "d097b75f7cc510139574d3fc785162bc00bb660d4d7f0240f05c984519aac0c6",
+            "baf4499d88c60680e7127e8cd5218398d83073272f7c9a5efe64025597c2ac46"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "cd9fad0045318a85f5ca755be80241779be24f63f6603fb152f7a5d2e4d8002e",
+            "50e0ebb36824d7fdc2c5c0b6822ba62528efda475cfae54e9c47edc648218208",
+            "fcb04c6dde4e921bb36ea8a6c35eb060a0c279a9373ec43780864839927b3f58",
+            "dfc05c4ce31b7f06a0cf88d1855de590d0a52b76e7901bd502134ea699c5d192"
+          ],
+          "output_sha256": [
+            "c896e7f0cec87bbce8d88f1a9b2c83cc76ec194e32fbbc77166eb493ef384aa1",
+            "a01f3764650223c32b0d738ca72e856b8f2f691f4d42ce5fe7a134530c256817",
+            "0a545c75587a1ec3b19d8f5af7a859e054a10857d92aa6b0e4776e30e0f420b1",
+            "c6faa7a159fba8a218c2dccb44bbc2b43b96901178b5d3a777706b8b776fce56"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            46.12240940332413,
+            46.150353737175465,
+            46.15526180714369,
+            46.17819096893072,
+            46.203332021832466
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            52.70866211503744,
+            52.73239687085152,
+            52.71275993436575,
+            52.71958187222481,
+            52.735297940671444
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            46.1189029738307,
+            46.17237951606512,
+            46.21414002031088,
+            46.15665879100561,
+            46.19081038981676
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 46.164519153535366,
+        "fused_us": 52.71958187222481,
+        "control_drift_fraction": 0.0003708723177209272,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.8756617088774188,
+        "projected_48_layer_saving_ms": -0.3146430104970932,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 1,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "cd9fad0045318a85f5ca755be80241779be24f63f6603fb152f7a5d2e4d8002e",
+            "50e0ebb36824d7fdc2c5c0b6822ba62528efda475cfae54e9c47edc648218208",
+            "fcb04c6dde4e921bb36ea8a6c35eb060a0c279a9373ec43780864839927b3f58",
+            "dfc05c4ce31b7f06a0cf88d1855de590d0a52b76e7901bd502134ea699c5d192"
+          ],
+          "output_sha256": [
+            "c896e7f0cec87bbce8d88f1a9b2c83cc76ec194e32fbbc77166eb493ef384aa1",
+            "a01f3764650223c32b0d738ca72e856b8f2f691f4d42ce5fe7a134530c256817",
+            "0a545c75587a1ec3b19d8f5af7a859e054a10857d92aa6b0e4776e30e0f420b1",
+            "c6faa7a159fba8a218c2dccb44bbc2b43b96901178b5d3a777706b8b776fce56"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "d040205280cf6d493f8b9278c2c53b29e185d407afeb0ca8b00351287b3a731f",
+            "f641fa184c98c7d74b17214625d2322958612e6cbbd0f07a96ff08eb79b91872",
+            "f8409ba6f73223c49fabb0b8f38f271c775c62aad4390aa72f1e3b118e7d5182",
+            "a9dcb205283d77df1925febb5b86ad237158006648a528b0dae8d4a4242328bd"
+          ],
+          "output_sha256": [
+            "0290b21fc161b6b1fc94966b3e31f2ff230ba1c5c720b74d4e5ba6c196c951f0",
+            "1d19b5d07ab673fe4fb77dbba6f16a3b4152fafec78d54a1f84f29bb0b3ff18a",
+            "d097b75f7cc510139574d3fc785162bc00bb660d4d7f0240f05c984519aac0c6",
+            "baf4499d88c60680e7127e8cd5218398d83073272f7c9a5efe64025597c2ac46"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "cd9fad0045318a85f5ca755be80241779be24f63f6603fb152f7a5d2e4d8002e",
+            "50e0ebb36824d7fdc2c5c0b6822ba62528efda475cfae54e9c47edc648218208",
+            "fcb04c6dde4e921bb36ea8a6c35eb060a0c279a9373ec43780864839927b3f58",
+            "dfc05c4ce31b7f06a0cf88d1855de590d0a52b76e7901bd502134ea699c5d192"
+          ],
+          "output_sha256": [
+            "c896e7f0cec87bbce8d88f1a9b2c83cc76ec194e32fbbc77166eb493ef384aa1",
+            "a01f3764650223c32b0d738ca72e856b8f2f691f4d42ce5fe7a134530c256817",
+            "0a545c75587a1ec3b19d8f5af7a859e054a10857d92aa6b0e4776e30e0f420b1",
+            "c6faa7a159fba8a218c2dccb44bbc2b43b96901178b5d3a777706b8b776fce56"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            46.40992730855942,
+            46.49045877158642,
+            46.403626911342144,
+            46.41394130885601,
+            46.408241614699364
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            53.036450408399105,
+            53.05578000843525,
+            53.098248317837715,
+            53.02213132381439,
+            53.005111403763294
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            46.40042316168547,
+            46.43367603421211,
+            46.42877262085676,
+            46.425857581198215,
+            46.44528962671757
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 46.41989944502711,
+        "fused_us": 53.036450408399105,
+        "control_drift_fraction": 0.000406062094690407,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.8752452150846777,
+        "projected_48_layer_saving_ms": -0.3175944462418556,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 17,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "eb2a7d82c500c68ba2a76dd8ddf7d999befe2662df7e396824bb02e53b94bcc0",
+            "7e78a8cc345194fe5a44262fbffe6b6c56cf57f0efc469075ed18324c0c56b4d",
+            "f1875ecf7ea4cc2317e0894f2bf2c164fa769514e16212cdba73e03507a19df6",
+            "d57e3a96c8040add1e0a3ac2ad4834e36625c1d27d80c1067e554543e98d7242"
+          ],
+          "output_sha256": [
+            "3a8dc9b0e5e6375f472b6f516994a89d2841b26cff2e8a3ce6c52bef6e77c95e",
+            "c79325043c882114dac671351285fb54b803c780b265fc3cc1e94ec24556f480",
+            "459f452e73c5435e50695d8d74a97aac4e2d0d213f3ca07d8eb29a021c999fea",
+            "1f165c2f4ac16f035c69c32208403346dcdbd9ccdf491719cc1e853a3a9ac24f"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "a098e1685a0222ab19cb27ac4398a68cd7eeefb3f64c9452b267680391c9c9f5",
+            "166b40de582f8c259150b96a77b93f97aefb694e5077b9c6772ce38a79c4ee63",
+            "3cead5fc4389af88756142088ee5ee62306454fe45cc6dc776db4a672c3a72ea",
+            "611add772e4584b4f366211434a7eb3c559f4e71df220a040fd73093ffe36768"
+          ],
+          "output_sha256": [
+            "b1419b1ee4df45c947b57564171a904de6eddebf2100490b2482a9a84765dbb6",
+            "24b2c54dc55a6976a235367293f33c26d0653341c2f70b94cb3b6c274d75081c",
+            "53e43bd290ea9edcd8a8f578b0d2cedde6b3b6c0df75eaaf4a12c9795f4635f1",
+            "d8577030fb3c53375983b300efe5f97be98975a4113d5754af2d995a7cf88e59"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "eb2a7d82c500c68ba2a76dd8ddf7d999befe2662df7e396824bb02e53b94bcc0",
+            "7e78a8cc345194fe5a44262fbffe6b6c56cf57f0efc469075ed18324c0c56b4d",
+            "f1875ecf7ea4cc2317e0894f2bf2c164fa769514e16212cdba73e03507a19df6",
+            "d57e3a96c8040add1e0a3ac2ad4834e36625c1d27d80c1067e554543e98d7242"
+          ],
+          "output_sha256": [
+            "3a8dc9b0e5e6375f472b6f516994a89d2841b26cff2e8a3ce6c52bef6e77c95e",
+            "c79325043c882114dac671351285fb54b803c780b265fc3cc1e94ec24556f480",
+            "459f452e73c5435e50695d8d74a97aac4e2d0d213f3ca07d8eb29a021c999fea",
+            "1f165c2f4ac16f035c69c32208403346dcdbd9ccdf491719cc1e853a3a9ac24f"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.83305585384369,
+            62.82324902713299,
+            62.84938659518957,
+            62.82455287873745,
+            62.82704882323742
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            65.71630947291851,
+            65.80856163054705,
+            65.76329004019499,
+            65.74054714292288,
+            65.80004002898932
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            62.841069884598255,
+            62.86140996962786,
+            62.796007841825485,
+            63.032559119164944,
+            63.15445061773062
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 62.83706286922097,
+        "fused_us": 65.76329004019499,
+        "control_drift_fraction": 0.0005469164481546329,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9555036378322087,
+        "projected_48_layer_saving_ms": -0.14045890420675278,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 17,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "eb2a7d82c500c68ba2a76dd8ddf7d999befe2662df7e396824bb02e53b94bcc0",
+            "7e78a8cc345194fe5a44262fbffe6b6c56cf57f0efc469075ed18324c0c56b4d",
+            "f1875ecf7ea4cc2317e0894f2bf2c164fa769514e16212cdba73e03507a19df6",
+            "d57e3a96c8040add1e0a3ac2ad4834e36625c1d27d80c1067e554543e98d7242"
+          ],
+          "output_sha256": [
+            "3a8dc9b0e5e6375f472b6f516994a89d2841b26cff2e8a3ce6c52bef6e77c95e",
+            "c79325043c882114dac671351285fb54b803c780b265fc3cc1e94ec24556f480",
+            "459f452e73c5435e50695d8d74a97aac4e2d0d213f3ca07d8eb29a021c999fea",
+            "1f165c2f4ac16f035c69c32208403346dcdbd9ccdf491719cc1e853a3a9ac24f"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "a098e1685a0222ab19cb27ac4398a68cd7eeefb3f64c9452b267680391c9c9f5",
+            "166b40de582f8c259150b96a77b93f97aefb694e5077b9c6772ce38a79c4ee63",
+            "3cead5fc4389af88756142088ee5ee62306454fe45cc6dc776db4a672c3a72ea",
+            "611add772e4584b4f366211434a7eb3c559f4e71df220a040fd73093ffe36768"
+          ],
+          "output_sha256": [
+            "b1419b1ee4df45c947b57564171a904de6eddebf2100490b2482a9a84765dbb6",
+            "24b2c54dc55a6976a235367293f33c26d0653341c2f70b94cb3b6c274d75081c",
+            "53e43bd290ea9edcd8a8f578b0d2cedde6b3b6c0df75eaaf4a12c9795f4635f1",
+            "d8577030fb3c53375983b300efe5f97be98975a4113d5754af2d995a7cf88e59"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "eb2a7d82c500c68ba2a76dd8ddf7d999befe2662df7e396824bb02e53b94bcc0",
+            "7e78a8cc345194fe5a44262fbffe6b6c56cf57f0efc469075ed18324c0c56b4d",
+            "f1875ecf7ea4cc2317e0894f2bf2c164fa769514e16212cdba73e03507a19df6",
+            "d57e3a96c8040add1e0a3ac2ad4834e36625c1d27d80c1067e554543e98d7242"
+          ],
+          "output_sha256": [
+            "3a8dc9b0e5e6375f472b6f516994a89d2841b26cff2e8a3ce6c52bef6e77c95e",
+            "c79325043c882114dac671351285fb54b803c780b265fc3cc1e94ec24556f480",
+            "459f452e73c5435e50695d8d74a97aac4e2d0d213f3ca07d8eb29a021c999fea",
+            "1f165c2f4ac16f035c69c32208403346dcdbd9ccdf491719cc1e853a3a9ac24f"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.59813099354506,
+            64.64139092713594,
+            64.61735814809799,
+            64.64929785579443,
+            65.03618787974119
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            66.29548966884613,
+            66.3159228861332,
+            66.26544985920191,
+            66.23048800975084,
+            66.28327071666718
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            64.58480376750231,
+            64.68735635280609,
+            64.62235935032368,
+            64.64298814535141,
+            64.5824009552598
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 64.63187513872981,
+        "fused_us": 66.28327071666718,
+        "control_drift_fraction": 0.0002944178109304252,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9750857862009197,
+        "projected_48_layer_saving_ms": -0.0792669877409935,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 31,
+      "placement": "l1",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "ec7ff166ae80da9efd63c6d7f56a3ed796141e89f16accb338fc2928f4737d3d",
+            "fc2c1647944aadd7bee80229cfce4bf8ce8657120cbb13185f81f6a137923dda",
+            "952f40002a67f2f016f5bcdd9cee03e170107f0f1b14f30bc93f29c839835f3d",
+            "778a4a94a000783e673ddfd2567caac0ee6d7851a8cd21a84682e97187286af9"
+          ],
+          "output_sha256": [
+            "57f5ebd48c5d4e5edbacc8b56a9f66f76d6252b30703201af792555d7063ad92",
+            "8ce9bd45cd077025e6166160cee8fa978c3b73e4561ec36705e08b7d44658eaf",
+            "d06c9dbad4c95ece540e8c98e90333ce17c0f9a69fd06be74d2a75b433dd09fc",
+            "8c4e9ac3f6e36291f96a0d295be69ad5bea529587f50bf6b16f5d814f284b47b"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "c89316af964340223f6549f8d21343bc817332945206944f84480539ec74ffc8",
+            "facce9dfaf920a54c6d4521ea4d3bfea21a6fc66a2e3abd2180cb582d4985a0b",
+            "b3e1bcfd9ec7d7d38e314391882a530a51cf88fa41f5de05a4c8908f011263da",
+            "94d365d7098a6b82f73a36b556aae97696368c4104c011942d002a0202f40461"
+          ],
+          "output_sha256": [
+            "0c42114d5c96d52d823b00069c11767e2307dc78092c75263dcd1d45c3e603b2",
+            "31ac9c77c76b61115559a699a1f8b331988b48fec9d5078b2abe9b48c917a89e",
+            "bbd507b333a112207a038b21fba79332b43d4858726d1d1558f235d037a56ae8",
+            "d24079ffcf29cb0eebf8396f87ebb2964073a7e7cb1ef249c8f3cc4bd4b37694"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "ec7ff166ae80da9efd63c6d7f56a3ed796141e89f16accb338fc2928f4737d3d",
+            "fc2c1647944aadd7bee80229cfce4bf8ce8657120cbb13185f81f6a137923dda",
+            "952f40002a67f2f016f5bcdd9cee03e170107f0f1b14f30bc93f29c839835f3d",
+            "778a4a94a000783e673ddfd2567caac0ee6d7851a8cd21a84682e97187286af9"
+          ],
+          "output_sha256": [
+            "57f5ebd48c5d4e5edbacc8b56a9f66f76d6252b30703201af792555d7063ad92",
+            "8ce9bd45cd077025e6166160cee8fa978c3b73e4561ec36705e08b7d44658eaf",
+            "d06c9dbad4c95ece540e8c98e90333ce17c0f9a69fd06be74d2a75b433dd09fc",
+            "8c4e9ac3f6e36291f96a0d295be69ad5bea529587f50bf6b16f5d814f284b47b"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.0251770094037,
+            83.01766123622656,
+            83.01496040076017,
+            83.0302806571126,
+            83.06724019348621
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            84.06504988670349,
+            84.14716925472021,
+            84.1586897149682,
+            84.1323472559452,
+            84.13705974817276
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            83.12482852488756,
+            83.09578988701105,
+            83.08976888656616,
+            83.0948818475008,
+            83.07415060698986
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 83.07069540023804,
+        "fused_us": 84.13705974817276,
+        "control_drift_fraction": 0.0008395626556652047,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9873258662576704,
+        "projected_48_layer_saving_ms": -0.0511854887008667,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    },
+    {
+      "batch": 31,
+      "placement": "dram",
+      "mode": [
+        true,
+        true,
+        2560
+      ],
+      "checks": [
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "ec7ff166ae80da9efd63c6d7f56a3ed796141e89f16accb338fc2928f4737d3d",
+            "fc2c1647944aadd7bee80229cfce4bf8ce8657120cbb13185f81f6a137923dda",
+            "952f40002a67f2f016f5bcdd9cee03e170107f0f1b14f30bc93f29c839835f3d",
+            "778a4a94a000783e673ddfd2567caac0ee6d7851a8cd21a84682e97187286af9"
+          ],
+          "output_sha256": [
+            "57f5ebd48c5d4e5edbacc8b56a9f66f76d6252b30703201af792555d7063ad92",
+            "8ce9bd45cd077025e6166160cee8fa978c3b73e4561ec36705e08b7d44658eaf",
+            "d06c9dbad4c95ece540e8c98e90333ce17c0f9a69fd06be74d2a75b433dd09fc",
+            "8c4e9ac3f6e36291f96a0d295be69ad5bea529587f50bf6b16f5d814f284b47b"
+          ]
+        },
+        {
+          "allocation": 1,
+          "norm_sha256": [
+            "c89316af964340223f6549f8d21343bc817332945206944f84480539ec74ffc8",
+            "facce9dfaf920a54c6d4521ea4d3bfea21a6fc66a2e3abd2180cb582d4985a0b",
+            "b3e1bcfd9ec7d7d38e314391882a530a51cf88fa41f5de05a4c8908f011263da",
+            "94d365d7098a6b82f73a36b556aae97696368c4104c011942d002a0202f40461"
+          ],
+          "output_sha256": [
+            "0c42114d5c96d52d823b00069c11767e2307dc78092c75263dcd1d45c3e603b2",
+            "31ac9c77c76b61115559a699a1f8b331988b48fec9d5078b2abe9b48c917a89e",
+            "bbd507b333a112207a038b21fba79332b43d4858726d1d1558f235d037a56ae8",
+            "d24079ffcf29cb0eebf8396f87ebb2964073a7e7cb1ef249c8f3cc4bd4b37694"
+          ]
+        },
+        {
+          "allocation": 0,
+          "norm_sha256": [
+            "ec7ff166ae80da9efd63c6d7f56a3ed796141e89f16accb338fc2928f4737d3d",
+            "fc2c1647944aadd7bee80229cfce4bf8ce8657120cbb13185f81f6a137923dda",
+            "952f40002a67f2f016f5bcdd9cee03e170107f0f1b14f30bc93f29c839835f3d",
+            "778a4a94a000783e673ddfd2567caac0ee6d7851a8cd21a84682e97187286af9"
+          ],
+          "output_sha256": [
+            "57f5ebd48c5d4e5edbacc8b56a9f66f76d6252b30703201af792555d7063ad92",
+            "8ce9bd45cd077025e6166160cee8fa978c3b73e4561ec36705e08b7d44658eaf",
+            "d06c9dbad4c95ece540e8c98e90333ce17c0f9a69fd06be74d2a75b433dd09fc",
+            "8c4e9ac3f6e36291f96a0d295be69ad5bea529587f50bf6b16f5d814f284b47b"
+          ]
+        }
+      ],
+      "passed": true,
+      "changed_input_trace": true,
+      "input_and_address_stability": true,
+      "timings": [
+        {
+          "variant": "native",
+          "traced_call_us": [
+            84.81837809085846,
+            84.82830133289099,
+            84.8448183387518,
+            85.13866923749447,
+            85.16981732100248
+          ]
+        },
+        {
+          "variant": "fused",
+          "traced_call_us": [
+            85.886400192976,
+            85.85323579609394,
+            85.87378077208996,
+            85.8872989192605,
+            86.3315723836422
+          ]
+        },
+        {
+          "variant": "native",
+          "traced_call_us": [
+            84.8880922421813,
+            84.94316600263119,
+            85.0079720839858,
+            85.16381029039621,
+            84.89490021020174
+          ]
+        }
+      ],
+      "comparison": {
+        "native_us": 84.91903310641646,
+        "fused_us": 85.886400192976,
+        "control_drift_fraction": 0.001159147556739848,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9887366674539161,
+        "projected_48_layer_saving_ms": -0.046433620154857635,
+        "full_model_speedup_measured": false
+      },
+      "kernel_only": true
+    }
+  ],
+  "promoted_to_serving": false,
+  "scope": "26 TP4 layout cases; kernel timing only, not complete GDN or full-model gain",
+  "updated_at": "2026-10-10T09:55:57Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_case": [
+    31,
+    "dram",
+    [
+      true,
+      true,
+      2560
+    ]
+  ]
+}
