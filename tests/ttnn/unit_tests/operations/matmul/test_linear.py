@@ -11,7 +11,6 @@ from loguru import logger
 from models.common.utility_functions import (
     torch_random,
     is_blackhole,
-    skip_for_blackhole,
     is_llk_assert_enabled,
     skip_for_slow_dispatch,
 )
@@ -1273,7 +1272,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k_dram", [128, 256])
 @pytest.mark.parametrize(
     "m,n,tile_h,tile_w,transpose_tile",
@@ -1378,7 +1376,6 @@ def test_linear_fused_non_broadcast_bias_dram_sharded_in1(device, k_dram, m, n, 
         )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
 def test_linear_fused_non_broadcast_bias_width_sharded_in0_in1(device, m, k, n):
     """Fused bias [1,1,M,N] with width-sharded activations/weights/bias and 1D mcast program config."""
