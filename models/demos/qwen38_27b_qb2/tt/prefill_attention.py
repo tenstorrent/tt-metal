@@ -23,13 +23,27 @@ def make_batch_indices(mesh, maximum=32):
 
 
 def fill_and_attend(
-    q, k, v, key, value, page_table, start_pos, *, page_size, scale, program_config, batch_indices=None
+    q,
+    k,
+    v,
+    key,
+    value,
+    page_table,
+    start_pos,
+    *,
+    page_size,
+    scale,
+    program_config,
+    batch_indices=None,
+    compute_kernel_config=None,
 ):
     """Keep physical page ownership and causal offsets identical in both paths.
 
     batch_indices maps input rows to this already-sliced page table, not to
     global request slots or physical cache blocks. Its lifetime belongs to the
     caller; allocate it before capturing a trace that uses this boundary.
+    An explicit compute configuration is forwarded identically in both paths;
+    omitting it retains the native prefill defaults.
     """
     batch, _, length, _ = q.shape
     if page_table.shape[0] != batch or k.shape[0] != batch or v.shape[0] != batch:
@@ -38,6 +52,7 @@ def fill_and_attend(
     end_page = (start_pos + length + page_size - 1) // page_size
     if start_pos < 0 or start_pos % page_size or end_page > page_table.shape[-1]:
         raise ValueError("Prefill requires a page-aligned, covered continuation")
+    compute_options = {} if compute_kernel_config is None else {"compute_kernel_config": compute_kernel_config}
     if batch_indices is not None:
         if tuple(batch_indices.shape) != (batch,):
             raise ValueError("Prefill batch indices must contain one local page-table row per input")
@@ -47,7 +62,7 @@ def fill_and_attend(
                 update = ttnn.typecast(update, cache.dtype)
             ttnn.experimental.paged_fill_cache(cache, update, chunk_table, batch_idx_tensor=batch_indices, batch_idx=0)
         return ttnn.transformer.chunked_scaled_dot_product_attention(
-            q, key, value, page_table, start_pos, scale=scale, program_config=program_config
+            q, key, value, page_table, start_pos, scale=scale, program_config=program_config, **compute_options
         )
     outputs = []
     for user in range(batch):
@@ -67,6 +82,7 @@ def fill_and_attend(
                 start_pos,
                 scale=scale,
                 program_config=program_config,
+                **compute_options,
             )
         )
     return outputs[0] if batch == 1 else ttnn.concat(outputs, dim=0)

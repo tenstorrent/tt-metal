@@ -1,0 +1,52 @@
+{
+  "captured_at": 1791671914.153419,
+  "units": {
+    "qwen38-gdn-combined-v1-20261010.service": {
+      "RuntimeMaxUSec": "1d",
+      "MainPID": "479502",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "16s",
+      "MemoryMax": "274877906944",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "15bebec92d7649909517ba9a4a5a3778"
+    },
+    "qwen38-gdn-combined-followup-v1-20261010.service": {
+      "RuntimeMaxUSec": "1d",
+      "MainPID": "479505",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "16s",
+      "MemoryMax": "274877906944",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "8e20a69d96884f5a8f9346d08d638e64"
+    },
+    "qwen38-gdn-epilogue-padding-v2-20261010.service": {
+      "RuntimeMaxUSec": "1d 4h",
+      "MainPID": "500939",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "8s",
+      "MemoryMax": "34359738368",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "2cb03803508147cca833c466023b1a52"
+    },
+    "qwen38-prefill-numerics-v1-20261010.service": {
+      "RuntimeMaxUSec": "1d 4h",
+      "MainPID": "519518",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "8s",
+      "MemoryMax": "34359738368",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "7d953cfc6f7f46f98bc757a57330341c"
+    }
+  },
+  "recent_log": [
+    "2026-10-10 22:38:12.312 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 53",
+    "2026-10-10 22:38:16.930 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 54",
+    "2026-10-10 22:38:21.523 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 55",
+    "2026-10-10 22:38:25.958 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 56",
+    "2026-10-10 22:38:30.597 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 57"
+  ]
+}

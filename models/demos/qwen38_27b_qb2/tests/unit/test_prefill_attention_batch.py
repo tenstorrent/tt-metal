@@ -118,6 +118,47 @@ def test_rejects_invalid_boundary_before_device_operations(defect, expect_error)
         )
 
 
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+def test_compute_configuration_is_forwarded_identically_without_changing_defaults(batched, override):
+    calls = []
+    choice = object() if override else None
+    values = torch.zeros(2, 1, 32, 4)
+
+    def attend(q, *args, **kwargs):
+        calls.append(kwargs)
+        return q
+
+    boundary = load_boundary(
+        SimpleNamespace(
+            experimental=SimpleNamespace(paged_fill_cache=lambda *a, **k: None),
+            transformer=SimpleNamespace(chunked_scaled_dot_product_attention=attend),
+            concat=torch.cat,
+        )
+    )
+    boundary(
+        values,
+        values,
+        values,
+        values,
+        values,
+        torch.zeros(2, 1, dtype=torch.int32),
+        0,
+        page_size=32,
+        scale=0.5,
+        program_config="fixed",
+        batch_indices=torch.arange(2) if batched else None,
+        compute_kernel_config=choice,
+    )
+    assert len(calls) == (1 if batched else 2)
+    for call in calls:
+        assert call["program_config"] == "fixed"
+        if override:
+            assert call["compute_kernel_config"] is choice
+        else:
+            assert "compute_kernel_config" not in call
+
+
 def receipt():
     cases = []
     for batch, start, length in CASES:

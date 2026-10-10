@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-epilogue-padding-v2-20261010.service",
+  "predecessor_invocation": "2cb03803508147cca833c466023b1a52",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791671774.0850525,
+  "updated_at": "2026-10-10T22:38:14Z",
+  "predecessor": {
+    "MainPID": "500939",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "2cb03803508147cca833c466023b1a52"
+  }
+}

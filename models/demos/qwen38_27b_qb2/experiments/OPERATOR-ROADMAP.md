@@ -81,6 +81,14 @@ comparison is now running, with G0/API/full GPQA conditional on a matched >=1%
 32K gain. The new epilogue unused-row experiment follows that qualification;
 see [its frozen queue and limitations](../galaxy-evidence/gdn-epilogue-padding-v2/README.md).
 
+The prefill before-arm failure now has a separate numerical isolation test
+queued after that epilogue experiment. It reproduces the original seeded case,
+checks its causal reference independently, and varies exponentiation and
+accumulation without changing model defaults or loosening accuracy gates.
+Frozen CPU preflight passed; physical results remain pending. This diagnostic
+must identify a valid baseline before batching performance can be credited.
+[Exact plan and persistent launch](../galaxy-evidence/prefill-numerics-v1/README.md).
+
 ## Matmuls are optimized, with uneven remaining room
 
 The selected path already uses DRAM-sharded weights, L1-sharded activations,

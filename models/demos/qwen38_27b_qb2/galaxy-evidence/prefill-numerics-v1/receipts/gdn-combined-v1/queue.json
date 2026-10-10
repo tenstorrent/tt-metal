@@ -1,0 +1,117 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "combined-4k",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/models/demos/qwen38_27b_qb2/tests/test_compact_gdn_long_horizon.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=1620",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/combined-4k/hardware.xml"
+      ],
+      "timeout_seconds": 1800,
+      "started_at": 1791669607.5860138,
+      "finished_at": 1791669643.6302037
+    },
+    {
+      "name": "before",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/before/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791669643.636897,
+      "finished_at": 1791670640.8384926
+    },
+    {
+      "name": "compact",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/compact/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791670640.8526514,
+      "finished_at": 1791671638.0425518
+    },
+    {
+      "name": "after",
+      "state": "running",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-source-v1/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/after/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791671638.05693
+    }
+  ],
+  "cleanup_completed": false,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-compact-gates-v3-20261010.service",
+  "predecessor_invocation": "9d7889e59af942ef8e45967635e28d95",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791669607.5670226,
+  "target_tsu": 30,
+  "speculative_decoding": false,
+  "baseline_recurrence": "single_step_compact_gdn",
+  "candidate_recurrence": "single_step_compact_gdn_resident_gates",
+  "updated_at": "2026-10-10T22:33:58Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "after",
+  "combined_validation": {
+    "updates_per_batch": 4096,
+    "batches": [
+      16,
+      32
+    ],
+    "exact_boundary_comparison_passed": true,
+    "independent_dense_reference": false,
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  }
+}

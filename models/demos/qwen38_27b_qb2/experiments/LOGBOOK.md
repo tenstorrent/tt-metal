@@ -2299,3 +2299,39 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   did not exist; located the actual contract test with rg. Updated stale roadmap
   queue descriptions to reflect completed projection and GDN results.
 - Evidence: [epilogue-padding-v2](../galaxy-evidence/gdn-epilogue-padding-v2/README.md).
+
+## October 10, 22:29-22:43 UTC - Isolate prefill numerical failure
+
+- Previous turn made progress by publishing the default-off epilogue experiment
+  and persistent validation at117fb370372. Combined before/candidate arms now
+  completed:32K19.996/20.319TSU,16K22.722/23.142TSU, matching output hashes.
+  After-control is still active; no matched gain or new GPQA result is claimed.
+- Investigated the prefill batching failure at its serial before-arm. Pinned
+  native SDPA defaults select approximate exponentiation, HiFi2 and no FP32
+  destination accumulation; the streaming path also depends on accumulation.
+  Retained exact native sources. This is a numerical hypothesis, not proof.
+- Added an explicit optional compute-config argument to the shared boundary;
+  default calls remain unchanged. A new diagnostic repeats the original seed
+  and three nearby geometries with six controlled configurations. Independent
+  Torch SDPA checks the FP64 selected-row causal reference against actual
+  quantized KV. Four-rank outputs, page ownership, input immutability and
+  before/after native identity are required. Existing accuracy gates stay
+  unchanged; diagnostic completion cannot qualify a model or performance gain.
+- Frozen CPU suite722passed,1skipped,104subtests in4.38s; hardware collection
+  passed. Verified all288 model-source hashes against the frozen manifest.
+  Launched qwen38-prefill-numerics-v1-20261010, PID519518, invocation
+  7d953cfc6f7f46f98bc757a57330341c after exact epilogue-padding-v2 invocation.
+  At22:38UTC it is waiting, hardware_started=false,28h/32GiB/eight CPUs,
+  1800s hardware bound and shared lock. Estimated3-10min once eligible;
+  disconnect-persistent, not reboot-persistent. No native install edits.
+- Answered prefix/SSD status from the isolated worktree and verified remote
+  anatarajan/qwen38-prefix-offload-20261010 atfab35e060a5. It remains21CPU-tests
+  checkpoint/storage groundwork, without TT transfers or enabled vLLM APC.
+  Kernel/GPQA hardware priority was preserved.
+- Issues: first helper-construction assertion failed locally before staging;
+  corrected quoted-script replacement via AST decode/re-encode. SSH staging,
+  collection and remote-ref lookup needed prescribed sandbox escalation.
+  One guessed controller filename did not exist; no action depended on it.
+  Full manifest/sample prints were overly broad; subsequent checks use narrow
+  summaries. No reset/reboot, firmware/NFS change or active-source mutation.
+- Evidence: [prefill-numerics-v1](../galaxy-evidence/prefill-numerics-v1/README.md).
