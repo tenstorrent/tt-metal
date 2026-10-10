@@ -222,9 +222,17 @@ void process_and_sort_tiles(
     CircularBuffer cb_expert_index_template(cb_expert_index_template_id);
     CircularBuffer cb_sorted_group_scores(cb_sorted_group_scores_id);
     CircularBuffer cb_sorted_expert_indices_temp(cb_sorted_expert_indices_temp_id);
+#if defined(ARCH_BLACKHOLE)
+    // Only the sorted scores go on and they do not depend on the index lanes, so DEST 2 and 3 stay unloaded.
+    constexpr bool sort_index_lanes = false;
+#else
+    constexpr bool sort_index_lanes = true;
+#endif
     topk_tile_init();
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
-    cb_expert_index_template.wait_front(Wt);
+    if constexpr (sort_index_lanes) {
+        cb_expert_index_template.wait_front(Wt);
+    }
     cb_biased_scores.wait_front(Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
@@ -234,11 +242,13 @@ void process_and_sort_tiles(
         transpose_tile(cb_biased_scores_id, wt, 0);
         transpose_tile(cb_biased_scores_id, wt + 1, 1);
 
-        // transpose and unpack into dest regs
-        reconfig_data_format_srca(cb_expert_index_template_id);
-        transpose_init(cb_expert_index_template_id);
-        transpose_tile(cb_expert_index_template_id, wt, 2);
-        transpose_tile(cb_expert_index_template_id, wt + 1, 3);
+        if constexpr (sort_index_lanes) {
+            // transpose and unpack into dest regs
+            reconfig_data_format_srca(cb_expert_index_template_id);
+            transpose_init(cb_expert_index_template_id);
+            transpose_tile(cb_expert_index_template_id, wt, 2);
+            transpose_tile(cb_expert_index_template_id, wt + 1, 3);
+        }
 
         // llk_topk_sort -> inplace
         if constexpr (stable_sort) {
@@ -258,18 +268,20 @@ void process_and_sort_tiles(
         pack_tile(1, cb_sorted_group_scores_id);
         cb_sorted_group_scores.push_back(1);
 
-        // pack sorted index tiles
-        pack_reconfig_data_format(cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.reserve_back(1);
-        pack_tile(2, cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.push_back(1);
+        if constexpr (sort_index_lanes) {
+            // pack sorted index tiles
+            pack_reconfig_data_format(cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.reserve_back(1);
+            pack_tile(2, cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.push_back(1);
 
-        cb_sorted_expert_indices_temp.reserve_back(1);
-        pack_tile(3, cb_sorted_expert_indices_temp_id);
-        cb_sorted_expert_indices_temp.push_back(1);
+            cb_sorted_expert_indices_temp.reserve_back(1);
+            pack_tile(3, cb_sorted_expert_indices_temp_id);
+            cb_sorted_expert_indices_temp.push_back(1);
 
-        cb_sorted_expert_indices_temp.wait_front(2);
-        cb_sorted_expert_indices_temp.pop_front(2);
+            cb_sorted_expert_indices_temp.wait_front(2);
+            cb_sorted_expert_indices_temp.pop_front(2);
+        }
 
         tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
