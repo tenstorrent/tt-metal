@@ -614,3 +614,119 @@ def test_cp_mlp_norm_layer(mesh_device, seq_len, reset_seeds):
     ccl.close()
     assert res["attn_norm_pcc"] >= 0.99995 and res["ff_norm_pcc"] >= 0.99995, res
     assert res["mlp_out_pcc_b_vs_today"] >= 0.9999, res
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Slice 6: layer-major driver and last-token exit
+# ---------------------------------------------------------------------------------------------------------------
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+@pytest.mark.parametrize("seq_len", [40960])
+def test_cp_layer_major(mesh_device, seq_len, reset_seeds):
+    """cp.layer_major_prefill (2 users on different columns, 1 real layer) against cp.model_prefill per user:
+    last-token windows and KV caches torch.equal; last-token logits (process_output_prefill_logits on the window vs
+    on the full natural output) torch.equal. Logs the wall time of both tails."""
+    import time
+
+    model, _, _ = _one_layer_model(mesh_device, seq_len)
+    attn = model.layers[0].attention
+    rot = model.get_or_create_prefill_rot_mats()
+    nb = seq_len // 64
+    users = [
+        dict(slot=0, last=seq_len - 1, blocks=torch.arange(nb)),
+        dict(slot=9, last=seq_len - 400, blocks=torch.arange(nb, 2 * nb)),
+    ]
+    for u in users:
+        pt_host = torch.full((COLS, nb), -1, dtype=torch.int32)
+        pt_host[u["slot"] // 8] = u["blocks"].int()
+        u["pt"] = ttnn.from_torch(
+            pt_host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=(ROWS, COLS)),
+        )
+        torch.manual_seed(100 + u["slot"])
+        u["xh"] = torch.randn(1, 1, seq_len, cp.HIDDEN).to(torch.bfloat16)
+
+    def caches(u):
+        devs = [ttnn.get_device_tensors(t) for t in attn.layer_past]
+        col = u["slot"] // 8
+        return [torch.stack([ttnn.to_torch(d[r * COLS + col])[u["blocks"]] for r in range(ROWS)]) for d in devs]
+
+    def window_of(nat, last):
+        w0 = (last // cp.EXIT_WINDOW) * cp.EXIT_WINDOW
+        return [ttnn.to_torch(d)[:, :, w0 : w0 + cp.EXIT_WINDOW] for d in ttnn.get_device_tensors(nat)]
+
+    def timed(fn):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        out = fn()
+        ttnn.synchronize_device(mesh_device)
+        return out, (time.perf_counter() - t0) * 1e3
+
+    # user-major (today's CP forward) per user
+    ref = {}
+    for u in users:
+        nat = cp.model_prefill(model, _x_natural(mesh_device, u["xh"], ttnn.bfloat16), rot, u["slot"], u["pt"], None)
+        ttnn.synchronize_device(mesh_device)
+        ref[u["slot"]] = dict(win=window_of(nat, u["last"]), cache=caches(u))
+        model.process_output_prefill_logits(nat, last_token_idx=u["last"])  # compile
+        lg, ms = timed(lambda: model.process_output_prefill_logits(nat, last_token_idx=u["last"]))
+        ref[u["slot"]]["logits"] = ttnn.to_torch(ttnn.get_device_tensors(lg[0])[0])
+        ref[u["slot"]]["tail_ms"] = ms
+        ttnn.deallocate(nat)
+    # wipe both users' blocks so the layer-major run has to write them again
+    for u in users:
+        z = ttnn.from_torch(
+            torch.zeros(1, 1, seq_len, 128),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for t in attn.layer_past:
+            ttnn.experimental.paged_fill_cache(t, z, u["pt"], batch_idx=0)
+        ttnn.deallocate(z)
+
+    lm = [
+        dict(
+            h=cp.model_entry(model, _x_natural(mesh_device, u["xh"], ttnn.bfloat16)),
+            user_id=u["slot"],
+            page_table=u["pt"],
+            last_idx=u["last"],
+        )
+        for u in users
+    ]
+    windows = cp.layer_major_prefill(model, lm, rot, None)
+    ttnn.synchronize_device(mesh_device)
+    bad, res = [], {}
+    for u, win in zip(users, windows):
+        r = ref[u["slot"]]
+        got = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(win)]
+        nw = sum(int(torch.equal(a, b)) for a, b in zip(got, r["win"]))
+        nc = sum(int(torch.equal(a, b)) for a, b in zip(caches(u), r["cache"]))
+        model.process_output_prefill_logits(win, last_token_idx=u["last"] % cp.EXIT_WINDOW)  # compile
+        lg, ms = timed(lambda: model.process_output_prefill_logits(win, last_token_idx=u["last"] % cp.EXIT_WINDOW))
+        eq_logits = torch.equal(ttnn.to_torch(ttnn.get_device_tensors(lg[0])[0]), r["logits"])
+        res[
+            u["slot"]
+        ] = f"window {nw}/32 caches {nc}/2 logits_equal {eq_logits} tail_ms natural {r['tail_ms']:.2f} window {ms:.2f}"
+        if nw != 32 or nc != 2 or not eq_logits:
+            bad.append(f"user {u['slot']}: {res[u['slot']]}")
+    # exit cost alone (b1): natural exit vs last-token exit on the same residual
+    ctx = cp.get_context(model.tt_ccl, mesh_device, seq_len)
+    h = cp.model_entry(model, _x_natural(mesh_device, users[0]["xh"], ttnn.bfloat16))
+    for fn in (
+        lambda: cp.exit_natural(ctx, model.tt_ccl, h),
+        lambda: cp.exit_last_token(ctx, model.tt_ccl, h, seq_len - 1),
+    ):
+        ttnn.deallocate(fn())
+    o1, t_nat = timed(lambda: cp.exit_natural(ctx, model.tt_ccl, h))
+    o2, t_last = timed(lambda: cp.exit_last_token(ctx, model.tt_ccl, h, seq_len - 1))
+    logger.info(f"CP_S6 exit_ms natural {t_nat:.2f} last_token {t_last:.2f} (S={seq_len})")
+    for u in users:
+        logger.info(f"CP_S6 user {u['slot']}: {res[u['slot']]}")
+    model.tt_ccl.close()
+    assert not bad, "\n".join(bad)
