@@ -62,7 +62,7 @@ void kernel_main() {
 
         // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory sets
         // UnpackToDestFp32 for cb_inp so transpose_tile preserves FP32 precision into DEST.
-        // Its math-side init (called from transpose_init) records slots [16, 32) of the math-thread
+        // On Wormhole its math-side init (called from transpose_init) records slots [16, 32) of the math-thread
         // replay buffer, clobbering the LREG2 / LREG3 portions of welford's recurrence (welford
         // records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
         // welford_init<WelfordInitMode::PreserveStats>() after each transpose_tile re-records
@@ -73,7 +73,8 @@ void kernel_main() {
         // consume that state, and the next iteration's transpose_init reprograms it.
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
-        // gated out.
+        // gated out. On Blackhole welford records slots [0, 16) only, so neither record is redone
+        // per tile (welford_rerecord_per_tile).
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_inp, block_size);
             uint32_t r;

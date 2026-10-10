@@ -92,15 +92,15 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         // Block-interleaved pre-add + Welford. The Welford accumulator lives in the SFPU within a
         // tile_regs scope, but the pre-add must use its own tile_regs scope to pack its result to
-        // dfb_inp_id before the Welford pass can transpose-read it back. To bridge those scopes the
-        // accumulator (mean, M2) is spilled to dfb::mean_spill / dfb::m2_spill between chunks via
-        // welford_save_state / welford_restore_state. This lets dfb_inp_id stay sized to a small
-        // number of tiles (blk * 2 for double-buffer) regardless of Wt. Larger blk amortizes the
-        // save/restore overhead and accuracy loss across more tiles per spill cycle; blk is
-        // chosen by the factory as gcd(Wt, DST capacity) so it always divides Wt.
+        // dfb_inp_id before the Welford pass can transpose-read it back. On Blackhole the
+        // accumulator (mean, M2) stays in LREG4/5 across those scopes; elsewhere it is spilled to
+        // dfb::mean_spill / dfb::m2_spill between chunks via welford_save_state / welford_restore_state.
+        // This lets dfb_inp_id stay sized to a small number of tiles (blk * 2 for double-buffer)
+        // regardless of Wt. Larger blk amortizes the save/restore overhead and accuracy loss across
+        // more tiles per spill cycle; blk is chosen by the factory as gcd(Wt, DST capacity) so it
+        // always divides Wt.
 
-        // Seed the spill buffers with an initialized (zero) Welford state,
-        // since iteration 0 below expects it.
+        // Start from a zero Welford state: in the registers, or in the spill buffers iteration 0 below reads.
         if constexpr (welford_state_in_lregs) {
             welford_init();
         } else {
@@ -137,6 +137,7 @@ void kernel_main() {
                     copy_init(dfb::res);
                     copy_tile(dfb::res, i, 1);
                     if constexpr (welford_state_in_lregs) {
+                        // Mean to tile 2 and M2 to tile 3, clear of the add's operands in tiles 0 and 1.
                         welford_save_state(dst2);
                     }
                     add_binary_tile_init();
@@ -168,7 +169,7 @@ void kernel_main() {
             dfb_in0.pop_front(block.size());
             dfb_res.pop_front(block.size());
 
-            // --- Welford: reload accumulator, update with block tiles, spill back ---
+            // --- Welford: update with block tiles (the spill path reloads the accumulator and spills it back) ---
             if constexpr (!welford_state_in_lregs) {
                 dfb_mean_spill.wait_front(1);
                 dfb_m2_spill.wait_front(1);
@@ -210,7 +211,7 @@ void kernel_main() {
             }
             if constexpr (welford_state_in_lregs) {
                 if constexpr (!DST_ACCUM_MODE) {
-                    // A round trip through the 16-bit DEST rounds the state to bfloat16, as the spill path below does.
+                    // A round trip through the 16-bit DEST truncates the state to bfloat16, as the spill path does.
                     welford_save_state(dst1);
                     welford_restore_state(dst1);
                 }
@@ -236,7 +237,7 @@ void kernel_main() {
             }
         }
 
-        // Finalize: reload accumulator and write mean and variance to the scratch buffer.
+        // Finalize: write mean and variance to the scratch buffer; the spill path reloads the accumulator first.
         if constexpr (!welford_state_in_lregs) {
             dfb_mean_spill.wait_front(1);
             dfb_m2_spill.wait_front(1);
@@ -280,7 +281,7 @@ void kernel_main() {
 
         // When the input buffer carries Float32 with fp32_dest_acc_en=true, the program factory
         // sets UnpackToDestFp32 for it so transpose_tile preserves FP32 precision into DEST.
-        // Its math-side init (called from transpose_init) records slots [16, 32) of the
+        // On Wormhole its math-side init (called from transpose_init) records slots [16, 32) of the
         // math-thread replay buffer, clobbering the LREG2 / LREG3 portions of Welford's recurrence
         // (welford records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
         // welford_init<WelfordInitMode::PreserveStats>() after each transpose_tile re-records
@@ -293,7 +294,8 @@ void kernel_main() {
         //
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
-        // gated out.
+        // gated out. On Blackhole welford records slots [0, 16) only, so neither record is redone
+        // per tile (welford_rerecord_per_tile).
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             dfb_inp.wait_front(1);  // cumulative wait
             if constexpr (welford_rerecord_per_tile) {

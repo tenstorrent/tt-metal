@@ -98,8 +98,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     // The welford kernel does the pre-add and welford passes in blk-sized chunks, spilling the
-    // welford accumulator to a small buffer between chunks. Per-chunk overhead (state spill +
-    // tile_regs scope switch) amortizes over more tiles when blk is larger; the upper bound is
+    // welford accumulator to a small buffer between chunks (on Blackhole it stays in the SFPU
+    // registers). Per-chunk overhead (state spill + tile_regs scope switch) amortizes over more
+    // tiles when blk is larger; the upper bound is
     // how many tiles fit in DST in a single tile_regs scope (4 in fp32_dest_acc, 8 otherwise).
     // Constrain blk to divide Wt so the reader and compute kernel stay aligned without a
     // partial last block.
@@ -131,8 +132,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // The pre-add and welford passes are interleaved in block_size-sized chunks in the welford
     // kernel: each chunk's tiles are added into the fused buffer and then immediately consumed by
     // welford, with the welford accumulator spilled to the mean / M2 spill buffers between
-    // chunks. So the fused buffer only needs to hold block_size * 2 tiles (double-buffered for
-    // producer/consumer overlap), not the full Wt row.
+    // chunks (kept in the SFPU registers on Blackhole). So the fused buffer only needs to hold
+    // block_size * 2 tiles (double-buffered for producer/consumer overlap), not the full Wt row.
     const uint32_t fused_tiles = block_size * 2;
     const uint32_t welford_spill_tiles = 1;
 
@@ -157,9 +158,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     // UnpackToDest routes the unpack to DEST instead of SrcA, preserving FP32 precision.
-    // That path uses the math-thread replay buffer, which collides with Welford's recurrence
-    // slots; welford_unpack_fp32_active gates welford_init<WelfordInitMode::PreserveStats>()
-    // after each transpose_tile to re-record the SFPU replay buffer.
+    // That path uses the math-thread replay buffer, which on Wormhole collides with Welford's
+    // recurrence slots; there welford_unpack_fp32_active gates welford_init<WelfordInitMode::PreserveStats>()
+    // after each transpose_tile to re-record the SFPU replay buffer. On Blackhole the two records are disjoint.
     //
     // On the FUSE path, pre-add uses copy_tile + add_binary_tile (SFPU), not add_tiles, so
     // the input and residual buffers can use UnpackToDest for the copy_tile unpack, and the fused
@@ -325,6 +326,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // The Welford spill buffers hold the FP32 accumulator between block iterations and are reloaded
     // into DEST via copy_tile. On the SrcA/B path that round-trip truncates FP32 to TF32 on every
     // block iteration. Force UnpackToDest on them so the FP32 precision survives the spill cycle.
+    // The Blackhole kernel keeps the accumulator in the SFPU registers and leaves them unused.
     if (fuse_pre_add && fp32_dest_acc_en) {
         unpack_via_dest(compute_gen1, PREWF_MEAN_SPILL);
         unpack_via_dest(compute_gen1, PREWF_M2_SPILL);
