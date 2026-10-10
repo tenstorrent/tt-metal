@@ -92,7 +92,8 @@ def test_flat_balanced_sweep(device):
             regions = torch.zeros(1, NG, dtype=torch.int32)
             counts[0, :E] = M
             regions[0, :E] = torch.arange(E, dtype=torch.int32) * M
-            tidx = torch.randint(0, T, (1, E * M), dtype=torch.int32)
+            # (seeded per M: a run's inputs at M do not depend on its M list, so dumps of different runs compare)
+            tidx = torch.randint(0, T, (1, E * M), dtype=torch.int32, generator=torch.Generator().manual_seed(M))
             cd, rd, td = rm(counts, ttnn.uint32), rm(regions, ttnn.uint32), rm(tidx, ttnn.uint32)
             if UNIFIED:  # the dispatched buffer: the experts' rows back to back (>= one expert's capacity of rows)
                 xb = rm(torch.randn(max(E * M, CAP), H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)

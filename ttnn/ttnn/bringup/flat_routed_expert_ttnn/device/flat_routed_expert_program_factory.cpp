@@ -134,14 +134,19 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
     }
-    if (p.hbuf == 4) {  // the 4th h buffer's gather semaphore on the down chain heads
+    if (p.hu) {  // h units of HU row tiles (gather semaphores of up to 8 unit buffers: se_dyn.hpp)
+        dyn_def["SE_HU"] = std::to_string(p.hu);
+    } else if (p.hbuf == 4) {  // the 4th h buffer's gather semaphore on the down chain heads
         dyn_def["SE_GATH3"] = std::to_string(GATH3);
     }
     // perf probe (read at program build, not hashed): MIMO_FL_X_RESIDENT=1 - x never moves. The relay kernels
     // (read / tilize / multicast / helpers) return at once and the gate/up receivers treat a landing slot's x as
     // present as soon as the slot is free: the compute runs on whatever the landing ring holds (garbage outputs).
     // h pieces per sub-block down the chains (perf probe MIMO_FL_HPIECES; must divide the h tiles)
-    const uint32_t H_PIECES = std::getenv("MIMO_FL_HPIECES") ? std::atoi(std::getenv("MIMO_FL_HPIECES")) : 32;
+    // (32 per sub-block; h units keep the piece size: 32 HU / MT per unit, else each chain link, LINK_DEPTH pieces in
+    // flight, is round-trip bound: 1-row units with 32 pieces ran bfp8 M 2048 at 655 vs 275 us per expert)
+    const uint32_t H_PIECES = std::getenv("MIMO_FL_HPIECES") ? std::atoi(std::getenv("MIMO_FL_HPIECES"))
+                                                             : (p.hu ? std::max(1u, 32 * p.hu / MT) : 32);
     if (const char* ld = std::getenv("MIMO_FL_LINK_DEPTH")) {  // (perf probe: h pieces in flight per chain link)
         dyn_def["SE_LINK_DEPTH"] = ld;
     }
@@ -530,7 +535,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     }
     for (const auto& [pw, ds] : dgroups) {
         const uint32_t kd = FlatRoutedExpertPlan::kd_of(pw, It), nblk = It / kd, slot = kd * pw;
-        const uint32_t ring = static_cast<uint32_t>(std::nearbyint(p.dring * nblk)), out = MT * pw;
+        // the down side's row tiles per h buffer: the sub-block, or the h unit
+        const uint32_t MTD = p.hu ? p.hu : MT, MTGD = p.hu ? p.hu : MTG;
+        const uint32_t ring = static_cast<uint32_t>(std::nearbyint(p.dring * nblk)), out = MTD * pw;
         std::vector<CoreCoord> cores;
         for (uint32_t d : ds) {
             cores.push_back(p.down[d]);
@@ -538,26 +545,37 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // perf probe (read at program build): MIMO_FL_DN_NOC0=1 - the down cores' h chain / y writes on NOC0, their
         // weight reads on NOC1 (default: the other way round)
         const bool dn_noc0 = std::getenv("MIMO_FL_DN_NOC0") != nullptr;
+        // y writes from the NCRISC on its NOC (se6_dw.cpp) instead of the BRISC, whose NOC carries the h chain (one
+        // subgrid): bfp8 x + bf16 h at M 512 / 2048 / 5120 -9 / -9 / -11%, bf16 x + h -4 / -3 / -4% (the doubled h
+        // traffic the y writes contended with), bfp8 / bfp8 -4 / -1 / -0%; +1% (~0.4 us) at M <= 64 (perf probe
+        // MIMO_FL_Y_NC=0: the BRISC writes y)
+        const char* ync_env = std::getenv("MIMO_FL_Y_NC");
+        const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : true);
+        const Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
+        auto plus = [](Defines a, const Defines& b) {
+            a.insert(b.begin(), b.end());
+            return a;
+        };
         const auto kr =
             dm("se6_drecv.cpp",
                cores,
                DataMovementProcessor::RISCV_0,
                dn_noc0 ? NOC::NOC_0 : NOC::NOC_1,
-               {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,  S,  ngu_sg, p.nd_sg + p.n_rdn,
-                HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MT, pw, Ht,     GATH,
+               {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,   S,  ngu_sg, p.nd_sg + p.n_rdn,
+                HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MTD, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw));
+               plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync));
         const auto kw =
             dm("se6_dw.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
-               {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E},
-               dyn_def);
+               {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E, 0, 0, 0, MTD, pw, Ht},
+               y_nc ? plus(yrm_def(dyn_def, pw), ync) : dyn_def);
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,
-               {MTG, G, It, kd, pw, E, S, slot, ring},
+               {MTGD, G, It, kd, pw, E, S, slot, ring},
                dn_def(yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}}))),
                cfg.down_fp32,
                cfg.down_fp32);
@@ -584,6 +602,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             add_rt(kr, dc, a);
             Args w;
             w.a(AddrSrc::Down).lit(d % banks).lit((d / banks) * p.wd_region).cat(dyn).lits(sgx(sg));
+            if (y_nc) {
+                w.a(AddrSrc::Y).lit(p.col0s[d]);
+            }
             add_rt(kw, dc, w);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
@@ -634,9 +655,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
     arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, x_fmt, p.x_tile);
     if (p.hl_in_arena) {  // bf16 x / h: gate/up h_local in the arena (out of the program-wide static CB region)
-        arena_cb(3, p.hl_off, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+        arena_cb(3, p.hl_off, p.hl_slots * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
     } else {
-        static_cb(3, p.hbuf * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
+        static_cb(3, p.hl_slots * MTG * NP * p.h_tile, p.gu, h_fmt, p.h_tile);
     }
     static_cb(16, 2048, p.gu, tt::DataFormat::Float16_b, 2048);
     if (p.gu_l1acc) {

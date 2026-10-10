@@ -320,6 +320,24 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
 
 inline uint32_t se_dyn_rps(const SeDyn& d) { return d.rps; }
 
+#ifdef SE_HU
+// h units (SE_HU row tiles): the down cores take h unit by unit, each unit its own "virtual expert" (h buffer, down
+// pass, y rows, done / go count). The schedule is built with the sub-block size every kernel shares (SE_RPS); this
+// recounts each entry in units (a sub-block boundary is a unit boundary, so entry a's units are the row tiles
+// holding its tokens, in units). Unit u's slices are counted in gather semaphore SE_HU_GATH[u % HBUF] on the down
+// chain heads: the ids no down-core kernel uses otherwise (0..2 and 4: the reader / weight credits elsewhere).
+constexpr uint32_t SE_HU_GATH[8] = {8, 14, 15, 3, 0, 1, 2, 4};
+inline void se_dyn_units(SeDyn& d) {
+    constexpr uint32_t ur = SE_HU * 32;
+    d.num_v = 0;
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        d.subs[a] = (d.cnt[a] + ur - 1) / ur;
+        d.num_v += d.subs[a];
+    }
+    d.rps = ur;
+}
+#endif
+
 // Hands the schedule to this core's compute kernel: one page of CB META_CB in the se_meta.hpp layout (read there
 // with read_tile_value). EMPTY publishes no entries (the core has no compute work this launch).
 inline void se_dyn_publish(const SeDyn& d, uint32_t meta_cb, bool empty = false) {
