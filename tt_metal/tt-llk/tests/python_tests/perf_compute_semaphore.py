@@ -12,13 +12,7 @@ from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    SEMAPHORE_RING,
-    TILE_COUNT,
-)
+from helpers.test_variant_parameters import LOOP_FACTOR, SEMAPHORE_RING, TILE_COUNT
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -32,6 +26,9 @@ def test_perf_compute_semaphore(perf_report, ring_depth):
     # parametrize hands a single axis as a one-element tuple
     if isinstance(ring_depth, tuple):
         (ring_depth,) = ring_depth
+    assert (
+        ring_depth == 0 or ring_depth >= TILES
+    ), "a ring below one DEST section deadlocks"
     configuration = PerfConfig(
         "sources/compute_semaphore_perf.cpp",
         InputOutputFormat(BF16, BF16),
@@ -41,12 +38,7 @@ def test_perf_compute_semaphore(perf_report, ring_depth):
             PerfRunType.PACK_ISOLATE,
         ],
         templates=[SEMAPHORE_RING(ring_depth)],
-        runtimes=[
-            TILE_COUNT(TILES),
-            NUM_BLOCKS(1),
-            NUM_TILES_IN_BLOCK(TILES),
-            LOOP_FACTOR(64),
-        ],
+        runtimes=[TILE_COUNT(TILES), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
             None,
             BF16,
