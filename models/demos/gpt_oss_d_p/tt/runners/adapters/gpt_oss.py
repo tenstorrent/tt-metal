@@ -26,6 +26,16 @@ from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, P
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 
 
+def _resolve_dflash_checkpoint_path(params: PrefillRunParams) -> Optional[Path]:
+    """Use the drafter the common runner resolved; the adapter never re-reads the environment."""
+
+    if not params.dflash_enabled:
+        return None
+    if not params.dflash_checkpoint_path:
+        raise ValueError("dflash_enabled requires a resolved dflash_checkpoint_path (DFLASH_HF_MODEL)")
+    return Path(params.dflash_checkpoint_path)
+
+
 @dataclass
 class GptOssKvCaches(KvCaches):
     """Concrete KvCaches for GPT-OSS: a list holding the single GptOssKVCache (k+v struct),
@@ -157,6 +167,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             # Same knob as allocate_kv_cache, so the runtime's gating (migration / cache-read
             # asserts) agrees with the engine-owned cache it is handed.
             bounded_sliding_kv_cache=_bounded_sliding_kv_cache_enabled(),
+            dflash_checkpoint_path=_resolve_dflash_checkpoint_path(params),
         )
 
         if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
