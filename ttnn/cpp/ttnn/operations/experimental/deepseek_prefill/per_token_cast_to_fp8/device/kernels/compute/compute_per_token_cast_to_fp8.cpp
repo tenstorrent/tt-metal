@@ -121,7 +121,16 @@ void kernel_main() {
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;
 
+#ifdef TOKEN_COUNT_AWARE
+    // num_blocks is computed on device by the reader (expert-buffer valid prefix) and mailed here.
+    constexpr uint32_t cb_loop_count_id = get_compile_time_arg_val(14);
+    CircularBuffer cb_loop_count(cb_loop_count_id);
+    cb_loop_count.wait_front(1);
+    uint32_t num_blocks = cb_loop_count.read_tile_value(0, 0);
+    cb_loop_count.pop_front(1);
+#else
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
+#endif
 
     // Configure the unpacker hw on the fp32 reduce/abs operand so num_faces / tile dims are full
     // (4 faces). Configuring on a bf16 cb_in instead leaves the fp32 reduce reading only 2 faces

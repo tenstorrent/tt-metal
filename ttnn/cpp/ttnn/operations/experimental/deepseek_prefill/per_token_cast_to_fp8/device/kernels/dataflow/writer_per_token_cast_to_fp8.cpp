@@ -23,6 +23,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#ifdef TOKEN_COUNT_AWARE
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/count_aware_range.hpp"
+#endif
 
 // Extract column 0 of one fp32 tile into out[0..tile_h) (one value per block row); face-aware walk.
 template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
@@ -44,8 +47,10 @@ void kernel_main() {
 #ifdef INPUT_TILE_LAYOUT
     uint32_t output_e4m3_addr = get_arg_val<uint32_t>(0);
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
+#ifndef TOKEN_COUNT_AWARE
     uint32_t block_offset = get_arg_val<uint32_t>(2);         // first global block of this core
     uint32_t num_blocks = get_arg_val<uint32_t>(3);           // blocks owned by this core
+#endif
     uint32_t rows_per_batch = get_arg_val<uint32_t>(4);       // R = logical rows per batch (dim -2)
     uint32_t row_tiles_per_batch = get_arg_val<uint32_t>(5);  // ceil(R / tile_h)
 #else
@@ -69,6 +74,10 @@ void kernel_main() {
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
     constexpr uint32_t chunks_per_row = get_compile_time_arg_val(10);      // H / 128 (I/O chunks per row)
     constexpr uint32_t chunk_scale_blocks = get_compile_time_arg_val(11);  // scales per chunk row (128/scale_block_w)
+    // Packed output: each e4m3 row is [data_row_bytes e4m3 | scale_blocks_per_row fp32]; the scales go into
+    // the same row (scale tensor unused). Used for the scaled fp8 combine wire.
+    constexpr bool pack_scales_in_row = get_compile_time_arg_val(12) != 0;
+    constexpr uint32_t data_row_bytes = get_compile_time_arg_val(13);
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
     constexpr uint32_t scale_bytes = sizeof(uint32_t);                // fp32 scale = one 32-bit word = 4 bytes
@@ -77,11 +86,46 @@ void kernel_main() {
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                   // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE = faces_per_row * face_elems;  // fp32 stride per face row
 
-    constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<12>();
+    constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<14>();
     constexpr auto scale_args = TensorAccessorArgs<output_e4m3_accessor_args.next_compile_time_args_offset()>();
     const auto output_e4m3 = TensorAccessor(output_e4m3_accessor_args, output_e4m3_addr);
     const auto scale = TensorAccessor(scale_args, scale_addr);
     Noc noc;
+#ifdef TOKEN_COUNT_AWARE
+    constexpr uint32_t ca_base = scale_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_region_scratch = get_compile_time_arg_val(ca_base + 0);
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(ca_base + 1);
+    constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(ca_base + 2);
+    constexpr uint32_t ca_num_cores = get_compile_time_arg_val(ca_base + 3);
+    constexpr uint32_t ca_experts_per_chip = get_compile_time_arg_val(ca_base + 4);
+    constexpr uint32_t ca_max_rows = get_compile_time_arg_val(ca_base + 5);
+    constexpr auto region_args = TensorAccessorArgs<ca_base + 6>();
+    constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
+    constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+    const auto region = TensorAccessor(region_args, get_arg_val<uint32_t>(6));
+    const auto counts = TensorAccessor(counts_args, get_arg_val<uint32_t>(7));
+    const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(8));
+    const uint32_t core_id = get_arg_val<uint32_t>(9);
+    CircularBuffer cb_region_scratch_obj(cb_region_scratch);
+    CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
+    CircularBuffer cb_table_scratch_obj(cb_table_scratch);
+    const CountAwareRange range = count_aware_block_range(
+        noc,
+        region,
+        counts,
+        table,
+        cb_region_scratch_obj,
+        cb_counts_scratch_obj,
+        cb_table_scratch_obj,
+        ca_experts_per_chip,
+        ca_max_rows,
+        tile_h,
+        chunks_per_row,
+        core_id,
+        ca_num_cores);
+    const uint32_t block_offset = range.first_block;
+    const uint32_t num_blocks = range.num_blocks;
+#endif
     CircularBuffer cb_output_e4m3_obj(cb_output_e4m3);
     CircularBuffer cb_scale_tiles_obj(cb_scale_tiles);
     CircularBuffer cb_scale_scratch_obj(cb_scale_scratch);
@@ -101,12 +145,21 @@ void kernel_main() {
         const uint32_t first_scale = first_col * chunk_scale_blocks;
         const uint32_t run_bytes = (last_col - first_col + 1) * chunk_scale_blocks * scale_bytes;
         for (uint32_t row_in_tile = 0; row_in_tile < n_rows; ++row_in_tile) {
-            noc.async_write(
-                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
-                scale,
-                run_bytes,
-                {.offset_bytes = row_in_tile * scale_aligned_page_bytes + first_scale * scale_bytes},
-                {.page_id = row_base + row_in_tile, .offset_bytes = first_scale * scale_bytes});
+            if constexpr (pack_scales_in_row) {
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                    output_e4m3,
+                    run_bytes,
+                    {.offset_bytes = row_in_tile * scale_aligned_page_bytes + first_scale * scale_bytes},
+                    {.page_id = row_base + row_in_tile, .offset_bytes = data_row_bytes + first_scale * scale_bytes});
+            } else {
+                noc.async_write(
+                    use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                    scale,
+                    run_bytes,
+                    {.offset_bytes = row_in_tile * scale_aligned_page_bytes + first_scale * scale_bytes},
+                    {.page_id = row_base + row_in_tile, .offset_bytes = first_scale * scale_bytes});
+            }
         }
         noc.async_write_barrier();  // scratch is reused by the next row-tile
     };

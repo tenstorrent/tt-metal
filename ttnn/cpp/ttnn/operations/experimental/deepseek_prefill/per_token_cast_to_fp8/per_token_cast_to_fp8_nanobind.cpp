@@ -50,7 +50,13 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("round_scale_to_power_of_two") = false,
         nb::arg("scale_block_w") = DEFAULT_SCALE_BLOCK_W,
-        nb::arg("round_to_nearest_even") = false);
+        nb::arg("round_to_nearest_even") = false,
+        nb::arg("token_count_aware") = false,
+        nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("expert_token_counts") = nb::none(),
+        nb::arg("global_expert_idx_table") = nb::none(),
+        nb::arg("experts_per_chip") = 0,
+        nb::arg("pack_scales_in_row") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8::detail

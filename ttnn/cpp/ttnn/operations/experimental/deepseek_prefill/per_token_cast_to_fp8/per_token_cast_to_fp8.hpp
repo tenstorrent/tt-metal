@@ -25,7 +25,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     bool round_scale_to_power_of_two = false,
     uint32_t scale_block_w = DEFAULT_SCALE_BLOCK_W,
-    bool round_to_nearest_even = false);
+    bool round_to_nearest_even = false,
+    bool token_count_aware = false,
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_token_counts = std::nullopt,
+    const std::optional<ttnn::Tensor>& global_expert_idx_table = std::nullopt,
+    uint32_t experts_per_chip = 0,
+    bool pack_scales_in_row = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8
 

@@ -1,0 +1,68 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Token-count-aware work range for per_token_cast_to_fp8 over a MoE expert buffer (TILE input).
+// The valid prefix of the flat expert-major buffer is max over this chip's local experts of
+// region_offset[g] + ceil32(count[g]) (g = global_expert_idx_table[local]). Both dataflow kernels
+// compute it on device from the same three small tables, then take a balanced slice of the
+// (row-tile x 128-chunk) block space by core_id. Mirrors per_token_cast_back's token_count_aware path.
+
+#pragma once
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
+struct CountAwareRange {
+    uint32_t first_block;
+    uint32_t num_blocks;
+};
+
+template <typename RegionT, typename CountsT, typename TableT>
+inline CountAwareRange count_aware_block_range(
+    Noc& noc,
+    const RegionT& region,
+    const CountsT& counts,
+    const TableT& table,
+    CircularBuffer& region_scratch,
+    CircularBuffer& counts_scratch,
+    CircularBuffer& table_scratch,
+    uint32_t experts_per_chip,
+    uint32_t max_rows,
+    uint32_t tile_h,
+    uint32_t chunks_per_row,
+    uint32_t core_id,
+    uint32_t num_cores) {
+    region_scratch.reserve_back(1);
+    counts_scratch.reserve_back(1);
+    table_scratch.reserve_back(1);
+    noc.async_read(region, region_scratch, region.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(counts, counts_scratch, counts.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(table, table_scratch, table.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    const volatile tt_l1_ptr uint32_t* region_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(region_scratch.get_write_ptr());
+    const volatile tt_l1_ptr uint32_t* counts_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_scratch.get_write_ptr());
+    const volatile tt_l1_ptr uint32_t* table_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_scratch.get_write_ptr());
+    uint32_t valid_rows = 0;
+    for (uint32_t local = 0; local < experts_per_chip; ++local) {
+        const uint32_t g = table_ptr[local];
+        const uint32_t end = region_ptr[g] + ((counts_ptr[g] + tile_h - 1) / tile_h) * tile_h;
+        if (end > valid_rows) {
+            valid_rows = end;
+        }
+    }
+    if (valid_rows > max_rows) {
+        valid_rows = max_rows;
+    }
+    const uint32_t total_blocks = ((valid_rows + tile_h - 1) / tile_h) * chunks_per_row;
+    const uint32_t start = (total_blocks * core_id) / num_cores;
+    const uint32_t end = (total_blocks * (core_id + 1)) / num_cores;
+    return {start, end - start};
+}

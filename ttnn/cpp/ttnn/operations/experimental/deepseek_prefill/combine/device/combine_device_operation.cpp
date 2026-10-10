@@ -33,7 +33,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT16 ||
             (tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT8_B &&
-             tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE),
+             tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE) ||
+            (operation_attributes.fp8_scaled_combine && tensor_args.dispatched_buffer.dtype() == DataType::FP8_E4M3 &&
+             tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR),
         "Dispatched buffer must be BFLOAT16 or BFLOAT8_B with TILE layout, got {}",
         tensor_args.dispatched_buffer.dtype());
     TT_FATAL(
@@ -73,17 +75,22 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             arch == tt::ARCH::BLACKHOLE, "fp8_scaled_combine=true requires Blackhole hardware (got arch {})", arch);
         TT_FATAL(!operation_attributes.use_fp8_combine, "fp8_scaled_combine and use_fp8_combine are exclusive");
-        TT_FATAL(
-            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE,
-            "fp8_scaled_combine=true requires a TILE-layout dispatched buffer (the scales are formed per tile row)");
-        const auto& tile = tensor_args.dispatched_buffer.tensor_spec().tile();
-        TT_FATAL(
-            tile.get_height() == 32 && tile.get_width() == 32,
-            "fp8_scaled_combine=true requires 32x32 tiles (one scale per 32-wide tile row)");
-        TT_FATAL(
-            tensor_args.dispatched_buffer.logical_shape()[-1] % 128 == 0,
-            "fp8_scaled_combine=true requires hidden dim % 128 == 0, got {}",
-            tensor_args.dispatched_buffer.logical_shape()[-1]);
+        if (tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE) {
+            // Quantized here, in the untilize stage (one scale per 32-wide tile row).
+            const auto& tile = tensor_args.dispatched_buffer.tensor_spec().tile();
+            TT_FATAL(
+                tile.get_height() == 32 && tile.get_width() == 32,
+                "fp8_scaled_combine=true requires 32x32 tiles (one scale per 32-wide tile row)");
+            TT_FATAL(
+                tensor_args.dispatched_buffer.logical_shape()[-1] % 128 == 0,
+                "fp8_scaled_combine=true requires hidden dim % 128 == 0, got {}",
+                tensor_args.dispatched_buffer.logical_shape()[-1]);
+        } else {
+            // Already quantized upstream: packed [H e4m3 | H/32 fp32] rows, moved byte for byte.
+            TT_FATAL(
+                tensor_args.dispatched_buffer.dtype() == DataType::FP8_E4M3,
+                "fp8_scaled_combine with a ROW_MAJOR buffer expects packed FP8_E4M3 rows");
+        }
     }
     if (operation_attributes.use_fp8_combine) {
         auto arch = tensor_args.dispatched_buffer.device()->arch();
@@ -142,7 +149,8 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     auto output_dtype = (operation_attributes.use_fp8_combine || operation_attributes.fp8_scaled_combine)
                             ? DataType::FP8_E4M3
                             : DataType::BFLOAT16;
-    if (operation_attributes.fp8_scaled_combine) {
+    if (operation_attributes.fp8_scaled_combine &&
+        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE) {
         // Packed row: [hidden_dim e4m3 bytes | hidden_dim/32 fp32 scales (4 bytes each)].
         output_shape = ttnn::Shape(
             {1,

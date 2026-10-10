@@ -605,3 +605,50 @@ def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
     # e4m3 subnormals are not decoded exactly by the unpacker (same mask as test_token_count_aware_cast_back).
     normal = e4m3.float()[:off].abs() > 2.0**-6
     assert torch.equal(out[:off][normal], golden[:off][normal]), "count-aware metadata-tail dequant mismatch"
+
+
+@pytest.mark.parametrize("counts", [[37, 0, 64, 5, 130], [0, 0, 0, 0, 1]], ids=["mixed", "one_token"])
+def test_count_aware_packed_quant_expert_buffer(device, counts):
+    """Scaled fp8 combine source: quantize the valid prefix of a bf8_b TILE expert buffer into packed
+    [H e4m3 | H/32 fp32] rows, then dequantize them with cast_back(scales_in_row_tail=True)."""
+    torch.manual_seed(0)
+    H, capacity, block = K3_LATENT, 640, 32
+    experts_per_chip = len(counts)
+    table = [2 * s + 1 for s in range(experts_per_chip)]
+    region, tok = [0] * (2 * experts_per_chip), [0] * (2 * experts_per_chip)
+    off = 0
+    for slot, c in enumerate(counts):
+        region[table[slot]], tok[table[slot]] = off, c
+        off += _ceil_tile(c)
+    x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, 1)).float())
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    x_bf8 = ttnn.to_torch(x_tt).float()  # what the device actually holds
+    packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt,
+        round_scale_to_power_of_two=True,
+        scale_block_w=block,
+        round_to_nearest_even=True,
+        token_count_aware=True,
+        expert_region_offsets=create_u32_tensor(device, region),
+        expert_token_counts=create_u32_tensor(device, tok),
+        global_expert_idx_table=create_u32_tensor(device, table),
+        experts_per_chip=experts_per_chip,
+        pack_scales_in_row=True,
+    )
+    assert tuple(packed_tt.shape) == (capacity, H + 4 * H // block)
+    back = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            packed_tt, None, output_dtype=ttnn.float32, scale_block_w=block, scales_in_row_tail=True
+        )
+    ).float()
+    assert tuple(back.shape) == (capacity, H)
+    valid = back[:off]
+    ref = x_bf8[:off]
+    s = _ref_pow2_scale_blocks(ref, block).repeat_interleave(block, dim=-1)
+    expected = (ref / s).to(torch.float8_e4m3fn).float() * s
+    normal = (ref / s).abs() >= 2.0**-6
+    match = (valid[normal] == expected[normal]).float().mean().item()
+    logger.info(f"count-aware packed quant {counts}: match {match:.6%} over {off} rows")
+    assert match >= 0.999, f"packed quant/dequant match {match:.4%}"

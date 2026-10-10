@@ -735,8 +735,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // cb_dispatched_buffer (c_0) in chunks of this size, and the untilize compute kernel consumes
     // the same chunk size — so c_0 only needs to hold 2 * block_ct_dim pages for double-buffering.
     const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
-    const bool fp8_scaled = operation_attributes.fp8_scaled_combine;
-    uint32_t block_ct_dim = 8;
+    // In-combine quantize only for a TILE buffer; a ROW_MAJOR fp8 buffer already holds packed rows.
+    const bool fp8_scaled = operation_attributes.fp8_scaled_combine && is_tile_layout;
+    // Scaled FP8 quantizes in 32-bit DEST, half-sync (math/pack overlap): at most 4 tiles per block.
+    uint32_t block_ct_dim = fp8_scaled ? 4 : 8;
     while (full_ct_dim % block_ct_dim != 0) {
         --block_ct_dim;
     }
@@ -808,6 +810,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             fp32_cb(tt::CBIndex::c_11, 1);
             fp32_cb(tt::CBIndex::c_12, 2 * block_ct_dim);
             fp32_cb(tt::CBIndex::c_13, block_ct_dim);
+            fp32_cb(tt::CBIndex::c_15, block_ct_dim);  // compute-private copy of the scales (for 1/scale)
             const uint32_t scale_row_bytes = static_cast<uint32_t>(hidden_size) / 8u;  // hidden/32 fp32
             desc.cbs.push_back(tt::tt_metal::CBDescriptor{
                 .total_size = read_batch_size * scale_row_bytes,
@@ -1140,6 +1143,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(tt::CBIndex::c_13),  // 15: cb_inv_scale
             std::bit_cast<uint32_t>(1.0e-4f),          // 16: amax clamp min
             std::bit_cast<uint32_t>(1.0f / 448.0f),    // 17: 1 / E4M3 max
+            static_cast<uint32_t>(tt::CBIndex::c_15),  // 18: compute-private scale copy
         };
         compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
@@ -1149,7 +1153,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
             // tiles, but pack_untilize_block uses block_ct_dim (up to 8). Full-sync 32-bit restores
             // the 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
-            .dst_full_sync_en = operation_attributes.use_fp8_combine || fp8_scaled,
+            .dst_full_sync_en = operation_attributes.use_fp8_combine,
         };
         untilize_compute_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(compute_kd));

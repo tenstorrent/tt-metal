@@ -40,6 +40,10 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # boundary (host-side allocator state, so it is exact at op-dispatch time). Used for the fp8-wire
 # temp-buffer footprint targets.
 _MOE_MEM_PROBE = os.environ.get("MOE_MEM_PROBE") == "1"
+# Scaled fp8 combine: the origin dequantizes with a standalone per_token_cast_back pass (v1). A fused
+# dequant inside post_combine_reduce (sparse-SDPA style: tilize the slab, bcast-multiply the scales in
+# compute) is the follow-up; MOE_FUSED_DQ2=1 is reserved for it.
+_MOE_FUSED_DQ2 = os.environ.get("MOE_FUSED_DQ2", "0") == "1"
 
 
 def _dram_allocated_bytes(mesh_device) -> int:
@@ -1056,20 +1060,44 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects TILE_LAYOUT input
+        combine_input = expert_outputs
+        if self.combine_fp8:
+            # Q2 on the full grid: quantize only the valid prefix of the expert buffer into packed
+            # [e4m3 | fp32 scale per 1x32] rows; combine then moves them byte for byte (no untilize math).
+            combine_input, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                expert_outputs,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                round_scale_to_power_of_two=True,
+                scale_block_w=32,
+                round_to_nearest_even=True,
+                token_count_aware=True,
+                expert_region_offsets=tt_expert_region_offsets,
+                expert_token_counts=tt_expert_token_counts,
+                global_expert_idx_table=self.global_expert_idx_tt,
+                experts_per_chip=self.experts_per_chip,
+                pack_scales_in_row=True,
+            )
+            if not return_intermediates:
+                # Combine reads the packed copy; the bf8 expert buffer is dead.
+                ttnn.deallocate(expert_outputs)
+            mem_mark("after_q2")
         combined_output = self.combine_module(
-            expert_outputs,
+            combine_input,
             metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
         )
         mem_mark("after_combine")
+        if self.combine_fp8:
+            ttnn.deallocate(combine_input)
         if not return_intermediates:
             # Combine has consumed the expert outputs and the dispatch metadata; free them before the
             # reduce (and before the fp8 combine dequant's bf16 copy) to keep the MoE temp peak down.
-            ttnn.deallocate(expert_outputs)
+            if not self.combine_fp8:
+                ttnn.deallocate(expert_outputs)
             ttnn.deallocate(metadata)
-        if self.combine_fp8:
-            # DQ2: unpack [e4m3 | fp32 scales] rows back to bf16 for the weighted reduce. Slots of
+        if self.combine_fp8 and not _MOE_FUSED_DQ2:
+            # DQ2 (v1, standalone): unpack [e4m3 | fp32 scales] rows back to bf16 for the weighted reduce. Slots of
             # non-local experts are never written by combine; post_combine_reduce never reads them.
             combined_fp8 = combined_output
             combined_output = ttnn.experimental.deepseek_prefill.per_token_cast_back(

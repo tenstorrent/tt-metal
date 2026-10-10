@@ -117,6 +117,8 @@ void kernel_main() {
     CircularBuffer cb_scaler(cb_scaler_id);
     CircularBuffer cb_scale(cb_scale_id);
     CircularBuffer cb_inv_scale(cb_inv_scale_id);
+    constexpr uint32_t cb_scale_priv_id = get_compile_time_arg_val(18);
+    CircularBuffer cb_scale_priv(cb_scale_priv_id);
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
@@ -185,51 +187,85 @@ void kernel_main() {
                 cb_in.wait_front(block_ct_dim);
                 if constexpr (fp8_scaled) {
                     // 1x32 block = one tile row: scale[r] = pow2_up(max(amax_r, 1e-4) / 448) per tile.
-                    // Phase A: |x| of each tile (fp32) -> cb_abs.
+                    // Each phase handles the whole block (<= 4 tiles, half-sync 32-bit DEST) under one
+                    // acquire, so every init runs once per block, not once per tile.
+                    // Phase A: |x| -> cb_abs (fp32).
                     reconfig_full_operand_srca(cb_in_id);
                     pack_reconfig_data_format(cb_abs_id);
                     copy_init(cb_in_id);
-                    abs_tile_init();
                     cb_abs.reserve_back(block_ct_dim);
+                    tile_regs_acquire();
                     for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                        tile_regs_acquire();
-                        copy_tile(cb_in_id, k, 0);
-                        abs_tile(0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, cb_abs_id);
-                        tile_regs_release();
+                        copy_tile(cb_in_id, k, k);
                     }
+                    abs_tile_init();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        abs_tile(k);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        pack_tile(k, cb_abs_id);
+                    }
+                    tile_regs_release();
                     cb_abs.push_back(block_ct_dim);
-                    // Phase B: row max -> scale (slot 0, to the writer) and 1/scale (slot 1).
+                    // Phase B1: row max -> clamp -> /448 -> pow2 scale; to the writer and a private copy.
                     cb_abs.wait_front(block_ct_dim);
                     cb_scale.reserve_back(block_ct_dim);
-                    cb_inv_scale.reserve_back(block_ct_dim);
+                    cb_scale_priv.reserve_back(block_ct_dim);
                     reconfig_data_format(cb_abs_id, cb_scaler_id);
                     pack_reconfig_data_format(cb_scale_id);
+                    tile_regs_acquire();
+                    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_id);
                     for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                        tile_regs_acquire();
-                        reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_id);
-                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, 0);
-                        reduce_uninit();
-                        clamp_tile_init();
-                        clamp_tile(0, clamp_min_bits, 0x7f7fffffu);
-                        binop_with_scalar_tile_init();
-                        mul_unary_tile(0, inv_448_bits);
-                        MATH((combine_ceil_power_of_two_tile(0)));
-                        copy_dest_values_init();
-                        copy_dest_values<DataFormat::Float32>(0, 1);
-                        recip_tile_init();
-                        recip_tile(1);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(0, cb_scale_id);
-                        pack_tile(1, cb_inv_scale_id);
-                        tile_regs_release();
+                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, k);
                     }
+                    reduce_uninit();
+                    clamp_tile_init();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        clamp_tile(k, clamp_min_bits, 0x7f7fffffu);
+                    }
+                    binop_with_scalar_tile_init();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        mul_unary_tile(k, inv_448_bits);
+                    }
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        MATH((combine_ceil_power_of_two_tile(k)));
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        pack_tile(k, cb_scale_id);
+                    }
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        pack_tile(k, cb_scale_priv_id);
+                    }
+                    tile_regs_release();
                     cb_scale.push_back(block_ct_dim);
-                    cb_inv_scale.push_back(block_ct_dim);
+                    cb_scale_priv.push_back(block_ct_dim);
                     cb_abs.pop_front(block_ct_dim);
+                    // Phase B2: 1/scale (exact for powers of two).
+                    cb_scale_priv.wait_front(block_ct_dim);
+                    cb_inv_scale.reserve_back(block_ct_dim);
+                    reconfig_full_operand_srca(cb_scale_priv_id);
+                    pack_reconfig_data_format(cb_inv_scale_id);
+                    copy_init(cb_scale_priv_id);
+                    tile_regs_acquire();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        copy_tile(cb_scale_priv_id, k, k);
+                    }
+                    recip_tile_init();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        recip_tile(k);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        pack_tile(k, cb_inv_scale_id);
+                    }
+                    tile_regs_release();
+                    cb_inv_scale.push_back(block_ct_dim);
+                    cb_scale_priv.pop_front(block_ct_dim);
                     // Phase C: x * (1/scale) per row, RNE onto the e4m3 grid, untilize into the row stride.
                     cb_inv_scale.wait_front(block_ct_dim);
                     reconfig_data_format(cb_in_id, cb_inv_scale_id);

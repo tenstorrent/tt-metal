@@ -20,12 +20,17 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#ifdef TOKEN_COUNT_AWARE
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/count_aware_range.hpp"
+#endif
 
 void kernel_main() {
 #ifdef INPUT_TILE_LAYOUT
     uint32_t src_addr = get_arg_val<uint32_t>(0);
+#ifndef TOKEN_COUNT_AWARE
     uint32_t block_offset = get_arg_val<uint32_t>(1);          // first global block of this core
     uint32_t num_blocks = get_arg_val<uint32_t>(2);            // blocks owned by this core
+#endif
 #else
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_blocks = get_arg_val<uint32_t>(1);
@@ -56,6 +61,51 @@ void kernel_main() {
 
     const auto src = TensorAccessor(src_args, src_addr);
     Noc noc;
+#ifdef TOKEN_COUNT_AWARE
+    // Expert-buffer mode: this core's slice of the valid prefix, computed on device; num_blocks is
+    // published to the compute kernel through the loop-count mailbox.
+    constexpr uint32_t ca_base = src_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_loop_count = get_compile_time_arg_val(ca_base + 0);
+    constexpr uint32_t cb_region_scratch = get_compile_time_arg_val(ca_base + 1);
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(ca_base + 2);
+    constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(ca_base + 3);
+    constexpr uint32_t ca_num_cores = get_compile_time_arg_val(ca_base + 4);
+    constexpr uint32_t ca_experts_per_chip = get_compile_time_arg_val(ca_base + 5);
+    constexpr uint32_t ca_max_rows = get_compile_time_arg_val(ca_base + 6);
+    constexpr uint32_t ca_chunks_per_row = get_compile_time_arg_val(ca_base + 7);
+    constexpr auto region_args = TensorAccessorArgs<ca_base + 8>();
+    constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
+    constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+    const auto region = TensorAccessor(region_args, get_arg_val<uint32_t>(1));
+    const auto counts = TensorAccessor(counts_args, get_arg_val<uint32_t>(2));
+    const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(3));
+    const uint32_t core_id = get_arg_val<uint32_t>(4);
+    CircularBuffer cb_region_scratch_obj(cb_region_scratch);
+    CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
+    CircularBuffer cb_table_scratch_obj(cb_table_scratch);
+    const CountAwareRange range = count_aware_block_range(
+        noc,
+        region,
+        counts,
+        table,
+        cb_region_scratch_obj,
+        cb_counts_scratch_obj,
+        cb_table_scratch_obj,
+        ca_experts_per_chip,
+        ca_max_rows,
+        tile_h,
+        ca_chunks_per_row,
+        core_id,
+        ca_num_cores);
+    const uint32_t block_offset = range.first_block;
+    const uint32_t num_blocks = range.num_blocks;
+    {
+        CircularBuffer cb_loop_count_obj(cb_loop_count);
+        cb_loop_count_obj.reserve_back(1);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[0] = num_blocks;
+        cb_loop_count_obj.push_back(1);
+    }
+#endif
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_scaler_obj(cb_scaler);
 

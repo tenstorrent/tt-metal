@@ -64,9 +64,28 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         "per_token_cast_to_fp8: FP8_E4M3 path requires Blackhole hardware, got arch {}",
         input.device()->arch());
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            (input.dtype() == tt::tt_metal::DataType::BFLOAT8_B && input.layout() == tt::tt_metal::Layout::TILE),
+        "per_token_cast_to_fp8: input dtype must be BFLOAT16 / FLOAT32, or BFLOAT8_B in TILE layout, got {}",
         static_cast<int>(input.dtype()));
+    if (attrs.token_count_aware) {
+        TT_FATAL(
+            input.layout() == tt::tt_metal::Layout::TILE,
+            "per_token_cast_to_fp8: token_count_aware requires a TILE input (MoE expert buffer)");
+        TT_FATAL(
+            tensor_args.expert_region_offsets.has_value() && tensor_args.expert_token_counts.has_value() &&
+                tensor_args.global_expert_idx_table.has_value() && attrs.experts_per_chip > 0,
+            "per_token_cast_to_fp8: token_count_aware requires expert_region_offsets, expert_token_counts, "
+            "global_expert_idx_table and experts_per_chip > 0");
+        for (const auto* t :
+             {&*tensor_args.expert_region_offsets,
+              &*tensor_args.expert_token_counts,
+              &*tensor_args.global_expert_idx_table}) {
+            TT_FATAL(
+                t->dtype() == tt::tt_metal::DataType::UINT32 && t->layout() == tt::tt_metal::Layout::ROW_MAJOR,
+                "per_token_cast_to_fp8: expert tables must be UINT32 ROW_MAJOR");
+        }
+    }
     const auto& tile = input.tensor_spec().tile();
     // The compute kernels build cb_in with the default, non-transposed tile descriptor and
     // compute_program_hash only records tile/face shapes. A transposed tile would be unpacked with the
@@ -141,15 +160,19 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
     const auto& input = tensor_args.input_tensor;
     const auto& input_shape = input.logical_shape();
 
+    auto e4m3_shape = input_shape;
+    if (attrs.pack_scales_in_row) {
+        e4m3_shape[-1] = input_shape[-1] + 4 * (input_shape[-1] / attrs.scale_block_w);
+    }
     tt::tt_metal::TensorSpec output_e4m3_spec(
-        input_shape,
+        e4m3_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             attrs.output_memory_config));
 
     tt::tt_metal::TensorSpec scale_spec(
-        scale_output_shape(input_shape, attrs.scale_block_w),
+        attrs.pack_scales_in_row ? ttnn::Shape({1, 32}) : scale_output_shape(input_shape, attrs.scale_block_w),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -170,8 +193,14 @@ ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     const auto& input = tensor_args.input_tensor;
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const auto face_shape = input.tensor_spec().tile().get_face_shape();
+    const auto opt_spec = [](const std::optional<Tensor>& t) {
+        return t.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t->tensor_spec()) : std::nullopt;
+    };
     return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
         attrs,
+        opt_spec(tensor_args.expert_region_offsets),
+        opt_spec(tensor_args.expert_token_counts),
+        opt_spec(tensor_args.global_expert_idx_table),
         input.dtype(),
         input.layout(),  // ROW_MAJOR and TILE select different program factories
         input.memory_config(),
@@ -191,14 +220,27 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const tt::tt_metal::MemoryConfig& output_memory_config,
     bool round_scale_to_power_of_two,
     uint32_t scale_block_w,
-    bool round_to_nearest_even) {
+    bool round_to_nearest_even,
+    bool token_count_aware,
+    const std::optional<Tensor>& expert_region_offsets,
+    const std::optional<Tensor>& expert_token_counts,
+    const std::optional<Tensor>& global_expert_idx_table,
+    uint32_t experts_per_chip,
+    bool pack_scales_in_row) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_memory_config = output_memory_config,
         .round_scale_to_power_of_two = round_scale_to_power_of_two,
         .scale_block_w = scale_block_w,
-        .round_to_nearest_even = round_to_nearest_even};
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+        .round_to_nearest_even = round_to_nearest_even,
+        .token_count_aware = token_count_aware,
+        .experts_per_chip = experts_per_chip,
+        .pack_scales_in_row = pack_scales_in_row};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor,
+        .expert_region_offsets = expert_region_offsets,
+        .expert_token_counts = expert_token_counts,
+        .global_expert_idx_table = global_expert_idx_table};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

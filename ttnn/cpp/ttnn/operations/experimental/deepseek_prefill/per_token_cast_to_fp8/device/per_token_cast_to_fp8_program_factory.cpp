@@ -4,6 +4,7 @@
 
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
+#include <array>
 #include <bit>
 #include <map>
 #include <string>
@@ -73,7 +74,10 @@ KernelIds build_kernels_and_cbs(
     bool round_scale_to_power_of_two,
     uint32_t scale_block_w,
     bool round_to_nearest_even,
-    const std::map<std::string, std::string>& defines) {
+    const std::map<std::string, std::string>& defines,
+    const PerTokenCastToFp8Params& attrs,
+    const PerTokenCastToFp8Inputs& tensor_args,
+    uint32_t num_cores_total) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -104,9 +108,12 @@ KernelIds build_kernels_and_cbs(
     const uint32_t in_elem_bytes = input.element_size();
     const uint32_t input_block_bytes = block_w * in_elem_bytes;      // reader CT[1]; ROW_MAJOR-only
     const uint32_t output_e4m3_block_bytes = block_w;                // one 128-element row, 1 byte/elem
-    const uint32_t in_tile_bytes = tile_h * tile_w * in_elem_bytes;  // cb_in page = one input tile
+    // cb_in page = one input tile (tile_size handles block-float formats such as Bfp8_b).
+    const uint32_t in_tile_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
-    const uint32_t scale_aligned_page_bytes = output_scale.buffer()->aligned_page_size();
+    // Packed rows keep the scale staging at a 64-B aligned row stride (the scale tensor is unused).
+    const uint32_t scale_aligned_page_bytes = attrs.pack_scales_in_row ? tt::round_up(scale_blocks_per_row * 4u, 64u)
+                                                                       : output_scale.buffer()->aligned_page_size();
 
     auto* src_buffer = input.buffer();
     auto* dst_e4m3_buffer = output_e4m3.buffer();
@@ -165,6 +172,36 @@ KernelIds build_kernels_and_cbs(
     std::vector<uint32_t> reader_ct_args = {
         cb_in_idx, input_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
+    if (attrs.token_count_aware) {
+        reader_ct_args.insert(
+            reader_ct_args.end(),
+            {static_cast<uint32_t>(CBIndex::c_8),
+             static_cast<uint32_t>(CBIndex::c_9),
+             static_cast<uint32_t>(CBIndex::c_10),
+             static_cast<uint32_t>(CBIndex::c_11),
+             num_cores_total,
+             attrs.experts_per_chip,
+             M,
+             chunks_per_row});
+        TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(reader_ct_args);
+        TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(reader_ct_args);
+        TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(reader_ct_args);
+        // Mailbox (reader -> compute num_blocks) and the per-kernel private table scratch.
+        auto small_cb = [&](uint32_t idx, uint32_t bytes, DataFormat df) {
+            CircularBufferConfig cfg = CircularBufferConfig(bytes, {{idx, df}}).set_page_size(idx, bytes);
+            CreateCircularBuffer(program, all_cores, cfg);
+        };
+        small_cb(CBIndex::c_8, 64, DataFormat::UInt32);
+        const std::array<const Tensor*, 3> tabs{
+            &*tensor_args.expert_region_offsets,
+            &*tensor_args.expert_token_counts,
+            &*tensor_args.global_expert_idx_table};
+        for (uint32_t t = 0; t < 3; ++t) {
+            const uint32_t bytes = tabs[t]->buffer()->aligned_page_size();
+            small_cb(CBIndex::c_9 + t, bytes, DataFormat::UInt32);
+            small_cb(CBIndex::c_12 + t, bytes, DataFormat::UInt32);
+        }
+    }
     KernelIds ids;
     ids.reader = CreateKernel(
         program,
@@ -190,9 +227,24 @@ KernelIds build_kernels_and_cbs(
         face_h,
         face_w,
         chunks_per_row,
-        chunk_scale_blocks};
+        chunk_scale_blocks,
+        static_cast<uint32_t>(attrs.pack_scales_in_row),
+        H};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
+    if (attrs.token_count_aware) {
+        writer_ct_args.insert(
+            writer_ct_args.end(),
+            {static_cast<uint32_t>(CBIndex::c_12),
+             static_cast<uint32_t>(CBIndex::c_13),
+             static_cast<uint32_t>(CBIndex::c_14),
+             num_cores_total,
+             attrs.experts_per_chip,
+             M});
+        TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(writer_ct_args);
+    }
     ids.writer = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
@@ -222,7 +274,8 @@ KernelIds build_kernels_and_cbs(
         tile_w,
         static_cast<uint32_t>(round_scale_to_power_of_two),
         scale_block_wt,
-        static_cast<uint32_t>(round_to_nearest_even)};
+        static_cast<uint32_t>(round_to_nearest_even),
+        static_cast<uint32_t>(CBIndex::c_8)};  // 14: loop-count mailbox (token_count_aware)
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     ids.compute = CreateKernel(
@@ -243,7 +296,8 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const Tensor& input,
     const Tensor& output_e4m3,
     const Tensor& output_scale,
-    bool tile_layout) {
+    bool tile_layout,
+    const PerTokenCastToFp8Inputs& tensor_args) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -287,6 +341,12 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     Program program{};
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
+    if (attrs.token_count_aware) {
+        // The host does not know the valid prefix: light up the whole grid; each core sizes its slice on device.
+        num_cores = compute_grid.x * compute_grid.y;
+        all_cores = CoreRangeSet{CoreRange{{0, 0}, {compute_grid.x - 1, compute_grid.y - 1}}};
+        defines["TOKEN_COUNT_AWARE"] = "1";
+    }
 
     const KernelIds k = build_kernels_and_cbs(
         program,
@@ -298,7 +358,10 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         attrs.round_scale_to_power_of_two,
         attrs.scale_block_w,
         attrs.round_to_nearest_even,
-        defines);
+        defines,
+        attrs,
+        tensor_args,
+        num_cores);
 
     const uint32_t src_addr = input.buffer()->address();
     const uint32_t dst_e4m3_addr = output_e4m3.buffer()->address();
@@ -310,6 +373,33 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         const auto& core = all_cores_vec[i];
         const uint32_t core_units = units_for_core_from_split(core, crs1, crs2, upc1, upc2);
         uint32_t num_blocks = 0;
+        if (attrs.token_count_aware) {
+            SetRuntimeArgs(
+                program,
+                k.reader,
+                core,
+                {src_addr,
+                 tensor_args.expert_region_offsets->buffer()->address(),
+                 tensor_args.expert_token_counts->buffer()->address(),
+                 tensor_args.global_expert_idx_table->buffer()->address(),
+                 i});
+            SetRuntimeArgs(
+                program,
+                k.writer,
+                core,
+                {dst_e4m3_addr,
+                 dst_scale_addr,
+                 0u,
+                 0u,
+                 rows_per_plane,
+                 row_tiles_per_plane,
+                 tensor_args.expert_region_offsets->buffer()->address(),
+                 tensor_args.expert_token_counts->buffer()->address(),
+                 tensor_args.global_expert_idx_table->buffer()->address(),
+                 i});
+            SetRuntimeArgs(program, k.compute, core, {0u});
+            continue;
+        }
         if (tile_layout) {
             num_blocks = core_units;  // the work unit is already a 128-block
             SetRuntimeArgs(program, k.reader, core, {src_addr, offset, num_blocks});
@@ -347,6 +437,17 @@ void apply_io_overrides(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
         writer_args[0] = dst_e4m3_addr;
         writer_args[1] = dst_scale_addr;
+        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() == 5) {
+            const uint32_t r = tensor_args.expert_region_offsets->buffer()->address();
+            const uint32_t c = tensor_args.expert_token_counts->buffer()->address();
+            const uint32_t t = tensor_args.global_expert_idx_table->buffer()->address();
+            reader_args[1] = r;
+            reader_args[2] = c;
+            reader_args[3] = t;
+            writer_args[6] = r;
+            writer_args[7] = c;
+            writer_args[8] = t;
+        }
     }
 }
 
@@ -358,7 +459,8 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     tensor_return_value_t& tensor_return_value) {
     const auto& [output_e4m3, output_scale] = tensor_return_value;
     const bool tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
-    return create_program(operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout);
+    return create_program(
+        operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout, tensor_args);
 }
 
 void PerTokenCastToFp8ProgramFactory::override_runtime_arguments(
