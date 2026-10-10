@@ -3,6 +3,7 @@
 
 """Host-only sequence geometry for the fixed SP4/TP8 Llama prefill layout."""
 
+import os
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -12,7 +13,12 @@ DEFAULT_MAX_SEQ_LEN = 2048
 MAX_CONTEXT_LENGTH = Model.MAX_POSITION_EMBEDDINGS
 CHUNK_SIZE = 1024
 CACHE_PAGE_SIZE = 32
-DEFAULT_NUM_USERS = 2
+# A deployment chooses its slot count through the environment, and this has to be the default
+# rather than a value threaded in at one call site. Two places build a geometry without a count
+# and would otherwise disagree with a deployment that raised it: the runtime compares a requested
+# count against the shared layout, and it validates an allocated cache against a geometry built
+# from max_seq_len alone, so it would reject the cache it just allocated correctly.
+DEFAULT_NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 
 
 @dataclass(frozen=True)
@@ -21,7 +27,8 @@ class PrefillGeometry:
 
     ``num_users`` is the number of concurrently cached sequences (KV slots). It sets only the packed
     cache's batch extent, so raising it costs DRAM and nothing else; the gather addresses a slot by
-    index, and every other dimension here is per-slot.
+    index, and every other dimension here is per-slot. Measured: 2 slots and 1681 slots prefill at
+    the same 151 ms per chunk (docs/kv-slot-capacity.md), so the count is a memory decision alone.
     """
 
     # Fixed execution layout. Only the allocated context capacity and slot count vary between
