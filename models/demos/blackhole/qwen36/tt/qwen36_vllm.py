@@ -58,7 +58,10 @@ _RELOAD_COMMAND_DEFAULTS = {
 def _build_model_capabilities():
     """The plugin-visible capabilities. QWEN36_SERVE_DEVICE_DECODE=0 returns exactly the pre-1.6S dict."""
     caps = {
-        "supports_prefix_caching": False,
+        # Automatic prefix caching: vLLM reuses the attention KV blocks and passes start_pos (cached tokens, a multiple
+        # of the block size 64); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
+        # disables it. Run vLLM with --block-size 64 and --enable-prefix-caching.
+        "supports_prefix_caching": os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1",
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
@@ -195,7 +198,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
         # when a request actually carries pixel_values / pixel_values_videos.
         model.init_vision_model()
-        return cls([model], [args], mesh_device)
+        inst = cls([model], [args], mesh_device)
+        # vLLM's --[no-]enable-prefix-caching, read from the config the worker publishes while loading the model; the model-side
+        # GDN snapshot cache is only worth its ~1.2 GB/device (and the per-prefill snapshot saves) when vLLM will reuse prefixes.
+        # Non-vLLM callers (tests, demos) have no current config and keep the default (enabled).
+        try:
+            from vllm.config import get_current_vllm_config
+
+            inst._vllm_prefix_caching = bool(get_current_vllm_config().cache_config.enable_prefix_caching)
+        except Exception:
+            inst._vllm_prefix_caching = True
+        return inst
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs.
@@ -269,7 +282,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
                 "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
             )
-            return self._prefill_forward_tp_batched(model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"))
+            return self._prefill_forward_tp_batched(
+                model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"), start_pos=kwargs.get("start_pos")
+            )
+        # Prefix caching (start_pos > 0) is only exploited by the batched slot path above. The B=1 TP path and the
+        # single-device path ignore start_pos and recompute the whole prompt from position 0: correct (the cached KV
+        # blocks are rewritten with the same values), just slower.
         vision_tokens = self._compute_vision_tokens(model, kwargs)
         if model.num_devices > 1:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
@@ -322,7 +340,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         logger.info(f"Finished prefill up to {T} tokens, starting decode...")
         return logits, torch.zeros(1, dtype=torch.long)
 
-    def _prefill_forward_tp_batched(self, model, tokens, page_table, prompt_lens, empty_slots):
+    def _prefill_forward_tp_batched(self, model, tokens, page_table, prompt_lens, empty_slots, start_pos=None):
         """TP batched (max_num_seqs>1) prefill: prefill each request in this step into its decode slot.
 
         vLLM prefills new requests while other slots decode, so each user's B=1 state is written into
@@ -333,6 +351,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         page_table:  torch [N, max_blocks] — row u = request u's blocks.
         prompt_lens: per-request real lengths (row u trimmed to prompt_lens[u]).
         empty_slots: per-request decode slot; defaults to range(N) (mirrors Generator.prefill_forward_text).
+        start_pos:   optional per-request number of prefix-cached tokens (vLLM APC; rows of tokens / page_table are
+                     still the FULL prompt / page-table row). Resumed from the model's GDN snapshots when available.
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — text M-RoPE delta is 0, applied model-side).
         """
         N = tokens.shape[0]
@@ -343,7 +363,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
-        host_logits = model.prefill_paged_slots(token_ids_list, pt, empty_slots, valid_lens=plens)
+        if start_pos is not None:
+            start_pos = [int(x) for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)]
+            assert len(start_pos) == N, "one start_pos per request"
+        host_logits = model.prefill_paged_slots(
+            token_ids_list, pt, empty_slots, valid_lens=plens, start_positions=start_pos
+        )
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
         logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
         return logits, torch.zeros(N, dtype=torch.long)
@@ -584,6 +609,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
             f"page_table_blocks={num_blocks}{', batched B=1 scratch' if batched else ''}"
         )
+        env_pc = os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1"
+        vllm_pc = getattr(self, "_vllm_prefix_caching", True)
+        if batched and model._prefix_cache is None and model.short_prefill_trace_enabled():
+            logger.info(
+                f"GDN prefix-state cache {'enabled' if env_pc and vllm_pc else 'disabled'} "
+                f"(QWEN36_PREFIX_CACHE={'1' if env_pc else '0'}, vLLM enable_prefix_caching={vllm_pc})"
+            )
+        if batched and model._prefix_cache is None and env_pc and vllm_pc and model.short_prefill_trace_enabled():
+            # GDN prefix-state cache (APC): allocates the snapshot slots (+ the B=1 scratch they mirror) NOW, before any
+            # prefill/decode trace is captured. The batched slot path is the only one that resumes from snapshots.
+            from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
+
+            model._prefix_cache = GdnPrefixStateCache(model)
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
