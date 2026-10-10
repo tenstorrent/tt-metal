@@ -5,10 +5,15 @@
 #pragma once
 
 #include <optional>
+#include <string_view>
 
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
+
+// TT_FATAL unless every trainable parameter is stored in bf16. For optimizers whose update only exists for bf16
+// parameters: fp32 parameters are supported by AdamW, and by the others once the precision config lands (#56513).
+void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name);
 
 class OptimizerBase {
 public:

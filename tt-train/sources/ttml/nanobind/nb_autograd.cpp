@@ -22,6 +22,7 @@
 #include "autograd/callback.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
@@ -112,7 +113,15 @@ void py_module(nb::module_& m) {
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
             "assign",
-            [](const TensorPtr& self, const TensorPtr& other) { self->set_value(other->get_value()); },
+            [](const TensorPtr& self, const TensorPtr& other) {
+                // Keep self's storage dtype: loading weights into a parameter never changes its precision.
+                const auto& current = self->get_value(PreferredPrecision::NATIVE);
+                const auto precision =
+                    ttml::core::is_tensor_initialized(current) && current.dtype() == ttnn::DataType::FLOAT32
+                        ? PreferredPrecision::FULL
+                        : PreferredPrecision::HALF;
+                self->set_value(other->get_value(precision));
+            },
             nb::arg("other"));
         py_tensor.def_static(
             "from_numpy",

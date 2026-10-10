@@ -673,3 +673,35 @@ def test_binary_operators_distinct_operands(numpy_type, binary_op, numpy_op, lhs
     result = getattr(autograd_lhs, binary_op)(autograd_rhs)
 
     assert_binary_result(result, numpy_op(lhs, rhs))
+
+
+_NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+_OTHER_FLOAT_DTYPE = {
+    ttnn.DataType.BFLOAT16: ttnn.DataType.FLOAT32,
+    ttnn.DataType.FLOAT32: ttnn.DataType.BFLOAT16,
+}
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_assign_keeps_the_storage_dtype(dtype):
+    """Loading values into a tensor (checkpoints, safetensors) never changes its precision."""
+    shape = (1, 1, 32, 32)
+    target = ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=np.float32), new_type=dtype)
+    values = np.full(shape, 0.5, dtype=np.float32)
+    source = ttml.autograd.Tensor.from_numpy(values, new_type=_OTHER_FLOAT_DTYPE[dtype])
+
+    target.assign(source)
+
+    assert target.get_value(_NATIVE).dtype == dtype
+    np.testing.assert_array_equal(target.to_numpy(precision=_NATIVE).astype(np.float32), values)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_in_place_initializers_keep_the_storage_dtype(dtype):
+    """ttml.init's in-place initializers fill a parameter without changing its precision."""
+    parameter = ttml.autograd.Tensor.from_numpy(np.zeros((1, 1, 32, 32), dtype=np.float32), new_type=dtype)
+
+    ttml.init.normal_(parameter, 0.0, 1.0)
+
+    assert parameter.get_value(_NATIVE).dtype == dtype
+    assert np.any(parameter.to_numpy(precision=_NATIVE).astype(np.float32) != 0.0)

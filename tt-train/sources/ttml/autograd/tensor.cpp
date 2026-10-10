@@ -39,7 +39,7 @@ void Tensor::add_grad(const ttnn::Tensor& grad) {
     }
 
     if (!is_grad_initialized()) {
-        auto value_shape = m_value.get_tensor().logical_shape();
+        auto value_shape = m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape();
         if (grad.logical_shape() != value_shape) {
             throw std::logic_error(fmt::format(
                 "Shapes of gradients are not equal. Expected: {}, got: {}", value_shape, grad.logical_shape()));
@@ -117,11 +117,11 @@ void Tensor::set_value(const ttnn::Tensor& value) {
 void Tensor::set_grad(const ttnn::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
         auto grad_shape = grad.logical_shape();
-        auto value_shape = m_value.get_tensor().logical_shape();
+        auto value_shape = m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape();
         if (grad_shape != value_shape) {
             throw std::logic_error(fmt::format(
                 "Shapes of gradients are not equal. Expected: {}, got: {}",
-                m_value.get_tensor().logical_shape(),
+                m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape(),
                 grad.logical_shape()));
         }
     }
@@ -138,6 +138,10 @@ void Tensor::set_requires_grad(bool requires_grad) {
 
 const ttnn::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
     return m_value.get_tensor(preferred_precision);
+}
+
+MutableTensorView Tensor::get_value_for_update(PreferredPrecision precision) {
+    return m_value.get_value_for_update(precision);
 }
 
 const ttnn::Tensor& Tensor::get_grad() const {
@@ -157,7 +161,8 @@ const std::optional<NodeId>& Tensor::get_node() const {
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
-    return get_value().logical_shape();
+    // The shape is the same in every precision; NATIVE never casts.
+    return get_value(PreferredPrecision::NATIVE).logical_shape();
 }
 
 uint32_t Tensor::get_rank() const {
