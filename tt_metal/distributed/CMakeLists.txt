@@ -80,6 +80,7 @@ if(USE_MPI)
         ${CMAKE_CURRENT_SOURCE_DIR}/host_h2h_socket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/erisc_h2h_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/erisc_e2h2h2e_pipeline.cpp
     )
 endif()
 

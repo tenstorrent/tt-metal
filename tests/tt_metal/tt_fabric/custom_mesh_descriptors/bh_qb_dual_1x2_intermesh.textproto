@@ -1,0 +1,25 @@
+# A 4-chip Blackhole box split into two 1x2 meshes, one per rank, the cables between them inter-mesh.
+# The ERISC bridge pipeline bridges one of those channels (TT_BRIDGE_E2H_FORCE_CHAN).
+
+mesh_descriptors {
+  name: "M1x2"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M1x2" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1x2" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M1x2" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1x2" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+    directional: false
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

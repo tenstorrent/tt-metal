@@ -207,6 +207,31 @@ if(TARGET OpenMPI::MPI)
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
     )
+
+    # The full E2H -> H2H -> H2E pipeline: two ranks, a device each, launched by tt-run.
+    add_executable(erisc_pipeline_benchmark)
+    target_sources(erisc_pipeline_benchmark PRIVATE benchmark_erisc_e2h2h2e_pipeline.cpp)
+    target_link_libraries(
+        erisc_pipeline_benchmark
+        PRIVATE
+            tt_metal
+            test_common_libs
+            benchmark::benchmark
+            OpenMPI::MPI
+    )
+    target_include_directories(
+        erisc_pipeline_benchmark
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}
+    )
+    set_target_properties(
+        erisc_pipeline_benchmark
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+    )
 endif()
 
 # H2E leg benchmark: one device, no MPI. Carries its own main(), so no benchmark_main.
