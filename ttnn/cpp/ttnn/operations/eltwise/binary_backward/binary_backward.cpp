@@ -4,7 +4,9 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <array>
 #include <numbers>
+#include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -130,18 +132,32 @@ std::vector<Tensor> atan2_bw(
     float t_nan = std::nanf("");
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    std::vector<EltwiseUnaryWithParam> ops_chain = {
-        EltwiseUnaryWithParam{UnaryOpType::SQUARE}, EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+
+    // The denominator was square(hypot(a, b)). binary_ng lowers HYPOT to SQUARE and SQUARE on
+    // the operands, ADD, then SQRT (binary_ng_utils.cpp), so that was already sq(a) + sq(b)
+    // with a square root taken and then undone. Writing the two SQUARE activations out drops
+    // that round trip: the sum of squares is bit-identical, one pack and one unpack of
+    // sqrt(S) go away, and the pair of roundings they carried goes with them.
+    const std::array square_it = {EltwiseUnaryWithParam{UnaryOpType::SQUARE}};
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+    const std::array negate_it = {EltwiseUnaryWithParam{UnaryOpType::NEG}};
+
+    Tensor sum_of_squares =
+        ttnn::add(input_a, other, std::nullopt, output_mem_config, std::nullopt, {}, square_it, square_it);
     Tensor recip_mul = ttnn::multiply(
-        grad_tensor,
-        ttnn::unary_chain(ttnn::hypot(input_a, other, output_mem_config), ops_chain, output_mem_config),
-        std::nullopt,
-        output_mem_config);
+        grad_tensor, sum_of_squares, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
+    sum_of_squares.deallocate();
     Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_mem_config);
-    Tensor cond = ttnn::logical_and(ttnn::eqz(input_a, output_mem_config), ttnn::eqz(other, output_mem_config));
+    // The origin guard keeps its two standalone eqz dispatches. Folded as EQZ operand
+    // activations they would run after the LLK broadcast datacopy on a subtile-broadcast
+    // operand, which reads a bfloat16 subnormal as zero, and the guard would fire for
+    // operands that are not the origin.
+    Tensor cond = ttnn::logical_and(
+        ttnn::eqz(input_a, output_mem_config), ttnn::eqz(other, output_mem_config), std::nullopt, output_mem_config);
     grad_a = ttnn::where(cond, t_nan, grad_a, output_mem_config);
     grad.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(input_a), recip_mul, std::nullopt, output_mem_config);
+    Tensor grad_b =
+        ttnn::multiply(input_a, recip_mul, std::nullopt, output_mem_config, std::nullopt, {}, negate_it, {});
     grad_b = ttnn::where(cond, t_nan, grad_b, output_mem_config);
     recip_mul.deallocate();
     cond.deallocate();
