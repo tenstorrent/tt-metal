@@ -546,6 +546,68 @@ inline void cfg_reg_rmw_tensix(std::uint32_t val)
     }
 }
 
+// TRISC instruction cache stream prefetch (RISC_PREFETCH_CTRL, off from reset): while on, a demand miss of this TRISC's
+// icache also fetches the next ICACHE_PREFETCH_LINES 16 B lines, so straight-line code such as a kernel's init runs faster.
+constexpr std::uint32_t ICACHE_PREFETCH_LINES = 5;
+static_assert(ICACHE_PREFETCH_LINES >= 1 && ICACHE_PREFETCH_LINES <= 7, "Wormhole reads only bits [2:0] of Max_Req_Count");
+
+#if defined(COMPILE_FOR_TRISC)
+namespace detail
+{
+// The TRISCs share the register, so this is one RMWCIB0 of this thread's enable bit and the common count: atomic in the
+// shared config arbiter, unlike a RISC load and store. It takes effect once the thread's earlier Tensix instructions ran.
+template <bool enable>
+inline void set_icache_prefetch()
+{
+#if !defined(TT_METAL_TTSIM) // ttsim does not model RISC_PREFETCH_CTRL and aborts on any access to it
+    static_assert(COMPILE_FOR_TRISC >= 0 && COMPILE_FOR_TRISC <= 2, "one enable bit per TRISC");
+    static_assert(RISC_PREFETCH_CTRL_Max_Req_Count_ADDR32 == RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32, "one register");
+    constexpr std::uint32_t thread_bit = 1u << (RISC_PREFETCH_CTRL_Enable_Trisc_SHAMT + COMPILE_FOR_TRISC);
+    constexpr std::uint32_t count_mask = RISC_PREFETCH_CTRL_Max_Req_Count_MASK & 0xff;
+    constexpr std::uint32_t count_bits = (ICACHE_PREFETCH_LINES << RISC_PREFETCH_CTRL_Max_Req_Count_SHAMT) & count_mask;
+    if constexpr (enable)
+    {
+        TTI_RMWCIB0(thread_bit | count_mask, thread_bit | count_bits, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
+    }
+    else
+    {
+        TTI_RMWCIB0(thread_bit, 0, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
+    }
+#endif
+}
+} // namespace detail
+
+inline void icache_prefetch_on()
+{
+    detail::set_icache_prefetch<true>();
+}
+
+inline void icache_prefetch_off()
+{
+    detail::set_icache_prefetch<false>();
+}
+
+// Init-scoped prefetch: the firmware turns it on before the kernel and the thread's first wait for data or space turns it
+// off, as loops run slower with it (it pollutes the 2-way icache sets and adds L1 traffic).
+inline bool icache_prefetch_in_init = false;
+
+inline void icache_prefetch_init_begin()
+{
+    icache_prefetch_on();
+    icache_prefetch_in_init = true;
+}
+
+// One load and a not taken branch once the init has ended.
+__attribute__((always_inline)) inline void icache_prefetch_init_end()
+{
+    if (__builtin_expect(icache_prefetch_in_init, false))
+    {
+        icache_prefetch_off();
+        icache_prefetch_in_init = false;
+    }
+}
+#endif
+
 inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
 {
     mailbox_base[thread][0] = data;
