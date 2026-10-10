@@ -256,7 +256,15 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
     } else {
         MATH((llk_math_fast_tilize_init_skip_remap<is_fp32_dest_acc_en>(icb)));
     }
-    PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (full_dim == 2) {
+            PACK((llk_pack_fast_tilize_init_two_tile_row<is_fp32_dest_acc_en>(icb, ocb)));
+        } else {
+            PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+        }
+    } else {
+        PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+    }
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
@@ -349,7 +357,7 @@ ALWI void fast_tilize_block(
 
             if (chunk != prev_chunk) {
                 UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
                 prev_chunk = chunk;
             }
             UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
@@ -475,7 +483,7 @@ ALWI void fast_tilize_block(
 // clang-format off
 /**
  * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
- * modified by _llk_unpack_tilizeA_B_init_.
+ * modified by llk_unpack_tilizeA_B_init.
  *
  * Return value: None
  *
@@ -490,8 +498,9 @@ ALWI void fast_tilize_block(
  * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
  * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
  * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
- * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Wormhole: face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata. Blackhole: not written, its init never programs it |
- * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | Wormhole only: CH0/CH1 Z and W counters zeroed on both unpackers                           |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | face_r_dim * FACE_C_DIM in both halfwords, from the operand's CB metadata                 |
+ * | Tile Y/Z dims             | THCON_SEC0 | Tile descriptor Y and Z dims of unpacker 0            | Blackhole only: Y dim 1, Z dim num_faces, from the operand's CB metadata                   |
+ * | ZW address counters       | UNP_A/B    | Z/W counters stepped by the tilize MOP                | CH0/CH1 Z and W counters zeroed on both unpackers                                          |
  * | XY address counters       | UNP_A/B    | Y counters stepped by the tilizeA_B row pattern       | Blackhole only: CH0/CH1 Y counters zeroed on both unpackers                                |
  * | SrcA Y stride (CH1)       | UNP0       | Per-row SrcA write stride used by the row-at-a-time tilize | Blackhole only: restored to the canonical stride for unpack_dst_format                 |
  *

@@ -172,7 +172,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
 
     // fast_tilize_init
-    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);
+    const bool input_32b = static_cast<std::uint32_t>(formats.unpack_A_src) == static_cast<std::uint32_t>(DataFormat::Float32);
+    _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src, input_32b);
 
     // Row-scoped pack: destination programmed once per row, chunks streamed through.
     std::uint32_t prev_udim = unit_dims[0];
@@ -187,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t udim = unit_dims[u];
                 if (udim != prev_udim)
                 {
-                    _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
+                    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
                     prev_udim = udim;
                 }
                 _llk_packer_wait_for_math_done_();

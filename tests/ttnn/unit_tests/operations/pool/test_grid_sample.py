@@ -381,6 +381,34 @@ def test_grid_sample_bilinear_weight_format(device, input_dtype, grid_kind, shar
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
 
 
+# A last channel chunk narrower than the others (C above 256 and not a multiple of 256) must not write past its
+# output: with the output sharded right below the input tensor in L1, any such write rewrites input sticks.
+@pytest.mark.parametrize("channels", [288, 384, 640])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_grid_sample_partial_channel_chunk_keeps_input(device, channels, align_corners):
+    torch.manual_seed(42)
+    input_tensor = torch.randn(1, 8, 16, channels).to(torch.bfloat16)
+    grid = torch.randint(-12, 13, (1, 2, 32, 2)).float() / 8
+    expected = golden_grid_sample(input_tensor, grid, align_corners=align_corners)
+    grid_host = ttnn.reshape(ttnn.from_torch(grid, dtype=ttnn.float32), (1, 2, 8, 8))
+    memory_config = ttnn.create_sharded_memory_config(
+        (8, 8),
+        ttnn.CoreGrid(y=1, x=2),
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    grid_device = ttnn.to_memory_config(ttnn.to_device(grid_host, device), memory_config)
+    input_device = ttnn.from_torch(input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    outputs = [
+        ttnn.to_torch(ttnn.grid_sample(input_device, grid_device, mode="bilinear", align_corners=align_corners))
+        for _ in range(2)
+    ]
+    assert torch.equal(ttnn.to_torch(input_device), input_tensor), "grid_sample modified its input tensor"
+    assert torch.equal(outputs[0], outputs[1]), "a second run of the same grid_sample gave a different output"
+    torch.testing.assert_close(outputs[0], expected, atol=0.02, rtol=0.02)
+
+
 @pytest.mark.parametrize("input_dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("batch_output_channels", [False, True])
 @pytest.mark.parametrize(
