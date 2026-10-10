@@ -33,3 +33,10 @@
 3. `ttp checks`; land: `git switch -c ttp/t362-land origin/ttp/t48-ltx25-integrated`, cherry-pick the code commits
    (not the notes commit), `ttp push --detach`.
 4. Clean blx01: rm -rf /var/tmp/fasth3/t362 after `git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t362/b`.
+
+## Job 466 (blx01, 2026-10-10 ~19:14-19:18 UTC): passed, no drop
+- unit test PASSED (4 cases incl. padded-channel 64). Both arms md5-identical on seeds 0-4 (pcc 1.0, psnr inf, maxabs 0).
+- decode_s min: arm 0 (unfused) 0.6214, arm 1 (fused) 0.5156: -106 ms (-17%), same job, 900 MHz clamp, relative only.
+  Arm 0 was 0.5606 in job 459, so the gain vs that is ~45 ms, matching the #349 profile (45.9 ms). Noise is large.
+- 0f2ca651c33 flips LTX_VAE_FUSE_UNPATCH default to 1. Landing: ttp/t362-land (cherry-picks a4996c6a3d3 695a102dc1c
+  b5d8b7f567e 0f2ca651c33 onto origin/ttp/t48-ltx25-integrated), ttp push --detach.
