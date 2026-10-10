@@ -214,6 +214,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

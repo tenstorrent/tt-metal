@@ -229,6 +229,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(RESULT_TILE, L1_ADDRESS(buffer_Res[0]));
+                // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                if constexpr (PERF_PACK_SECTION_RELEASE)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
             }
         }
         else
