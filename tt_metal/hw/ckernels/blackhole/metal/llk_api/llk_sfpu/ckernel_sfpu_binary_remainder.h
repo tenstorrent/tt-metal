@@ -15,6 +15,8 @@ namespace ckernel::sfpu {
 
 // 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
 constexpr float TWO_POW_31 = 2147483648.0f;
+// TWO_POW_31 as the immediate of SFPLOADI_MOD0_FLOATB, which loads the upper 16 bits.
+constexpr std::uint32_t TWO_POW_31_FLOATB = 0x4f00;
 
 // Computes 1/|b| for the unsigned remainder (single Newton–Raphson refinement). Split recip and
 // remainder computation so that the tensor-scalar path can hoist this loop-invariant work above its
@@ -267,14 +269,14 @@ sfpi_inline void remainder_int32_lm_head(const uint in0, const uint in1) {
     // macro 1: L1 = 1 / L3 after 3 issues; L1 = L3 * L1 + L1 after 6 issues
     TT_SFPLOADMACRO((1 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG1 >> 2));
     TTI_SFPGT(0, p_sfpu::LREG3, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in0);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG3, 1);
     TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG6, sfpi::SFPABS_MOD1_INT);
     TTI_SFPCAST(p_sfpu::LREG6, p_sfpu::LREG4, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LREG3, 0);
     TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
@@ -285,7 +287,7 @@ sfpi_inline void remainder_int32_lm_head(const uint in0, const uint in1) {
     TTI_SFPABS(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPABS_MOD1_INT);
     TTI_SFPCAST(p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
     TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG6, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
@@ -341,13 +343,15 @@ sfpi_inline void calculate_remainder_int32(
 #else
     // SFPLOADMACRO schedule of calculate_remainder_int32_body; no scheduled op shares data, lane flags or a sub-unit
     // with the issue after it, so the result does not depend on the issue pace.
-    const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
-    lltt::record<lltt::Exec>(0, 32);
-    remainder_int32_lm_head(in0, in1);
+    constexpr uint dst_tile_size = 64;
+    constexpr uint head_len = 32;  // the instructions of remainder_int32_lm_head
+    const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
+               out = dst_index_out * dst_tile_size;
+    load_replay_buf<Exec>(0, head_len, [in0, in1] { remainder_int32_lm_head(in0, in1); });
     remainder_int32_lm_tail(out);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 32);
+        lltt::replay(0, head_len);
         remainder_int32_lm_tail(out);
     }
 #endif
@@ -359,7 +363,7 @@ sfpi_inline void remainder_uint32_lm_head(const uint in0, const uint in1) {
     TTI_SFPABS(0, p_sfpu::LREG5, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);
     TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPARECIP_MOD1_RECIP);
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, 1);
@@ -377,7 +381,7 @@ sfpi_inline void remainder_uint32_lm_head(const uint in0, const uint in1) {
     TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     // macro 1: L6 = L3 * L6 (low bits) after 4 issues; L6 = L0 + L6 after 6 issues
@@ -441,13 +445,15 @@ sfpi_inline void calculate_remainder_uint32(
 #else
     // SFPLOADMACRO schedule of calculate_remainder_uint32_body; no scheduled op shares data, lane flags or a sub-unit
     // with the issue after it, so the result does not depend on the issue pace.
-    const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
-    lltt::record<lltt::Exec>(0, 32);
-    remainder_uint32_lm_head(in0, in1);
+    constexpr uint dst_tile_size = 64;
+    constexpr uint head_len = 32;  // the instructions of remainder_uint32_lm_head
+    const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
+               out = dst_index_out * dst_tile_size;
+    load_replay_buf<Exec>(0, head_len, [in0, in1] { remainder_uint32_lm_head(in0, in1); });
     remainder_uint32_lm_tail(out);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 32);
+        lltt::replay(0, head_len);
         remainder_uint32_lm_tail(out);
     }
 #endif

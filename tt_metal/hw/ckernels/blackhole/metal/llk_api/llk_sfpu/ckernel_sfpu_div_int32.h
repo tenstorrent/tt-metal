@@ -78,12 +78,14 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
 #else
     // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC and SFPPOPC sit in MAD latency slots and float(in1)
     // stays in L7.
-    const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
-    lltt::record<lltt::Exec>(0, 26);
-    div_int32_lm_row(in0, in1, out);
+    constexpr uint dst_tile_size = 64;
+    constexpr uint row_len = 26;  // div_int32_lm_row's 25 instructions and its dst_reg increment
+    const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
+               out = dst_index_out * dst_tile_size;
+    load_replay_buf<Exec>(0, row_len, [in0, in1, out] { div_int32_lm_row(in0, in1, out); });
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 26);
+        lltt::replay(0, row_len);
     }
 #endif
 }

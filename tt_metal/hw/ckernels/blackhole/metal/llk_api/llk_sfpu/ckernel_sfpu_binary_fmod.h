@@ -113,14 +113,14 @@ sfpi_inline void fmod_int32_lm_head(const uint in0, const uint in1) {
     TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);
     TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in0);
     TTI_SFPGT(0, p_sfpu::LREG1, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
     TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG5, 0);
     TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG12, p_sfpu::LREG4, 0);
     // macro 1: L6 = float(L6) after 5 issues
@@ -133,7 +133,7 @@ sfpi_inline void fmod_int32_lm_head(const uint in0, const uint in1) {
     // macro 2: L7 = L0 * L7 (low bits) after 6 issues
     TT_SFPLOADMACRO((2 << 2) | (p_sfpu::LREG7 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG7 >> 2));
     TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LCONST_0, 1);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_POW_31_FLOATB);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPSHFT(-23 & 0xfff, p_sfpu::LREG3, p_sfpu::LREG7, 5);
@@ -182,13 +182,15 @@ sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_i
 #else
     // SFPLOADMACRO schedule of calculate_fmod_int32_body; no scheduled op shares data, lane flags or a sub-unit
     // with the issue after it, so the result does not depend on the issue pace.
-    const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
-    lltt::record<lltt::Exec>(0, 32);
-    fmod_int32_lm_head(in0, in1);
+    constexpr uint dst_tile_size = 64;
+    constexpr uint head_len = 32;  // the instructions of fmod_int32_lm_head
+    const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
+               out = dst_index_out * dst_tile_size;
+    load_replay_buf<Exec>(0, head_len, [in0, in1] { fmod_int32_lm_head(in0, in1); });
     fmod_int32_lm_tail(out);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 32);
+        lltt::replay(0, head_len);
         fmod_int32_lm_tail(out);
     }
 #endif
