@@ -102,9 +102,10 @@ class RMSNorm(nn.Module):
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1])
         return None if geometry is None else _block_sharded_memory_config(*geometry)
 
-    def forward(self, x, memory_config=None):
+    def forward(self, x, memory_config=None, output_dtype=None):
         """A memory_config equal to shard_memory_config(x) returns the block-sharded output as is; an x already in
-        that layout is not resharded."""
+        that layout is not resharded. output_dtype converts on the unshard, so it applies only to a block-sharded
+        norm whose output is unsharded."""
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1])
         if geometry is None:
             return ttnn.rms_norm(
@@ -129,6 +130,8 @@ class RMSNorm(nn.Module):
             x_sharded.deallocate(True)
         if memory_config is not None and memory_config == shard_memory_config:
             return out_sharded
-        out = ttnn.sharded_to_interleaved(out_sharded, memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.sharded_to_interleaved(
+            out_sharded, memory_config or ttnn.DRAM_MEMORY_CONFIG, output_dtype=output_dtype
+        )
         out_sharded.deallocate(True)
         return out
