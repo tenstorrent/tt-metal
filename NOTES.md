@@ -36,6 +36,10 @@ Code commit ced1ac7f2bd: table entries + CPU test + sweep candidates gain T=2/4.
 - drv363d (started 12:40 PDT): same driver, build capped at CMAKE_BUILD_PARALLEL_LEVEL=32.
   retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t363/detach/drv363d
 
+- drv363d: build ok (19:41 UTC); A/B broker job 479 (19:41-19:44 UTC, blx01 full 4x8, 900 MHz clamp, relative):
+  A_old yuv decode [0.5893, 0.6077, 0.5971] median 0.5971 s; B_new [0.541, 0.555, 0.5571] median 0.5550 s;
+  new/old 0.929 (-7.1%); identical=True pcc=1.000000 psnr=inf maxabs=0. jit and b cleaned. No drops.
+  Summary: tt-project/t363/res/ab_job479_summary.txt.
+
 ## Next step
-Read drv363b.done and the "AB RESULT" line. If PCC>=0.999/PSNR>=45 (expect identical): git switch -c
-<branch>-land origin/ttp/t48-ltx25-integrated, cherry-pick ced1ac7f2bd, ttp push --detach.
+Land ced1ac7f2bd on ttp/t48-ltx25-integrated (cherry-pick onto a -land branch, ttp push --detach).

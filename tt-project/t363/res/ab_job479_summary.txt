@@ -1,0 +1,14 @@
+AB decoder_blocks metadata: [['res_x', {'num_layers': 4}], ['compress_space', {'multiplier': 2}], ['res_x', {'num_layers': 6}], ['compress_time', {'multiplier': 2}], ['res_x', {'num_layers': 4}], ['compress_all', {'multiplier': 1}], ['res_x', {'num_layers': 2}], ['compress_all', {'multiplier': 2}], ['res_x', {'num_layers': 2}]]
+AB old={(4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 1, 4, 8), (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4), (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4), (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4)}
+AB new={(4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 2, 2, 8), (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 2, 4, 4), (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4), (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4)}
+AB arm=A_old yuv_s=[0.5893, 0.6077, 0.5971] median=0.5971
+2026-10-10 19:44:22.842 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 15/86 tensors (17%), 5s
+2026-10-10 19:44:26.275 | INFO     | models.tt_dit.layers.module:tick:62 - converting weights to device: 86/86 tensors (100%), 9s
+2026-10-10 19:44:26.276 | INFO     | models.tt_dit.utils.progress:__exit__:62 - convert LTXVideoDecoder: done in 9s
+AB arm=B_new yuv_s=[0.541, 0.555, 0.5571] median=0.5550
+AB RESULT median_old_s=0.5971 median_new_s=0.5550 new/old=0.9294 identical=True pcc=1.000000 psnr_db=inf maxabs=0
+2026-10-10 19:44:50.621 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-10 19:44:50.621 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-10 19:44:50.621 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[t363] rc=0 wall 133 s 2026-10-10T19:44:50Z
+T363_EXIT=0
