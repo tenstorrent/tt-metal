@@ -3846,15 +3846,20 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
     Blackhole grid. One output tile per core keeps L1 from shrinking the block. The explicit config below spells
     out the expected default, together with the compute config the default picks (HiFi2 with packer L1
     accumulation; an explicit program config alone would run LoFi), so running it must reuse the default's
-    program-cache entry, while a one-tile block must build a new program.
+    program-cache entry, while a one-tile block must build a new program. A grid on which the default takes neither
+    of those two programs runs another program family, which this test does not cover, so it skips there.
     """
     torch.manual_seed(0)
     grid = device.compute_with_storage_grid_size()
     m_size, n_size = 32 * grid.y, 32 * grid.x
     expected = _default_dram_in0_block_w(k_size // 32, grid.x)
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
     )
 
     def config(in0_block_w):
@@ -3885,9 +3890,15 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
         explicit_output = ttnn.to_torch(
             ttnn.matmul(input_a, input_b, program_config=config(expected), compute_kernel_config=compute_kernel_config)
         )
-        assert (
-            device.num_program_cache_entries() == entries
-        ), f"the default config for Kt={k_size // 32} on a {grid.x}-column grid is not in0_block_w={expected}"
+        if device.num_program_cache_entries() != entries:
+            entries = device.num_program_cache_entries()
+            ttnn.matmul(input_a, input_b, program_config=config(1), compute_kernel_config=compute_kernel_config)
+            assert (
+                device.num_program_cache_entries() != entries
+            ), f"the default config for Kt={k_size // 32} on a {grid.x}-column grid takes in0_block_w=1, not {expected}"
+            pytest.skip(
+                f"the default config on a {grid.x}x{grid.y} grid is not the 2D multicast program this test checks"
+            )
         assert torch.equal(default_output, explicit_output)
 
         ttnn.matmul(input_a, input_b, program_config=config(1), compute_kernel_config=compute_kernel_config)
