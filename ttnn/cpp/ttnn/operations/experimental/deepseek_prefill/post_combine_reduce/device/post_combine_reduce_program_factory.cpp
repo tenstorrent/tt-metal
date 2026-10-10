@@ -69,6 +69,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         "Embedding dimension tiles {} must fit in 8 DST registers for batching",
         emb_dim_cb_tiles);
 
+    TT_FATAL(num_experts <= 32, "post_combine_reduce: at most 32 slots per token, got {}", num_experts);
+
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     TT_FATAL(num_tokens > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
     TT_FATAL(
@@ -99,101 +101,71 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
-    // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = combine_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = input_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    const auto push_cb = [&](tt::CBIndex index, uint32_t num_pages, uint32_t page_size, tt::DataFormat format) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = num_pages * page_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = format,
+                .page_size = page_size,
+            }}},
+        });
+    };
 
-    // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = weight_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = weight_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    // The reader streams only active (token, slot) pairs: one combine row (c_0) and one weight scalar in
+    // element 0 of a tile (c_1) each, double-buffered so the next read overlaps the multiply.
+    push_cb(tt::CBIndex::c_0, 2 * emb_dim_cb_tiles, tile_size, input_cb_data_format);
+    push_cb(tt::CBIndex::c_1, 2, tile_size, weight_cb_data_format);
 
-    // c_2 / c_3 CBs (dispatch table, indices) are only allocated when the
-    // DeepSeek skip path is in use; the GPT-OSS path does not touch them.
+    // c_4: per-chunk active-slot count of each token (reader -> compute).
+    constexpr uint32_t token_counts_page_size = TOKENS_PER_CHUNK * sizeof(uint32_t);
+    push_cb(tt::CBIndex::c_4, 2, token_counts_page_size, tt::DataFormat::UInt32);
+
+    // c_5: reader-private scratch for one chunk's routing weights, one aligned weight page per (token, slot).
+    const uint32_t weight_aligned_page_size = get_aligned_page_size(weights);
+    TT_FATAL(
+        get_num_pages(weights) == num_tokens * num_experts,
+        "post_combine_reduce: expected one weight page per (token, slot), got {} pages for {} x {}",
+        get_num_pages(weights),
+        num_tokens,
+        num_experts);
+    push_cb(tt::CBIndex::c_5, TOKENS_PER_CHUNK * num_experts, weight_aligned_page_size, weight_cb_data_format);
+
+    // c_2 / c_3: reader-private dispatch table and one chunk's expert indices (dispatch-table mode only).
     uint32_t dispatch_table_num_pages = 0;
-    uint32_t dispatch_table_page_size_val = 0;
     uint32_t dispatch_table_aligned_page_size = 0;
-    uint32_t indices_page_size_val = 0;
+    uint32_t dispatch_table_entries = 0;
     uint32_t indices_aligned_page_size = 0;
-    uint32_t indices_pages_per_core = 0;
-
     if (use_dispatch_table_skip) {
         const auto& indices = *indices_opt;
         const auto& expert_dispatch_table = *dispatch_table_opt;
 
-        tt::DataFormat indices_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices.dtype());
-        tt::DataFormat dispatch_table_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(expert_dispatch_table.dtype());
-
-        // c_2: Dispatch table scratch — loaded once by writer, read by compute.
         dispatch_table_num_pages = get_num_pages(expert_dispatch_table);
-        dispatch_table_page_size_val = get_page_size(expert_dispatch_table);
         dispatch_table_aligned_page_size = get_aligned_page_size(expert_dispatch_table);
-        uint32_t dispatch_table_cb_size = dispatch_table_num_pages * dispatch_table_aligned_page_size;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = dispatch_table_cb_size,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = dispatch_table_cb_data_format,
-                .page_size = dispatch_table_aligned_page_size,
-            }}},
-        });
+        // The reader indexes the table as one contiguous int32 array.
+        TT_FATAL(
+            dispatch_table_num_pages == 1 || get_page_size(expert_dispatch_table) == dispatch_table_aligned_page_size,
+            "post_combine_reduce: a multi-page expert_dispatch_table must have aligned pages");
+        dispatch_table_entries = expert_dispatch_table.logical_volume();
+        push_cb(
+            tt::CBIndex::c_2,
+            dispatch_table_num_pages,
+            dispatch_table_aligned_page_size,
+            tt::tt_metal::datatype_to_dataformat_converter(expert_dispatch_table.dtype()));
 
-        // c_3: Indices scratch — loaded one chunk at a time (reused per chunk).
-        indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
-        indices_pages_per_core = TOKENS_PER_CHUNK;
-        uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = indices_cb_size,
-            .core_ranges = core_range_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = indices_cb_data_format,
-                .page_size = indices_aligned_page_size,
-            }}},
-        });
+        push_cb(
+            tt::CBIndex::c_3,
+            TOKENS_PER_CHUNK,
+            indices_aligned_page_size,
+            tt::tt_metal::datatype_to_dataformat_converter(indices.dtype()));
     }
 
-    // c_16: Output — one chunk at a time (compute produces TOKENS_PER_CHUNK tiles per iteration)
-    uint32_t output_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = output_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = output_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
-
-    // c_17: Row-major scratch for tilize — one chunk at a time
-    uint32_t rowmajor_cb_size = TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile_size;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = rowmajor_cb_size,
-        .core_ranges = core_range_set,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-            .data_format = output_cb_data_format,
-            .page_size = tile_size,
-        }}},
-    });
+    // c_16: tilized output, one chunk at a time.
+    push_cb(tt::CBIndex::c_16, TOKENS_PER_CHUNK * emb_dim_cb_tiles, tile_size, output_cb_data_format);
+    // c_17: row-major accumulator (tilize input), one chunk at a time.
+    push_cb(tt::CBIndex::c_17, TOKENS_PER_CHUNK * emb_dim_cb_tiles, tile_size, output_cb_data_format);
 
     auto* combine_buffer = combine_output.buffer();
     auto* weight_buffer = weights.buffer();
@@ -201,47 +173,30 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
-    // Reader does not need to know about expert-skip; that logic lives in compute + writer.
+    // Reader compile-time args: fixed layout in both modes. In weight mode the dispatch-table metadata is zero
+    // and the dispatch_table / indices accessor slots carry the weight tensor's args as placeholders.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         emb_dim_bytes,
-    };
-    tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
-
-    // Compute compile-time args. The skip-mode toggle is appended last so the
-    // DeepSeek-only arg (dispatch_table page count) retains a stable position
-    // across both modes (it is zero in the GPT-OSS path).
-    std::vector<uint32_t> compute_compile_time_args = {
-        num_experts,
-        emb_dim_cb_tiles,
+        weight_aligned_page_size,
         dispatch_table_num_pages,
+        dispatch_table_aligned_page_size,
+        dispatch_table_entries,
+        indices_aligned_page_size,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
     };
-
-    // Writer compile-time args use a fixed layout across both paths. In the
-    // GPT-OSS path the dispatch_table / indices metadata slots carry zeros and
-    // the dispatch_table_accessor_args / indices_accessor_args slots reuse the
-    // weight tensor's TensorAccessorArgs as an always-valid placeholder; the
-    // kernel guards every use of them with `if constexpr (use_dispatch_table_skip)`.
-    std::vector<uint32_t> writer_compile_time_args = {
-        num_experts,
-        emb_dim_cb_tiles,
-        emb_dim_out_tiles,
-        dispatch_table_num_pages,
-        dispatch_table_page_size_val,
-        dispatch_table_aligned_page_size,
-        indices_page_size_val,
-        indices_aligned_page_size,
-    };
-    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? dispatch_table_buffer : weight_buffer)
-        .append_to(writer_compile_time_args);
+        .append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)
-        .append_to(writer_compile_time_args);
-    writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
+        .append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> compute_compile_time_args = {emb_dim_cb_tiles};
+
+    std::vector<uint32_t> writer_compile_time_args = {emb_dim_cb_tiles, emb_dim_out_tiles};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
@@ -279,37 +234,30 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
     // get (base_chunks_per_core + 1) chunks; the remaining get base_chunks_per_core.
+    // Buffer addresses go in as Buffer* so the framework records bindings for the cache-hit fast path.
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
         const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
 
-        // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
-        // Push the buffer pointer first so the framework records a BufferBinding
-        // for the cache-hit fast path.
+        // Reader: combine, weights, (dispatch-table mode: dispatch_table, indices), token_start, chunks.
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.push_back(combine_buffer);
+        reader_rt_args.push_back(weight_buffer);
+        if (use_dispatch_table_skip) {
+            reader_rt_args.push_back(dispatch_table_buffer);
+            reader_rt_args.push_back(indices_buffer);
+        }
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
-        // Compute RT args (no Buffer*).
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
-        compute_rt_args.push_back(token_start);
         compute_rt_args.push_back(chunks_this_core);
         compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
 
-        // Writer runtime args: weight_addr, output_addr,
-        //   (deepseek only: dispatch_table_addr, indices_addr),
-        //   token_start, chunks_this_core.  All buffer addresses are pushed as
-        //   Buffer* so the framework records bindings for the fast path.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(weight_buffer);
         writer_rt_args.push_back(output_buffer);
-        if (use_dispatch_table_skip) {
-            writer_rt_args.push_back(dispatch_table_buffer);
-            writer_rt_args.push_back(indices_buffer);
-        }
         writer_rt_args.push_back(token_start);
         writer_rt_args.push_back(chunks_this_core);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
