@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -34,19 +35,35 @@ void kernel_main() {
     // legacy reader pre-shifted the base by `aligned_input_width_offset_bytes`; in the typed
     // model that per-core byte shift becomes the source-side `offset_bytes` on each read.
     const auto s0 = TensorAccessor(tensor::src);
-    uint32_t stick_id = start_id;
-    cb_in0.reserve_back(block_height);
+
+    // Thread t of N fills shard rows t, t + N, ...: the strided DFB gives each thread every N-th
+    // entry, N entries apart in L1.
+    const uint32_t thread_id = get_my_thread_id();
+    const uint32_t num_threads = get_num_threads();
+#ifdef IMPLICIT_SYNC
+    // Host enables this only when every row is one unpadded DFB entry: each TXN_ID read fills the
+    // next entry (the shard itself or a staging ring) and posts its credit when it lands. Quasar
+    // NoC reads take any source byte offset, so the row is read from its exact start.
+    const uint32_t row_offset_bytes = aligned_input_width_offset_bytes + aligned_offset;
+    for (uint32_t h = thread_id; h < block_height; h += num_threads) {
+        noc.async_read<NocOptions::TXN_ID>(s0, cb_in0, {.page_id = start_id + h, .offset_bytes = row_offset_bytes}, {});
+    }
+#else
+    const uint32_t num_my_rows = block_height > thread_id ? (block_height - thread_id - 1) / num_threads + 1 : 0;
+    const uint32_t dest_stride_bytes = num_threads * padded_block_width_bytes;
+    uint32_t stick_id = start_id + thread_id;
+    cb_in0.reserve_back(num_my_rows);
     if (aligned) {
         uint32_t dest_off = 0;
-        for (uint32_t h = 0; h < block_height; ++h) {
+        for (uint32_t h = 0; h < num_my_rows; ++h) {
             noc.async_read(
                 s0,
                 cb_in0,
                 block_width_bytes,
                 {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                 {.offset_bytes = dest_off});
-            stick_id++;
-            dest_off += padded_block_width_bytes;
+            stick_id += num_threads;
+            dest_off += dest_stride_bytes;
         }
         noc.async_read_barrier();
     } else {
@@ -55,10 +72,10 @@ void kernel_main() {
         constexpr uint32_t trid_base = 1;
 
         // Private node-local L1 scratchpad (raw memory, no producer/consumer credit semantics).
-        // Total size == num_trids * scratch_cb_page_size (set by the host ScratchpadSpec), so the
-        // per-slot page size is recovered by dividing the total by num_trids.
+        // Total size == num_threads * num_trids * scratch_cb_page_size (set by the host ScratchpadSpec):
+        // the threads share it, each owning num_trids slots.
         Scratchpad<uint32_t> scratch(scratch::pad);
-        uint32_t scratch_cb_page_size = scratch.size_in_bytes() / num_trids;
+        uint32_t scratch_cb_page_size = scratch.size_in_bytes() / (num_threads * num_trids);
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -66,7 +83,7 @@ void kernel_main() {
         // Initialize slots
         for (uint32_t i = 0; i < num_trids; i++) {
             slot_states[i] = SlotState::IDLE;
-            scratch_offsets[i] = i * scratch_cb_page_size;
+            scratch_offsets[i] = (thread_id * num_trids + i) * scratch_cb_page_size;
         }
 
         // Local NoC coordinates for the scratch->dest reads.
@@ -80,11 +97,11 @@ void kernel_main() {
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
         uint32_t rows_completed = 0;  // Number of scratch->dest transfers completed
 
-        while (rows_completed < block_height) {
+        while (rows_completed < num_my_rows) {
             for (uint32_t slot = 0; slot < num_trids; slot++) {
                 uint32_t active_trid = trid_base + slot;
 
-                if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
+                if (slot_states[slot] == SlotState::IDLE && rows_issued < num_my_rows) {
                     // Start new src->scratch transfer (TRID-tagged). Destination is the raw L1
                     // scratchpad slot, addressed directly (no DFB offset semantics).
                     CoreLocalMem<uint32_t> scratch_dst(scratch_l1_base + scratch_offsets[slot]);
@@ -98,8 +115,8 @@ void kernel_main() {
                     dest_offsets[slot] = dest_off;
                     slot_states[slot] = SlotState::SRC_PENDING;
 
-                    stick_id++;
-                    dest_off += padded_block_width_bytes;
+                    stick_id += num_threads;
+                    dest_off += dest_stride_bytes;
                     rows_issued++;
                 }
                 if (slot_states[slot] == SlotState::SRC_PENDING) {
@@ -140,5 +157,6 @@ void kernel_main() {
         /*size_bytes=*/0,
         {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = 0},
         NocOptVals{.trid = 0});
-    cb_in0.push_back(block_height);
+    cb_in0.push_back(num_my_rows);
+#endif
 }

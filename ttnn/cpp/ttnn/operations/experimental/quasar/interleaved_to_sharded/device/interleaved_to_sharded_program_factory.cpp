@@ -32,6 +32,7 @@ namespace {
 // (Pattern: Unity-build hygiene for anonymous-namespace symbols).
 const DFBSpecName I2S_INPUT_DFB{"i2s_input"};
 const DFBSpecName I2S_OUTPUT_DFB{"i2s_output"};
+const DFBSpecName I2S_STAGE_DFB{"i2s_stage"};
 // SCRATCH is modeled as a private node-local L1 scratchpad (not a DFB): the stick-layout reader is
 // the sole user (it both fills it via src->scratch and drains it via a local scratch->dest copy).
 // A self-looped DFB (same DM kernel bound PRODUCER+CONSUMER) is rejected on Gen2/Quasar by the
@@ -44,6 +45,21 @@ const TensorParamName I2S_OUTPUT{"i2s_output"};
 const KernelSpecName I2S_READER{"i2s_reader"};
 const KernelSpecName I2S_WRITER{"i2s_writer"};
 const KernelSpecName I2S_COMPUTE{"i2s_compute"};
+
+// Implicit sync on a side whose threads round-robin `num_tcs` tile counters in total: the DFB picks
+// the fewest txn IDs (2..4, else 1) that split the entries evenly over those counters and stores
+// the entries per txn ID as a uint8 (dataflow_buffer.cpp), so a count above 255 wraps and the
+// credit ISR never fires.
+bool i2s_fits_implicit_sync(uint32_t num_entries, uint32_t num_tcs) {
+    uint32_t num_txn_ids = 1;
+    for (uint32_t n = 2; n <= 4; n++) {
+        if (num_entries % (n * num_tcs) == 0) {
+            num_txn_ids = n;
+            break;
+        }
+    }
+    return num_entries % num_tcs == 0 && num_entries / num_txn_ids <= 255;
+}
 
 }  // namespace
 
@@ -152,14 +168,29 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
 
     bool is_tile = (input.layout() == Layout::TILE);
+    // A row-major DFB entry can be one whole shard row when no core pads the row width and the row
+    // keeps L1 alignment. Quasar NoC reads take any source byte offset, so the source needs none.
+    const bool rm_rows_are_entries =
+        !is_tile && input_unit_size % l1_alignment == 0 && num_units_per_shard_width_last == input_unit_size;
+    // Into an L1 shard the reader runs as 4 threads and the writer as 2. The output DFB is strided
+    // over the threads, so its entry count must split evenly over the 4 readers.
+    const bool shard_splits = !convert_df && !dst_is_dram && num_units_per_shard % 4 == 0;
     // Implicit sync lands one full DFB entry per read at the DFB's own write pointer, so the reader can
-    // use it only when every core reads its whole block contiguously: no width or height padding.
-    // The DFB stores entries per txn ID as a uint8 and picks two txn IDs for an even shard but may
-    // pick one for an odd one, so a larger shard wraps that count and the credit ISR never fires.
+    // fill the shard with it only when every core reads its whole block contiguously: no width or
+    // height padding.
     const bool implicit_sync =
-        is_tile && !convert_df && !dst_is_dram && num_units_per_shard_width_last == num_units_per_shard_width &&
-        num_units_per_shard_height_last == num_units_per_shard_height &&
-        (num_units_per_shard <= 255 || (num_units_per_shard % 2 == 0 && num_units_per_shard <= 510));
+        (is_tile ? num_units_per_shard_width_last == num_units_per_shard_width : rm_rows_are_entries) && !convert_df &&
+        !dst_is_dram && num_units_per_shard_height_last == num_units_per_shard_height &&
+        i2s_fits_implicit_sync(num_units_per_shard, shard_splits ? 4 : 1);
+    // Any other row-major shard of whole-row entries goes through a staging ring instead: the readers
+    // fill it and the writers copy each row into the shard, so the shard size is not bounded by the
+    // ring's entry count. Every thread must move at least one row, since the DFB's final-credit
+    // barrier waits for all of a kernel's threads.
+    const bool staged =
+        rm_rows_are_entries && !convert_df && !dst_is_dram && !implicit_sync && num_units_per_shard_height_last >= 4;
+    const bool multi_thread = shard_splits || staged;
+    const uint32_t num_reader_threads = multi_thread ? 4 : 1;
+    const uint32_t num_writer_threads = multi_thread ? 2 : 1;
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;
@@ -183,7 +214,18 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     if (!dst_is_dram) {
         output_dfb.borrowed_from = I2S_OUTPUT;
     }
-    spec.dataflow_buffers.push_back(output_dfb);
+    if (staged) {
+        // STAGE DFB replaces the borrowed one: two rows per reader thread, which implicit sync needs
+        // as a multiple of 2 txn IDs x 4 tile counters.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = I2S_STAGE_DFB,
+            .entry_size = padded_offset_bytes,
+            .num_entries = 2 * num_reader_threads,
+            .data_format_metadata = output_cb_data_format,
+        });
+    } else {
+        spec.dataflow_buffers.push_back(output_dfb);
+    }
 
     // INPUT DFB: only when a data-format conversion compute kernel is inserted.
     if (convert_df) {
@@ -202,17 +244,22 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     if (!is_tile && use_scratch) {
         spec.scratchpads.push_back(ScratchpadSpec{
             .unique_id = I2S_SCRATCH_PAD,
-            .size_per_node = scratch_cb_page_size * num_trids,
+            .size_per_node = scratch_cb_page_size * num_trids * num_reader_threads,
         });
     }
 
     // Reader kernel. Produces into INPUT_DFB (when converting) or directly into OUTPUT_DFB.
-    const DFBSpecName reader_out_dfb = convert_df ? I2S_INPUT_DFB : I2S_OUTPUT_DFB;
+    const DFBSpecName reader_out_dfb = staged ? I2S_STAGE_DFB : (convert_df ? I2S_INPUT_DFB : I2S_OUTPUT_DFB);
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    reader.num_threads = num_reader_threads;
+    if (implicit_sync || staged) {
+        reader.hw_config = ttnn::create_reader_datamovement_config();
+        reader.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
+    }
     if (is_tile) {
         reader.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
@@ -223,10 +270,6 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         reader.compile_time_args = {
             {"num_readers", all_cores.num_cores()}, {"tile_bytes", convert_df ? input_unit_size : output_unit_size}};
         reader.dfb_bindings = {ProducerOf(reader_out_dfb, "in0")};
-        if (implicit_sync) {
-            reader.hw_config = ttnn::create_reader_datamovement_config();
-            reader.compiler_options.defines.emplace("IMPLICIT_SYNC", "1");
-        }
         reader.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height_tiles",
@@ -267,6 +310,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         .unique_id = I2S_WRITER,
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    writer.num_threads = num_writer_threads;
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
         writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_OUTPUT, .accessor_name = "dst"}};
@@ -295,6 +339,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                     "start_id",
                     "output_width_in_pages"}};
         }
+    } else if (staged) {
+        writer.source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
+            "writer_unary_stick_layout_staged_to_shard.cpp";
+        writer.hw_config = ttnn::create_writer_datamovement_config();
+        writer.dfb_bindings = {ConsumerOf(I2S_STAGE_DFB, "stage")};
+        writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_OUTPUT, .accessor_name = "dst"}};
+        writer.runtime_arg_schema = {.runtime_arg_names = {"block_height", "padded_block_width_bytes"}};
     } else {
         writer.source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/dataflow/"
@@ -508,6 +560,14 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                         {"padded_block_width_bytes", padded_offset_bytes},
                         {"start_id", start_id},
                         {"output_width_in_pages", output_width_in_pages},
+                    });
+            } else if (staged) {
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
+                        {"block_height", shard_height},
+                        {"padded_block_width_bytes", padded_offset_bytes},
                     });
             } else {
                 writer_rtas["num_units"][core] = curr_num_units_per_shard;
