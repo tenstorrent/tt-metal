@@ -726,6 +726,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
             _init_topk();
         }
     }
+    else if constexpr (OPERATION == SfpuType::hardshrink)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        ckernel::sfpu::hardshrink_bf16_tile_init<!is_fp32_dest_acc_en>();
+    }
     else
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
@@ -1626,7 +1631,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardshrink, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* lambda = 0.5f */);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_hardshrink,
+            (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE),
+            dst_index,
+            vector_mode,
+            0x3f000000u /* lambda = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::softplus)
     {
