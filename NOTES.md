@@ -18,13 +18,15 @@ Run 1 (drv337, done 07:03 UTC): both arms FAILED on the script's own pytest --ti
   out_conv23_r1/ltx_av_fast_1920x1088_0.mp4 md5 1340be4d394e1a37575d6cc275a4a113.
 - No leftover processes after either job. blx01 /var/tmp/fasth3 footprint 137 G (no room for a DiT cache).
 
-Running (2026-10-10 07:07 UTC)
-- drv337b on blx01 (ttp detach --remote, pid 3141740): verified the user's copy /var/tmp/fasth3/ltx25_vae/... (size+sha OK,
-  07:07:42), then conv25 (LTX25_VIDEO_VAE = that copy) and conv23, -t 570, now with a warm JIT. Waits behind #333 job 386.
-  Marker drv337b.done. Probe: ttp detach --check --host blx01 /var/tmp/fasth3/t337/drv337b
-
-Left
-- Quote conv25 timing table verbatim (+ commit, command, job id), video + still, compare conv25 vs conv23 md5/decode time.
-- Verify blx03 copy /var/tmp/fasth3/ltx25_vae/ltx-2.5-video-vae-conv-bf16.safetensors once .part is gone (still .part at
-  06:39, 957 MB); never touch the .part.
-- Cleanup blx01: t337/b, t337/jit, fetch.sh, cmp.*, vae.log (keep model files). Report footprint.
+Run 2 (drv337b, done 07:51 UTC, blx01, 900 MHz clamp: relative only). Both PASSED, no drop, no leftover processes.
+- Commit 63e54d98036 (ttp/t48-ltx25-integrated), standard test unmodified (test_md5 d9a26aaf...), command:
+  pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+  with LTX_VERSION=2.5 LTX25_DIFFVAE=0 (8+3, 1088x1920, 145 f, 24 fps, seed default). Driver: notes/t337/run337.sh.
+- conv25 job 391 (LTX25_VIDEO_VAE = /var/tmp/fasth3/ltx25_vae/... 2.5 split file): replay Total 7.33 s, VAE decode 0.60 s.
+- conv23 job 394 (2.3 monolith): replay Total 7.31 s, VAE decode 0.58 s.
+- All four mp4s md5 1340be4d394e1a37575d6cc275a4a113 (bit-identical, as expected: the weights are byte-identical).
+- Kept video: blx01 /var/tmp/fasth3/t337/out_conv25/ltx_av_fast_1920x1088_1.mp4, still notes/t337/conv25_t3s.jpg (sane).
+- #333 job 388 (VAE 0.70 s) ran on a different commit; same-commit A/B above shows no decode-time difference.
+- Cleanup done 07:56 UTC: removed t337/b (worktree of t48, 2.9G), t337/jit (6.1G), extra outputs, fetch/cmp scratch.
+  t337 now 14M; blx01 /var/tmp/fasth3 133G; df / 52%. Model files kept.
+- blx03 copy: left alone per update #243 (separate task).
