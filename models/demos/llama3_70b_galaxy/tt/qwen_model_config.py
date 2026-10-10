@@ -228,9 +228,16 @@ class TtQwenModelArgs(TtModelArgs):
 
         self._configure_prefetcher_path()
 
-        # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
+        dram_grid_size = mesh_device.dram_grid_size()
+        assert dram_grid_size.y == 1, "Galaxy DRAM sharding assumes a one-dimensional DRAM grid"
+        self.dram_grid_size = dram_grid_size
+        self.num_dram_cores = dram_grid_size.x
+
+        # Set up prefetcher stuff (Blackhole: one reader per available bank; Wormhole: 12 x 2)
         if self.is_blackhole:
-            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(8, 3, False, is_blackhole=True)
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(
+                self.num_dram_cores, 3, False, is_blackhole=True
+            )
         else:
             _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
@@ -367,26 +374,16 @@ class TtQwenModelArgs(TtModelArgs):
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
 
-            # DRAM weight grid specs for dram sharding matmuls
-            if self.is_blackhole:
-                # BH path: keep DRAM sharding width <= 8 to avoid tensor-spec shard-grid asserts.
-                self.dram_weight_grid = ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0),
-                            ttnn.CoreCoord(7, 0),
-                        )
-                    }
-                )
-            else:
-                self.dram_weight_grid = ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0),
-                            ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
-                        )
-                    }
-                )
+            # DRAM weight grid specs for DRAM-sharded matmuls. Harvested Blackhole devices may expose
+            # seven banks, so this must follow the device rather than the unharvested eight-bank layout.
+            self.dram_weight_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(self.dram_grid_size.x - 1, self.dram_grid_size.y - 1),
+                    )
+                }
+            )
 
             # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
             self.compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
@@ -1181,8 +1178,8 @@ class TtQwenModelArgs(TtModelArgs):
             )
             # BH no-prefetch: L1 column-sharded act @ DRAM width-sharded wqkv (test_galaxy_nd pattern).
             qkv_k_per_device = self.dim // self.cluster_shape[1]
-            qkv_dram_cores = 8 if self.is_blackhole else 12
-            # SHARDED_ATTN_INPUT is 5 K-tiles wide per shard (1280 / 8 DRAM cols); dram_matmul_config
+            qkv_dram_cores = self.num_dram_cores
+            # SHARDED_ATTN_INPUT is 5 K-tiles wide per shard on an 8-bank device; dram_matmul_config
             # can pick in0_block_w=2 from find_grid_k_n and trip shard_width % in0_block_w.
             self.model_config[
                 "XQKV_DECODE_PER_DEVICE_PROGCFG"
@@ -1993,7 +1990,7 @@ class TtQwenModelArgs(TtModelArgs):
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 8 if self.is_blackhole else 12
+        dram_cores = self.num_dram_cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -2009,9 +2006,8 @@ class TtQwenModelArgs(TtModelArgs):
             """
             return b * math.ceil(a / b)
 
-        # Blackhole has a stricter effective width-shard core budget in this path.
-        # Keep local shard count <= 8 after mesh partitioning.
-        num_cores = 16 if self.is_blackhole else 24
+        # Each logical shard is split in two below, so this is twice the physical DRAM-bank count.
+        num_cores = 2 * self.num_dram_cores
         N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
         N_per_shard_in_dram = N_per_shard * 2
         in1_shard_shape = [k, N_per_shard_in_dram]

@@ -203,7 +203,7 @@ def _get_core_ranges_blackhole(num_reader_cores, num_global_cb_receivers):
     """
     Blackhole galaxy prefetcher core placement (first-pass functional bring-up).
 
-    Topology (measured): 12x10 tensix grid (x:0-11, y:0-9), 8 DRAM banks.
+    Topology (measured): 12x10 tensix grid (x:0-11, y:0-9), up to 8 DRAM banks.
     Layout:
       - DRAM readers: banks 0..num_reader_cores-1.
       - Senders: one tensix per reader in column 0 (rows 0..num_reader_cores-1);
@@ -215,12 +215,11 @@ def _get_core_ranges_blackhole(num_reader_cores, num_global_cb_receivers):
         receiver/ring cores.
     NoC1 congestion tuning of the ring order is deferred (Step 6).
     """
-    assert num_reader_cores <= 8, f"Blackhole galaxy has 8 DRAM banks, got num_reader_cores={num_reader_cores}"
+    assert num_reader_cores <= 8, f"Blackhole galaxy supports up to 8 DRAM banks, got {num_reader_cores}"
     grid_h = 10  # y rows
     max_recv_col = num_global_cb_receivers  # receivers occupy columns 1..num_global_cb_receivers
 
-    all_dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(8)]
-    dram_cores = all_dram_cores[:num_reader_cores]
+    dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(num_reader_cores)]
 
     # Senders in column 0: active first, then dummies filling the rest of the column.
     active_sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
@@ -612,9 +611,16 @@ class TtModelArgs:
             # assume Wormhole's 12 DRAM banks / wider tensix grid). Wormhole galaxy is unchanged.
             self.use_prefetcher = not self.is_blackhole
 
-        # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
+        dram_grid_size = mesh_device.dram_grid_size()
+        assert dram_grid_size.y == 1, "Galaxy DRAM sharding assumes a one-dimensional DRAM grid"
+        self.dram_grid_size = dram_grid_size
+        self.num_dram_cores = dram_grid_size.x
+
+        # Set up prefetcher stuff (Blackhole: one reader per available bank; Wormhole: 12 x 2)
         if self.is_blackhole:
-            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(8, 3, False, is_blackhole=True)
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(
+                self.num_dram_cores, 3, False, is_blackhole=True
+            )
         else:
             _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
@@ -733,7 +739,7 @@ class TtModelArgs:
                 {
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                        ttnn.CoreCoord(self.dram_grid_size.x - 1, self.dram_grid_size.y - 1),
                     )
                 }
             )
@@ -2534,9 +2540,7 @@ class TtModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        # Blackhole exposes 8 DRAM banks vs Wormhole's 12; the shard-width division must match the
-        # actual dram_weight_grid or the shard count exceeds the available banks (TT_FATAL).
-        dram_cores = 8 if self.is_blackhole else 12
+        dram_cores = self.num_dram_cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -2552,7 +2556,8 @@ class TtModelArgs:
             """
             return b * math.ceil(a / b)
 
-        num_cores = 16 if self.is_blackhole else 24
+        # Each logical shard is split in two below, so this is twice the physical DRAM-bank count.
+        num_cores = 2 * self.num_dram_cores
         N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
         N_per_shard_in_dram = N_per_shard * 2
         in1_shard_shape = [k, N_per_shard_in_dram]
