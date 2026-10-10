@@ -66,7 +66,10 @@ void TelemetryManager::read_telemetry() {
         double bw_GB_s = bytes_per_cycle * double(freq_ghz);
         double time_s = static_cast<double>(cycles) / (freq_mhz * 1e6);
         double pps = static_cast<double>(tel.num_packets_sent) / time_s;
-        log_info(
+        // Per-core detail; the run-level summary (min/avg/max BW) is logged at info in
+        // process_telemetry_for_golden() below, so this stays at debug to avoid one line per
+        // active ethernet core per telemetry read (thousands of lines on large mesh topologies).
+        log_debug(
             tt::LogTest,
             "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
             "packets_sent={:d}",
