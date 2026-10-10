@@ -119,7 +119,17 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK(
             (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
+#if defined(ARCH_BLACKHOLE)
+        // The math thread sets a transpose's rate, so its zero-flag clears skip the run-time face loop.
+        MATH((llk_math_eltwise_unary_datacopy<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn,
+              true>(idst, icb)));
+#else
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(idst, icb)));
+#endif
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));

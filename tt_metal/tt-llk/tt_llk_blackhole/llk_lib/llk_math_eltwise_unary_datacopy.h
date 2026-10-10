@@ -80,6 +80,7 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
+ * @tparam unroll_zero_flag_clears: Issue a four-face tile's unpack-to-dest zero-flag clears without the run-time face loop.
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
@@ -88,7 +89,13 @@ inline void eltwise_unary_bcast_col_32b_face_pair()
  *       function, and @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
  */
-template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <
+    DataCopyType type,
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool unpack_to_dest            = false,
+    bool unroll_zero_flag_clears   = false>
 inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
@@ -121,11 +128,22 @@ inline void _llk_math_eltwise_unary_datacopy_(
             dst_format_masked == (std::uint32_t)DataFormat::UInt32);
         const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
         const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
-#pragma GCC unroll 0
-        for (std::uint32_t i = 0; i < num_faces; i++)
+        if (unroll_zero_flag_clears && num_faces == 4)
         {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+            const std::uint32_t first_face = get_dest_index_in_faces(local_tile, 0);
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, first_face);
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, first_face + 1);
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, first_face + 2);
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, first_face + 3);
+        }
+        else
+        {
+#pragma GCC unroll 0
+            for (std::uint32_t i = 0; i < num_faces; i++)
+            {
+                // Clears zero flags in DEST for one face.
+                TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+            }
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
