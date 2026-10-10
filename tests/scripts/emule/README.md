@@ -37,7 +37,7 @@ If `TT_EMULE_PATH` is not set, the script clones `tenstorrent/tt-emule@main`
 into `$HOME/.cache/tt-metal-emule-smoke/tt-emule` (override with `TT_EMULE_CACHE`;
 refreshed on re-run). See the script header for all environment variables.
 
-**Prerequisites:** clang-20 + libstdc++ (gcc-13+), CMake ≥ 3.24, Ninja, ccache.
+**Prerequisites:** clang-20 + libstdc++ (gcc-13+), CMake ≥ 3.25, Ninja, ccache.
 The `ghcr.io/tenstorrent/tt-mlir/tt-mlir-ci-ubuntu-24-04` image has them all.
 
 ## What it runs
