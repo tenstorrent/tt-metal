@@ -40,6 +40,7 @@ void bind_conv3d(nb::module_& mod) {
 
         Keyword Args:
             bias_tensor (ttnn.Tensor, optional): Bias tensor.
+            residual_tensor (ttnn.Tensor, optional): Row-major bfloat16 tensor of the output's shape, added to the output in the conv epilogue.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output of the Conv3D operation.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the Conv3D operation.
 
@@ -70,7 +71,8 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("output_pad_h") = 0u,
         nb::arg("output_pad_w") = 0u,
         nb::arg("output_depth_to_space") = std::array<uint32_t, 3>{1, 1, 1},
-        nb::arg("output_trim_t_front") = 0u);
+        nb::arg("output_trim_t_front") = 0u,
+        nb::arg("residual_tensor") = nb::none());
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(

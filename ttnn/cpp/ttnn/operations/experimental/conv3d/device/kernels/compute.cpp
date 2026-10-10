@@ -226,6 +226,38 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
 }
 
+// Adds the residual to the untilized output. Both CBs hold the same row-major rows in tile-sized
+// pages, so an elementwise add over those pages is layout-agnostic.
+template <uint32_t num_tiles, uint32_t add_dst_tiles>
+void add_residual_rm(uint32_t in_cb, uint32_t residual_cb, uint32_t out_cb) {
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer residual_cb_obj(residual_cb);
+    CircularBuffer out_cb_obj(out_cb);
+
+    reconfig_data_format(in_cb, residual_cb);
+    pack_reconfig_data_format(out_cb);
+    add_init(in_cb, residual_cb);
+    for (uint32_t i = 0; i < num_tiles; i += add_dst_tiles) {
+        const uint32_t tiles_cur = std::min(add_dst_tiles, num_tiles - i);
+        in_cb_obj.wait_front(tiles_cur);
+        residual_cb_obj.wait_front(tiles_cur);
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
+            add_tiles(in_cb, residual_cb, tile, tile, tile);
+        }
+        tile_regs_commit();
+        out_cb_obj.reserve_back(tiles_cur);
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
+            pack_tile_with_wh_destination_wait(tile, out_cb, tile);
+        }
+        out_cb_obj.push_back(tiles_cur);
+        tile_regs_release();
+        in_cb_obj.pop_front(tiles_cur);
+        residual_cb_obj.pop_front(tiles_cur);
+    }
+}
+
 template <uint32_t rows, uint32_t cols, bool fp32_interm, uint32_t in_cb, uint32_t out_cb>
 void untilize_block() {
     constexpr auto untilize_reconfig_mode =
@@ -363,6 +395,12 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_acc_tiled = get_compile_time_arg_val(29);
     // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
     constexpr bool use_fp32_exact = get_compile_time_arg_val(30) == 1;
+    // Residual epilogue: untilize into cb_untilized_rm, then add the residual the writer staged in
+    // cb_residual_rm into cb_matmul_result_rm.
+    constexpr bool use_residual = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t cb_residual_rm = get_compile_time_arg_val(32);
+    constexpr uint32_t cb_untilized_rm = get_compile_time_arg_val(33);
+    constexpr uint32_t cb_untilize_out = use_residual ? cb_untilized_rm : cb_matmul_result_rm;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -498,12 +536,16 @@ void kernel_main() {
                                         compute_kernel_lib::untilize<
                                             matmul_N_t,
                                             cb_matmul_interm_tiled,
-                                            cb_matmul_result_rm,
+                                            cb_untilize_out,
                                             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
                                             untilize_reconfig_mode_sb,
                                             compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(
                                             subblock_h);
+                                        if constexpr (use_residual) {
+                                            add_residual_rm<subblock_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(
+                                                cb_untilized_rm, cb_residual_rm, cb_matmul_result_rm);
+                                        }
                                     }
                                 }
                             }
@@ -537,8 +579,12 @@ void kernel_main() {
                                         cb_matmul_interm_tiled,
                                         cb_reduction_tiled,
                                         cb_bias_tiled,
-                                        cb_matmul_result_rm,
+                                        cb_untilize_out,
                                         cb_reduction_acc_tiled>(num_workers);
+                                    if constexpr (use_residual) {
+                                        add_residual_rm<output_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(
+                                            cb_untilized_rm, cb_residual_rm, cb_matmul_result_rm);
+                                    }
                                 }
                             }  // end if constexpr (!enable_streaming_output)
                         }

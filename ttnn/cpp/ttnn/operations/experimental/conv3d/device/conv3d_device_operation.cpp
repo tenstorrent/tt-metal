@@ -311,6 +311,42 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             2 * sizeof(uint32_t),
             offset_tensor.buffer()->aligned_page_size());
     }
+
+    if (tensor_args.residual_tensor.has_value()) {
+        // The writer reads residual rows with the output's page index and channel offset, and compute
+        // adds them as bf16 pages after the untilize.
+        const auto& residual = tensor_args.residual_tensor.value();
+        TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Residual tensor must be on device");
+        TT_FATAL(residual.buffer() != nullptr, "Residual tensor must be allocated in a buffer on device");
+        TT_FATAL(residual.layout() == Layout::ROW_MAJOR, "Residual tensor must be row-major");
+        TT_FATAL(
+            residual.dtype() == DataType::BFLOAT16 && input_tensor_a.dtype() == DataType::BFLOAT16 &&
+                args.dtype == DataType::BFLOAT16,
+            "Residual epilogue needs bfloat16 input, residual and output; got input {}, residual {}, output {}",
+            input_tensor_a.dtype(),
+            residual.dtype(),
+            args.dtype);
+        TT_FATAL(
+            residual.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                residual.buffer()->is_dram(),
+            "Residual tensor must be DRAM interleaved");
+        TT_FATAL(
+            args.output_pad_h == 0 && args.output_pad_w == 0 && d2s_factor == 1 && args.output_trim_t_front == 0,
+            "Residual epilogue does not support output padding or depth-to-space");
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        TT_FATAL(
+            residual.padded_shape() == output_spec.padded_shape(),
+            "Residual shape {} must match the output shape {}",
+            residual.padded_shape(),
+            output_spec.padded_shape());
+        const uint32_t C_out_block = args.config.C_out_block > 0
+                                         ? args.config.C_out_block
+                                         : tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            (C_out_block * residual.element_size()) % tt::tt_metal::hal::get_dram_alignment() == 0,
+            "Residual epilogue needs C_out_block ({}) rows aligned to DRAM reads",
+            C_out_block);
+    }
 }
 
 tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
@@ -398,6 +434,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     if (tensor_args.halo_buffer.has_value()) {
         input_tensors.push_back(tensor_args.halo_buffer.value());
     }
+    if (tensor_args.residual_tensor.has_value()) {
+        input_tensors.push_back(tensor_args.residual_tensor.value());
+    }
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
 
@@ -430,7 +469,8 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     uint32_t output_pad_h,
     uint32_t output_pad_w,
     const std::array<uint32_t, 3>& output_depth_to_space,
-    uint32_t output_trim_t_front) {
+    uint32_t output_trim_t_front,
+    const std::optional<Tensor>& residual_tensor) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -471,7 +511,8 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .weight_tensor = weight_tensor,
         .bias_tensor = bias_tensor,
         .halo_buffer = halo_buffer,
-        .pad_offset_tensor = pad_offset_tensor};
+        .pad_offset_tensor = pad_offset_tensor,
+        .residual_tensor = residual_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -275,11 +275,13 @@ class LTXCausalConv3d(Module):
         logical_w: int = 0,
         output_depth_to_space: tuple[int, int, int] | None = None,
         output_trim_t_front: int = 0,
+        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
         # output_depth_to_space: conv3d writes each (p1, p2, p3) channel group to its depth-to-space
         # slot (per device), dropping the first output_trim_t_front frames.
+        # residual: added to the output in the conv3d epilogue (see can_fuse_residual).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         fold_time_pad = self.fold_time_pad and not causal
@@ -406,9 +408,23 @@ class LTXCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
             **halo_kwargs,
             **d2s_kwargs,
+            **({} if residual is None else dict(residual_tensor=residual)),
         )
 
         return x_BTHWC
+
+    def can_fuse_residual(self, residual: ttnn.Tensor) -> bool:
+        """conv3d's residual epilogue reads bf16 row-major DRAM rows laid out like its output."""
+        mem = residual.memory_config()
+        return (
+            self.dtype == ttnn.bfloat16
+            and self.out_channels == self.unpadded_out_channels
+            and self.out_channels % 32 == 0
+            and residual.dtype == ttnn.bfloat16
+            and residual.layout == ttnn.ROW_MAJOR_LAYOUT
+            and mem.buffer_type == ttnn.BufferType.DRAM
+            and mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        )
 
     def can_fold_depth_to_space(self, stride: tuple[int, int, int]) -> bool:
         """conv3d's depth-to-space output needs tile-aligned groups that nest with C_out_block."""
@@ -487,6 +503,10 @@ class LTXResnetBlock3D(Module):
             out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
+        # On by default (LTX_VAE_FUSE_RESIDUAL=0 turns it off): conv2 adds the skip in its epilogue
+        # instead of a separate add over the whole activation.
+        self.fuse_residual = os.environ.get("LTX_VAE_FUSE_RESIDUAL", "1") != "0"
+
         self.has_shortcut = in_channels != out_channels
         if self.has_shortcut:
             # 1x1x1 channel-projection conv
@@ -532,7 +552,6 @@ class LTXResnetBlock3D(Module):
 
         h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Skip connection
         if self.has_shortcut:
@@ -544,6 +563,10 @@ class LTXResnetBlock3D(Module):
             )
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        self.fused = self.fuse_residual and self.conv2.can_fuse_residual(residual)
+        if self.fused:
+            return self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w, residual=residual)
+        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
         return ttnn.add(residual, h)
 
 

@@ -58,6 +58,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     uint32_t output_pad_h = 0,
     uint32_t output_pad_w = 0,
     const std::array<uint32_t, 3>& output_depth_to_space = std::array<uint32_t, 3>{1, 1, 1},
-    uint32_t output_trim_t_front = 0);
+    uint32_t output_trim_t_front = 0,
+    const std::optional<Tensor>& residual_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
