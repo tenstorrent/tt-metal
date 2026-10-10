@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 import torch
 
+from models.common.sampling.sampling_params import SamplingParams
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 
 
@@ -180,6 +181,18 @@ def _table(keys, width=4):
     return _tensor(rows)
 
 
+def _sampling(rows, **values):
+    """Device-sampling parameters with one entry per row; greedy unless ``values`` say otherwise.
+
+    A value given as a list is used as it is; any other value is repeated for every row.
+    """
+    fields = dict(
+        temperature=0.0, top_k=1, top_p=1.0, presence_penalty=0.0, frequency_penalty=0.0, repetition_penalty=1.0
+    )
+    fields.update(values)
+    return SamplingParams(**{name: v if isinstance(v, list) else [v] * int(rows) for name, v in fields.items()})
+
+
 def _prefill(model, prompt_len=2, slot=0, key=10, start=0, rows=1):
     """One prefill call as the runner makes it for ``rows`` prompts."""
     tokens = torch.full((rows, prompt_len), 7, dtype=torch.int32)
@@ -201,7 +214,7 @@ def _ordinary(model, anchors, positions, keys, result=None, sampling=True, **kwa
     if result is not None:
         model.results.append(result)
     if sampling:
-        kwargs.setdefault("sampling_params", object())
+        kwargs.setdefault("sampling_params", _sampling(len(anchors)))
     return model.decode_forward(
         tokens=_tensor(anchors).reshape(-1, 1),
         start_pos=_tensor(positions),
@@ -223,7 +236,7 @@ def _verify(model, blocks, positions, valid, keys, result=None, sampling=True, *
     if result is not None:
         model.results.append(result)
     if sampling:
-        kwargs.setdefault("sampling_params", object())
+        kwargs.setdefault("sampling_params", _sampling(len(blocks)))
     return model.decode_forward(
         tokens=_tensor(blocks),
         start_pos=_tensor(positions),
