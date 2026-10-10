@@ -14,6 +14,10 @@
 #include "ckernel_sfpu_situ_glu.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+#include "ckernel_sfpu_situ_glu.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
 
 namespace ckernel {
 
@@ -46,6 +50,21 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_BLACKHOLE
+    if (vector_mode == VectorMode::RC) {
+        // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_situ_glu,
+            (DST_ACCUM_MODE, 32 /*ITERATIONS*/, sfpu::SituGluConfigKimi),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+        return;
+    }
+#endif
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -61,6 +80,43 @@ ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMod
  * Please refer to documentation for any_init.
  */
 ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init))); }
+
+#ifdef ARCH_BLACKHOLE
+/**
+ * Pack-thread variant of situ_glu_tile, to overlap math-thread FPU work. Call it in place of tile_regs_wait(), after
+ * TTI_SEMWAIT(STALL_TDMA | STALL_CFG | STALL_SFPU, t6_sem(MATH_PACK), STALL_ON_ZERO), and wait with
+ * TTI_STALLWAIT(STALL_PACK, WAIT_SFPU) before pack_tile. Initialize with situ_glu_tile_init_pack(); from that init
+ * to the last call the math thread must not use the SFPU, whose configuration the init programs.
+ */
+ALWI void situ_glu_tile_pack(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    if (vector_mode == VectorMode::RC) {
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_situ_glu,
+            (DST_ACCUM_MODE, 32 /*ITERATIONS*/, sfpu::SituGluConfigKimi),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+        return;
+    }
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_situ_glu,
+        (DST_ACCUM_MODE, 8 /*ITERATIONS*/, sfpu::SituGluConfigKimi),
+        idst0,
+        idst1,
+        odst,
+        vector_mode)));
+}
+
+/**
+ * Pack-thread variant of situ_glu_tile_init.
+ */
+ALWI void situ_glu_tile_init_pack() { PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init))); }
+#endif
 
 }  // namespace ckernel
 
