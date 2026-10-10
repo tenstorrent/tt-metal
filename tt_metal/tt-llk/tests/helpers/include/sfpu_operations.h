@@ -1821,7 +1821,11 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
     {
+#if defined(ARCH_BLACKHOLE)
+        SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_binary_init, (APPROXIMATION_MODE));
+#else
         SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_init, (APPROXIMATION_MODE));
+#endif
     }
     else if constexpr (BINOP == BinaryOp::FMOD_INT32)
     {
@@ -1897,15 +1901,18 @@ void call_binary_sfpu_operation(
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests take 8 or 32 iterations; 32 asks for a full tile.");
 #if defined(ARCH_BLACKHOLE)
     constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+    // The int32 floor and trunc divisions stay per face: with the LLK asserts on, their 32-row form runs out of LREGs here.
     constexpr bool one_call =
         ITERATIONS == 32 &&
-        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
-         ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::ADD ||
+         BINOP == BinaryOp::SUB || (BINOP == BinaryOp::MUL && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
          BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE || BINOP == BinaryOp::MAX ||
          BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER || BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE ||
          BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 || BINOP == BinaryOp::BITWISE_AND || BINOP == BinaryOp::BITWISE_OR ||
          BINOP == BinaryOp::BITWISE_XOR || BINOP == BinaryOp::LSHFT || BINOP == BinaryOp::RSHFT || BINOP == BinaryOp::LOGICAL_RSHFT ||
-         BINOP == BinaryOp::GCD || BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT);
+         BINOP == BinaryOp::GCD || BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT || BINOP == BinaryOp::MAX_INT32 ||
+         BINOP == BinaryOp::MIN_INT32 || BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32 || BINOP == BinaryOp::REMAINDER_INT32 ||
+         BINOP == BinaryOp::REMAINDER_UINT32 || BINOP == BinaryOp::FMOD_INT32 || BINOP == BinaryOp::RSUB_INT32 || BINOP == BinaryOp::MUL_INT32);
     constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
     if constexpr (one_call)
     {
@@ -1989,13 +1996,19 @@ void call_binary_sfpu_operation(
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // Two's complement in DEST, as add_int_tile and sub_int_tile pass.
+        constexpr bool int32_sign_magnitude = false;
+#else
+        constexpr bool int32_sign_magnitude = true;
+#endif
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _add_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -2010,7 +2023,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _sub_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
