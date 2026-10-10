@@ -12,14 +12,12 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 
 namespace ttnn::operations::ccl {
-
-// Import the program artifacts type from the experimental namespace
-using ReduceScatterProgramArtifacts = ttnn::experimental::prim::ReduceScatterProgramArtifacts;
 
 struct ReduceScatterDeviceOperation {
     struct operation_attributes_t {
@@ -46,33 +44,12 @@ struct ReduceScatterDeviceOperation {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct ReduceScatterProgram {
-        struct shared_variables_t {
-            std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
-            tt::tt_metal::GlobalSemaphore barrier_semaphore;
-            ttnn::experimental::prim::ReduceScatterProgramArtifacts program_artifacts;
-        };
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
+        // Workload-scoped semaphores; one ProgramDescriptor per coord; tensor addresses are Buffer* bindings.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-            const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<ReduceScatterProgram>;

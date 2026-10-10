@@ -4,6 +4,9 @@
 ///
 #include <algorithm>
 #include <array>
+#include <bitset>
+#include <type_traits>
+#include <variant>
 
 #include <tt-metalium/allocator.hpp>
 
@@ -27,6 +30,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -346,8 +351,199 @@ using namespace ccl;
 using ttnn::experimental::ccl::append_fabric_mux_connection_ct_args;
 using ttnn::experimental::ccl::append_fabric_mux_connection_rt_args;
 
-ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
-    tt::tt_metal::Program& program,
+namespace {
+
+template <typename ProgramOrDesc>
+inline constexpr bool is_legacy_program_v = std::is_same_v<std::decay_t<ProgramOrDesc>, tt::tt_metal::Program>;
+
+tt::tt_metal::CoreRangeSet as_core_range_set(const tt::tt_metal::CoreRangeSet& cores) { return cores; }
+
+template <typename ProgramOrDesc>
+void add_cb(
+    ProgramOrDesc& target, const tt::tt_metal::CoreRangeSet& cores, const tt::tt_metal::CircularBufferConfig& config) {
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        tt::tt_metal::CreateCircularBuffer(target, cores, config);
+    } else {
+        tt::tt_metal::CBDescriptor::FormatDescriptors format_descriptors;
+        const auto& data_formats = config.data_formats();
+        const auto& page_sizes = config.page_sizes();
+        for (uint8_t buffer_index : config.local_buffer_indices()) {
+            format_descriptors.push_back(tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = buffer_index,
+                .data_format = data_formats.at(buffer_index).value(),
+                .page_size = page_sizes.at(buffer_index).value(),
+            });
+        }
+        target.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = config.total_size(),
+            .core_ranges = cores,
+            .format_descriptors = std::move(format_descriptors),
+        });
+    }
+}
+
+template <typename ProgramOrDesc>
+uint32_t add_semaphore(
+    ProgramOrDesc& target,
+    const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_spec,
+    uint32_t initial_value) {
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        return tt::tt_metal::CreateSemaphore(target, core_spec, initial_value);
+    } else {
+        const tt::tt_metal::CoreRangeSet cores = std::visit(
+            ttsl::overloaded{
+                [](const tt::tt_metal::CoreRange& core_range) { return tt::tt_metal::CoreRangeSet(core_range); },
+                [](const tt::tt_metal::CoreRangeSet& core_range_set) { return core_range_set.merge_ranges(); },
+            },
+            core_spec);
+        TT_FATAL(!cores.ranges().empty(), "Expecting a non-empty CoreRangeSet");
+        // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp).
+        constexpr uint32_t kSemaphoresPerCore = 16;
+        std::bitset<kSemaphoresPerCore> used_semaphore_ids;
+        for (const auto& core_range : cores.ranges()) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
+                    const tt::tt_metal::CoreCoord core(x, y);
+                    for (const auto& semaphore : target.semaphores) {
+                        if (semaphore.core_type == tt::CoreType::WORKER && semaphore.core_ranges.contains(core)) {
+                            used_semaphore_ids.set(semaphore.id);
+                        }
+                    }
+                }
+            }
+        }
+        std::optional<uint32_t> semaphore_id;
+        for (uint32_t candidate = 0; candidate < kSemaphoresPerCore; ++candidate) {
+            if (!used_semaphore_ids.test(candidate)) {
+                semaphore_id = candidate;
+                break;
+            }
+        }
+        TT_FATAL(semaphore_id.has_value(), "No available semaphore ID");
+        target.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = semaphore_id.value(),
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = cores,
+            .initial_value = initial_value,
+        });
+        return semaphore_id.value();
+    }
+}
+
+template <typename ProgramOrDesc, typename CoreSpec, typename Config>
+tt::tt_metal::KernelHandle add_kernel(
+    ProgramOrDesc& target, const std::string& kernel_path, const CoreSpec& cores, const Config& config) {
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        return tt::tt_metal::CreateKernel(target, kernel_path, cores, config);
+    } else {
+        tt::tt_metal::KernelDescriptor kernel;
+        kernel.kernel_source = kernel_path;
+        kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        kernel.core_ranges = as_core_range_set(cores);
+        kernel.compile_time_args = config.compile_args;
+        kernel.defines.reserve(config.defines.size());
+        for (const auto& [name, value] : config.defines) {
+            kernel.defines.emplace_back(name, value);
+        }
+        kernel.named_compile_time_args.reserve(config.named_compile_args.size());
+        for (const auto& [name, value] : config.named_compile_args) {
+            kernel.named_compile_time_args.emplace_back(name, value);
+        }
+        kernel.compiler_include_paths = config.compiler_include_paths;
+        if constexpr (std::is_same_v<std::decay_t<Config>, tt::tt_metal::ComputeConfig>) {
+            kernel.opt_level = config.opt_level;
+            kernel.config = tt::tt_metal::ComputeConfigDescriptor{
+                .math_fidelity = config.math_fidelity,
+                .fp32_dest_acc_en = config.fp32_dest_acc_en,
+                .dst_full_sync_en = config.dst_full_sync_en,
+                .unpack_to_dest_mode = config.unpack_to_dest_mode,
+                .bfp8_pack_precise = config.bfp8_pack_precise,
+                .math_approx_mode = config.math_approx_mode,
+                .enable_trisc2_rvv = config.enable_trisc2_rvv,
+            };
+        } else if constexpr (std::is_base_of_v<tt::tt_metal::DataMovementConfig, std::decay_t<Config>>) {
+            kernel.opt_level = config.opt_level;
+            if constexpr (std::is_same_v<std::decay_t<Config>, tt::tt_metal::ReaderDataMovementConfig>) {
+                kernel.config = tt::tt_metal::ReaderConfigDescriptor{};
+            } else if constexpr (std::is_same_v<std::decay_t<Config>, tt::tt_metal::WriterDataMovementConfig>) {
+                kernel.config = tt::tt_metal::WriterConfigDescriptor{};
+            } else {
+                kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
+                    .processor = config.processor,
+                    .noc = config.noc,
+                    .noc_mode = config.noc_mode,
+                };
+            }
+        }
+        const tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(target.kernels.size());
+        target.kernels.push_back(std::move(kernel));
+        return kernel_id;
+    }
+}
+
+template <typename ProgramOrDesc>
+void set_runtime_args(
+    ProgramOrDesc& target,
+    tt::tt_metal::KernelHandle kernel_id,
+    std::initializer_list<tt::tt_metal::CoreCoord> cores,
+    const std::vector<uint32_t>& runtime_args) {
+    TT_FATAL(cores.size() == 1, "reduce_scatter runtime args are set on one core at a time");
+    const tt::tt_metal::CoreCoord core = *cores.begin();
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        tt::tt_metal::SetRuntimeArgs(target, kernel_id, {core}, runtime_args);
+    } else {
+        tt::tt_metal::KernelDescriptor::RTArgList args;
+        args.append(runtime_args);
+        target.kernels[kernel_id].emplace_runtime_args(core, args);
+    }
+}
+
+void append_reduce_scatter_common_args(
+    tt::tt_metal::KernelDescriptor::RTArgList& common_args,
+    bool is_ring,
+    const std::optional<GlobalSemaphore>& barrier,
+    const std::vector<GlobalSemaphore>& semaphores,
+    const Tensor& input,
+    const Tensor& intermediate,
+    const Tensor& output,
+    const std::optional<Tensor>& penult) {
+    TT_FATAL(input.buffer() != nullptr, "reduce_scatter input buffer is null");
+    TT_FATAL(intermediate.buffer() != nullptr, "reduce_scatter intermediate buffer is null");
+    TT_FATAL(output.buffer() != nullptr, "reduce_scatter output buffer is null");
+    common_args.push_back(input.buffer());
+    common_args.push_back(intermediate.buffer());
+    common_args.push_back(output.buffer());
+    if (penult.has_value()) {
+        common_args.push_back(penult->buffer());
+    } else {
+        common_args.push_back(0u);
+    }
+    if (barrier.has_value()) {
+        common_args.push_back(
+            barrier->address());  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+    } else {
+        common_args.push_back(0u);
+    }
+    common_args.push_back(
+        semaphores.at(0).address());  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+    if (is_ring) {
+        common_args.push_back(
+            semaphores.at(1)
+                .address());  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+        common_args.push_back(
+            semaphores.at(2)
+                .address());  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+    } else {
+        common_args.push_back(0u);
+        common_args.push_back(0u);
+    }
+}
+
+}  // namespace
+
+template <typename ProgramOrDesc>
+auto build_ring_reduce_scatter_program_impl(
+    ProgramOrDesc& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const std::optional<Tensor>& penult_intermediate_tensor,
@@ -573,21 +769,21 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     // input_tensor from reader -> compute
     uint32_t input_cb_index = tt::CB::c_in0;
-    CreateCircularBuffer(
+    add_cb(
         program,
         sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes));
     // interm_tensor from reader -> compute
     uint32_t intermediate_cb_index = tt::CB::c_in1;
-    CreateCircularBuffer(
+    add_cb(
         program,
         sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes));
     // output_tensor from reader -> compute
     uint32_t intermediate_2_cb_index = tt::CB::c_in2;
-    CreateCircularBuffer(
+    add_cb(
         program,
         sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(
@@ -595,14 +791,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             .set_page_size(intermediate_2_cb_index, l1_scratch_cb_page_size_bytes));
     // input_tensor from reader -> writer
     uint32_t reader_output_cb_index = tt::CB::c_in3;
-    CreateCircularBuffer(
+    add_cb(
         program,
         sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes));
     // reduced tensor from compute -> writer
     uint32_t compute_output_cb_index = tt::CB::c_in4;
-    CreateCircularBuffer(
+    add_cb(
         program,
         sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(
@@ -616,7 +812,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     // KERNEL CREATION
     if (fuse_op) {
-        fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+            fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        } else {
+            TT_FATAL(false, "fused reduce-scatter is not supported on the descriptor factory");
+        }
     }
 
     // Kernel Runtime Args
@@ -692,7 +892,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                                          : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
                                            "device/kernels/ring_reduce_scatter_minimal_async_reader.cpp";
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
+    auto reader_kernel_id = add_kernel(
         program,
         reader_kernel_path,
         sender_worker_core_range_set,
@@ -757,7 +957,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                                          : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
                                            "device/kernels/ring_reduce_scatter_minimal_async_writer.cpp";
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+    auto writer_kernel_id = add_kernel(
         program,
         writer_kernel_path,
         sender_worker_core_range_set,
@@ -787,7 +987,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                                             "device/kernels/ring_reduction.cpp";
 
     auto compute_kernel_id =
-        tt::tt_metal::CreateKernel(program, compute_kernel_path, sender_worker_core_range_set, compute_kernel_config_);
+        add_kernel(program, compute_kernel_path, sender_worker_core_range_set, compute_kernel_config_);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();
@@ -889,7 +1089,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
 
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
+                set_runtime_args(program, reader_kernel_id, {core}, reader_rt_args);
 
                 // Writer RT args
                 std::vector<uint32_t> writer_rt_args;
@@ -927,8 +1127,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     // direction's mux. Two per-worker semaphores (flow control + teardown) back the
                     // connection; append_client_connection_rt_args serializes exactly the client args
                     // the device-side FabricMuxV2Sender::build_from_args expects.
-                    const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
-                    const auto teardown_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                    const auto flow_control_sem_id = add_semaphore(program, core, 0);
+                    const auto teardown_sem_id = add_semaphore(program, core, 0);
                     mux_config.append_client_connection_rt_args(
                         mux_virtual_core,
                         static_cast<uint8_t>(worker),
@@ -959,7 +1159,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         }
                     }
                 }
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
+                set_runtime_args(program, writer_kernel_id, {core}, writer_rt_args);
 
                 // Shared by both compute kernels. dim_zero_ring_reduction.cpp has no unit loop and
                 // stops reading after dir, leaving the two trailing values unread; the split helper
@@ -970,27 +1170,145 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     dir,                  // dir
                     unit_start,           // unit_start
                     unit_end};            // unit_end
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, {core}, compute_rt_args);
+                set_runtime_args(program, compute_kernel_id, {core}, compute_rt_args);
             }
         }
     }
 
     // Common bindings: input, intermediate, output, penult, barrier, sem0, sem1, ack.
-    const auto common_args = ReduceScatterProgramArtifacts::collect_runtime_args(
-        true,
-        barrier_semaphore,
-        semaphore,
-        input_tensor,
-        intermediate_tensor,
-        output_tensor,
-        penult_intermediate_tensor);
-    SetCommonRuntimeArgs(program, reader_kernel_id, common_args);
-    SetCommonRuntimeArgs(program, writer_kernel_id, common_args);
-    return {GetCommonRuntimeArgs(program, reader_kernel_id), GetCommonRuntimeArgs(program, writer_kernel_id)};
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        const auto common_args = ReduceScatterProgramArtifacts::collect_runtime_args(
+            true,
+            barrier_semaphore,
+            semaphore,
+            input_tensor,
+            intermediate_tensor,
+            output_tensor,
+            penult_intermediate_tensor);
+        tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, common_args);
+        return ReduceScatterProgramArtifacts{
+            GetCommonRuntimeArgs(program, reader_kernel_id), GetCommonRuntimeArgs(program, writer_kernel_id)};
+    } else {
+        tt::tt_metal::KernelDescriptor::RTArgList common_args;
+        append_reduce_scatter_common_args(
+            common_args,
+            true,
+            barrier_semaphore,
+            semaphore,
+            input_tensor,
+            intermediate_tensor,
+            output_tensor,
+            penult_intermediate_tensor);
+        program.kernels[reader_kernel_id].emplace_common_runtime_args(common_args);
+        program.kernels[writer_kernel_id].emplace_common_runtime_args(common_args);
+        return;
+    }
 }
 
-ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
+ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    return build_ring_reduce_scatter_program_impl(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
+}
+
+void build_ring_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    build_ring_reduce_scatter_program_impl(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
+}
+
+template <typename ProgramOrDesc>
+auto build_line_reduce_scatter_program_impl(
+    ProgramOrDesc& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     // Unused (Line never takes the Ring-only contiguous penult intermediate path); present only for call-signature
@@ -1162,23 +1480,23 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
+    add_cb(program, sender_worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
+    add_cb(program, sender_worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
+    add_cb(program, sender_worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
+    add_cb(program, sender_worker_core_range_set, cb_compute_output_config);
 
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -1248,12 +1566,16 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     }
     // KERNEL CREATION
     if (fuse_op) {
-        fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+            fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        } else {
+            TT_FATAL(false, "fused reduce-scatter is not supported on the descriptor factory");
+        }
     }
 
     // Common Kernel Runtime Args
     const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
-    uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
+    uint32_t fwd_bwd_semaphore_address = add_semaphore(program, sender_worker_core_range_set, 0);
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
@@ -1272,7 +1594,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         mux_base_l1_address);
 
     // mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+    auto mux_kernel_id = add_kernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
         mux_core_range_set,
@@ -1330,7 +1652,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
                               "device/kernels/line_reduce_scatter_minimal_async_reader.cpp";
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
+    auto reader_kernel_id = add_kernel(
         program,
         sender_reader_kernel_path,
         sender_worker_core_range_set,
@@ -1396,7 +1718,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
                               "device/kernels/line_reduce_scatter_minimal_async_writer.cpp";
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+    auto writer_kernel_id = add_kernel(
         program,
         sender_writer_kernel_path,
         sender_worker_core_range_set,
@@ -1422,8 +1744,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                             : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
                               "device/kernels/line_reduction.cpp";
 
-    auto reduce_kernel_id = tt::tt_metal::CreateKernel(
-        program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
+    auto reduce_kernel_id =
+        add_kernel(program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();
@@ -1446,7 +1768,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+                set_runtime_args(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
 
             auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
@@ -1526,7 +1848,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
+                set_runtime_args(program, reader_kernel_id, {core}, reader_rt_args);
 
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
@@ -1548,42 +1870,185 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     start_tiles_read,                                            // start_tiles_read
                     start_tiles_to_read,                                         // start_tiles_to_read
                 };
-                append_fabric_mux_connection_rt_args(
-                    mux_connection_valid(dir),
-                    mux_virtual_core,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                    mux_kernel_config,
-                    core,
-                    worker,
-                    worker == 0,
-                    termination_master_virtual_core,
-                    program,
-                    writer_rt_args);
-                if (intermediate_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
+                if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+                    append_fabric_mux_connection_rt_args(
+                        mux_connection_valid(dir),
+                        mux_virtual_core,
+                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                        mux_kernel_config,
+                        core,
+                        worker,
+                        worker == 0,
+                        termination_master_virtual_core,
+                        program,
+                        writer_rt_args);
+                    if (intermediate_is_sharded) {
+                        shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
+                    }
+                    if (output_is_sharded) {
+                        shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
+                    }
+                    set_runtime_args(program, writer_kernel_id, {core}, writer_rt_args);
+                } else {
+                    tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+                    writer_args.append(writer_rt_args);
+                    append_fabric_mux_connection_rt_args(
+                        mux_connection_valid(dir),
+                        mux_virtual_core,
+                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                        mux_kernel_config,
+                        core,
+                        worker,
+                        worker == 0,
+                        termination_master_virtual_core,
+                        program,
+                        writer_args);
+                    if (intermediate_is_sharded || output_is_sharded) {
+                        std::vector<uint32_t> sharding_rt_args;
+                        if (intermediate_is_sharded) {
+                            shard_builder::extend_sharding_run_time_args(intermediate_tensor, sharding_rt_args);
+                        }
+                        if (output_is_sharded) {
+                            shard_builder::extend_sharding_run_time_args(output_tensor, sharding_rt_args);
+                        }
+                        writer_args.append(sharding_rt_args);
+                    }
+                    program.kernels[writer_kernel_id].emplace_runtime_args(core, writer_args);
                 }
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
-                }
-
-                tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
                 std::vector<uint32_t> reduce_rt_args = {
                     num_total_reduction_steps,
                     start_tiles_read,
                     start_tiles_to_read,
                 };
-                tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
+                set_runtime_args(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
     }
 
     // Common bindings: input, intermediate, output, penult, barrier, sem0, sem1, ack.
-    const auto common_args = ReduceScatterProgramArtifacts::collect_runtime_args(
-        false, barrier_semaphore, semaphore, input_tensor, intermediate_tensor, output_tensor);
-    SetCommonRuntimeArgs(program, reader_kernel_id, common_args);
-    SetCommonRuntimeArgs(program, writer_kernel_id, common_args);
-    return {GetCommonRuntimeArgs(program, reader_kernel_id), GetCommonRuntimeArgs(program, writer_kernel_id)};
+    if constexpr (is_legacy_program_v<ProgramOrDesc>) {
+        const auto common_args = ReduceScatterProgramArtifacts::collect_runtime_args(
+            false, barrier_semaphore, semaphore, input_tensor, intermediate_tensor, output_tensor);
+        tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, common_args);
+        return ReduceScatterProgramArtifacts{
+            GetCommonRuntimeArgs(program, reader_kernel_id), GetCommonRuntimeArgs(program, writer_kernel_id)};
+    } else {
+        tt::tt_metal::KernelDescriptor::RTArgList common_args;
+        append_reduce_scatter_common_args(
+            common_args,
+            false,
+            barrier_semaphore,
+            semaphore,
+            input_tensor,
+            intermediate_tensor,
+            output_tensor,
+            std::nullopt);
+        program.kernels[reader_kernel_id].emplace_common_runtime_args(common_args);
+        program.kernels[writer_kernel_id].emplace_common_runtime_args(common_args);
+        return;
+    }
+}
+
+ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    return build_line_reduce_scatter_program_impl(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
+}
+
+void build_line_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    build_line_reduce_scatter_program_impl(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn
@@ -1687,6 +2152,106 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     CoreCoord core_grid_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     return ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
+}
+
+void build_ring_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        penult_intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        compute_kernel_config);
+}
+
+void build_line_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
         intermediate_tensor,
