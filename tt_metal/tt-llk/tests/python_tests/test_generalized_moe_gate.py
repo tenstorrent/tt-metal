@@ -1117,11 +1117,12 @@ def test_generalized_moe_gate_step1_hi(knobs):
     ), "step1_hi touched the scratch region"
 
 
-# step1 and step1_hi<d2b_dst=0, b2d_base=0> program byte-identical MOPs today: the same two
+# On Wormhole step1 and step1_hi<d2b_dst=0, b2d_base=0> program byte-identical MOPs: the same two
 # MOV_4_ROWS from DEST row 0, the same TRNSPSRCB, the same eight MOV_1_ROW back to rows 0-7, both at
 # num_tiles=3. The grouped path calls step1 and the ungrouped path calls step1_hi, so nothing else
 # would notice if one were edited and the other left behind. That equivalence is the claim here, and
-# it is also what lets the step1_hi test above stand as step1's layout cover.
+# it is also what lets the step1_hi test above stand as step1's layout cover. On Blackhole step1 runs
+# step1_hi<0, 0> itself, so there the check holds by construction.
 def test_generalized_moe_gate_step1_matches_step1_hi():
     tags, tiles = _tag_tiles()
 
