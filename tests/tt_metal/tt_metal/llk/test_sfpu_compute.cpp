@@ -1238,8 +1238,20 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         // Both branches (x < 0, x >= 0) and the x >= 8 saturation.
         return uniform(-10.0f, 10.0f);
     }
-    if (op_name == "rpow" || op_name == "exp2" || op_name == "hardsigmoid" || op_name == "softsign" ||
-        op_name == "tanh_derivative" || op_name == "i0" || op_name == "i1") {
+    if (op_name == "softsign") {
+        // [-4, 4] as before, with every fourth value replaced by a magnitude up to the bfloat16 maximum, where
+        // 1 / (1 + |x|) underflows and softsign must still return +-1.
+        auto packed = uniform(-4.0f, 4.0f);
+        auto values = unpack_vector<bfloat16, uint32_t>(packed);
+        constexpr float big[] = {1.0e8f, 1.0e30f, 1.0e38f, 3.0e38f};
+        for (size_t i = 3; i < values.size(); i += 4) {
+            const float f = static_cast<float>(values[i]);
+            values[i] = bfloat16(std::copysign(big[(i / 4) % 4], f));
+        }
+        return pack_vector<uint32_t, bfloat16>(values);
+    }
+    if (op_name == "rpow" || op_name == "exp2" || op_name == "hardsigmoid" || op_name == "tanh_derivative" ||
+        op_name == "i0" || op_name == "i1") {
         return uniform(-4.0f, 4.0f);
     }
     if (op_name == "power_iterative" || op_name == "expm1") {
