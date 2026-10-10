@@ -355,22 +355,36 @@ inline void _llk_pack_fast_untilize_emit_phase_(
     }
 }
 
-// One call processes one 2/3/4-tile chunk inside a wider row.
-// Output address points at this chunk's row-0 column in the row-major tensor.
+/**
+ * @brief Pack one 2/3/4-tile chunk of a wider row-major output row.
+ *
+ * @tparam block_ct_dim: Largest chunk width in tiles (2, 3 or 4).
+ * @tparam full_ct_dim: Width of the whole output row in tiles; must exceed block_ct_dim.
+ * @param address: L1 address, in 16B units, of this chunk's row-0 column in the row-major output.
+ * @param unit_dim: Width of this chunk in tiles, in [2, block_ct_dim].
+ * @param prev_unit_dim: In/out. Chunk width the strided MOP was last built for; the MOP is rebuilt and this updated
+ *        when unit_dim differs. Pass 0 on the first call after init, which does not build the strided MOP.
+ * @param output_row_stride_16B: Distance between output rows in 16B units. Must equal the row pitch
+ *        @ref _llk_pack_fast_untilize_init_ programmed, SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM) / 16,
+ *        and stay fixed across calls sharing prev_unit_dim: rows inside a run advance by the programmed pitch,
+ *        while this value decides whether one base can carry all 32 rows and spaces the run bases.
+ * @note Call @ref _llk_pack_fast_untilize_init_ with the same block_ct_dim / full_ct_dim first, and
+ *       @ref _llk_pack_fast_untilize_uninit_ after the last call.
+ */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_block_strided_(
-    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B = 0)
+    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
 {
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize strided path supports block_ct_dim 2, 3, or 4");
     static_assert(full_ct_dim > block_ct_dim, "Use the contiguous fast_untilize block when the chunk is the full row");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(output_row_stride_16B != 0, "fast_untilize strided pack needs the output row stride");
 
     constexpr std::uint32_t MAX_CARRIED_OUTPUT_Y_ROW = 2 * FAST_UNTILIZE_PHASE_ROWS - 1;
 
     // Fast path: the packer can carry y_dst across all 32 rows of the chunk from
-    // a single base without leaving the window. output_row_stride_16B == 0 means
-    // a legacy caller that did not supply the stride; keep the old carry behavior.
-    const bool carry_full_chunk = output_row_stride_16B == 0 || MAX_CARRIED_OUTPUT_Y_ROW * output_row_stride_16B < PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B;
+    // a single base without leaving the window.
+    const bool carry_full_chunk = MAX_CARRIED_OUTPUT_Y_ROW * output_row_stride_16B < PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B;
 
     // Otherwise rebase every rows_per_run rows. rows_per_run is the largest
     // power-of-two divisor of FAST_UNTILIZE_PHASE_ROWS whose top row stays inside

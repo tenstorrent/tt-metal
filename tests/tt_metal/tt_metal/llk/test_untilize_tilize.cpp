@@ -87,6 +87,8 @@ struct TestConfig {
     // UntilizeType::PACK only: use fast_untilize_* (api/compute/experimental/fast_untilize.h) instead of
     // plain pack_untilize_*.
     bool fast_untilize = false;
+    // fast_untilize only: issue the strided pack through llk_pack_fast_untilize_block_strided_at_address.
+    bool fast_untilize_at_address = false;
     // Exercise explicit geometry while the output metadata describes a full tile.
     bool explicit_untilize_geometry = false;
     bool explicit_untilize_narrow_row = false;
@@ -371,6 +373,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     }
     if (test_config.fast_untilize) {
         compute_defines.emplace("FAST_UNTILIZE", "1");
+    }
+    if (test_config.fast_untilize_at_address) {
+        compute_defines.emplace("FAST_UNTILIZE_AT_ADDRESS", "1");
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
@@ -1556,6 +1561,33 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
+// A Float32 row needs the output row stride once 31 rows span the packer's carried Y-offset window
+// (from 67 tiles); 137 tiles is the first width where even 16 rows overflow it, so each phase is rebased
+// in runs of 8. Runs the llk_pack_fast_untilize_block_strided_at_address entry point first, so the output
+// buffer cannot already hold the compute-API result, then the compute API. Random input keeps every row
+// distinct.
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeFastUntilizeWideFp32Row) {
+    constexpr std::uint32_t wide_ct_dim = 137;
+    const auto src_data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * wide_ct_dim, /*rand_max_float=*/100, /*seed=*/42);
+    for (bool at_address : {true, false}) {
+        SCOPED_TRACE(at_address ? "llk_pack_fast_untilize_block_strided_at_address" : "fast_untilize_block");
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fp32_dest_acc_en = true,
+            .fast_untilize = true,
+            .fast_untilize_at_address = at_address,
+            .input_single_tile_size = tt::tile_size(tt::DataFormat::Float16_b),
+            .output_single_tile_size = tt::tile_size(tt::DataFormat::Float32),
+            .num_tiles_r = 1,
+            .num_tiles_c = wide_ct_dim,
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+            .output_fmt = tt::DataFormat::Float32,
+            .src0_data = src_data,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
     }
 }
 
