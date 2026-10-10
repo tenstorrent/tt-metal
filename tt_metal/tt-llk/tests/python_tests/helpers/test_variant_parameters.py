@@ -2197,11 +2197,13 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
 SFPU_MISC_OPERATIONS = {
     "rand": 0,
     "dropout": 1,
+    "mask": 2,
     "copy_dest_values": 3,
     "reshuffle_rows": 4,
     "softcap": 5,
     "situ_glu": 6,
     "clamped_silu_glu": 7,
+    "mask_int": 8,
 }
 
 
@@ -2222,6 +2224,24 @@ class SFPU_MISC_OP(TemplateParameter):
                 f"constexpr std::uint32_t SFPU_MISC_OPERATION = {SFPU_MISC_OPERATIONS[self.misc_mathop]};",
                 f"constexpr std::uint32_t SFPU_MISC_PARAM = {self.misc_param};",
                 f"constexpr bool SFPU_MISC_INIT_PER_TILE = {'true' if self.misc_init_per_tile else 'false'};",
+            ]
+        )
+
+
+@dataclass
+class SFPU_MASK_PLACEMENT(TemplateParameter):
+    """DEST tile indices of the data and the mask tile for sources/sfpu_mask_test.cpp."""
+
+    mask_data_dst_index: int = 0
+    mask_mask_dst_index: int = 1
+    mask_posinf: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t MASK_DATA_DST_INDEX = {self.mask_data_dst_index};",
+                f"constexpr std::uint32_t MASK_MASK_DST_INDEX = {self.mask_mask_dst_index};",
+                f"constexpr bool MASK_POSINF = {'true' if self.mask_posinf else 'false'};",
             ]
         )
 

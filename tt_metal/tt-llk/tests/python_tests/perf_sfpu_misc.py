@@ -38,6 +38,7 @@ _ROWS = [
     ("mask", _BF16, DestAccumulation.No, 0, False),
     ("mask", _BF16, DestAccumulation.Yes, 0, False),
     ("mask_int", _INT32, DestAccumulation.Yes, 0, False),
+    ("mask_int", _INT32, DestAccumulation.Yes, 1, False),
     ("copy_dest_values", _BF16, DestAccumulation.No, 0, False),
     ("copy_dest_values", _INT32, DestAccumulation.Yes, 0, False),
     ("copy_dest_values", _BF16, DestAccumulation.No, 1, False),
