@@ -22,9 +22,11 @@ from helpers.test_variant_parameters import (
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
+TILES = 2
 
 
 @pytest.mark.perf
+# (stage, iterations); the iteration count only applies at stage 2.
 @parametrize(variant=[(0, 20), (1, 20), (2, 1), (2, 5), (2, 20)])
 def test_perf_sinkhorn(perf_report, variant):
     # parametrize hands a single axis as a one-element tuple
@@ -36,16 +38,16 @@ def test_perf_sinkhorn(perf_report, variant):
         InputOutputFormat(BF16, BF16),
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.MATH_ISOLATE],
         templates=[PERF_STAGE(stage), SINKHORN_ITERS(iters)],
-        runtimes=[TILE_COUNT(2), LOOP_FACTOR(16)],
+        runtimes=[TILE_COUNT(TILES), LOOP_FACTOR(16)],
         variant_stimuli=StimuliConfig(
             None,
             BF16,
             None,
             BF16,
             BF16,
-            tile_count_A=2,
+            tile_count_A=TILES,
             tile_count_B=1,
-            tile_count_res=2,
+            tile_count_res=TILES,
         ),
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,
