@@ -1,5 +1,14 @@
 # Remaining optimization opportunities, Oct 9 2026
 
+**Historical snapshot, superseded October 10.** Use the
+[operator roadmap](OPERATOR-ROADMAP.md) for current priorities and results.
+B16/32K/TP4 BFP8 decode has since reached **16.55 TSU**, with full GPQA
+**177/198 (89.39%)**. Compact GDN projects to roughly 20 TSU from measured
+block savings, but its full-model timing and qualification remain pending.
+The current target is **30 native TSU**, without speculative decoding. The
+unqualified/queued statuses and performance values below describe October 9,
+not the present deployment or experiment queue.
+
 Priority: 32K ISL, then 16K, with active 128K/256K checks and explicit tradeoffs.
 Optimize total committed output throughput. Historical optimized BFP4 32K/B32 point is
 373.70 output tok/s per TP4 after shared Q/K (+6.64% over the previous single-step

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:35:02.090469+00:00",
+  "generated_at": "2026-10-10T18:46:32.594498+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -118,6 +118,11 @@
       "sha256": "cff925af5d7b852ad2f4dc8877f3fb467970468e2d3a3f47cf2414fc14c0aa27"
     },
     {
+      "path": "demo/run_compact_long_horizon.py",
+      "bytes": 5509,
+      "sha256": "66c0a26478d98a8f0743c2160214ef72278316311dd6c46835260130a04d8d48"
+    },
+    {
       "path": "demo/run_eight_hour_experiments.py",
       "bytes": 7557,
       "sha256": "8294b76671a1d87c9921e860a6568752c7f197b2bd912dc4deef6b00c276d98a"
@@ -189,18 +194,18 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 166883,
-      "sha256": "ee36efa7a213c2d7a7d1aaedf87603706db6da06af224572c89457814e8e5d10"
+      "bytes": 169368,
+      "sha256": "cf32197ec92d88d248b6b7d54863566ac347d70c4a2651515b263d2950bf644f"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 22942,
-      "sha256": "37ef1f2f3b1534b926870dc3cd279a90b31ed9db4ae405e26483c2e414b8e039"
+      "bytes": 23894,
+      "sha256": "448cbdb11548fed39ad27098b00593d735dc9edb677d0d72dbc5484229bb1fc5"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 7060,
-      "sha256": "791513fa021f1f881cbc1db45531fe89b6e2128b615b9e7e56d47b65347d3c8f"
+      "bytes": 7615,
+      "sha256": "bee52607ea860cb44155e15f706aa0805183253a828b42adae0c557238ea48c1"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
@@ -2140,6 +2145,66 @@
       "path": "galaxy-evidence/compact-gdn-launch-v1/stage-launch.py.gz",
       "bytes": 2964,
       "sha256": "a3428d425773a6f48301b4e50bacb29445d8a0acec2a099680592703216816c4"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/README.md",
+      "bytes": 3138,
+      "sha256": "aea3900cf4ed1f671e2a4805b67dbdd998384001682b69f0a8d5920d31607b52"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/frozen-gdn-reader.cpp.gz",
+      "bytes": 1189,
+      "sha256": "76bda242e9ff4deaca501088ef6080f3bfd5c01ebc26248fb935d8669bf16264"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v1/preflight.log.gz",
+      "bytes": 1358,
+      "sha256": "ace9e874016dcd8e440077525043f3e002f777078ec19e0909f9a5030b454e67"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v2/launch-unit.json",
+      "bytes": 155,
+      "sha256": "4a5d5f0705b743fcf11045ce3c1710fae4f5c5b6e21fccf8a3254b6813c2daf4"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v2/launch.json",
+      "bytes": 2646,
+      "sha256": "359d5bb2fa148e9a0eee65bcc9d07629d7567fdfeeb036af7ef7f47ba1dafb8c"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v2/preflight.log.gz",
+      "bytes": 386,
+      "sha256": "185e5d4fffd2dca34c981a051edd2a8dc4eb950a948ebf5a277b26293b3f05f6"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v2/source-manifest.json",
+      "bytes": 27850,
+      "sha256": "42a56b73d1f752e5e49e5bfe9624d9dccae33ab5d3beba6c0f5c6d0424f69998"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-control-v2/unit.xml.gz",
+      "bytes": 10718,
+      "sha256": "bc335bdb09163c837305db72b7b7bdf18aeb1fd5b211819b277481e5e46d56cb"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/receipts/compact-long-horizon-v2/queue.json",
+      "bytes": 617,
+      "sha256": "c7d3b4398a74735ec4ee9d3a2aa8b98131cbee6f13a06d0db30820dace95f212"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/source-format-difference.json",
+      "bytes": 2206,
+      "sha256": "e7ef2190bb6d469bbc95a7235466f979e628922dbb6e8cb8ee3e45e204d5d639"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/stage-v1.py.gz",
+      "bytes": 2393,
+      "sha256": "76ed7e3d10f19169ee2ec6cf7c147a95dc348650be3d5b0cce07d5365e793c99"
+    },
+    {
+      "path": "galaxy-evidence/compact-long-horizon-v2/stage-v2.py.gz",
+      "bytes": 2392,
+      "sha256": "0716c23552eaba0462971a9e5da048736cbd3deedbfeb5ed8329267127e6f219"
     },
     {
       "path": "galaxy-evidence/compact-pool-recovery-v1/README.md",
@@ -11092,8 +11157,8 @@
     },
     {
       "path": "tests/compact_gdn.py",
-      "bytes": 504,
-      "sha256": "6c12d40b9fc766f19c794c913d1f0fe95478fe883efc0125a4985190e210a2aa"
+      "bytes": 2924,
+      "sha256": "ce15b1f03003b0d69cd85a5564b5ed9a8ad73818b9636e4605376b73221344e2"
     },
     {
       "path": "tests/galaxy_http_sweep.py",
@@ -11171,6 +11236,11 @@
       "sha256": "9ba2d336f98470baea2006f5769c913962cdffa48e2ebb7ddd13d5570abb99e4"
     },
     {
+      "path": "tests/test_compact_gdn_long_horizon.py",
+      "bytes": 4288,
+      "sha256": "3f98e5fc7a7b0131aefcf00a810c30eb3afd496a8a79c2712915beb16e9deaad"
+    },
+    {
       "path": "tests/test_full_trace_profile.py",
       "bytes": 10246,
       "sha256": "c73aef6019ca2fc20bc202ca75b83a494e04072e2dd67d3ec1448623dc68b87f"
@@ -11182,8 +11252,8 @@
     },
     {
       "path": "tests/test_gdn_epilogue_layer.py",
-      "bytes": 9496,
-      "sha256": "ab40466099b490531f4590d10e8794f09c87f59efb08ade272fe955bca564efe"
+      "bytes": 9795,
+      "sha256": "6b24363cf3c35b634c8188f282828c7f9776330bc6c9bf514622a8ea27a9e214"
     },
     {
       "path": "tests/test_gdn_flat_prepare.py",
@@ -11254,6 +11324,11 @@
       "path": "tests/unit/test_compact_gdn_queue.py",
       "bytes": 1797,
       "sha256": "a6a123081a128b41ad3ccfa877bc36263461c7cbb70e41a94532bc04a8e19f0c"
+    },
+    {
+      "path": "tests/unit/test_compact_long_horizon.py",
+      "bytes": 2428,
+      "sha256": "4272ce37a532300924fd2ffec7ef008fe3e02c33a11e0332c37c31c473bfe995"
     },
     {
       "path": "tests/unit/test_decoder_accuracy_followup.py",

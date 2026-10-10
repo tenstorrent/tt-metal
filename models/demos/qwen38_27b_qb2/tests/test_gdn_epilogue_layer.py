@@ -12,6 +12,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import changing_input_checkpoints
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, CANDIDATES, POLICIES, VARIANTS, compare
 from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import capture, host_ranks, run_case
 from models.demos.qwen38_27b_qb2.tests.test_gdn_model_adapter import tensor_digest
@@ -22,15 +23,16 @@ from models.demos.qwen38_27b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 
-def changing_input_comparison(layer, mesh, batch):
+def changing_input_comparison(layer, mesh, batch, *, updates=64):
     """Two independent sessions, changing tokens, same real BFP8 weights.
 
     Both traces own separate recurrent/history allocations created before
     either trace captures scratch addresses. Compare each user
-    on every rank after 1/2/4/8/16/32/64 updates, including actual projected
+    on every rank after power-of-two updates, including actual projected
     output. A stationary-input recurrence check alone would miss history and
     stale-input bugs in the new convolution/packed-gate boundary.
     """
+    checkpoints = changing_input_checkpoints(updates)
     rng = torch.Generator().manual_seed(341200 + batch)
     sources = [
         ttnn.from_torch(
@@ -73,30 +75,30 @@ def changing_input_comparison(layer, mesh, batch):
             for zero, value in zip(slot["zeros"], (state.recurrent, state.conv)):
                 ttnn.copy(zero, value)
         checks = []
-        for step in range(64):
+        for step in range(updates):
             source = sources[(step * 7 + step // 3) % len(sources)]
             observed = []
             for slot, trace in zip(slots, traces):
                 x, state, output = slot["x"], slot["state"], slot["output"]
                 ttnn.copy(source, x)
                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-                if step + 1 in (1, 2, 4, 8, 16, 32, 64):
+                if step + 1 in checkpoints:
                     # Read before the other trace can reuse shared projection
                     # scratch or the all-reduce destination.
-                    observed.append(
-                        [
-                            [tensor_digest(v.reshape(batch, -1)) for v in host_ranks(t)]
-                            for t in (state.recurrent, state.conv, output)
-                        ]
-                    )
+                    hashes = []
+                    for tensor in (state.recurrent, state.conv, output):
+                        ranks = host_ranks(tensor)
+                        assert len(ranks) == 4 and all(torch.isfinite(value).all() for value in ranks)
+                        hashes.append([tensor_digest(value.reshape(batch, -1)) for value in ranks])
+                    observed.append(hashes)
             if observed:
                 assert (
                     observed[0] == observed[1]
                 ), f"Changing-input compact GDN diverged at batch={batch}, step={step+1}"
-                checks.append(dict(step=step + 1, recurrent_conv_projected_sha256=observed[0]))
+                checks.append(dict(step=step + 1, recurrent_conv_projected_sha256=observed[0], all_values_finite=True))
         return dict(
             batch=batch,
-            updates=64,
+            updates=updates,
             checkpoints=checks,
             all_ranks_bit_identical=True,
             persistent_sessions_precede_trace_capture=True,
