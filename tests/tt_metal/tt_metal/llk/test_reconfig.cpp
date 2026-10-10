@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -1166,6 +1168,131 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
+    }
+}
+
+// ============================================================================
+// Conditional reconfig_data_format_srca/srcb(old, new) where old and new differ in BOTH data format and tile
+// geometry: the unpacker is configured for a Float16_b 32x32 CB (c_2), switched to a Float32 tiny-tile CB, and c_0
+// is passed through to c_16 (a copy for srcA; c_0 + zeros for srcB). The reconfig must reprogram the face
+// geometry as well as the format, so the output equals the input. Inputs are bf16-representable so the Tf32
+// source path carries them exactly.
+// ============================================================================
+namespace unit_tests::compute::reconfig {
+
+enum class ReconfiguredSrc : std::uint8_t { A, B };
+
+std::vector<std::uint32_t> run_reconfig_format_and_geometry(
+    distributed::MeshDevice& mesh_device,
+    ReconfiguredSrc src,
+    const Tile& tile,
+    const std::vector<std::uint32_t>& src_vec,
+    std::uint32_t num_tiles) {
+    static constexpr std::uint32_t k_dram_bank_id = 0;
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const std::uint32_t tiny_tile_size = tile.get_tile_size(tt::DataFormat::Float32);
+    const std::uint32_t full_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t buffer_size = num_tiles * tiny_tile_size;
+
+    auto make_dram_buffer = [&]() {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size},
+            {.page_size = buffer_size, .buffer_type = BufferType::DRAM},
+            &mesh_device);
+    };
+    auto add_cb = [&](tt::CBIndex cb, tt::DataFormat fmt, std::uint32_t page_size, const Tile* cb_tile) {
+        CircularBufferConfig config = CircularBufferConfig(page_size, {{cb, fmt}}).set_page_size(cb, page_size);
+        if (cb_tile != nullptr) {
+            config.set_tile_dims(cb, *cb_tile);
+        }
+        CreateCircularBuffer(program, core, config);
+    };
+
+    const bool srcb = src == ReconfiguredSrc::B;
+    auto src_buffer = make_dram_buffer();
+    auto dst_buffer = make_dram_buffer();
+    std::shared_ptr<distributed::MeshBuffer> zeros_buffer;
+
+    add_cb(tt::CBIndex::c_0, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    if (srcb) {
+        zeros_buffer = make_dram_buffer();
+        add_cb(tt::CBIndex::c_1, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    }
+    // Only configures the unpacker before the reconfig; never pushed.
+    add_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile_size, nullptr);
+    add_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, tiny_tile_size, &tile);
+
+    auto reader = CreateKernel(
+        program,
+        srcb ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp"
+             : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    std::map<std::string, std::string> defines;
+    if (srcb) {
+        defines["RECONFIG_SRCB"] = "1";
+    }
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_format_and_geometry.cpp",
+        core,
+        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = {num_tiles}, .defines = defines});
+
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
+    if (srcb) {
+        distributed::EnqueueWriteMeshBuffer(
+            cq, zeros_buffer, std::vector<std::uint32_t>(src_vec.size(), 0), /*blocking=*/true);
+        SetRuntimeArgs(
+            program,
+            reader,
+            core,
+            {src_buffer->address(), k_dram_bank_id, zeros_buffer->address(), k_dram_bank_id, num_tiles});
+    } else {
+        SetRuntimeArgs(program, reader, core, {src_buffer->address(), k_dram_bank_id, num_tiles});
+    }
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), k_dram_bank_id, num_tiles});
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
+    return result_vec;
+}
+
+}  // namespace unit_tests::compute::reconfig
+
+TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
+    using unit_tests::compute::reconfig::ReconfiguredSrc;
+    constexpr std::uint32_t num_tiles = 4;
+    constexpr std::uint32_t seed = 42;
+    constexpr float value_range = 10.0f;
+    constexpr std::uint32_t k_bf16_representable_mask = 0xFFFF0000u;
+    // 8x32 changes the face size. Without the geometry reprogramming, srcA 8x32 comes out wrong, and an LLK-assert
+    // build stops at the unpack-config check (srcB 8x32 data still matches with asserts off). 16x32 changes only
+    // the face count and passes either way; both 16x32 cases are controls.
+    for (const auto& shape : {std::array<std::uint32_t, 2>{16, 32}, std::array<std::uint32_t, 2>{8, 32}}) {
+        const Tile tile(shape);
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dist(-value_range, value_range);
+        std::vector<std::uint32_t> src_vec(num_tiles * tile.get_tile_hw());
+        for (auto& word : src_vec) {
+            word = std::bit_cast<std::uint32_t>(dist(rng)) & k_bf16_representable_mask;
+        }
+        for (const auto src : {ReconfiguredSrc::A, ReconfiguredSrc::B}) {
+            for (auto& device : this->devices_) {
+                auto result = unit_tests::compute::reconfig::run_reconfig_format_and_geometry(
+                    *device, src, tile, src_vec, num_tiles);
+                EXPECT_EQ(src_vec, result)
+                    << "src" << (src == ReconfiguredSrc::A ? "A" : "B") << ", tile " << shape[0] << "x" << shape[1];
+            }
+        }
     }
 }
 
