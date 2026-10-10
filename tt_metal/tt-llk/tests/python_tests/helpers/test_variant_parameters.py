@@ -1998,6 +1998,93 @@ class FILL_INT_FORMAT(TemplateParameter):
 
 
 @dataclass
+class WELFORDS(TemplateParameter):
+    """Compile-time schedule of sfpu_welfords_quasar_test.cpp (tiles_per_block 0 = one Dest section)."""
+
+    reciprocal_size: int = 0
+    partial_last_tile: bool = False
+    welfords_start_row: int = 0
+    welfords_num_rows: int = 32
+    face_layout: bool = False
+    final_grouped: bool = False
+    final_group_id: int = 0
+    final_dst: int = 0
+    save_restore: bool = False
+    state_grouped: bool = False
+    state_group_id: int = 0
+    state_dst: int = 0
+    save_after_tiles: int = 0
+    tiles_per_block: int = 0
+
+    def convert_to_cpp(self) -> str:
+        def b(value: bool) -> str:
+            return str(value).lower()
+
+        lines: list[str] = [
+            f"constexpr std::size_t WELFORDS_RECIP_SIZE = {self.reciprocal_size};",
+            f"constexpr bool WELFORDS_PARTIAL_LAST_TILE = {b(self.partial_last_tile)};",
+            f"constexpr std::uint32_t WELFORDS_START_ROW = {self.welfords_start_row};",
+            f"constexpr std::uint32_t WELFORDS_NUM_ROWS = {self.welfords_num_rows};",
+            f"constexpr bool WELFORDS_FACE_LAYOUT = {b(self.face_layout)};",
+            f"constexpr bool WELFORDS_FINAL_GROUPED = {b(self.final_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_GROUP_ID = {self.final_group_id};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_DST = {self.final_dst};",
+            f"constexpr bool WELFORDS_SAVE_RESTORE = {b(self.save_restore)};",
+            f"constexpr bool WELFORDS_STATE_GROUPED = {b(self.state_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_STATE_GROUP_ID = {self.state_group_id};",
+            f"constexpr std::uint32_t WELFORDS_STATE_DST = {self.state_dst};",
+            f"constexpr std::uint32_t WELFORDS_SAVE_AFTER_TILES = {self.save_after_tiles};",
+            f"constexpr std::uint32_t WELFORDS_TILES_PER_BLOCK = {self.tiles_per_block};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class TWO_PASS_STATS(TemplateParameter):
+    """Compile-time schedule of sfpu_welfords_two_pass_quasar_test.cpp.
+
+    two_pass_mode: 0 STREAM, 1 COMBINE, 2 SWITCH; two_pass_finalize: 0 row, 1 raw, 2 split, 3 combined, 4 row w/o mean.
+    """
+
+    two_pass_mode: int = 0
+    two_pass_dual: bool = True
+    two_pass_finalize: int = 0
+    two_pass_retain_anchor: bool = False
+    two_pass_average_variance: bool = True
+    two_pass_group_a: int = 0
+    two_pass_group_b: int = 0
+    two_pass_final_dst: int = 0
+    two_pass_state_dst: int = 0
+    two_pass_tiles_per_block: int = 0
+    two_pass_block_tiles: int = 1
+    two_pass_partial_last_tile: bool = False
+    two_pass_start_row: int = 0
+    two_pass_num_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        def b(value: bool) -> str:
+            return str(value).lower()
+
+        lines: list[str] = [
+            f"constexpr std::uint32_t TWO_PASS_MODE = {self.two_pass_mode};",
+            f"constexpr bool TWO_PASS_DUAL = {b(self.two_pass_dual)};",
+            f"constexpr std::uint32_t TWO_PASS_FINALIZE = {self.two_pass_finalize};",
+            f"constexpr bool TWO_PASS_RETAIN_ANCHOR = {b(self.two_pass_retain_anchor)};",
+            f"constexpr bool TWO_PASS_AVERAGE_VARIANCE = {b(self.two_pass_average_variance)};",
+            f"constexpr std::uint32_t TWO_PASS_GROUP_A = {self.two_pass_group_a};",
+            f"constexpr std::uint32_t TWO_PASS_GROUP_B = {self.two_pass_group_b};",
+            f"constexpr std::uint32_t TWO_PASS_FINAL_DST = {self.two_pass_final_dst};",
+            f"constexpr std::uint32_t TWO_PASS_STATE_DST = {self.two_pass_state_dst};",
+            f"constexpr std::uint32_t TWO_PASS_TILES_PER_BLOCK = {self.two_pass_tiles_per_block};",
+            f"constexpr std::uint32_t TWO_PASS_BLOCK_TILES = {self.two_pass_block_tiles};",
+            f"constexpr bool TWO_PASS_PARTIAL_LAST_TILE = {b(self.two_pass_partial_last_tile)};",
+            f"constexpr std::uint32_t TWO_PASS_START_ROW = {self.two_pass_start_row};",
+            f"constexpr std::uint32_t TWO_PASS_NUM_ROWS = {self.two_pass_num_rows};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 
