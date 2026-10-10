@@ -227,9 +227,9 @@ public:
     // Whether the edge leaving `local` in `egress` belongs to a protected ring.
     bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
 
-    // The ring a direction rides: the express decomposition for an axis hop, the ordinary X ring for
-    // E/W. Null when the mesh has no such ring. Public because the multicast reverse trees are built
-    // from it off the control plane -- a host that must open one connection per canonical root output
+    // The ring a direction rides: the express decomposition for a hop on the express axis (including Z),
+    // the ordinary orthogonal ring otherwise. Null when the mesh has no such ring. Public because the multicast reverse
+    // trees are built from it off the control plane -- a host that must open one connection per canonical root output
     // has to run the same encoder the worker runs, and that needs this topology.
     const AxisRouteTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
 

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <ios>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -40,6 +41,22 @@ MeshGraph load(const std::string& fixture) {
     const auto path =
         std::filesystem::path(rtoptions.get_root_dir()) / "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
     return MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+}
+
+// {Y topology, X topology} for an express fixture: the express rings on the axis that carries the
+// chords, the ordinary ring on the other. Either is empty when it does not derive.
+std::pair<std::optional<AxisRouteTopology>, std::optional<AxisRouteTopology>> fixture_topologies(
+    const MeshGraph& mesh_graph) {
+    auto express = derive_express_ring_topology(mesh_graph, MeshId{0});
+    if (!express.has_value()) {
+        return {std::nullopt, std::nullopt};
+    }
+    const int express_axis = express->axis_dim;
+    auto ordinary = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1 - express_axis);
+    if (express_axis == 0) {
+        return {std::move(express), std::move(ordinary)};
+    }
+    return {std::move(ordinary), std::move(express)};
 }
 
 // union(R(root, dst)) recomputed from next_row, independently of the generator.
@@ -99,6 +116,7 @@ std::uint8_t expected_action_for_code(int axis_dim, std::uint8_t code) {
     switch (code) {
         case Routing2DCodec::X2_EAST: return Routing2DCodec::ACTION_EAST;
         case Routing2DCodec::X2_WEST: return Routing2DCodec::ACTION_WEST;
+        case Routing2DCodec::X2_Z: return Routing2DCodec::ACTION_Z;
         default: return 0;
     }
 }
@@ -223,15 +241,13 @@ void check_axis(const MeshGraph& mesh_graph, const AxisRouteTopology& topo, cons
 void check_fixture(const std::string& fixture) {
     const auto mesh_graph = load(fixture);
 
-    const auto express = derive_express_ring_topology(mesh_graph, MeshId{0});
-    ASSERT_TRUE(express.has_value()) << fixture << ": derived no express rings";
-    check_axis(mesh_graph, *express, fixture + " Y");
-
-    // X is the ordinary four-column ring: E/W only, no chords. A multicast encodes both axes, so
+    // One axis carries the chords, the other is an ordinary ring. A multicast encodes both axes, so
     // every root on both must form a single-parent tree.
-    const auto ordinary_x = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
-    ASSERT_TRUE(ordinary_x.has_value()) << fixture << ": X dimension does not close into a ring";
-    check_axis(mesh_graph, *ordinary_x, fixture + " X");
+    const auto [y_topo, x_topo] = fixture_topologies(mesh_graph);
+    ASSERT_TRUE(y_topo.has_value()) << fixture << ": Y topology did not derive";
+    ASSERT_TRUE(x_topo.has_value()) << fixture << ": X topology did not derive";
+    check_axis(mesh_graph, *y_topo, fixture + " Y");
+    check_axis(mesh_graph, *x_topo, fixture + " X");
 }
 
 // Packing an ancestor before its descendant is silent on device, dropping branches from the encoded
@@ -259,10 +275,9 @@ TEST(McastReverseTreeTest, PackingRejectsAncestorBeforeDescendant) {
 // outside that span is touched. The sentinel fill is what makes the untouched region checkable.
 void check_embed(const std::string& fixture, std::size_t num_corners) {
     const auto mesh_graph = load(fixture);
-    const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
-    ASSERT_TRUE(y_topo.has_value()) << fixture << ": derived no express rings";
-    const auto x_topo = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
-    ASSERT_TRUE(x_topo.has_value()) << fixture << ": X dimension does not close into a ring";
+    const auto [y_topo, x_topo] = fixture_topologies(mesh_graph);
+    ASSERT_TRUE(y_topo.has_value()) << fixture << ": Y topology did not derive";
+    ASSERT_TRUE(x_topo.has_value()) << fixture << ": X topology did not derive";
 
     const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
@@ -319,13 +334,13 @@ void check_embed(const std::string& fixture, std::size_t num_corners) {
     }
 }
 
-// True when the embedded Y tree contains a transit chord. The encoder keeps the canonical tree
+// True when an embedded axis tree contains a transit chord. The encoder keeps the canonical tree
 // in that case; a tree with no Z edge is chordless and a one-direction extent walks that way.
-bool y_tree_has_transit_chord(const std::vector<std::uint8_t>& trees, std::uint32_t y_size) {
-    const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(y_size);
+bool axis_tree_has_transit_chord(const std::uint8_t* tree_region, std::uint32_t axis_len, std::uint8_t z_code) {
+    const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; i++) {
-        const auto edge = Routing2DCodec::get_mcast_tree_edge(trees.data(), i);
-        if (Routing2DCodec::mcast_edge_output(edge) == Routing2DCodec::Y2_Z) {
+        const auto edge = Routing2DCodec::get_mcast_tree_edge(tree_region, i);
+        if (Routing2DCodec::mcast_edge_output(edge) == z_code) {
             return true;
         }
     }
@@ -376,9 +391,8 @@ std::vector<bool> target_rows(int axis_len, int root, int before_hops, int after
 // reverse tree, so agreeing with the encoder means the tree does stand for the routes.
 void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     const auto mesh_graph = load(fixture);
-    const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
+    const auto [y_topo, x_topo] = fixture_topologies(mesh_graph);
     ASSERT_TRUE(y_topo.has_value()) << fixture;
-    const auto x_topo = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
     ASSERT_TRUE(x_topo.has_value()) << fixture;
 
     const int y_len = y_topo->axis_len;
@@ -388,13 +402,15 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
     // Generic encoder coverage includes combined extents that the public source-injection API does
     // not accept as one branch, plus legal one-sided branches that can require cardinal+Z fanout.
+    // Both axes are sampled alike, so the express axis gets long one-sided branches whichever it is.
     const std::vector<std::pair<int, int>> y_extents = {{0, 0}, {1, 0}, {0, 1}, {2, 2}, {y_len / 2, 0}, {0, y_len / 2}};
-    const std::vector<std::pair<int, int>> x_extents = {{0, 0}, {1, 0}, {0, 1}, {1, x_len - 2}};
+    const std::vector<std::pair<int, int>> x_extents = {
+        {0, 0}, {1, 0}, {0, 1}, {1, x_len - 2}, {x_len / 2, 0}, {0, x_len / 2}};
 
     int multi_output_roots = 0;
 
     const std::set<int> representative_rows = {0, 1, y_len / 2, y_len - 1};
-    const std::set<int> representative_columns = {0, x_len - 1};
+    const std::set<int> representative_columns = {0, 1, x_len / 2, x_len - 1};
     for (int root_y : representative_rows) {
         for (int root_x : representative_columns) {
             std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
@@ -428,7 +444,10 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     // The anchor column always delivers; target_rows only stands in the root when an
                     // axis has no extent at all. A chordless one-direction extent walks that cardinal
                     // instead of the canonical tie-break, which would leave the opposite way.
-                    auto want_x = (x_one_direction && x_len > 1)
+                    const std::uint8_t* x_tree = trees.data() + Routing2DCodec::mcast_tree_x_offset(y_size);
+                    const std::uint8_t* y_tree = trees.data();
+                    auto want_x = (x_one_direction && x_len > 1 &&
+                                   !axis_tree_has_transit_chord(x_tree, x_size, Routing2DCodec::X2_Z))
                                       ? directional_axis_actions(
                                             x_len,
                                             root_x,
@@ -442,7 +461,8 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                             want_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
                         }
                     }
-                    auto want_y = (y_one_direction && y_len > 1 && !y_tree_has_transit_chord(trees, y_size))
+                    auto want_y = (y_one_direction && y_len > 1 &&
+                                   !axis_tree_has_transit_chord(y_tree, y_size, Routing2DCodec::Y2_Z))
                                       ? directional_axis_actions(
                                             y_len,
                                             root_y,
@@ -452,8 +472,8 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                                             Routing2DCodec::ACTION_SOUTH)
                                       : expected_actions(mesh_graph, MeshId{0}, *y_topo, root_y, targets_y);
                     const std::uint8_t x_root_action = want_x[root_x];
-                    const std::uint8_t teeth =
-                        x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
+                    const std::uint8_t teeth = x_root_action & (Routing2DCodec::ACTION_EAST |
+                                                                Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_Z);
                     const std::uint8_t deliver = x_root_action & Routing2DCodec::ACTION_LOCAL_DELIVER;
                     for (int y = 0; y < y_len; y++) {
                         if (targets_y[y]) {
@@ -518,6 +538,107 @@ TEST(McastReverseTreeTest, OneDirectionBranchUsesTransitChord) {
 
     EXPECT_EQ(actions[root_y] & Routing2DCodec::ACTION_ETH_MASK, Routing2DCodec::ACTION_SOUTH);
     EXPECT_NE(actions[2] & Routing2DCodec::ACTION_Z, 0);
+}
+
+// The transpose of OneDirectionBranchUsesTransitChord: with the chords on X, a one-direction E/W
+// extent must stay on the canonical tree rather than walk plain cardinal hops across ring domains.
+TEST(McastReverseTreeTest, OneDirectionXBranchUsesTransitChord) {
+    const auto mesh_graph = load("express_links_4x32_mesh_graph_descriptor.textproto");
+    const auto [y_topo, x_topo] = fixture_topologies(mesh_graph);
+    ASSERT_TRUE(y_topo.has_value() && x_topo.has_value());
+
+    constexpr std::uint32_t root_y = 0;
+    constexpr std::uint32_t root_x = 1;
+    const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
+    const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    ASSERT_TRUE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
+
+    std::vector<std::uint8_t> actions(y_size + x_size, 0);
+    encode_2d_mcast_maps(actions.data(), trees.data(), y_size, x_size, root_y, root_x, 0, 0, /*e_hops=*/4, 0);
+
+    EXPECT_EQ(actions[y_size + root_x] & Routing2DCodec::ACTION_ETH_MASK, Routing2DCodec::ACTION_EAST);
+    EXPECT_NE(actions[y_size + 2] & Routing2DCodec::ACTION_Z, 0);
+    // No vertical extent, so the source row is a target and carries the root column's teeth.
+    EXPECT_EQ(actions[root_y] & Routing2DCodec::ACTION_ETH_MASK, Routing2DCodec::ACTION_EAST);
+}
+
+// When the root column itself launches a chord, Z is one of its teeth and every target row must
+// carry it; otherwise the N/S/Z-facing routers on those rows never take the chord.
+TEST(McastReverseTreeTest, XAxisChordAtRootIsCopiedToTargetRows) {
+    const auto mesh_graph = load("express_links_4x32_mesh_graph_descriptor.textproto");
+    const auto [y_topo, x_topo] = fixture_topologies(mesh_graph);
+    ASSERT_TRUE(y_topo.has_value() && x_topo.has_value());
+
+    constexpr std::uint32_t root_y = 0;
+    constexpr std::uint32_t root_x = 2;  // a chord anchor of the {start 2, step 4} pattern
+    const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
+    const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    ASSERT_TRUE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
+
+    std::vector<std::uint8_t> actions(y_size + x_size, 0);
+    encode_2d_mcast_maps(
+        actions.data(), trees.data(), y_size, x_size, root_y, root_x, 0, /*s_hops=*/2, /*e_hops=*/8, 0);
+
+    ASSERT_NE(actions[y_size + root_x] & Routing2DCodec::ACTION_Z, 0)
+        << "premise: the root column launches a chord on this extent";
+    // With a Y extent the source row is not a target, so only the S rows carry the teeth.
+    EXPECT_EQ(actions[root_y] & Routing2DCodec::ACTION_Z, 0) << "source row is not a target row";
+    for (std::uint32_t y = root_y + 1; y <= root_y + 2; y++) {
+        EXPECT_NE(actions[y] & Routing2DCodec::ACTION_Z, 0) << "target row " << y << " lost the root's Z tooth";
+    }
+
+    // The {start 2, step 4} pattern links column 2 to column 5 (the {0, 8} pattern has no chord at
+    // column 2). A Z-facing router at that landing must decode X only; Y-first would hand it row 1's
+    // spine byte. These are the bytes Routing2DCodec.ZFacingRouterOnXExpressReadsTheXMapOnly hardcodes.
+    constexpr std::uint32_t landing_y = root_y + 1;
+    constexpr std::uint32_t landing_x = 5;
+    EXPECT_EQ(
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, true>(actions.data(), landing_y, landing_x, y_size)),
+        Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_EAST);
+    EXPECT_EQ(
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, false>(actions.data(), landing_y, landing_x, y_size)),
+        Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_EAST |
+            Routing2DCodec::ACTION_Z);
+}
+
+// fabric_set_mcast_route submits a branch through one connection and asserts that the root leaves on
+// at most one edge. With the chords on X, an E/W-only branch from a chord anchor column leaves on its
+// cardinal plus Z and needs the source-inject fanout; from any other column it stays single-edge.
+// N/S-only branches have no chord to take, so they stay single-edge from every root. (On Y-express
+// the two cases swap.)
+TEST(McastReverseTreeTest, SingleConnectionBranchesOnXExpress4x32) {
+    const auto mesh_graph = load("express_links_4x32_mesh_graph_descriptor.textproto");
+    const auto topologies = fixture_topologies(mesh_graph);
+    const auto& y_topo = topologies.first;
+    const auto& x_topo = topologies.second;
+    ASSERT_TRUE(y_topo.has_value() && x_topo.has_value());
+
+    constexpr std::uint32_t root_y = 0;
+    const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
+    const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
+    // The root's outputs, read where fabric_set_mcast_route reads them: the source row's Y byte.
+    const auto root_outputs = [&](std::uint32_t root_x, std::uint32_t s_hops, std::uint32_t e_hops) {
+        std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+        EXPECT_TRUE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
+        std::vector<std::uint8_t> actions(y_size + x_size, 0);
+        encode_2d_mcast_maps(actions.data(), trees.data(), y_size, x_size, root_y, root_x, 0, s_hops, e_hops, 0);
+        return static_cast<std::uint8_t>(actions[root_y] & Routing2DCodec::ACTION_ETH_MASK);
+    };
+
+    // Column 1 anchors no chord: the E-only branch leaves on E alone.
+    EXPECT_EQ(root_outputs(/*root_x=*/1, 0, /*e_hops=*/4), Routing2DCodec::ACTION_EAST);
+
+    // Column 2 anchors the 2<->5 chord: the E-only branch leaves on E and Z, which the
+    // single-connection API refuses.
+    const auto anchor = root_outputs(/*root_x=*/2, 0, /*e_hops=*/8);
+    EXPECT_NE(anchor & Routing2DCodec::ACTION_EAST, 0);
+    EXPECT_NE(anchor & Routing2DCodec::ACTION_Z, 0);
+    EXPECT_GT(std::popcount(static_cast<unsigned>(anchor)), 1);
+
+    // An S-only branch from the same anchor column has no chord on Y, so one connection suffices.
+    EXPECT_EQ(root_outputs(/*root_x=*/2, /*s_hops=*/2, 0), Routing2DCodec::ACTION_SOUTH);
 }
 
 // Galaxy all-gather load-balances an even ring by putting axis/2 hops on the short cardinal
@@ -668,6 +789,12 @@ TEST(McastReverseTreeTest, Embed8x4) {
 TEST(McastReverseTreeTest, Embed32x4) {
     check_embed("express_links_32x4_mesh_graph_descriptor.textproto", /*num_corners=*/1);
 }
+TEST(McastReverseTreeTest, Encode4x32) {
+    check_encode("express_links_4x32_mesh_graph_descriptor.textproto", /*expect_multi_output_roots=*/true);
+}
+TEST(McastReverseTreeTest, Embed4x32) {
+    check_embed("express_links_4x32_mesh_graph_descriptor.textproto", /*num_corners=*/1);
+}
 
 void check_maximum_embed(
     const std::string& name, const std::string& descriptor, std::uint32_t expected_y, std::uint32_t expected_x) {
@@ -812,6 +939,9 @@ TEST(McastReverseTreeTest, Supports4x1Mesh) {
 TEST(McastReverseTreeTest, AllRootsFormTrees8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }
 TEST(McastReverseTreeTest, AllRootsFormTrees32x4) {
     check_fixture("express_links_32x4_mesh_graph_descriptor.textproto");
+}
+TEST(McastReverseTreeTest, AllRootsFormTrees4x32) {
+    check_fixture("express_links_4x32_mesh_graph_descriptor.textproto");
 }
 
 }  // namespace

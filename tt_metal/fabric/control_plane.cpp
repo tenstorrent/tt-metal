@@ -1743,12 +1743,28 @@ bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
     return this->routing_table_generator_->get_express_rings(mesh_id) != nullptr;
 }
 
-// The ring covering `direction` from `local`: the express decomposition for an axis hop, the ordinary X
-// ring for E/W. Null when that dimension carries no ring.
+// The ring covering `direction` from `local`: the express decomposition for a hop on the express axis
+// (Z always is), the ordinary orthogonal ring otherwise. Null for non-express meshes, and when the
+// orthogonal dimension does not close.
 const AxisRouteTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
-    const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
-    return orthogonal ? this->routing_table_generator_->get_x_rings(mesh_id)
-                      : this->routing_table_generator_->get_express_rings(mesh_id);
+    const auto* express = this->routing_table_generator_->get_express_rings(mesh_id);
+    if (express == nullptr) {
+        return nullptr;
+    }
+    const int axis = [&] {
+        switch (direction) {
+            case RoutingDirection::N:
+            case RoutingDirection::S: return 0;
+            case RoutingDirection::E:
+            case RoutingDirection::W: return 1;
+            case RoutingDirection::Z: return express->axis_dim;
+            default: TT_THROW("ring_for_direction: {} is not a port direction", enchantum::to_string(direction));
+        }
+    }();
+    if (axis == express->axis_dim) {
+        return express;
+    }
+    return this->routing_table_generator_->get_orthogonal_rings(mesh_id);
 }
 
 const AxisRouteTopology* ControlPlane::axis_topology(MeshId mesh_id, int axis) const {
@@ -1766,9 +1782,8 @@ std::optional<int> ControlPlane::ring_coord_of_neighbor(
 }
 
 bool ControlPlane::has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const {
-    const auto* rings = dimension == RoutingDimension::X
-                            ? this->routing_table_generator_->get_x_rings(fabric_node_id.mesh_id)
-                            : this->routing_table_generator_->get_express_rings(fabric_node_id.mesh_id);
+    const auto* rings = this->ring_for_direction(
+        fabric_node_id.mesh_id, dimension == RoutingDimension::X ? RoutingDirection::E : RoutingDirection::N);
     if (rings == nullptr) {
         return false;
     }
@@ -1822,8 +1837,9 @@ bool ControlPlane::are_same_directed_ring_edges(
 
 bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
     const auto* rings = this->routing_table_generator_->get_express_rings(local.mesh_id);
-    if (rings == nullptr || !this->is_protected_ring_edge(local, egress)) {
-        return true;  // nothing protected is being acquired, so nothing to gate
+    if (rings == nullptr || this->ring_for_direction(local.mesh_id, egress) != rings ||
+        !this->is_protected_ring_edge(local, egress)) {
+        return true;  // nothing protected on the express axis is being acquired, so nothing to gate
     }
     const int row =
         static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);

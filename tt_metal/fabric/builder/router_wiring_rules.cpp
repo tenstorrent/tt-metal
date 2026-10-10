@@ -37,22 +37,29 @@ constexpr std::array<RoutingDirection, 4> k_cardinal_directions = {
 // Computed from both, substituting for neither -- direction and capability stay independent axes.
 enum class TurnRole : uint8_t {
     UNRESTRICTED,   // Y cardinal (any capability), or an X landing: no dimension-order limit
-    X_RING_ONLY,    // X cardinal, same-mesh: may only continue around the X ring
-    EXPRESS_CHORD,  // Z carrying a same-mesh chord: a Y resource, like N/S
+    X_RING_ONLY,    // same-mesh X resource (E/W, or Z when the chords run along X): may only continue on X
+    EXPRESS_CHORD,  // Z carrying a same-mesh chord along Y: a Y resource, like N/S
     BOUNDARY,       // Z crossing a mesh boundary: carries no routing direction
 };
 
 // Total over both enums; establishment validates whether a pair can describe a real chip. Folding
 // impossible pairs here preserves their structurally implied roles without duplicating validation:
-// (Z, INTRAMESH_CARDINAL) folds into EXPRESS_CHORD and (E/W, INTRAMESH_EXPRESS) into X_RING_ONLY
-// because those reproduce the implied wiring answers.
-TurnRole turn_role(RoutingDirection dir, EdgeCapability cap) {
-    // Z carries a routing direction unless its edge crosses a mesh boundary.
+// (Z, INTRAMESH_CARDINAL) folds into the same-mesh chord role and (E/W, INTRAMESH_EXPRESS) into
+// X_RING_ONLY because those reproduce the implied wiring answers.
+TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express_axis) {
+    // Z carries a routing direction unless its edge crosses a mesh boundary, and is a resource of the
+    // axis its chords run along.
     if (dir == RoutingDirection::Z) {
-        return cap == EdgeCapability::INTERMESH ? TurnRole::BOUNDARY : TurnRole::EXPRESS_CHORD;
+        if (cap == EdgeCapability::INTERMESH) {
+            return TurnRole::BOUNDARY;
+        }
+        if (is_x_axis_direction(dir, express_axis)) {
+            return TurnRole::X_RING_ONLY;
+        }
+        return TurnRole::EXPRESS_CHORD;
     }
     // A landing is a route root, not a packet mid-X-phase, so it is exempt from dimension order.
-    if (is_x_axis_direction(dir)) {
+    if (is_x_axis_direction(dir, express_axis)) {
         return cap == EdgeCapability::INTERMESH ? TurnRole::UNRESTRICTED : TurnRole::X_RING_ONLY;
     }
     return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
@@ -98,8 +105,8 @@ EdgeCapability facing_capability_of(const PerDirectionCapabilities& caps, Routin
 // matching each mode's historical convention. Both 2D families run it -- the chord sits exactly
 // at the express limit (four cardinals, four downstream EDMs), which is the zero-margin case a
 // canary is for.
-void check_vc0_downstream_capacity(const RouterTurnSet& turn_set, bool express_routing_enabled) {
-    if (express_routing_enabled) {
+void check_vc0_downstream_capacity(const RouterTurnSet& turn_set, ExpressAxis express_axis) {
+    if (express_axis != ExpressAxis::NONE) {
         const size_t vc0_limit =
             builder_config::get_vc0_downstream_edm_count(/*is_2D_routing=*/true, /*express_routing_enabled=*/true);
         TT_FATAL(
@@ -128,7 +135,7 @@ bool wires_into(
     RoutingDirection egress_direction,
     std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     uint32_t vc) {
     // A U-turn is a property of the turn, not of its ports: no router wires back over its own link
     // whatever they are. It needs no classification, so it answers first.
@@ -136,7 +143,7 @@ bool wires_into(
         return false;
     }
 
-    const TurnRole producer_role = turn_role(producer_direction, producer_capability);
+    const TurnRole producer_role = turn_role(producer_direction, producer_capability, express_axis);
     const bool egress_is_z = (egress_direction == RoutingDirection::Z);
 
     // Turn sets are emitted per direction letter rather than per discovered neighbor, so a caller
@@ -156,19 +163,24 @@ bool wires_into(
 
     // Non-express is producer-blind: every non-self cardinal wires in, and Z is a target only as
     // the boundary template's.
-    if (!express_routing_enabled) {
+    if (express_axis == ExpressAxis::NONE) {
         return !egress_is_z || chip_z_role == ZPortRole::INTERMESH_BOUNDARY;
+    }
+
+    // Z is a target only when the chip has a Z port, whichever axis it serves and whoever feeds it.
+    if (egress_is_z && chip_z_role == ZPortRole::NONE) {
+        return false;
     }
 
     switch (producer_role) {
         case TurnRole::UNRESTRICTED:   // no dimension-order limit applies to this producer
-        case TurnRole::EXPRESS_CHORD:  // a chord is a Y resource; its feed rides every carrier VC
-            // Any non-self egress, and Z only when the chip has a Z port.
-            return !egress_is_z || chip_z_role != ZPortRole::NONE;
+        case TurnRole::EXPRESS_CHORD:  // a chord along Y is a Y resource; its feed rides every carrier VC
+            return true;
         case TurnRole::X_RING_ONLY:
             // X producers cannot re-enter protected Y. Capability matters: an intermesh egress
-            // leaves the mesh rather than entering Y, so E/W exit routers remain wired to it.
-            return !is_protected_y_egress(egress_direction, resolve_egress_capability());
+            // leaves the mesh rather than entering Y, so E/W exit routers remain wired to it. When
+            // the chords run along X, Z is not protected Y, so E/W can continue onto a chord.
+            return !is_protected_y_egress(egress_direction, resolve_egress_capability(), express_axis);
         case TurnRole::BOUNDARY: break;  // answered above
     }
     TT_FATAL(false, "unreachable: every TurnRole is handled above");
@@ -184,7 +196,9 @@ PerDirectionCapabilities canonical_express_endpoint_capabilities() {
     return caps;
 }
 
-uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps) {
+uint32_t express_vc0_producer_arity(
+    RoutingDirection direction, const PerDirectionCapabilities& caps, ExpressAxis express_axis) {
+    TT_FATAL(express_axis != ExpressAxis::NONE, "Express producer arity needs the mesh's express axis");
     // The Z-port role the wiring rule consults is this chip's own, not a global.
     const ZPortRole chip_z_role = z_role_of(caps);
 
@@ -203,7 +217,7 @@ uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirecti
                 direction,
                 caps.at(direction),
                 chip_z_role,
-                /*express_routing_enabled=*/true,
+                express_axis,
                 /*vc=*/0)) {
             ++count;
         }
@@ -214,10 +228,14 @@ uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirecti
 uint32_t express_vc0_sender_count() {
     // The canonical endpoint chip attains the structural ceiling: every Y and X producer wires
     // into an E/W facing under any capability assignment, so no per-chip set produces a wider one.
+    // Taken over both axes so the family size does not depend on which one a mesh uses: the widest
+    // facing moves (E/W on Y-express, E/W and Z on X-express) but the maximum does not.
     const auto caps = canonical_express_endpoint_capabilities();
     uint32_t count = 0;
-    for (const auto direction : k_all_directions) {
-        count = std::max(count, express_vc0_producer_arity(direction, caps));
+    for (const auto express_axis : {ExpressAxis::Y, ExpressAxis::X}) {
+        for (const auto direction : k_all_directions) {
+            count = std::max(count, express_vc0_producer_arity(direction, caps, express_axis));
+        }
     }
     return count;
 }
@@ -234,12 +252,14 @@ RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config) {
     const auto edge_capability = facing_capability_of(chip_capabilities, facing);
     const auto chip_z_role = z_role_of(chip_capabilities);
     validate_facing_role_consistency(facing, edge_capability, chip_z_role);
 
+    // The express family's width is the same on either axis (see express_vc0_sender_count).
+    const bool express_routing_enabled = express_axis != ExpressAxis::NONE;
     const bool requires_vc1 = vc_config && vc_config->requires_vc1;
     const bool requires_vc2 = vc_config && vc_config->requires_vc2;
     // Evaluated once per router: is this the chip's Z-facing intermesh boundary?
@@ -324,7 +344,7 @@ RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config) {
     RouterTurnSet turn_set{};
 
@@ -368,21 +388,21 @@ RouterTurnSet turn_set_for_router(
         return turn_set;
     }
 
-    // The express chord (the cross-check has already verified capability and role): a chord is a
-    // Y resource, like N/S, with no opposite and no Z target of its own. Which cardinals
-    // it feeds still comes from the primitive, so this set and the guard derivation -- which
-    // reads the same primitive per producer -- cannot disagree.
+    // The express chord (the cross-check has already verified capability and role): a resource of
+    // its mesh's express axis, with no opposite and no Z target of its own. A chord along Y feeds
+    // every cardinal, like N/S; a chord along X feeds only E/W, like an X ring edge. Which cardinals
+    // it feeds comes from the primitive, so this set and the guard derivation -- which reads the
+    // same primitive per producer -- cannot disagree.
     if (facing == RoutingDirection::Z) {
         TT_FATAL(
-            express_routing_enabled && is_2D_topology(topology),
+            express_axis != ExpressAxis::NONE && is_2D_topology(topology),
             "An express (Z) chord requires 2D Mesh/Torus routing with express routing enabled");
         for (const auto dir : k_cardinal_directions) {
-            if (wires_into(
-                    facing, edge_capability, dir, chip_capabilities.at(dir), chip_z_role, express_routing_enabled, 0)) {
+            if (wires_into(facing, edge_capability, dir, chip_capabilities.at(dir), chip_z_role, express_axis, 0)) {
                 emit_on_enabled_vcs(dir);
             }
         }
-        check_vc0_downstream_capacity(turn_set, express_routing_enabled);
+        check_vc0_downstream_capacity(turn_set, express_axis);
         return turn_set;
     }
 
@@ -399,14 +419,7 @@ RouterTurnSet turn_set_for_router(
     // remaining cardinals in enum order. Every member is what the primitive wires, so this set
     // and the guard derivation cannot disagree.
     const auto opposite = get_opposite_direction(facing);
-    if (wires_into(
-            facing,
-            edge_capability,
-            opposite,
-            chip_capabilities.at(opposite),
-            chip_z_role,
-            express_routing_enabled,
-            0)) {
+    if (wires_into(facing, edge_capability, opposite, chip_capabilities.at(opposite), chip_z_role, express_axis, 0)) {
         emit_on_enabled_vcs(opposite);
     }
     for (const auto candidate : k_cardinal_directions) {
@@ -414,13 +427,7 @@ RouterTurnSet turn_set_for_router(
             continue;
         }
         if (wires_into(
-                facing,
-                edge_capability,
-                candidate,
-                chip_capabilities.at(candidate),
-                chip_z_role,
-                express_routing_enabled,
-                0)) {
+                facing, edge_capability, candidate, chip_capabilities.at(candidate), chip_z_role, express_axis, 0)) {
             emit_on_enabled_vcs(candidate);
         }
     }
@@ -435,7 +442,7 @@ RouterTurnSet turn_set_for_router(
             RoutingDirection::Z,
             chip_capabilities.at(RoutingDirection::Z),
             chip_z_role,
-            express_routing_enabled,
+            express_axis,
             0)) {
         const bool boundary_target = (chip_z_role == ZPortRole::INTERMESH_BOUNDARY);
         turn_set[0].push_back(ConnectionTarget(0, RoutingDirection::Z));
@@ -445,7 +452,7 @@ RouterTurnSet turn_set_for_router(
     }
 
     // Downstream capacity canary, read off the emitted set (both 2D families run it).
-    check_vc0_downstream_capacity(turn_set, express_routing_enabled);
+    check_vc0_downstream_capacity(turn_set, express_axis);
 
     return turn_set;
 }
@@ -454,11 +461,11 @@ RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config) {
     return RouterArchetype{
-        router_vc_shape(topology, facing, chip_capabilities, express_routing_enabled, vc_config),
-        turn_set_for_router(topology, facing, chip_capabilities, express_routing_enabled, vc_config)};
+        router_vc_shape(topology, facing, chip_capabilities, express_axis, vc_config),
+        turn_set_for_router(topology, facing, chip_capabilities, express_axis, vc_config)};
 }
 
 }  // namespace tt::tt_fabric

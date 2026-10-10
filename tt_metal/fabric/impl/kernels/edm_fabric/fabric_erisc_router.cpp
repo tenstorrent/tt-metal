@@ -777,7 +777,9 @@ FORCE_INLINE void forward_to_local_destination(
 
 // Packed-slot bitset of eth outputs this ELF actually has. Bit i is fwd_dirs<MY_DIR>()[i].
 // Intramesh E/W also drop N/S (packed bits 1 and 2): Y-before-X forbids those turns, and
-// decode_action for E/W never reads the Y byte. INTERMESH E/W landings keep them.
+// decode_action for E/W never reads the Y byte. On an X-express mesh an intramesh Z router is an X
+// resource for the same reasons: it decodes the X byte only, which never carries N/S, so it drops
+// N/S (packed bits 2 and 3) as dead arms. INTERMESH landings keep them.
 template <size_t DOWNSTREAM_EDM_SIZE>
 constexpr uint8_t live_eth_mask_2d() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
@@ -799,6 +801,11 @@ constexpr uint8_t live_eth_mask_2d() {
         (my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST) && !is_intermesh_router;
     if constexpr (trim_ns_for_intramesh_ew) {
         live = static_cast<uint8_t>(live & ~0b0110);
+    }
+    constexpr bool trim_ns_for_intramesh_z_on_x_express =
+        my_dir == eth_chan_directions::Z && FabricExpressConfig::z_decodes_x_only() && !is_intermesh_router;
+    if constexpr (trim_ns_for_intramesh_z_on_x_express) {
+        live = static_cast<uint8_t>(live & ~0b1100);
     }
     return live;
 }
@@ -1457,7 +1464,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     action = Routing2DCodec::decode_action_y_first(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
-                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                    // A Z-facing router decodes the axis its chord runs along; see FabricExpressConfig.
+                    action = Routing2DCodec::decode_action<
+                        static_cast<eth_chan_directions>(my_direction),
+                        FabricExpressConfig::z_decodes_x_only()>(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
                 // This chip is the exit when the maps say deliver here but the final mesh is

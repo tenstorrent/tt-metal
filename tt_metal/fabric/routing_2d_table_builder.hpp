@@ -62,7 +62,7 @@ inline std::uint8_t* x_row(std::uint8_t* table, std::uint32_t y_size, std::uint3
 
 }  // namespace routing_2d_table_builder_detail
 
-// Packs destination-major first-hop vectors. Y actions may be N/S/Z; X actions may be E/W.
+// Packs destination-major first-hop vectors. Y actions may be N/S/Z; X actions may be E/W/Z.
 // Returns false without writing when the shape or output span is invalid. An off-axis action is a
 // topology error and may leave the live span partially populated; ControlPlane treats it as fatal.
 template <typename YActionSource, typename XActionSource>
@@ -109,6 +109,7 @@ inline bool pack_2d_route_vectors(
                 switch (x_action(cur, dst)) {
                     case eth_chan_directions::EAST: action = Routing2DCodec::X2_EAST; break;
                     case eth_chan_directions::WEST: action = Routing2DCodec::X2_WEST; break;
+                    case eth_chan_directions::Z: action = Routing2DCodec::X2_Z; break;
                     default: return false;
                 }
             }

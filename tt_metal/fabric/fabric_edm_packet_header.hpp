@@ -1330,8 +1330,8 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
-#if defined(FABRIC_EXPRESS_ENABLED)
-// Express routing with UDM is not supported.
+#if defined(FABRIC_EXPRESS_AXIS)
+// Express routing (on either axis) with UDM is not supported.
 //
 // UDM records the source's first-hop direction in the packet (udm_control.initial_direction) and uses
 // it to pick a downstream mux. The mux fabric is cardinal-only by construction --
