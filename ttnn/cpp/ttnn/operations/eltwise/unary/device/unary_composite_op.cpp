@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -113,6 +114,16 @@ namespace ttnn {
 // Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose generated SFPU kernel computes the result, where the unary program selects
+    // that kernel; every other call keeps the composite below. unary_impl runs a BF16 input to a BF16
+    // output with FP32 DEST off.
+    const std::vector<operations::unary::EltwiseUnaryWithParam> fused = {
+        operations::unary::UnaryWithParam(operations::unary::UnaryOpType::MULTIGAMMALN)};
+    if (x.device() != nullptr && operations::unary::utils::get_bf16_kernel_defines(
+                                     fused, x.dtype(), x.dtype(), /*fp32_dest_acc_en=*/false, x.device()->arch())
+                                     .has_value()) {
+        return ttnn::operations::unary::detail::unary_impl(x, fused, output_mem_config);
+    }
     Tensor result = ttnn::lgamma(x, output_mem_config);
     result = ttnn::add(
         result,
