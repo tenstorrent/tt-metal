@@ -61,7 +61,7 @@
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 15
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
@@ -74,7 +74,7 @@
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 15
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic

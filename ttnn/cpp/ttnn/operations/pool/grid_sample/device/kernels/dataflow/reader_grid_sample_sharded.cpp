@@ -10,7 +10,7 @@
 
 #define PRINT_AND_PROFILE 0
 #if PRINT_AND_PROFILE
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/debug/dprint.h"
 #endif
 

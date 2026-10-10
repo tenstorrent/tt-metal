@@ -47,7 +47,7 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     // tt_metal/fabric/erisc_datamover_builder.hpp
     constexpr size_t max_packet_payload_wormhole = 7616;
     constexpr size_t max_packet_payload_blackhole = 15232;
-    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/fabric/fabric_edm_packet_header.hpp
+    // NOC_SCATTER_WRITE_MAX_CHUNKS in tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp
     constexpr size_t max_scatter_write_chunks = 4;
 
     if (page_size == 0) {
@@ -149,7 +149,7 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
         const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
                                      : mesh_view.get_fabric_node_ids_on_row(row_or_col);
         for (size_t i = 1; i < nodes.size(); i++) {
-            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(mesh_device, nodes[i - 1], nodes[i]);
             if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
                 return false;
             }
