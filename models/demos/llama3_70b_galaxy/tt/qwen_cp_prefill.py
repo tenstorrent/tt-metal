@@ -337,6 +337,12 @@ def ff13_fp32_acc() -> bool:
     return os.environ.get("QWEN_CP_FF13_FP32", "0") == "1"
 
 
+def ff2_bf8_rs() -> bool:
+    """FF2 output (and its row reduce-scatter) in bf8 instead of bf16: half the RS bytes (job163: RS [S/4, 5120]
+    bf16 1.756 ms, bf8 0.942 ms). The residual add still writes bf16."""
+    return os.environ.get("QWEN_CP_FF2_BF8", "1") == "1"
+
+
 def _row_ag(tt_ccl, model_config, t, seq_len):
     kw = dict(model_config["QWEN_PREFILL_RING_AG_PARAMS"](seq_len, "FF2") or {})
     return _ag(tt_ccl, t, 2, 0, **kw)
@@ -484,7 +490,7 @@ def mlp_prefill(ctx: CPContext, tt_ccl, mlp, x_local, w):
         input_tensor=w2_in,
         weight_tensor=w["w2"],
         config=FF2_CFG,
-        dtype=mlp.prefill_output_dtype,
+        dtype=ttnn.bfloat8_b if ff2_bf8_rs() else mlp.prefill_output_dtype,
         compute_kernel_config=args.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )  # [1, 1, S/4, 5120]
