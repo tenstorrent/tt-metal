@@ -162,7 +162,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
     # Class-level capabilities
     model_capabilities = {
-        "supports_prefix_caching": False,
+        # vLLM automatic prefix caching: a request whose leading KV blocks are already cached arrives with
+        # start_pos > 0 and prefills only the suffix (see Generator.prefill_forward_text); images whose
+        # tokens lie inside the cached prefix come without pixel data and skip the vision tower.
+        "supports_prefix_caching": True,
         # Split decode submission (decode_forward(read_from_device=False) + read_decode_output(async_read=True))
         # and the resident token feedback buffer come from the shared tt_transformers generator, the same way
         # the text models declare them; vLLM's async scheduling needs this flag.
@@ -293,10 +296,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         **kwargs,  # pixel_values and image_grid_thw
     ):
         empty_slots = kwargs.pop("empty_slots", None)
-        start_pos = kwargs.get("start_pos", None)
-        assert (start_pos is None) or all(
-            x == 0 for x in start_pos
-        ), f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
+        start_pos = kwargs.get("start_pos", None)  # per-user cached prefix lengths (automatic prefix caching)
+        num_cached_per_user = self._normalize_start_pos(start_pos, tokens.shape[0])
         # enable_trace is passed through from vLLM
 
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
@@ -317,29 +318,70 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # A batched prefill may mix users with and without an image (per-user entries are None for text-only
         # prompts); the image token positions in input_ids carry the user mapping, so only the users with
         # images contribute to the flattened pixel / grid lists.
-        user_pixel_values = [pv for pv in kwargs.get("pixel_values", []) if pv is not None]
-        if user_pixel_values:
-            inputs.pixel_values = torch.concat([im for pv in user_pixel_values for im in pv], dim=0)
-            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for g in kwargs["image_grid_thw"] if g is not None for im in g]
-            assert _grid_items and all(
-                im is not None for im in _grid_items
-            ), "Expected non-empty image_grid_thw for image inputs."
-            for g in _grid_items:
+        # With automatic prefix caching, vLLM strips the pixel data of an image whose tokens are fully
+        # inside the cached prefix (its grid stays, since M-RoPE positions need it): that image's rows of
+        # the merged embedding are never read by the resumed prefill, so they get zero placeholders and
+        # the vision tower runs only on the images that still carry pixels.
+        images = []  # (user, pixel_values or None, grid) in prompt order
+        for user, (pv_list, grid_list) in enumerate(
+            zip(kwargs.get("pixel_values", []), kwargs.get("image_grid_thw", []))
+        ):
+            if grid_list is None:
+                assert pv_list is None or all(pv is None for pv in pv_list), f"user {user}: pixels without grids"
+                continue
+            pv_list = pv_list if pv_list is not None else [None] * len(grid_list)
+            assert len(pv_list) == len(
+                grid_list
+            ), f"user {user}: {len(pv_list)} pixel entries for {len(grid_list)} grids"
+            for pv, g in zip(pv_list, grid_list):
                 assert (
-                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+                    g is not None and torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                ), f"user {user}: expected per-image image_grid_thw shape (3,), got {g!r}"
+                if pv is None:
+                    assert num_cached_per_user[user] > 0, f"user {user}: an uncached image arrived without pixels"
+                    images.append((user, None, g))
+                else:
+                    images.append((user, pv, g))
+        if images:
             inputs.image_grid_thw = torch.stack(
-                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
-                dim=0,
+                [g.to(device=tokens.device, dtype=torch.int32) for _, _, g in images], dim=0
             )
-            vision_start = time.perf_counter()
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            vision_time = time.perf_counter() - vision_start
-            batch_size = tokens.shape[0]
-            logger.info(
-                f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
+            live = [(pv, g) for _, pv, g in images if pv is not None]
+            if live:
+                vision_start = time.perf_counter()
+                live_embeds = self.visual_model(
+                    torch.concat([pv for pv, _ in live], dim=0),
+                    grid_thw=torch.stack([g.to(device=tokens.device, dtype=torch.int32) for _, g in live], dim=0),
+                )
+                vision_time = time.perf_counter() - vision_start
+                batch_size = tokens.shape[0]
+                logger.info(
+                    f"[PERF] Vision prefill: {vision_time*1000:.2f}ms "
+                    f"({vision_time/batch_size*1000:.2f}ms/user)"
+                    + (f" [{len(images) - len(live)} cached image(s) skipped]" if len(live) < len(images) else "")
+                )
+            else:
+                live_embeds = None
+                logger.info(f"[PERF] Vision prefill skipped: all {len(images)} image(s) are in cached prefixes")
+            merge_unit = self.reference_model.config.vision_config.spatial_merge_size**2
+            hidden = (
+                self.reference_model.config.text_config.hidden_size
+                if hasattr(self.reference_model.config, "text_config")
+                else self.reference_model.config.hidden_size
             )
+            placeholder_dtype = live_embeds.dtype if live_embeds is not None else torch.bfloat16
+            parts, cursor = [], 0
+            for _, pv, g in images:
+                n_tokens = int(g.prod().item()) // merge_unit
+                if pv is None:
+                    parts.append(torch.zeros(n_tokens, hidden, dtype=placeholder_dtype, device=tokens.device))
+                else:
+                    parts.append(live_embeds[cursor : cursor + n_tokens])
+                    cursor += n_tokens
+            assert (
+                live_embeds is None or cursor == live_embeds.shape[0]
+            ), f"vision tower produced {live_embeds.shape[0]} rows, grids account for {cursor}"
+            image_embeds = torch.cat(parts, dim=0)
         else:
             image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
@@ -372,6 +414,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             prompt_lens=decoding_pos,
             enable_trace=enable_trace,
             empty_slots=empty_slots,
+            start_pos=num_cached_per_user,
         )
         prefill_time = time.perf_counter() - prefill_start
         batch_size = tokens.shape[0]
