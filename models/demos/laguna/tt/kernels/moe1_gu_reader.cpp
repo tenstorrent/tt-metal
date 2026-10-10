@@ -26,14 +26,15 @@ void kernel_main() {
     constexpr uint32_t cb_w = 1;
     constexpr uint32_t cb_meta = 2;
     constexpr uint32_t cb_sp = 3;
-    constexpr auto in0_args = TensorAccessorArgs<10>();
+    constexpr uint32_t core_base = get_compile_time_arg_val(10);  // first core of this kernel's grid (row-major index)
+    constexpr auto in0_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
     const uint32_t in0_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - core_base;
     const uint32_t nt = core_index / slot_groups;
     const uint32_t group = core_index % slot_groups;  // active expert j goes to group j % slot_groups
 

@@ -17,12 +17,13 @@ void kernel_main() {
     constexpr uint32_t slots = get_compile_time_arg_val(6);
     constexpr uint32_t cb_sp2 = 4;
     constexpr uint32_t cb_out = 16;
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr uint32_t core_base = get_compile_time_arg_val(7);  // first core of this kernel's grid
+    constexpr auto out_args = TensorAccessorArgs<8>();
     constexpr auto sp_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
+    const uint32_t core_index = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - core_base;
     const uint32_t nt = core_index / slot_groups;
     const uint32_t group = core_index % slot_groups;  // active expert j goes to group j % slot_groups
 

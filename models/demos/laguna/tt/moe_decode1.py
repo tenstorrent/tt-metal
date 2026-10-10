@@ -55,25 +55,24 @@ def _compute_config():
     return cfg
 
 
-def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, chunk=None):
-    """x [1, 1, 1, H] bf16 TILE interleaved; w_gate_up [1, E, H, 2I] (gate | up per row); sparsity [1, 1, 1, E] bf16
-    ROW_MAJOR routing weights. Returns [1, E, 32, I] bf16 (row 0 of each active expert's tiles is real)."""
-    device = x.device()
+def _core_ranges(device, start, count):
+    """CoreRangeSet of the row-major core indices [start, start + count)."""
+    gx = device.compute_with_storage_grid_size().x
+    ranges, i = set(), start
+    while i < start + count:
+        y, x = divmod(i, gx)
+        n = min(gx - x, start + count - i)
+        ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x + n - 1, y)))
+        i += n
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _gate_up_parts(x, w_gate_up, sparsity, out, grid, core_base, slot_groups, chunk):
+    """Kernels and CBs of one gate_up_swiglu core set (cores core_base .. in row-major order)."""
     E = w_gate_up.shape[1]
     kt = x.padded_shape[-1] // TILE
     nt = w_gate_up.padded_shape[-1] // TILE // 2
-    out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, E, TILE, nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
-    )
-    slot_groups = -(-MAX_ACTIVE // SLOTS)
-    grid_size = device.compute_with_storage_grid_size()
-    num_cores = nt * slot_groups
-    assert num_cores <= grid_size.x * grid_size.y, (num_cores, grid_size)
-    grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, True)
-    # weight tiles per read: 16 lets the compute start sooner than 32 (b1 decode 14.92 -> 14.78 ms/token; 8/12/24/48/96
-    # measured 14.89/14.83/14.79/14.96/15.17)
-    # (chunk: the caller's override, e.g. the shared expert's 8 active cores read best in 48-tile pieces)
-    chunk = int(chunk or os.environ.get("TT_LAGUNA_MOE1_CHUNK", "16"))
+    gx = x.device().compute_with_storage_grid_size().x
     assert kt % chunk == 0, kt
     x_page, w_page, sp_page = _tile_bytes(x.dtype), _tile_bytes(w_gate_up.dtype), max(E * 2, 64)
     cbs = [
@@ -88,7 +87,7 @@ def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, 
         kernel_source=str(_KDIR / "moe1_gu_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[kt, nt, E, chunk, x_page, w_page, sp_page, grid_size.x, slot_groups, SLOTS]
+        compile_time_args=[kt, nt, E, chunk, x_page, w_page, sp_page, gx, slot_groups, SLOTS, core_base]
         + _accessor_args(x, w_gate_up, sparsity),
         common_runtime_args=[x.buffer_address(), w_gate_up.buffer_address(), sparsity.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
@@ -97,7 +96,7 @@ def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, 
         kernel_source=str(_KDIR / "moe1_gu_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[nt, E, 2048, sp_page, grid_size.x, slot_groups, SLOTS] + _accessor_args(out, sparsity),
+        compile_time_args=[nt, E, 2048, sp_page, gx, slot_groups, SLOTS, core_base] + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -108,14 +107,50 @@ def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, 
         compile_time_args=[kt, chunk, SLOTS],
         config=_compute_config(),
     )
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-    ttnn.generic_op([x, w_gate_up, sparsity, out], program)
-    return out
+    return [reader, writer, compute], cbs
 
 
-def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
+def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, chunk=None, shared=None):
+    """x [1, 1, 1, H] bf16 TILE interleaved; w_gate_up [1, E, H, 2I] (gate | up per row); sparsity [1, 1, 1, E] bf16
+    ROW_MAJOR routing weights. Returns [1, E, 32, I] bf16 (row 0 of each active expert's tiles is real).
+    shared = (w_sh [1, 1, H, 2 I_sh], active row, chunk): the shared expert as one always-active expert on the cores
+    after the routed ones, in the same program; returns (routed, shared [1, 1, 32, I_sh])."""
+    device = x.device()
+    E = w_gate_up.shape[1]
+    nt = w_gate_up.padded_shape[-1] // TILE // 2
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, E, TILE, nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    slot_groups = -(-MAX_ACTIVE // SLOTS)
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = nt * slot_groups
+    assert num_cores <= grid_size.x * grid_size.y, (num_cores, grid_size)
+    grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, True)
+    # weight tiles per read: 16 lets the compute start sooner than 32 (b1 decode 14.92 -> 14.78 ms/token; 8/12/24/48/96
+    # measured 14.89/14.83/14.79/14.96/15.17)
+    # (chunk: the caller's override, e.g. the shared expert's 8 active cores read best in 48-tile pieces)
+    chunk = int(chunk or os.environ.get("TT_LAGUNA_MOE1_CHUNK", "16"))
+    kernels, cbs = _gate_up_parts(x, w_gate_up, sparsity, out, grid, 0, slot_groups, chunk)
+    io = [x, w_gate_up, sparsity, out]
+    sh_out = None
+    if shared is not None:
+        w_sh, act, sh_chunk = shared
+        nt_sh = w_sh.padded_shape[-1] // TILE // 2
+        assert num_cores + nt_sh <= grid_size.x * grid_size.y, (num_cores, nt_sh)
+        sh_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, nt_sh * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+        )
+        k2, c2 = _gate_up_parts(x, w_sh, act, sh_out, _core_ranges(device, num_cores, nt_sh), num_cores, 1, sh_chunk)
+        kernels, cbs = kernels + k2, cbs + c2
+        io += [w_sh, act, sh_out]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    return out if shared is None else (out, sh_out)
+
+
+def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG, shared=None):
     """glu [1, E, 32, I] (gate_up_swiglu output); w_down [1, E, I, H]; sparsity as above. Returns [1, 1, 1, H] bf16:
-    the routing-weighted sum of the active experts' down projections."""
+    the routing-weighted sum of the active experts' down projections. shared = (sh_glu [1, 1, 32, I_sh], w_sh_down
+    [1, 1, I_sh, H] column pages): the shared expert's down projection accumulated into the same output tiles."""
     device = glu.device()
     E = w_down.shape[1]
     kt = w_down.padded_shape[-2] // TILE
@@ -127,6 +162,9 @@ def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
     assert nt <= grid_size.x * grid_size.y, (nt, grid_size)
     grid = ttnn.num_cores_to_corerangeset(nt, grid_size, True)
     x_page, w_page, sp_page = _tile_bytes(glu.dtype), _tile_bytes(w_down.dtype), max(E * 2, 64)
+    sh_glu, w_sh = shared if shared is not None else (glu, w_down)
+    kt_sh = w_sh.padded_shape[-2] // TILE if shared is not None else 0
+    w_sh_page = _tile_bytes(w_sh.dtype)
     cbs = [
         _cb(grid, 0, glu.dtype, x_page, 2 * kt),
         _cb(grid, 1, w_down.dtype, w_page, 2 * kt),
@@ -136,20 +174,23 @@ def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
         _cb(grid, 5, ttnn.bfloat16, 2048, 1),
         _cb(grid, 16, ttnn.bfloat16, 2048, 1),
     ]
+    if kt_sh:
+        cbs.append(_cb(grid, 6, w_sh.dtype, w_sh_page, kt_sh))
     reader = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "moe1_down_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[kt, nt, E, x_page, w_page, sp_page, grid_size.x, MAX_ACTIVE]
-        + _accessor_args(glu, w_down, sparsity),
-        common_runtime_args=[glu.buffer_address(), w_down.buffer_address(), sparsity.buffer_address()],
+        compile_time_args=[kt, nt, E, x_page, w_page, sp_page, grid_size.x, MAX_ACTIVE, kt_sh, w_sh_page]
+        + _accessor_args(glu, w_down, sparsity, sh_glu, w_sh),
+        common_runtime_args=[glu.buffer_address(), w_down.buffer_address(), sparsity.buffer_address(),
+                             sh_glu.buffer_address(), w_sh.buffer_address()],  # fmt: skip
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(_KDIR / "moe1_down_writer.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[2048, grid_size.x, E, sp_page] + _accessor_args(out, sparsity),
+        compile_time_args=[2048, grid_size.x, E, sp_page, int(kt_sh > 0)] + _accessor_args(out, sparsity),
         common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -157,11 +198,12 @@ def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
         kernel_source=str(_KDIR / "moe1_down_compute.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[kt],
+        compile_time_args=[kt, kt_sh],
         config=_compute_config(),
     )
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-    ttnn.generic_op([glu, w_down, sparsity, out], program)
+    io = [glu, w_down, sparsity, out] if shared is None else [glu, w_down, sparsity, sh_glu, w_sh, out]
+    ttnn.generic_op(io, program)
     return out
 
 

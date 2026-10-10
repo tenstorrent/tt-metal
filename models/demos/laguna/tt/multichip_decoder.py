@@ -326,6 +326,8 @@ class MultichipDecoder(OptimizedDecoder):
         # batch-1 decode shared expert through the same kernels, as one always-active expert over column-sharded
         # copies of its weights (TT_LAGUNA_SH1=0: the matmul / slice / multiply / matmul chain)
         self._sh1 = self._moe1_kernels and _parse_binary_env("TT_LAGUNA_SH1", True)
+        # ... run inside the routed experts' gate/up and down programs (idle cores / one more accumulated unit)
+        self._sh1_fused = _parse_binary_env("TT_LAGUNA_SH1_FUSED", True)
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._cp32_short = _parse_binary_env("TT_LAGUNA_CP32_SHORT", True)  # also 2..31 rows (16-row DFlash verify)
@@ -1507,6 +1509,17 @@ class MultichipDecoder(OptimizedDecoder):
             sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
         )
         x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        if self._sh1 and self._sh1_fused:
+            # shared expert inside the routed programs: its gate/up on the cores after the routed experts' (same
+            # program, runs alongside them), its down projection accumulated into the routed down's output tiles (no
+            # separate programs, no add)
+            glu, sh_glu = moe_decode1.gate_up_swiglu(
+                x1, self.w["exp_gate_up"], sparsity,
+                shared=(self.w["sh_gate_up_cp"], self.w["sh_active"], int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48"))),
+            )  # fmt: skip
+            return self._reduce(
+                moe_decode1.down_sum(glu, self.w["exp_down"], sparsity, shared=(sh_glu, self.w["sh_down_cp"]))
+            )
         glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
         routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
         if self._sh1:

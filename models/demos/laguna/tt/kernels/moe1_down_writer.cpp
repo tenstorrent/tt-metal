@@ -15,7 +15,8 @@ void kernel_main() {
     constexpr uint32_t cb_sp2 = 4;
     constexpr uint32_t cb_zero = 5;
     constexpr uint32_t cb_out = 16;
-    constexpr auto out_args = TensorAccessorArgs<4>();
+    constexpr uint32_t has_shared = get_compile_time_arg_val(4);  // the shared expert always contributes
+    constexpr auto out_args = TensorAccessorArgs<5>();
     constexpr auto sp_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
@@ -29,7 +30,7 @@ void kernel_main() {
     noc_async_read_barrier();
     invalidate_l1_cache();
     volatile tt_l1_ptr uint16_t* spv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
-    bool any = false;
+    bool any = has_shared != 0;
     for (uint32_t e = 0; e < num_experts; ++e) {
         if (spv[e] != 0) {
             any = true;

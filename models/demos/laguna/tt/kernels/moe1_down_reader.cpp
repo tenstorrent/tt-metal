@@ -21,9 +21,16 @@ void kernel_main() {
     constexpr uint32_t cb_w = 1;
     constexpr uint32_t cb_meta = 2;
     constexpr uint32_t cb_sp = 3;
-    constexpr auto x_args = TensorAccessorArgs<8>();
+    // shared expert (Kt_sh > 0): one more unit after the routed ones -- row 0 of its Kt_sh activation tiles and its
+    // Kt_sh down tiles of column nt (column pages, its own weight format in cb_w_sh)
+    constexpr uint32_t Kt_sh = get_compile_time_arg_val(8);
+    constexpr uint32_t w_sh_page = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_w_sh = 6;
+    constexpr auto x_args = TensorAccessorArgs<10>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sp_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto xs_args = TensorAccessorArgs<sp_args.next_compile_time_args_offset()>();
+    constexpr auto ws_args = TensorAccessorArgs<xs_args.next_compile_time_args_offset()>();
 
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
@@ -52,7 +59,7 @@ void kernel_main() {
 
     // rows 1-31 of the activation tiles are zeroed ONCE for both CB slots (each expert overwrites only row 0), so
     // the output tile's padding rows stay zero
-    if (n > 0) {
+    if (n > 0 || Kt_sh > 0) {
         // zero MEM_ZEROS_SIZE bytes, then double the zeroed prefix with local L1 copies (log2 requests, not
         // 2 * Kt * x_page / MEM_ZEROS_SIZE)
         const uint32_t x_base = get_write_ptr(cb_x);
@@ -80,5 +87,21 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_x, Kt);
         cb_push_back(cb_w, Kt);
+    }
+    if constexpr (Kt_sh > 0) {
+        const auto xs = TensorAccessor(xs_args, get_common_arg_val<uint32_t>(3), x_page);
+        const auto ws = TensorAccessor(ws_args, get_common_arg_val<uint32_t>(4), w_sh_page);
+        cb_reserve_back(cb_w_sh, Kt_sh);
+        noc_async_read(ws.get_noc_addr(nt), get_write_ptr(cb_w_sh), Kt_sh * w_sh_page);
+        cb_reserve_back(cb_x, Kt_sh);
+        const uint32_t x_l1 = get_write_ptr(cb_x);
+        for (uint32_t kt = 0; kt < Kt_sh; ++kt) {
+            const uint64_t src = xs.get_noc_addr(kt);
+            noc_async_read(src, x_l1 + kt * x_page, 32);
+            noc_async_read(src + 512, x_l1 + kt * x_page + 512, 32);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_x, Kt_sh);
+        cb_push_back(cb_w_sh, Kt_sh);
     }
 }
