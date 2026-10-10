@@ -35,6 +35,21 @@ const KernelSpecName S2I_READER{"s2i_reader"};
 const KernelSpecName S2I_WRITER{"s2i_writer"};
 const KernelSpecName S2I_COMPUTE{"s2i_compute"};
 
+// Implicit sync on a side whose threads round-robin `num_tcs` tile counters in total: the DFB picks
+// the fewest txn IDs (2..4, else 1) that split the entries evenly over those counters and stores
+// the entries per txn ID as a uint8 (dataflow_buffer.cpp), so a count above 255 wraps and the
+// credit ISR never fires.
+bool s2i_fits_implicit_sync(uint32_t num_entries, uint32_t num_tcs) {
+    uint32_t num_txn_ids = 1;
+    for (uint32_t n = 2; n <= 4; n++) {
+        if (num_entries % (n * num_tcs) == 0) {
+            num_txn_ids = n;
+            break;
+        }
+    }
+    return num_entries % num_tcs == 0 && num_entries / num_txn_ids <= 255;
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::create_program_artifacts(
@@ -127,14 +142,17 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     bool is_tile = (output.layout() == Layout::TILE);
+    // The tile path runs 4 reader and 2 writer threads. The input DFB is strided over the threads,
+    // so its entry count must split evenly over the 4 readers.
+    const bool multi_thread = is_tile && !convert_df && num_units_per_shard % 4 == 0;
+    const uint32_t num_reader_threads = multi_thread ? 4 : 1;
+    const uint32_t num_writer_threads = multi_thread ? 2 : 1;
     // Implicit sync acks one full DFB entry per write in order, so the writer can use it only when it
-    // writes every tile the reader posts: no width or height padding on any core.
-    // The DFB stores entries per txn ID as a uint8 and picks two txn IDs for an even shard but may
-    // pick one for an odd one, so a larger shard wraps that count and the credit ISR never fires.
-    const bool implicit_sync =
-        is_tile && !convert_df && num_units_per_shard_width_last == num_units_per_shard_width &&
-        num_units_per_shard_height_last == num_units_per_shard_height &&
-        (num_units_per_shard <= 255 || (num_units_per_shard % 2 == 0 && num_units_per_shard <= 510));
+    // writes every tile the reader posts: no width or height padding on any core. With 2 writer
+    // threads each round-robins 2 tile counters, 4 in total.
+    const bool implicit_sync = is_tile && !convert_df && num_units_per_shard_width_last == num_units_per_shard_width &&
+                               num_units_per_shard_height_last == num_units_per_shard_height &&
+                               s2i_fits_implicit_sync(num_units_per_shard, multi_thread ? 4 : 1);
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;
@@ -181,6 +199,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     reader.source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
         "reader_unary_sharded.cpp";
+    reader.num_threads = num_reader_threads;
     reader.dfb_bindings = {ProducerOf(S2I_INPUT_DFB, "in0")};
     reader.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
 
@@ -190,6 +209,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = S2I_OUTPUT, .accessor_name = "dst"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    writer.num_threads = num_writer_threads;
     writer.dfb_bindings = {ConsumerOf(writer_in_dfb, "out")};
     if (is_tile) {
         writer.source =
