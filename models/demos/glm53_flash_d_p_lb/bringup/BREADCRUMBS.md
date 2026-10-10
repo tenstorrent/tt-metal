@@ -368,3 +368,6 @@ norm reduce to fit.
 - KDA attention per layer (fake weights, chunk 5120 at 51200): 5.75 (precise ops) -> 4.20 ms; the op itself 0.471 ms
   (source 0.586). Layer device time kda_moe 10.91 -> 9.37, kda_dense 10.26 -> 8.69 ms.
 - GLM_KDA_DECAY=precise / kernel keep the old paths.
+- Whole model, real weights (tests/test_perf.py, 56320 tokens in 5120 chunks, with the full-mesh MoE input above):
+  warm prefill 6.01 s (9367 tok/s; was 7.03-7.09 s), chunks 541-560 ms; cold 12.59 s; last-chunk top1 vs text
+  0.6744 / top5 0.8804 (was 0.652 top1).
