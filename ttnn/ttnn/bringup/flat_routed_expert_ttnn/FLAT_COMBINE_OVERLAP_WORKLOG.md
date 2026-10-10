@@ -471,6 +471,23 @@ both moved (y 1, forward 0) like y alone. Did not work: the shared VCs are not w
   for the overlap (-0.6..-1.5%): there the reader mostly waits at the gate for the flat expert, not on reads (6.12).
   Vs the row-major baseline (1426 / 1748 / 1001 / 1636): -5.9% / -3.3% / -12.0% / -11.1%.
 
+### 6.15 Cheap probes on the 64 gu + 19 down config: pin 0, reader-tail down columns
+Overlap us (current default: pin 1, `MIMO_FL_PCD_R` 6, pipelined reads: 1342 / 1691 / 880 / 1455):
+
+| probe | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| pin 0 | 1295 (flat 1138) | 2138 (flat 1786) | 880 | 1650 (flat 1294) |
+| `MIMO_FL_PCD_R=8` | 1368 (flat 1231) | 1700 | 891 | 1508 |
+| `MIMO_FL_PCD_R=10` | 1390 | 1722 | 928 | 1607 |
+| `MIMO_FL_PCD_R=12` | 1372 | 1759 | L1 overflow (plan TT_FATAL) | same |
+
+- More reader-tail down columns: worse everywhere; flat itself slows (the reader tails become the bottleneck once
+  they also stream more down weights). The down-core starvation cannot be moved onto the readers.
+- pin 0: Kimi balanced -3.5% (pinning costs that flat 52 us here), hot cases +13..26%. Pinning does not have to be
+  global: the schedule is built on device from the counts, so a runtime rule (pin only when the largest expert is
+  far above the mean: Kimi balanced ~2.8x, hot ~27x) keeps both; flat and combine rebuild the schedule from the same
+  se_dyn code, so they stay consistent. Next.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
