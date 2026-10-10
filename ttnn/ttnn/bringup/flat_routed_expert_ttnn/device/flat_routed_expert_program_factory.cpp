@@ -70,6 +70,9 @@ std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     if (cfg.pin) {
         d.emplace_back("SE_PIN_MIN", std::to_string(cfg.pin));
         d.emplace_back("SE_PIN_SMALL", "2");
+        // pin only a dominant expert (se_dyn_pin); MIMO_FL_PIN_RATIO (read at program build; 0: always pin)
+        const char* r = std::getenv("MIMO_FL_PIN_RATIO");
+        d.emplace_back("SE_PIN_RATIO", r != nullptr ? std::string(r) : std::string("8"));
     }
     return d;
 }

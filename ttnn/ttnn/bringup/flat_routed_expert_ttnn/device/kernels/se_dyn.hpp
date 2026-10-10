@@ -100,6 +100,20 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
         b = d.subs[a] > d.subs[b] ? a : b;
     }
     const uint32_t sb = d.subs[b];
+#if defined(SE_PIN_RATIO) && SE_PIN_RATIO > 0
+    // Pin only a dominant expert: at least SE_PIN_RATIO x the mean of the others' sub-blocks. Below that the plain
+    // order is faster (no re-read of B's down weights per chunk; LoudBox 8x1 Kimi K2.7 balanced, max ~2.8x the mean:
+    // pinning cost its flat expert ~52 us) while a hot expert (~27x) needs pinning to hide the small experts' weights.
+    {
+        uint32_t rest = 0;
+        for (uint32_t a = 0; a < d.n_act; ++a) {
+            rest += a == b ? 0 : d.subs[a];
+        }
+        if (sb * (d.n_act - 1) < static_cast<uint32_t>(SE_PIN_RATIO) * rest) {
+            return;
+        }
+    }
+#endif
     // the others in schedule order: the small (weight-bound) ones first, they are interleaved with B's chunks; the
     // larger ones (compute-bound themselves) after B
     uint8_t order[SE_MAX_E];

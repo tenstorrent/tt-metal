@@ -488,6 +488,19 @@ Overlap us (current default: pin 1, `MIMO_FL_PCD_R` 6, pipelined reads: 1342 / 1
   far above the mean: Kimi balanced ~2.8x, hot ~27x) keeps both; flat and combine rebuild the schedule from the same
   se_dyn code, so they stay consistent. Next.
 
+### 6.16 Runtime pin rule (`SE_PIN_RATIO`, default 8; `MIMO_FL_PIN_RATIO`, 0 = always pin)
+`se_dyn_pin` pins the largest expert only when its sub-blocks are >= SE_PIN_RATIO x the mean of the others'.
+Decided on device from the counts; part of `flat_schedule_defines`, so combine's rebuilt order follows. Bit-identical.
+
+| overlap us (vs row-major baseline) | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| always pin (6.14) | 1342 (flat 1190) | 1691 | 880 | 1455 |
+| **ratio 8 (default)** | **1271 (-10.9%, flat 1103)** | **1705 (-2.4%)** | **890 (-11.1%)** | **1462 (-10.7%)** |
+| ratio 4 | 1272 | 1704 | 892 | 1459 |
+
+Worked: Kimi balanced -5.3% (its flat is faster unpinned than the global pin 0 run, 1103 vs 1138 us), the others
+within ~1% (noise); hot experts (~27x the mean) stay pinned. Not sensitive to the ratio between 4 and 8.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
