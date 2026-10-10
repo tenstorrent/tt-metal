@@ -108,7 +108,7 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_stage_gate_words(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
     uint32_t num_gates) {
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     std::vector<uint32_t> closed(num_gates, kStageGateClosed);
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
