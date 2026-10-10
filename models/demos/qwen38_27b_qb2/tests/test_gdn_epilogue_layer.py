@@ -5,6 +5,7 @@
 import gc
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -18,6 +19,7 @@ from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import capture
 from models.demos.qwen38_27b_qb2.tests.test_gdn_model_adapter import tensor_digest
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
+from models.demos.qwen38_27b_qb2.tt.gdn_epilogue.op import epilogue
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 from models.demos.qwen38_27b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
@@ -30,6 +32,7 @@ def changing_input_comparison(
     *,
     updates=64,
     policies=("single_step_flat_prepare_epilogue", "single_step_compact_gdn"),
+    epilogue_padding_modes=None,
 ):
     """Two independent sessions, changing tokens, same real BFP8 weights.
 
@@ -40,6 +43,9 @@ def changing_input_comparison(
     stale-input bugs in the new convolution/packed-gate boundary.
     """
     checkpoints = changing_input_checkpoints(updates)
+    if epilogue_padding_modes is not None:
+        if epilogue_padding_modes not in (("zero", "skip"), ("zero", "poison")) or policies[0] != policies[1]:
+            raise ValueError("Padding isolation requires matched recurrence policies and zero versus skip/poison")
     rng = torch.Generator().manual_seed(341200 + batch)
     sources = [
         ttnn.from_torch(
@@ -54,13 +60,28 @@ def changing_input_comparison(
     ]
     slots, traces = [], []
     original_recurrence = layer.policy["decode_recurrence"]
+
+    def invoke(slot):
+        layer.policy["decode_recurrence"] = slot["recurrence"]
+        if epilogue_padding_modes is None:
+            return layer._delta(slot["x"], slot["state"], decode=True)
+
+        def selected_epilogue(*args, **kwargs):
+            assert kwargs.get("compact_output") is True
+            return epilogue(*args, **kwargs, input_padding=slot["padding"])
+
+        # Test-only selection: production model policy remains unchanged.
+        with patch("models.demos.qwen38_27b_qb2.tt.decoder.gdn_epilogue", selected_epilogue):
+            return layer._delta(slot["x"], slot["state"], decode=True)
+
     try:
-        for recurrence in policies:
+        for index, recurrence in enumerate(policies):
             layer.policy["decode_recurrence"] = recurrence
             state = layer.allocate_state(batch_size=batch)
             x = ttnn.clone(sources[0])
             zeros = tuple(ttnn.zeros_like(value) for value in (state.recurrent, state.conv))
-            slots.append(dict(recurrence=recurrence, x=x, state=state, zeros=zeros))
+            padding = epilogue_padding_modes[index] if epilogue_padding_modes else "zero"
+            slots.append(dict(recurrence=recurrence, x=x, state=state, zeros=zeros, padding=padding))
         # Allocating session B after capturing A lets B's persistent inputs or
         # state reuse A's transient scratch addresses. Warm both complete
         # graphs and their reset copies before either capture, just as serving
@@ -68,14 +89,14 @@ def changing_input_comparison(
         for slot in slots:
             layer.policy["decode_recurrence"] = slot["recurrence"]
             x, state = slot["x"], slot["state"]
-            layer._delta(x, state, decode=True)
+            invoke(slot)
             for zero, value in zip(slot["zeros"], (state.recurrent, state.conv)):
                 ttnn.copy(zero, value)
         ttnn.synchronize_device(mesh)
         for slot in slots:
             layer.policy["decode_recurrence"] = slot["recurrence"]
             x, state = slot["x"], slot["state"]
-            trace, output = capture(mesh, lambda: layer._delta(x, state, decode=True))
+            trace, output = capture(mesh, lambda: invoke(slot))
             traces.append(trace)
             slot["output"] = output
         for slot in slots:

@@ -93,3 +93,13 @@ class CompactEpilogueContractTest(unittest.TestCase):
         for flag in ("compact_gate", "compact_output", "multiply_z"):
             with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, "Boolean"):
                 self.call(self.tensors(), **{flag: 1})
+
+    def test_input_padding_experiments_require_compact_writer(self):
+        for mode in ("skip", "poison"):
+            with self.subTest(mode=mode), self.assertRaises(Validated):
+                self.call(self.tensors(), compact_gate=True, compact_output=True, gate_offset=2560, input_padding=mode)
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "compact output"):
+                self.call(self.tensors(compact_output=False), compact_gate=True, input_padding=mode)
+        for mode in (None, True, 1, "unknown", []):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.call(self.tensors(), compact_gate=True, compact_output=True, input_padding=mode)

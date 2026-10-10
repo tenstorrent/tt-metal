@@ -34,6 +34,7 @@ def epilogue(
     compact_gate=False,
     compact_output=False,
     gate_offset=0,
+    input_padding="zero",
 ):
     """Normalize one token/user into caller-owned BF16 tiles.
 
@@ -42,11 +43,16 @@ def epilogue(
     gate_offset selecting z without an intermediate slice. Compact users
     occupy disjoint face rows, including explicitly zeroed output padding.
     Both layout options are experimental and preserve the arithmetic kernel.
+    input_padding='skip' leaves unused input rows uninitialized, only when the
+    writer emits compact live rows. 'poison' initializes them to quiet NaNs to
+    check row isolation; it is a validation mode, never a speed measurement.
     """
     import ttnn
 
     if any(type(flag) is not bool for flag in (multiply_z, compact_gate, compact_output)):
         raise ValueError("Layout and multiply_z flags must be Boolean")
+    if input_padding not in ("zero", "skip", "poison") or (input_padding != "zero" and not compact_output):
+        raise ValueError("Nonzero input_padding modes require compact output and must be skip or poison")
     if type(heads) is not int or heads < 1 or not math.isfinite(epsilon) or epsilon <= 0:
         raise ValueError("Require positive head count and finite positive epsilon")
     if type(gate_offset) is not int or gate_offset < 0 or gate_offset % 32 or (gate_offset and not compact_gate):
@@ -115,7 +121,14 @@ def epilogue(
             (
                 "reader.cpp",
                 read,
-                [eps_bits, int(compact_gate), heads, gate_offset // 32, *accessors(tensors[:3])],
+                [
+                    eps_bits,
+                    int(compact_gate),
+                    heads,
+                    gate_offset // 32,
+                    ("zero", "skip", "poison").index(input_padding),
+                    *accessors(tensors[:3]),
+                ],
                 ttnn.ReaderConfigDescriptor(),
             ),
             (

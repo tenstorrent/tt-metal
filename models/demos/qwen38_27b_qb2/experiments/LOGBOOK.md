@@ -2264,3 +2264,38 @@ still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README
   in the epilogue is a new source-backed optimization hypothesis (estimated
   1-2 ms, not measured); it is not in the running candidate.
   [Source proof and analyzer](../galaxy-evidence/compact-kernel-map-v1/README.md).
+
+## October 10, 22:09-22:24 UTC - Implement epilogue padding isolation experiment
+
+- Previous turn made progress: published combined model integration and exact
+  custom-kernel attribution at 3c4af0344ad. Revalidated both live units with
+  their original invocations. The first full-model arm completed at 22:17:20;
+  candidate timing was live at 22:23. No interruption or new performance claim.
+- Implemented default-zero epilogue input-padding modes. Opt-in skip avoids
+  48 KiB of scratch initialization per worker; poison fills both slots with
+  FP32/BF16 quiet NaNs. Only compact output accepts either mode. The reader
+  overwrites every live word, compute is unchanged and the writer still zeroes
+  output padding. No model/serving policy selects it. Expected 1-2-ms full-step
+  opportunity is unmeasured and separate from the running candidate.
+- Added 18 physical cases across public/compact/packed-offset gates, L1/DRAM,
+  B1/16/17/31/32, exact normalization/output, padding, CB wrap, rebind and
+  changed-input replay. Timings use zero/skip/zero with unchanged drift gates.
+  Real BFP8 layer comparisons run 4096 updates at B16/B32 in both skip and
+  poison modes versus zero, preserving FP32 state and independent sessions.
+- Frozen second-attempt CPU suite: 709 passed, one skipped, 104 subtests in
+  4.29 s; hardware test collection passed. Verified all 284 model-file hashes
+  against the frozen manifest. Pre-commit passed after Black/isort formatting.
+- Launched qwen38-gdn-epilogue-padding-v2-20261010, PID500939, invocation
+  2cb03803508147cca833c466023b1a52 after the exact combined-followup invocation.
+  Confirmed active/waiting with hardware_started=false; 28h/32GiB/eight CPUs,
+  1800s hardware bound, shared lock, disconnect-persistent but not reboot-
+  persistent. Current comparison and GPQA retain priority. No reset, reboot,
+  native-install, NFS or firmware change. Scope remains 30 native TSU plus the
+  full original single-Galaxy plan; this component does not complete it.
+- Issues: first CPU attempt failed in 13 tests before hardware because the
+  expect_error fixture requires a message argument. Corrected and preserved
+  v1 artifacts, used fresh v2 source/control directories. SSH staging and
+  collection needed prescribed sandbox escalation. A guessed unit-test filename
+  did not exist; located the actual contract test with rg. Updated stale roadmap
+  queue descriptions to reflect completed projection and GDN results.
+- Evidence: [epilogue-padding-v2](../galaxy-evidence/gdn-epilogue-padding-v2/README.md).

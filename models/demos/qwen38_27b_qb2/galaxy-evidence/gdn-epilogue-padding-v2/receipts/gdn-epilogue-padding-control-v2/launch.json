@@ -1,0 +1,62 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--property=RuntimeMaxSec=28h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=32G",
+    "--property=CPUQuota=800%",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v2",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v2",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--unit=qwen38-gdn-epilogue-padding-v2-20261010",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-control-v2/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-control-v2/run.log",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_gdn_epilogue_padding",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-v2",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-epilogue-padding-control-v2/source-manifest.json",
+    "--after-unit",
+    "qwen38-gdn-combined-followup-v1-20261010.service",
+    "--after-invocation",
+    "8e20a69d96884f5a8f9346d08d638e64",
+    "--after-receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-followup-v1/queue.json"
+  ],
+  "created_at": 1791670740.7807636,
+  "source_parent": "3c4af0344ad",
+  "source_manifest_sha256": "388f021eb041eb4417872d584ecdeca34980045ca62a7545dea66df1f7a4f2c7",
+  "hardware_plan": [
+    "18 four-rank shape/placement/gate-layout cases: exact native arithmetic, poisoned input rows, output padding, CB wrap, A/B/A rebind and changed-input replay",
+    "B16/B32 real-weight 4096 updates each with skip and poison versus zero padding",
+    "zero/skip/zero matched traced kernel timing; no automatic model promotion"
+  ],
+  "estimated_model_saving_ms": [
+    1,
+    2
+  ],
+  "estimated_model_tsu_32k": [
+    20.44,
+    20.87
+  ],
+  "estimate_not_guaranteed": true,
+  "expected_hardware_minutes": [
+    5,
+    15
+  ],
+  "hardware_timeout_seconds": 1800,
+  "precision_change": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false
+}

@@ -1,0 +1,45 @@
+{
+  "captured_at": 1791671003.6925488,
+  "units": {
+    "qwen38-gdn-combined-v1-20261010.service": {
+      "RuntimeMaxUSec": "1d",
+      "MainPID": "479502",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "16s",
+      "MemoryMax": "274877906944",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "15bebec92d7649909517ba9a4a5a3778"
+    },
+    "qwen38-gdn-combined-followup-v1-20261010.service": {
+      "RuntimeMaxUSec": "1d",
+      "MainPID": "479505",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "16s",
+      "MemoryMax": "274877906944",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "8e20a69d96884f5a8f9346d08d638e64"
+    },
+    "qwen38-gdn-epilogue-padding-v2-20261010.service": {
+      "RuntimeMaxUSec": "1d 4h",
+      "MainPID": "500939",
+      "Result": "success",
+      "CPUQuotaPerSecUSec": "8s",
+      "MemoryMax": "34359738368",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "2cb03803508147cca833c466023b1a52"
+    }
+  },
+  "recent_log": [
+    "2026-10-10 22:22:03.148 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 58",
+    "2026-10-10 22:22:07.848 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 59",
+    "2026-10-10 22:22:12.369 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 60",
+    "2026-10-10 22:22:17.039 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 61",
+    "2026-10-10 22:22:21.729 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 62",
+    "2026-10-10 22:22:26.429 | DEBUG    | models.demos.qwen38_27b_qb2.tt.model:__init__:108 - Loading Qwen3.8 layer 63",
+    "2026-10-10 22:22:42.961 | INFO     | models.demos.qwen38_27b_qb2.tt.model:__init__:174 - Qwen3.8 model loaded",
+    "SWEEP_CELL_BEGIN isl=32768 batch=16 replicas=1"
+  ]
+}

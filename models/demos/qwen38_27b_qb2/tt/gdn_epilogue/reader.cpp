@@ -12,7 +12,9 @@ void kernel_main() {
     constexpr bool compact = get_compile_time_arg_val(1) != 0;
     constexpr uint32_t heads = get_compile_time_arg_val(2);
     constexpr uint32_t gate_tile_offset = get_compile_time_arg_val(3);
-    constexpr auto ra = TensorAccessorArgs<4>();
+    constexpr uint32_t input_padding = get_compile_time_arg_val(4);
+    static_assert(input_padding <= 2);
+    constexpr auto ra = TensorAccessorArgs<5>();
     constexpr auto ga = TensorAccessorArgs<ra.next_compile_time_args_offset()>();
     constexpr auto wa = TensorAccessorArgs<ga.next_compile_time_args_offset()>();
     const auto raw = TensorAccessor(ra, get_arg_val<uint32_t>(0), 512);
@@ -31,15 +33,21 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(dfb::weight, 4);
-    // Before publishing either ring, zero both windows. Only the live row is
-    // changed afterward; padded token rows remain zero over every CB wrap.
-    auto* x_zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(dfb::x));
-    auto* g_zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(dfb::gate));
-    for (uint32_t i = 0; i < 8 * 1024; ++i) {
-        x_zero[i] = 0;
-    }
-    for (uint32_t i = 0; i < 8 * 512; ++i) {
-        g_zero[i] = 0;
+    // Public output needs zero padding. Compact output writes only row zero
+    // and independently clears its destination padding, so its opt-in path
+    // may skip these 48 KiB of stores. All live FP32/BF16 words below are
+    // overwritten before publication, including on both ring-buffer slots.
+    // Poison mode checks that the unchanged per-row compute cannot leak
+    // unused input rows into the live result, including after CB wrap.
+    if constexpr (input_padding != 1) {
+        auto* x_init = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(dfb::x));
+        auto* g_init = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(dfb::gate));
+        for (uint32_t i = 0; i < 8 * 1024; ++i) {
+            x_init[i] = input_padding == 2 ? 0x7fc00000 : 0;
+        }
+        for (uint32_t i = 0; i < 8 * 512; ++i) {
+            g_init[i] = input_padding == 2 ? 0x7fc07fc0 : 0;
+        }
     }
     // CB11 stages one FP32 row and eight aligned BF16 row pairs. Blackhole
     // DRAM reads require equal low six address bits: compact odd users must

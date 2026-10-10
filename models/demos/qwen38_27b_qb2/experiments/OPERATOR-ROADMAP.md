@@ -22,19 +22,19 @@ and labeled measured Galaxy throughput. This continues the Metal path.
 - Qualified shared-QK baseline: 67.245 ms/token, 14.871 tokens/s/user and
   237.94 aggregate decode tokens/s/TP4. Full GPQA: 178/198 (89.90%); all
   questions remain in the denominator, including five output-budget cutoffs.
-- New direct-preparation/epilogue candidate: three completed B16/32K measurements
+- Earlier direct-preparation/epilogue candidate: three completed B16/32K measurements
   give 60.422 ms/token, 16.550 tokens/s/user and 264.80 aggregate decode
   tokens/s. The completed after-control drift is +0.003082% with identical
   output hashes. Full GPQA subsequently passed at 177/198 (89.39%); six output
   cutoffs remain incorrect in the denominator. Serving promotion remains separate.
   [Raw candidate snapshot](../galaxy-evidence/operator-scope-v1/candidate-sweep.json)
   retains source/config hashes and every measured sample.
-- Full timing profile covers 64 layers, four ranks, three replays and all
+- Earlier shared-QK full timing profile covers 64 layers, four ranks, three replays and all
   38 operation types / 5001 device-operation rows per rank/replay. Device
   spans reconcile with fenced host steps within 0.403-0.461%. These counts
   are not program counts. Profile overhead is 7.46%; never subtract it
   uniformly from individual operations or add family medians as wall time.
-- The full profile is the shared-QK baseline. Current candidate two-layer
+- That earlier full profile is the shared-QK baseline. Subsequent candidate two-layer
   profiles locate opportunities remaining after preparation/epilogue fusion;
   multiplying them by layer count is an extrapolation, explicitly labeled.
 - The completed compact profile now covers 33 operation types / 2553 records
@@ -66,33 +66,20 @@ does not qualify accuracy. These follow-ups have not replaced the active
 compact-GDN/projection queue or changed the qualified serving launch.
 
 The [October 10 recovery receipt](../galaxy-evidence/compact-recovery-v2/README.md)
-records completed fusion GPQA and the prefill-budget A/B. Preallocating both
-sessions before trace capture fixed a changing-input harness failure. The
-real-weight compact block then measured 567.18 -> 350.97 us at B16. Extrapolating
-the 10.38-ms saving over 48 layers gave about 20 TSU. The completed full-model
-candidate now measures that gain, with after-control passed and GPQA running.
-Its first full-model attempt failed at the prefill vocabulary head because
-static kernel buffers overlapped persistent L1 allocations. A
-[replica-shared compact scratch pool](../galaxy-evidence/compact-pool-recovery-v1/README.md)
-reduces four L1 operands per layer to four per batch shape per replica while
-keeping history/recurrent state private. CPU and physical block checks passed;
-fresh before/compact/after full-model controls passed. The candidate has
-passed the formerly failing full-model boundary at both 32K and 16K, then
-completed three measured repeats and clean teardown. No further L1 failure
-occurred in this arm; qualification and long-horizon validation remain separate.
-The existing source-frozen followers run conditional G0/full GPQA/profile,
-projection tuning, then batched prefill attention. The 4K changing-input test is
-a separate follower; it adds no performance credit or independent dense
-reference claim. A register-resident recurrence experiment follows it, with
-independent dense-reference and before/candidate/after physical tests. Its two
-simulator attempts stopped at unsupported SETDVALID behavior before numerical
-comparison; no correctness or speedup is claimed for that candidate.
-An additional default-off packed-gate layout experiment follows the recurrence
-test. It preserves native gate math while eliminating the remaining per-user
-gate tile expansion. Its target is 0.5-1.5 ms per step, overlapping the gate
-layout/fusion allowance below. CPU preflight passed; physical B1/16/17/31/32
-L1/DRAM checks and real-weight B16/B32 recurrence checks remain queued.
-[Implementation and queue](../galaxy-evidence/compact-gates-v1/README.md).
+records fusion GPQA, the prefill-budget A/B and the corrected independent-session
+trace harness. The [shared compact scratch pool](../galaxy-evidence/compact-pool-recovery-v1/README.md)
+resolved the full-model L1 allocation failure. Compact subsequently passed the
+full comparison, GPQA, profile and 4096-step B16/B32 boundary checks. These are
+completed results, not pending queue items.
+
+The [projection follow-up](../galaxy-evidence/projection-l1-results-v1/README.md)
+finished all 62 revised cases with no accepted gain. Prefill batching stopped
+at an existing before-arm dense-reference failure; no gain is qualified.
+[Resident-state and compact-gate tests](../galaxy-evidence/gdn-followup-results-v1/README.md)
+both passed with small measured stage improvements. Their combined full-model
+comparison is now running, with G0/API/full GPQA conditional on a matched >=1%
+32K gain. The new epilogue unused-row experiment follows that qualification;
+see [its frozen queue and limitations](../galaxy-evidence/gdn-epilogue-padding-v2/README.md).
 
 ## Matmuls are optimized, with uneven remaining room
 
@@ -130,10 +117,10 @@ compact baseline is 49.913 ms, so 1 ms now corresponds to about 2% more TSU.
 | Order | Change and ownership | Expected benefit | Evidence, effort and risk |
 |---|---|---|---|
 | 0, completed | Direct preparation + fused GDN output epilogue | Measured 6.82-ms saving; +11.3% decode, reaching 16.55 TSU. | Matched controls and full GPQA 177/198 passed. Serving promotion and full Galaxy client performance remain separate. |
-| 1, qualified frozen candidate | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control and full 177/198 GPQA passed. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4K check separately queued. This gain replaces the initial estimate and overlaps broader fusion savings. Later default-off development changes are not the exact evaluated source. |
+| 1, qualified frozen candidate | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control and full 177/198 GPQA passed. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4096-step B16/B32 check passed. This gain replaces the initial estimate and overlaps broader fusion savings. Later default-off development changes are not the exact evaluated source. |
 | 2 | Retune output/down matmuls first, then GDN packed projection; include input/output conversions | Target 1.5-3.5 ms across matmuls, ~3-8% over the current compact baseline. This is a target range, not a demonstrated 90%-bandwidth result. | Vary reader count, bank/worker placement, K blocking and output sharding together. Measure the complete projection boundary. Avoid losing more to padding/resharding than the kernel saves. Existing gate/up is lower priority. Medium effort/risk. |
 | 3 | Production SDPA reader/compute delivery: chunk size, worker distribution, tagged lookahead and bank-local delivery | Target 1-2.7 ms, ~2-4% of the baseline. | SDPA is 12.63 ms; modeled KV-only floor is 8.91 ms at peak or 9.90 ms at 90%. Required math/reduction adds cost. Existing remote-delivery prototype loses to production and must not be promoted. Medium/high effort; preserve accurate exponentiation, FP32 accumulation and page ownership. |
-| 4 | Recurrence/preparation scheduling with shared Q/K and FP32 state | Target 0.5-1.5 ms after compact, ~1-3%; remeasure the boundary before credit. | Default-off register-resident compute variant compiled in simulator but execution was blocked by unsupported SETDVALID in both arms. Persistent physical correctness/timing test queued; full-DEST synchronization may offset saved L1 traffic. Baseline generic kernels total 5.29 ms including preparation; this is not the post-compact recurrence cost. Medium/high risk. |
+| 4 | Recurrence/preparation scheduling with shared Q/K and FP32 state | Target 0.5-1.5 ms after compact, ~1-3%; remeasure the boundary before credit. | Resident-state physical correctness passed, including dense reference. B16 timing 99.041 -> 88.131 us projects 0.524 ms across 48 layers; combined full-model validation is running. Post-compact recurrence and preparation kernel sums are 4.405 and 0.931 ms. Medium/high risk. |
 | 5 | Fuse residual add + RMSNorm and finish MLP SwiGLU in compatible L1 layouts | Target 0.5-1.5 ms beyond existing compact MLP/residual paths. | Norm kernels total 1.08 ms and binary/unary kernels 2.36 ms, shared across several candidates. Do not count the whole family. Current packed MLP already fuses SiLU into multiply. Further projection epilogues compete for pack/SFPU/register resources. Medium risk to rounding. |
 | 6 | All-reduce placement, buffer reuse and tiled projection/collective overlap | Target 0.3-0.8 ms plus any separately measured producer overlap. | All-reduce totals 2.61 ms. Existing two-link, persistent-buffer, direct-all-reduce path is already selected. Alternative fused collective paths exist in source but are not qualified substitutes. Changing reduction order requires accuracy checks. Medium/high integration risk. |
 | 7 | Q/K norm + RoPE + head-layout boundary; write final cache/attention layout directly | Target 0.3-0.7 ms. | Batched RoPE wrapper is ~1.01 ms across 16 layers, but rotation arithmetic itself only 0.137 ms in the full profile. Savings mostly belong to the layout budget. Preserve rotary dimensions, per-user positions and BFP8 cache packing. Medium effort/risk. |
@@ -181,7 +168,7 @@ but their effect on short-response end-to-end throughput is very different.
 | Priority | Work | Expected benefit and gate |
 |---|---|---|
 | P1, measured separately | B16 prefill budget 32K -> 64K with matched 32K/64K/32K controls | TTFT 98.66 -> 93.09 s (-5.6%); input 5322 -> 5640 tok/s (+6.0%). Decode remains 14.87 TSU on that older decoder, with identical generated tokens. No combined-fusion/full-GPQA promotion. B32 allocation previously failed. |
-| P2, implemented/queued | Batched full-attention cache fills and prefill attention calls | Default-off prototype reduces B16 cache fills 32 -> 2 and SDPA calls 16 -> 1. Four-rank before/batched/after boundary tests cover shuffled pages, nonzero slots, continued prefixes and dense per-user references. Engineering target 1.25-1.5x boundary, conditional 5-8% TTFT saving if it occupies 25% of prefill; stage share is unmeasured. No isolated decode gain or physical result yet. |
+| P2, blocked by baseline test failure | Batched full-attention cache fills and prefill attention calls | Default-off prototype reduces B16 cache fills 32 -> 2 and SDPA calls 16 -> 1. Four-rank before/batched/after boundary tests cover shuffled pages, nonzero slots, continued prefixes and dense per-user references. Engineering target 1.25-1.5x boundary, conditional 5-8% TTFT saving if it occupies 25% of prefill; stage share is unmeasured. Existing before-arm reference failed at B3/prefix32/chunk65; candidate was not reached. Earlier exact B2 outputs had 159% timing drift. No qualified gain. |
 | P3, profile first | Prefill GEMM tiling, sharded residual/norm continuity, intermediate allocation reuse | Tune with larger M, independently of decode. The 40%-MFU target is not established by decode bandwidth. No numerical prefill-kernel gain is assigned without current stage timings. |
 | P4 | Prefill GDN scan/convolution: workspace reuse, layout fusion, chunk/batch parallelism | Preserve recurrent state and chunk chronology. One-token decode kernel is not a prefill substitute. Profile scan/preparation separately; gain unquantified. |
 | P5 | Scheduler chunked prefill and mixed-load admission | Reduce decode pauses/TTFT tails under arrivals, not automatically raw isolated throughput. Model-internal chunking already exists. Current BFP8 plugin/state/sampler/cancellation gates remain. |
@@ -210,15 +197,12 @@ but their effect on short-response end-to-end throughput is very different.
 
 ## Acceptance and next actions
 
-Fusion qualification is complete. Retain that qualified implementation while
-the compact full-model control/candidate/control retry runs. For a valid
->=1% 32K gain, the persistent follower runs eight-replica G0, full 198-question
-GPQA and matched unprofiled/profiled whole-model decode. Projection and prefill
-boundary comparisons follow. The separate 4K boundary check extends short
-compact integration coverage without changing the running source. The auxiliary simulator hit an
-unsupported SETDVALID/source-format interaction in compact preparation after
-an explicitly fenced convolution; no numerical comparison passed. Physical
-testing remains necessary, and the simulator/native runtime is unmodified.
+Compact qualification and profiling are complete. Retain its exact qualified
+source while the combined resident-state/compact-gate before/candidate/after
+comparison runs. A matched >=1% 32K gain triggers eight-replica G0/API and full
+198-question GPQA. The default-off epilogue padding screen then runs its poison,
+replay, matched-timing and 4096-step checks. Each has a distinct frozen source;
+development HEAD itself is not the GPQA-qualified artifact.
 
 Use the remaining compact stage costs to select broader fusion; do not apply
 the original layout-family budget a second time. Every experiment must record original/candidate/after controls,
@@ -300,15 +284,10 @@ Existing baseline family timings alone do not prove another 16.58 ms recoverable
 If the remaining target budget is not met, report that gap instead of presenting
 small tuning gains or a speculative multiplier as completion.
 
-The [updated projection design](../galaxy-evidence/projection-compact-layout-v1/README.md)
-is now a waiting v6 follower after compact-v3 and its conditional
-qualification/profile-v3. It adds the actual compact-L1 GDN output boundary
-to the older public-DRAM output and compact MLP tests: 66 measurements with
-separate matched controls. Prefill-v3 and 4K-validation-v3 follow it using their
-unchanged sources. See the linked receipts for exact unit identities;
-historical launch files are not live status. The larger
-compact-pipeline work remains the primary native opportunity;
-projection tuning is a bounded supporting experiment, not a promised path to 30.
+The [compact projection design](../galaxy-evidence/projection-compact-layout-v1/README.md)
+was tested by the revised 62-case sweep. It produced no accepted speedup, so
+repeating reader/block knobs without a new mechanism is lower priority than
+compatible pipeline changes. Historical launch files are not live status.
 
 ## Latest completed knob sweep, 21:47 UTC
 
@@ -317,7 +296,7 @@ comparisons were slower than baseline; no knob change is promoted. This does
 not rule out kernel redesign, but the prior 1.5-3.5-ms estimated gain has not
 been realized. The prefill batching test failed the existing before-arm dense
 reference on a ragged chunk with prefix and requires a separate investigation.
-The three GDN experiments are queued independently behind successful projection.
+The three GDN experiments subsequently ran independently behind successful projection.
 [Results](../galaxy-evidence/projection-l1-results-v1/README.md) and
 [queue](../galaxy-evidence/gdn-independent-queue-v1/README.md).
 
@@ -327,7 +306,7 @@ Resident FP32 state and compact gates both passed standalone hardware correctnes
 At B16 they project 0.524 ms and 0.415 ms savings respectively from matched
 before/after stage measurements. Each is about 1% of the 49.913-ms full step;
 combined model measurement remains required. The compact-versus-flat 4096-update
-B16/B32 test also passed. All queued tests are complete. These incremental gains
+B16/B32 test also passed. All tests in that three-unit chain completed. These incremental gains
 do not meet 30 TSU; larger attention/GDN dataflow changes remain necessary.
 [Exact measurements and limitations](../galaxy-evidence/gdn-followup-results-v1/README.md).
 
@@ -344,5 +323,16 @@ recurrence 4.405 ms, epilogue 2.853 ms, convolution 0.996 ms, preparation 0.931 
 Next epilogue hypothesis: avoid clearing unused padding for compact output while
 retaining all public-output padding guarantees; estimated 1-2-ms full-step
 opportunity, requiring poison/wrap/replay correctness and matched timing.
-This is source-backed scope, not an implemented or measured speedup.
+The default-off implementation and poison/wrap/replay test are now queued after combined qualification. Hardware correctness and speed remain unmeasured.
 [Attribution and reproducible analysis](../galaxy-evidence/compact-kernel-map-v1/README.md).
+
+## Epilogue padding experiment queued, 22:23 UTC
+
+The standalone opt-in removes the reader's 48-KiB initialization of unused
+input rows while the compact writer preserves output padding. Poison mode
+fills both CB slots with NaNs to check isolation. CPU preflight passed 709 tests
+and 104 subtests; physical coverage includes 18 layout/placement cases and
+four 4096-step real-weight comparisons. Its bounded persistent unit waits behind
+the combined candidate's G0/API/GPQA follower. Estimated 1-2-ms full-step saving
+is a hypothesis, not an additional measured gain or a path alone to 30 TSU.
+[Implementation, source hashes and queue receipts](../galaxy-evidence/gdn-epilogue-padding-v2/README.md).

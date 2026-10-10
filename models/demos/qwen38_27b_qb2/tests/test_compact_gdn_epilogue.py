@@ -17,13 +17,17 @@ from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import compare_timings
 from models.demos.qwen38_27b_qb2.tests.test_gdn_epilogue import digest, download, native
 from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import capture
 from models.demos.qwen38_27b_qb2.tt.gdn_epilogue.op import epilogue
+from models.demos.qwen38_27b_qb2.tt.gdn_step.op import work_items
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 
 
-def run_case(mesh, batch, placement, mode):
+def run_case(mesh, batch, placement, mode, *, padding_experiment=False):
     compact_gate, compact_output, offset = mode
     memory = ttnn.L1_MEMORY_CONFIG if placement == "l1" else ttnn.DRAM_MEMORY_CONFIG
     options = dict(compact_gate=compact_gate, compact_output=compact_output, gate_offset=offset)
+    if padding_experiment:
+        assert compact_output
+        options["input_padding"] = "skip"
 
     def upload(values, dtype=ttnn.bfloat16, *, row=False):
         return ttnn.from_torch(
@@ -101,13 +105,22 @@ def run_case(mesh, batch, placement, mode):
 
     snapshots = [[[digest(v) for v in download(t)] for t in a["values"][:3]] for a in allocations]
     addresses = [[t.buffer_address() for t in a["values"]] for a in allocations]
-    checks = []
+    checks, poison_checks = [], []
     for index in (0, 1, 0):
         values = allocations[index]["values"]
         epilogue(*values, **options, multiply_z=False)
         norm = validate(values[-1], index, norm=True)
         epilogue(*values, **options)
         checks.append(dict(allocation=index, norm_sha256=norm, output_sha256=validate(values[-1], index)))
+        if padding_experiment:
+            epilogue(*values, **dict(options, input_padding="poison"), multiply_z=False)
+            poison_norm = validate(values[-1], index, norm=True)
+            epilogue(*values, **dict(options, input_padding="poison"))
+            poison_checks.append(
+                dict(allocation=index, norm_sha256=poison_norm, output_sha256=validate(values[-1], index))
+            )
+    if padding_experiment:
+        assert poison_checks == checks
     assert snapshots == [[[digest(v) for v in download(t)] for t in a["values"][:3]] for a in allocations]
     timings = []
     for variant in ("native", "fused", "native"):
@@ -115,6 +128,9 @@ def run_case(mesh, batch, placement, mode):
 
         def invoke():
             if variant == "native":
+                if padding_experiment:
+                    epilogue(*a["values"], **dict(options, input_padding="zero"))
+                    return a["values"][-1]
                 epilogue(*a["controls"])
                 return a["controls"][-1]
             epilogue(*a["values"], **options)
@@ -138,28 +154,43 @@ def run_case(mesh, batch, placement, mode):
         finally:
             ttnn.release_trace(mesh, trace)
 
-    def replay_call():
-        epilogue(*allocations[0]["values"], **options)
-        return allocations[0]["values"][-1]
+    replay_checks = []
+    for padding in ("skip", "poison") if padding_experiment else ("zero",):
 
-    trace, result = capture(mesh, replay_call)
-    replay_hashes = []
-    try:
-        for index in (2, 1, 2):
-            for src, dst in zip(allocations[index]["values"][:3], allocations[0]["values"][:3]):
-                ttnn.copy(src, dst)
-            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-            replay_hashes.append(validate(result, index))
-        assert replay_hashes[0] == replay_hashes[2] and replay_hashes[0] != replay_hashes[1]
-    finally:
-        ttnn.release_trace(mesh, trace)
+        def replay_call():
+            epilogue(*allocations[0]["values"], **dict(options, input_padding=padding))
+            return allocations[0]["values"][-1]
+
+        trace, result = capture(mesh, replay_call)
+        replay_hashes = []
+        try:
+            for index in (2, 1, 2):
+                for src, dst in zip(allocations[index]["values"][:3], allocations[0]["values"][:3]):
+                    ttnn.copy(src, dst)
+                ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+                replay_hashes.append(validate(result, index))
+            assert replay_hashes[0] == replay_hashes[2] and replay_hashes[0] != replay_hashes[1]
+            replay_checks.append(dict(input_padding=padding, output_sha256=replay_hashes))
+        finally:
+            ttnn.release_trace(mesh, trace)
+    if padding_experiment:
+        assert replay_checks[0]["output_sha256"] == replay_checks[1]["output_sha256"]
     assert addresses == [[t.buffer_address() for t in a["values"]] for a in allocations]
     assert snapshots == [[[digest(v) for v in download(t)] for t in a["values"][:3]] for a in allocations]
+    grid = mesh.compute_with_storage_grid_size()
+    assignments = work_items(batch * 12, grid.x, grid.y)
     return dict(
         batch=batch,
         placement=placement,
         mode=list(mode),
         checks=checks,
+        poison_checks=poison_checks,
+        replay_checks=replay_checks,
+        padding_experiment=padding_experiment,
+        output_padding_zero=True,
+        max_items_per_core=max(item[-1] for item in assignments),
+        input_cb_slots=2,
+        timing_input_padding=["zero", "skip", "zero"] if padding_experiment else ["zero"] * 3,
         passed=True,
         changed_input_trace=True,
         input_and_address_stability=True,
