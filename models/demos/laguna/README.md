@@ -21,9 +21,9 @@ Through the vLLM server, batch 1, versus the first version of this branch (2026-
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
-- Not met: batch-1 decode (80-86 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding: 6.4x faster than on 2026-10-09 (25 -> 159 tok/s on AIME24, 21-25 -> 100-111 tok/s on
-  real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
+- Not met: batch-1 decode (83-88 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
+- DFlash speculative decoding: about 6x faster than on 2026-10-09 (25 -> 144-159 tok/s on AIME24 across runs,
+  21-25 -> 104-117 tok/s on real text) and now faster than normal decode on every prompt; through the vLLM server 121 / 109 tok/s at 128 / 1K
   input tokens.
 
 ## Results
@@ -36,9 +36,9 @@ through the traced decode path the server runs (token picked on device). `tests/
 
 | Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
 |---|---:|---:|---:|---:|---:|---:|
-| 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.97 | 0.97 |
+| 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.99 | 0.97 |
 | 235 tokens | 32 | 0.98 | 1.00 | 1.00 | 0.99 | 0.97 |
-| 128 tokens | 1 | 0.95 | 1.00 | 1.00 | 0.96 | 0.97 |
+| 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.97 | 0.97 |
 | 128 tokens | 32 | 0.96 | 1.00 | 1.00 | 0.98 | 0.97 |
 | Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
@@ -53,11 +53,11 @@ Decode, tok/s per user (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 85.6 / 158 | 31.7 / 20 |
-| 1,024 | 82.6 / 157 | 30.1 / 20 |
-| 2,048 | 82.0 / 156 | 28.9 / 19 |
-| 4,096 | 81.4 / 155 | 26.7 / 19 |
-| 8,192 | 80.5 / 152 | 25.1 / 18 |
+| 128 | 88.2 / 158 | 31.7 / 20 |
+| 1,024 | 85.1 / 157 | 30.1 / 20 |
+| 2,048 | 84.8 / 156 | 28.9 / 19 |
+| 4,096 | 83.8 / 155 | 26.7 / 19 |
+| 8,192 | 83.2 / 152 | 25.1 / 18 |
 
 Time to first token (measured / target):
 
@@ -69,24 +69,25 @@ Time to first token (measured / target):
 | 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
 | 8,192 | 714 ms / 103 ms | 23.4 s / 3.31 s |
 
-DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 80-86 tok/s at these lengths). A round
+DFlash speculative decoding, batch 1 (decode tok/s; normal decode is 83-88 tok/s at these lengths). A round
 drafts 15 tokens, then checks up to the first 5 in Laguna in one step and keeps the matching ones plus one of
 Laguna's own. It checks fewer when the draft is unsure (once the product of its top-1 probabilities drops below 0.2),
-which reads fewer expert weights. 21-23 ms per round (draft 3.2 ms, check 17.4-19.3 ms) vs 11.7-12.4 ms per token
+which reads fewer expert weights. 21-22 ms per round (draft 2.9-3.1 ms, check 17.5-19.1 ms) vs 11.3-12.0 ms per token
 for normal decode, so DFlash wins when more than ~0.9 drafts per round are accepted:
 
 | Prompt | Input tokens | Decode, tok/s | Drafts accepted per round |
 |---|---:|---:|---:|
-| AIME24 | 235 | 158.8 | 2.6 |
-| Real text | 128 | 111.4 | 1.3 |
-| Real text | 1,024 | 108.7 | 1.4 |
-| Real text | 2,048 | 109.2 | 1.4 |
-| Real text | 4,096 | 104.0 | 1.4 |
-| Real text | 8,192 | 100.1 | 1.3 |
+| AIME24 | 235 | 144.3 | 2.1 |
+| Real text | 128 | 117.2 | 1.4 |
+| Real text | 1,024 | 104.4 | 1.3 |
+| Real text | 2,048 | 108.0 | 1.3 |
+| Real text | 4,096 | 115.3 | 1.6 |
+| Real text | 8,192 | 105.4 | 1.4 |
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
-model's own. Single runs vary by about +-10%, since the output (and so the acceptance) shifts with near-tie tokens.
+model's own. Single runs vary by about +-10%, since the output (and so the acceptance) shifts with near-tie tokens
+(AIME24: 144-159 tok/s at 2.1-2.6 drafts per round across the 2026-10-10 runs).
 
 ## Quick start
 
