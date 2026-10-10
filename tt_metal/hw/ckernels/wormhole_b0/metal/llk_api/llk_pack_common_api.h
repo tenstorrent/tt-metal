@@ -126,7 +126,10 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
 /**
  * Block the packer until the math thread signals that the destination register is ready to pack.
  */
-inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
+inline void llk_packer_wait_for_math_done() {
+    ckernel::icache_prefetch_init_end();  // the first wait ends the init (trisck.cc)
+    _llk_packer_wait_for_math_done_();
+}
 
 /**
  * Signal that the packer has finished its current destination-register section, releasing it
