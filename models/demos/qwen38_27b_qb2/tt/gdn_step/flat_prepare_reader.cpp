@@ -3,7 +3,8 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr auto qa = TensorAccessorArgs<0>();
+    constexpr bool compact = get_compile_time_arg_val(0) != 0;
+    constexpr auto qa = TensorAccessorArgs<1>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto da = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -28,14 +29,19 @@ void kernel_main() {
     for (uint32_t item = 0; item < count; ++item) {
         const uint32_t head = first + item * stride;
         const uint32_t batch = head / 4;
+        const uint32_t row = compact ? batch : 0;
+        const uint32_t row_pair = (row / 16) * 1024 + ((row % 16) / 2) * 64;
+        const uint32_t source_half = compact ? (row % 2) * 16 : 0;
         cb_reserve_back(0, 4);
         cb_reserve_back(1, 4);
         for (uint32_t tile = 0; tile < 4; ++tile) {
             for (uint32_t face = 0; face < 2; ++face) {
                 const uint32_t offset = tile * 128 + face * 64;
-                // Only token zero. Each 32-byte read is one BF16 face row.
-                noc_async_read(q.get_noc_addr(head * 4 + tile, face * 512), scratch + offset, 32);
-                noc_async_read(k.get_noc_addr(head * 4 + tile, face * 512), scratch + 512 + offset, 32);
+                // Compact rows pair users inside one tile; aligned 64-byte
+                // reads preserve the DRAM alignment contract for odd users.
+                const uint32_t page = (compact ? head % 4 : head) * 4 + tile;
+                noc_async_read(q.get_noc_addr(page, row_pair + face * 512), scratch + offset, compact ? 64 : 32);
+                noc_async_read(k.get_noc_addr(page, row_pair + face * 512), scratch + 512 + offset, compact ? 64 : 32);
             }
         }
         // The twelve gates fit in face zero of one padded tile per user.
@@ -48,7 +54,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < 128; ++i) {
             const uint32_t lane = i % 32;
             const uint32_t column = (i / 32) * 1024 + (lane / 16) * 512 + (lane % 16) * 16;
-            const uint32_t source = (i / 16) * 32 + i % 16;
+            const uint32_t source = (i / 16) * 32 + i % 16 + source_half;
             // Exact BF16 -> FP32 expansion; no new arithmetic rounding.
             qc[column] = static_cast<uint32_t>(raw[source]) << 16;
             kc[column] = static_cast<uint32_t>(raw[256 + source]) << 16;
@@ -63,14 +69,16 @@ void kernel_main() {
             for (uint32_t tile = 0; tile < 4; ++tile) {
                 for (uint32_t face = 0; face < 2; ++face) {
                     noc_async_read(
-                        v.get_noc_addr(value_head * 4 + tile, face * 512), scratch + 1024 + tile * 128 + face * 64, 32);
+                        v.get_noc_addr((compact ? local_head : value_head) * 4 + tile, row_pair + face * 512),
+                        scratch + 1024 + tile * 128 + face * 64,
+                        compact ? 64 : 32);
                 }
             }
             noc_async_read_barrier();
             const auto* raw_v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 1024);
             auto* output_v = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 1536);
             for (uint32_t i = 0; i < 128; ++i) {
-                output_v[i] = static_cast<uint32_t>(raw_v[(i / 16) * 32 + i % 16]) << 16;
+                output_v[i] = static_cast<uint32_t>(raw_v[(i / 16) * 32 + i % 16 + source_half]) << 16;
             }
             const auto* raw_decay = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 2048);
             const auto* raw_beta = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 2112);

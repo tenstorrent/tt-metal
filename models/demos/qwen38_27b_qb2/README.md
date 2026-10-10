@@ -11,6 +11,10 @@ The bring-up and queue descriptions below are historical snapshots; consult the
 logbook and current service state before treating a deployment as live or a
 candidate as qualified.
 
+**Current optimization priority:** B16 per-user prefill and decode, 32K first
+and 16K second. See the [benefit estimates and queued experiments](experiments/B16_PRIORITIES.md).
+The compact GDN front-end prototype is experimental and not enabled in serving.
+
 **Oct 10, 04:32 UTC:** optimized BFP8 shared-QK completed full GPQA at
 **178/198 (89.90%)**; five output-budget cutoffs remain in the denominator and
 all were incorrect. At32K, measured full-model decode is14.87TSU atB16 and

@@ -4,30 +4,39 @@
 
 The caller supplies exp(log_decay), retaining the current TTNN exp operation.
 This packs values/gates and normalizes Q/K with the existing FP32 arithmetic.
-No model path selects this prototype yet; all outputs are caller-owned.
+Compact convolution input is experimental; all outputs are caller-owned.
 """
 
 from models.demos.qwen38_27b_qb2.tt.gdn_step.op import HERE, kernel_source, work_items
 
 
-def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates):
+def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates, *, compact_qkv=False):
     import ttnn
 
     tensors = [q, k, v, decay, beta, normalized_q, normalized_k, values, gates]
     mesh = q.device()
     if "BLACKHOLE" not in str(mesh.arch()).upper():
         raise ValueError("Direct GDN preparation currently targets Blackhole only")
-    if len(q.shape) != 3 or q.shape[0] < 1 or q.shape[1] not in (1, 32) or q.shape[2] != 512:
-        raise ValueError("Q/K require [B,1 or 32,512]")
-    batch = q.shape[0]
-    for tensor, width, dtype in zip(
-        tensors[:5],
-        (512, 512, 1536, 12, 12),
-        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16),
+    if type(compact_qkv) is not bool:
+        raise ValueError("compact_qkv must be a Boolean")
+    if len(q.shape) != 3 or q.shape[2] != 512:
+        raise ValueError("Q/K require three-dimensional 512-channel inputs")
+    batch = q.shape[1] if compact_qkv else q.shape[0]
+    if batch < 1 or (compact_qkv and batch > 32):
+        raise ValueError("Unsupported direct preparation batch")
+    for index, (tensor, width, dtype) in enumerate(
+        zip(
+            tensors[:5],
+            (512, 512, 1536, 12, 12),
+            (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16),
+        )
     ):
+        compact = compact_qkv and index < 3
+        shapes = ((1, batch, width),) if compact else ((batch, 1, width), (batch, 32, width))
+        padded = (1 if compact else batch, 32, (width + 31) // 32 * 32)
         if (
-            tuple(tensor.shape) not in ((batch, 1, width), (batch, 32, width))
-            or tuple(tensor.padded_shape) != (batch, 32, (width + 31) // 32 * 32)
+            tuple(tensor.shape) not in shapes
+            or tuple(tensor.padded_shape) != padded
             or tensor.dtype != dtype
             or tensor.layout != ttnn.TILE_LAYOUT
             or tensor.memory_config() not in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
@@ -75,7 +84,7 @@ def prepare(q, k, v, decay, beta, normalized_q, normalized_k, values, gates):
             (
                 (HERE / "flat_prepare_reader.cpp").read_text(),
                 read,
-                accessors([*tensors[:5], values, gates]),
+                [int(compact_qkv), *accessors([*tensors[:5], values, gates])],
                 ttnn.ReaderConfigDescriptor(),
             ),
             (kernel_source("prepare_compute.cpp"), compute, [], config),

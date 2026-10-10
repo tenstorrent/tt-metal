@@ -1,0 +1,25 @@
+{
+  "state": "waiting",
+  "steps": [],
+  "primary_batch": 16,
+  "contexts": [
+    32768,
+    16384
+  ],
+  "predecessor_unit": "qwen38-gdn-fusion-full-v2-20261010.service",
+  "predecessor_invocation": "a257a3e921da46a3a9c987347c196190",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "promoted_to_serving": false,
+  "policy": "precision_single_step_shared_qk_bfp8_all.json",
+  "started_at": 1791608233.8425167,
+  "updated_at": "2026-10-10T04:59:14Z",
+  "predecessor": {
+    "MainPID": "3530696",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "a257a3e921da46a3a9c987347c196190"
+  }
+}

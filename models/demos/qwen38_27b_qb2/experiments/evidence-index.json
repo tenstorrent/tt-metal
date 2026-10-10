@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-10-10T04:36:10.694062+00:00",
+  "generated_at": "2026-10-10T05:00:21.868189+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "README.md",
-      "bytes": 28675,
-      "sha256": "1c1986387e1b97fc498a62edd6ee7e7d5e9d0ead8ab5de9a4e15d8f04f338aa1"
+      "bytes": 28933,
+      "sha256": "854535da01d87573372f22528854945602767cb548af12189b65dc244ad9710b"
     },
     {
       "path": "config/precision_accurate_decode_bfp8_all.json",
@@ -153,9 +153,14 @@
       "sha256": "2c5c9643b8029a7d006e589f63917f0315a3c416f80854bca8e477ddb59fc241"
     },
     {
+      "path": "experiments/B16_PRIORITIES.md",
+      "bytes": 6263,
+      "sha256": "fe0ff38af7e46a2bddb4f70bfb9837aae63c7db720ce6db93b150829a89795d5"
+    },
+    {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 134079,
-      "sha256": "3e4c4919483b49adf624ecb82ae656cbdea687fea73fb83879ed90691645a78e"
+      "bytes": 136959,
+      "sha256": "e5e8e4de08c985ee33926da4f6718e56e228e27bb50e2a8edd12cd6274334c6d"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -759,6 +764,96 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "1f56ae51761a553326f18780177608090bd035151679b295f06f76cec92aaefe"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/launch.json",
+      "bytes": 2044,
+      "sha256": "50bcaacf2e181ab43c540b6e1d4958e204ac6718ca3caea10b2fd776cc2a8b18"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/preflight.log.gz",
+      "bytes": 375,
+      "sha256": "c0733435250d04be406f8d25bbb795f494056d3c2e4ac407f52f714ad70ee239"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/source-manifest.json",
+      "bytes": 24743,
+      "sha256": "535a885591be75a00b18a35010225360581fb4898479d46d4df628e34ec7e78c"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/control/unit.xml.gz",
+      "bytes": 9303,
+      "sha256": "c4695f0e77e8cffb5ce454f3cba6c6f965fa259fde9c67b8ba153f987c7e28c9"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/failed-preflight-v1/preflight.log.gz",
+      "bytes": 1420,
+      "sha256": "c302e429ab184093968a53d280fa19e8e22f2e00067b65403a27736b172c3211"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/failed-preflight-v1/unit.xml.gz",
+      "bytes": 10324,
+      "sha256": "d488138fbace97ea6206d33711529e41442c9f7d82698042e44ff47717fe070a"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/queue.json",
+      "bytes": 698,
+      "sha256": "992f17ce3bab4ad102d7593776a60a60ccc62bc40a0ecde0cbadb4190d3df9eb"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/demo/run_b16_followup.py.gz",
+      "bytes": 3823,
+      "sha256": "a8519f67c211bf588099cd178eb85d0fa1feff573c6a1a2e1f19b5eceb62ff4f"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tests/test_gdn_frontend.py.gz",
+      "bytes": 3309,
+      "sha256": "eef65e407fec8f7c4620b5968582ec7c4d5ab187bf6ec7114595ff1f4ab40c5a"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tests/unit/test_b16_followup.py.gz",
+      "bytes": 1058,
+      "sha256": "90967f87ae438185562a7e63e344d6f27dca30043d832866be43e82e3254835e"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_frontend/compute.cpp.gz",
+      "bytes": 712,
+      "sha256": "4f19df33b67d9017334e63a57f23042447d76f7b7a52db200b9ec328a32392eb"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_frontend/op.py.gz",
+      "bytes": 2178,
+      "sha256": "e345cf0681e8a7b56fa6fd14197f2959584cb35ed063d8c8c0049669c1ddc880"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_frontend/reader.cpp.gz",
+      "bytes": 1189,
+      "sha256": "76bda242e9ff4deaca501088ef6080f3bfd5c01ebc26248fb935d8669bf16264"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_frontend/writer.cpp.gz",
+      "bytes": 461,
+      "sha256": "886b3536c41d418a23620b75aa414ab50b783cd3c1ffb694e49e0b06ec30756c"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1923,
+      "sha256": "348e1daad5ece9163c50a4432f83bf9efba5dd42056a27a66e152dfefebd9427"
+    },
+    {
+      "path": "galaxy-evidence/b16-priority-v2/source/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1579,
+      "sha256": "6253354edefea90de1e6f8dbc40212b8dfdee4ba3a8f2e916e39d98f075b2454"
     },
     {
       "path": "galaxy-evidence/bandwidth-capacity-validation-v2.json",
@@ -3881,6 +3976,446 @@
     },
     {
       "path": "galaxy-evidence/gdn-fusion-progress-v2/units.txt",
+      "bytes": 504,
+      "sha256": "b1817b312b54a04ec34389f0be7d36923f81ed96f63f2fe0373ca11d5706cc1b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/capture.json",
+      "bytes": 19679,
+      "sha256": "cee42bec4952c29aa07b4f71e4c51aacbac859b23f1ec039b62aa4e6e7489e31"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "d94b050304c1bb54a2a38ed92d89b28d3243a939d181e9a7207fda234d48595a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/launch.json",
+      "bytes": 1995,
+      "sha256": "9be825d65c7e95dd805320f517fdce7e51c553082bfdeec6820614efa8cc0e52"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/preflight.log.gz",
+      "bytes": 383,
+      "sha256": "88be4e18bbed3fdf8b4abda2912f2ea48ba99cb385762cc87ced6942b95dbe29"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/source-manifest.json",
+      "bytes": 23848,
+      "sha256": "f62215159f31a9f8e31e9b8e17b8ed48ab87e4ecdc83df16bc2ae1fe2a6b07c5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-control-v2/unit.xml.gz",
+      "bytes": 9176,
+      "sha256": "cd5cee90e15cc65188d195d9c66cf474e2faa767dda40db7d0d81fa714bb767f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/config/precision_single_step_flat_prepare_epilogue_bfp8_all.json",
+      "bytes": 1102,
+      "sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_bfp8_gdn_followup.py.gz",
+      "bytes": 5101,
+      "sha256": "10dd28a837f98660eb7c61066f3780fac55bd9d4af6f3c95d5e2d357732f1ee3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz",
+      "bytes": 1911,
+      "sha256": "21e1370df9cc637169a5d68259ea4ea3dbe9cc6c8238ad24e6f5441b6f604b30"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz",
+      "bytes": 1848,
+      "sha256": "fb717e56b75f1c4e1f3b4802ea08ef1eecbb08cdcafca298150da76aba1c5de3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz",
+      "bytes": 782,
+      "sha256": "5b10609050d3dfc1e6fb04b5b6acc6a08a5fd9d60bf598693173e2c64968535b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz",
+      "bytes": 1828,
+      "sha256": "e4d276a401ea271fa6d171d157e18aab7560d0f27292f3d4a065979c04dd9a35"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz",
+      "bytes": 3086,
+      "sha256": "ad778d878e827d8fa4c74893d6df8f4b5dbb842cfbf6c494328b836da2f51d65"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_model_adapter.py.gz",
+      "bytes": 3339,
+      "sha256": "dd4a186e32f4c376b50d457b08b6b2a47a5ccc3251b7a4af6713abb05f2b2683"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_bfp8_gdn_followup.py.gz",
+      "bytes": 1638,
+      "sha256": "97811d74a8047c07d616176690d868afb5909793a073b85f6ba6a4d3a73a15ea"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2544,
+      "sha256": "91e5ec585990ea07730794469ce261d4a42e8ff995112557631bb03b101d6576"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz",
+      "bytes": 924,
+      "sha256": "504125d24ff988b1d1a7f75a6f835b90d02d0b04df5080313b3a22c5c56e77d2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11331,
+      "sha256": "8282d87782a7c3361fb53f6004e7ed758f1602e289db65e9ec9b7196cee4fda5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1770,
+      "sha256": "9ba65b0b8dca041f8c628bb7e6160bcd87e340c940e1439db8678ae1b39e5f8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1432,
+      "sha256": "6a83f9ccecd5ca5ec1506ba5a01951af71dba2a1b195860577e46ef171c28aca"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1915,
+      "sha256": "68c7770d9bc3229a209c293dc13979095e327d9ed82e45b8e7b77ebaf20c263f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1465,
+      "sha256": "8306569f9f95a41facbe41e1d47d1347753e97b4caf21de93400f34d9573220f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v1/queue.json",
+      "bytes": 2653,
+      "sha256": "60b385f7f2a2a75d8a90894cef56764fc7710249fe9064e554f8d23edfaf0b5a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/flat-layer/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "c159a770e1c530120cc655e0fba42cd517fe279f86bc2cbf727c7b4d4186dc4d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/flat-layer/layer.json",
+      "bytes": 142307,
+      "sha256": "1c71d81929e5fee603f318a3b0653013f3e8c6768de12f7ed4565e6ef332bff2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "a229ef53bd1fd63f971b2be928febc291e1b2fd0a8095c0b641964675cd41837"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/exclusive_stages.csv",
+      "bytes": 7271,
+      "sha256": "9f64147033bcd40b53d102e1a10f9a70fbce92e9bfdd66f7fcbc2558c79f8378"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/inclusive_stages.csv",
+      "bytes": 8212,
+      "sha256": "3c79bf48735454f05d471eb6d32b024e6abd573c4dac1bf75e2504c9bd1d0cb4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/operations.csv",
+      "bytes": 38422,
+      "sha256": "dc4aa449aa07c71c45e3159c122b5209cc8c666a5de9aeec56dfec5fd27e97cb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/profile-summary.json",
+      "bytes": 180012,
+      "sha256": "759915e5f6cda9047d0636f51850331d258e00a1576bed9f28927798481b803d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/report.md",
+      "bytes": 2986,
+      "sha256": "1e418657ce07a090123238f2a9cc5be5a7934851de5ce4bd2e0242822f750d24"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/report.raw.md.gz",
+      "bytes": 1077,
+      "sha256": "29403976aa1930d2bbc9739942bb8441c8558bc129885220644fef9d73720505"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "07504107c4f441e47eb922c96ba3244b8cfd05efa53dbc7b4f979af5301a1b76"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/profile.json",
+      "bytes": 20172,
+      "sha256": "01f47641f856b63f1f5e2196d187843bdf6c1891d5bdef1b20fb8f1f50fccfd0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/run.log.gz",
+      "bytes": 4062,
+      "sha256": "297f93a85cae2e019606fd446723d8dccf740683acbe079d72544fffb0e408d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/tracy/.logs/cpp_device_perf_report.csv.gz",
+      "bytes": 129868,
+      "sha256": "ec4f5088e1f9813be4c84b83aff28adc711eb9efa509aca5fce4d7e23150ea7a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2861,
+      "sha256": "169017fb3a38ba3445ca4605f0162f382b145fbef5537acf1df6eb91af21fa36"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 81270,
+      "sha256": "05f1e4427d22362cecbe93f7899aa5e29dfb1ea18637dc8d465fb0e8f7c10f94"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 521,
+      "sha256": "9eb5f0ff716517f50ee363c63f576754bd3b41c45685e55aab751c85c9802df9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/tracy/reports/2026_10_10_04_35_01/ops_perf_results_2026_10_10_04_35_01.csv.gz",
+      "bytes": 248484,
+      "sha256": "9ef24c7554807c1933f3dd2a4086e7574f9b00b7d41c3309d43b1005af5e3e85"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "f3633cdeb3274357ea0efedcf2e6412cab0fedf4118b4832d60c88403d662764"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/exclusive_stages.csv",
+      "bytes": 7260,
+      "sha256": "2f15f4b4bf9ae4f77f05842f150d6ee067245f63554817ea8dbf578d7eef11fc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/inclusive_stages.csv",
+      "bytes": 8202,
+      "sha256": "27c65ab217feaab10011b893266a09c72a5ea89744d58eb75c42f3538eb602cf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/operations.csv",
+      "bytes": 35208,
+      "sha256": "356b3f4728a1684a462ec40671070e2229ba6727e21cd7a164f4b228c5d7fbe2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/profile-summary.json",
+      "bytes": 170171,
+      "sha256": "0ce5d817c6a433c19e91b86ef8e44729c4b44ee09621b69c7aeb0d8f5fefa56e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/report.md",
+      "bytes": 2993,
+      "sha256": "c61eadd32ada5b637cfbca92de7fd908937a03233e5d939ca2e47453cc3c9bcc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/analysis/report.raw.md.gz",
+      "bytes": 1042,
+      "sha256": "54784a7374dbf4532e352716ffe5f8d83afef0cc5a53f074d64cde81a06fae48"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "11fb17b6a9fcbb78a48d97743fb750c4df1f7d310ac6fd6c96ec973404305e49"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/profile.json",
+      "bytes": 20209,
+      "sha256": "6fc45f0a43fec148ce820dcf249395e32bf4a8b195e7d6e16bb304fa8759e6f7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/run.log.gz",
+      "bytes": 4051,
+      "sha256": "7f184168034b7dd710edb3df0c0113678b0be899d4f77e0f37577e2d10ccded1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/tracy/.logs/cpp_device_perf_report.csv",
+      "bytes": 388437,
+      "sha256": "dfef4a1d8ec45366d4e052fc7a6552cec083134f1bda71e9a214e959894bdc15"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2651,
+      "sha256": "10ddbdd5f6b8a6180fba1e255cdbc50aba05dc933ae6aebc61d88b6842612a17"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 68480,
+      "sha256": "6979c7d723c63de1cb7296338d2fa37159d90cbfbd806e2224ae908fefc3f617"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 522,
+      "sha256": "0b7ce7a796e69ddc946c73c72f264fdb41c671193451823ec6a7a9f00bcfb74a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/tracy/reports/2026_10_10_04_35_54/ops_perf_results_2026_10_10_04_35_54.csv.gz",
+      "bytes": 212281,
+      "sha256": "296d80e117a2274d9ad3a82235128d6470c4214901650e77b5793e5cb18e037d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "13038701d88c65dc868a90d251c018174e7d7c8b0f770e8fb72037407f369b46"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/exclusive_stages.csv",
+      "bytes": 7318,
+      "sha256": "3504d245905b9818c0184d5327ad9ff336f2cb9ae06b6595597846d2ce1a70bd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/inclusive_stages.csv",
+      "bytes": 8286,
+      "sha256": "5442e1600e870140d10d3a06d23d33e0230c3aedd3a222d00548bd11bedd1ec8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/operations.csv",
+      "bytes": 37766,
+      "sha256": "d68516b3c831e67839a80eeb84fde6c9e75d05b4f8d339f6fc1fa3fe034323e3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/profile-summary.json",
+      "bytes": 177493,
+      "sha256": "0f47955b246cb7123de16a01567a7e42f1c20abed48d060ade76fad2c5692825"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.md",
+      "bytes": 2975,
+      "sha256": "f340a0d6e3172009667d17fe1312c2d3bcce7a8a03226724608439169b5eefff"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.raw.md.gz",
+      "bytes": 1067,
+      "sha256": "651a8136e977fc958c369ca1454e7d1d0df18e7df4edb1811d971bd580d6fd1d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "9b3e3cf91f71e28956a468875e57555711202e66a743851ddf9b2fb23dca643e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/profile.json",
+      "bytes": 20173,
+      "sha256": "bbce56c7f7b242a189ba4f885b45226f04f17c7338d163d866cad8f8f7bf1cd8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/run.log.gz",
+      "bytes": 4039,
+      "sha256": "c80af467cdee1192afad6c6c2f43274ea95934d8b2cab69d9a08bf89c5720a4a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/cpp_device_perf_report.csv.gz",
+      "bytes": 127892,
+      "sha256": "9be80db9f8b476561cbfd89411c4a2bce8180ed950a248cf8bb9eb2456881949"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2871,
+      "sha256": "a6b5cc9f945c056213abb52ccbf5e763c64cd92fbbd6134d27ee0991c22f5596"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 79740,
+      "sha256": "01414f31bc96d6e40b02642a09fccacae24cea89666088a61c6e8cd7beb90464"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 528,
+      "sha256": "1447560260c4da78bd499a2f6a8d9ac8b89a82877cfbb9fa3c0c167114301b97"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/reports/2026_10_10_04_33_06/ops_perf_results_2026_10_10_04_33_06.csv.gz",
+      "bytes": 245430,
+      "sha256": "bf92ee7188d3ac147892b986ac39613e88e1119514a1dba007ffcb53624bb18d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "615d24f843d7edffe114a14444dce76a8a1d4dd7ab7179c26f5ad2a0381124b0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/exclusive_stages.csv",
+      "bytes": 7310,
+      "sha256": "703e7a7151b0ed15537997db386cb9d6d17329625a4561e0d3e5ea4b36ff534e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/inclusive_stages.csv",
+      "bytes": 8268,
+      "sha256": "d6486b5dd8dd901df528ec809809e4647c1cf3d94ca655f6f66777d9fffdb672"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/operations.csv",
+      "bytes": 34551,
+      "sha256": "9fb2bab0424e9cdf078570d35f0c91d03da82d65bae8d2ee399c279ede158557"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
+      "bytes": 167646,
+      "sha256": "edf3154f382ae3d9b6cae417ef66351446f03c268220c5e3b5d788472088d814"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.md",
+      "bytes": 2970,
+      "sha256": "8c965d31468187bb78404737585cc6182c6a3168b8eb5e3f0b222b302ed1bb01"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.raw.md.gz",
+      "bytes": 1072,
+      "sha256": "deee830d62bb1c5ad465b7d8fcaf19d3fe11002dedc847fab314de833dc7524a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "caedb847fa3f873a0e417091b790f671cf610fec95c4455345e1b766cdd5624d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/profile.json",
+      "bytes": 20209,
+      "sha256": "b4cc3aa8422d67d78c578eb76788d8e775711d33fe56667964c140e80fb6a9cb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/run.log.gz",
+      "bytes": 6969,
+      "sha256": "cfa3fa443fd54c068c02bb3ca7d708e39559d031e98665e787f2d1a8f52776e5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/cpp_device_perf_report.csv",
+      "bytes": 380804,
+      "sha256": "710afb43ea6e3579b9b83a7300fdb44adbce749c6752b4d6d96db2a528515332"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2655,
+      "sha256": "23eaf159535d24d91582b889df161990c2573e08f9cbfd869ad9e7ec0c66eed5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 67199,
+      "sha256": "5497d2343dac2963b94e52c919a2017cf865be83bf852ad5c2e57e6768d70fe5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 523,
+      "sha256": "eb20912d9f678e50f9f4fe5bcbd9dd8dace5c560bc1dcff98cf20cbc14259873"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/reports/2026_10_10_04_34_06/ops_perf_results_2026_10_10_04_34_06.csv.gz",
+      "bytes": 209912,
+      "sha256": "b263b6fe68d3646435007efb8b896dc72b7a51e565deaee8cd422a6e582e38f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/queue.json",
+      "bytes": 5963,
+      "sha256": "6d4f4aa999c912e4be10a1f9c90f90ba029158391cdea6d2d665b3daaca932d5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v3/units.txt",
       "bytes": 504,
       "sha256": "b1817b312b54a04ec34389f0be7d36923f81ed96f63f2fe0373ca11d5706cc1b"
     },
@@ -9462,13 +9997,13 @@
     },
     {
       "path": "tt/gdn_step/flat_prepare.py",
-      "bytes": 4477,
-      "sha256": "9ddd3761acf05a8991171976504a5ffd83c07607fa3b7a3abd5185e722d0dae7"
+      "bytes": 4934,
+      "sha256": "0e8abc89cf6126a6efabc263a2214fb9a3389526041f3c8b55578b27f1276632"
     },
     {
       "path": "tt/gdn_step/flat_prepare_reader.cpp",
-      "bytes": 5161,
-      "sha256": "9b3ea645064ebfd5252a058d09c381cec12cb7afcb327c1f8011213401cc2519"
+      "bytes": 5730,
+      "sha256": "bbbcbb7fad128f39fa105e7a57f3ed68ada87a8de0484b4b146850acc18f7e40"
     },
     {
       "path": "tt/gdn_step/model_adapter.py",

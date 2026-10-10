@@ -1812,3 +1812,61 @@ No session connection is needed for that queue to continue.
   end-to-end attribution before promising that target. Stage timelines overlap.
 - SSH helper executions blocked by sandbox were retried with explicit escalation.
   Native installation, weights, NFS and firmware were not changed.
+
+## Oct 10, 04:39-04:59 UTC: B16 priority, profile attribution and compact front end
+
+- User priority is now per-user prefill/decode performance at B16, 32K first
+  and 16K second. B32 becomes a secondary check; long context stays in scope.
+  Added B16_PRIORITIES.md with expected per-op, decode and all-in benefits.
+- Collected all four completed current Tracy profiles. At B16, packed
+  convolution is 110.46 us/layer, including about 73 us of output tilization.
+  Paged-attention inclusive time is 796.77 us/layer. Firmware wait sums are
+  not independent costs and blank NoC counters do not establish congestion.
+- Started an unselected compact GDN front-end prototype: one convolution row
+  per user, native ordered BF16 arithmetic, in-place history updates after
+  all old rows are read, and compact outputs consumed by the direct FP32
+  preparation reader. Covers aligned 64-byte DRAM reads for odd compact rows.
+  No serving policy/default selects this code and no hardware gain is claimed.
+- Added a physical TP4 comparison against native convolution/history plus
+  preparation, all four ranks, B16 before B32, two allocations, L1/DRAM,
+  public/compact projections, and changed-input traced replay. Prepared
+  vectors and convolution outputs require bit equality; history must match
+  independent host chronology. Native/fused/native timings retain drift.
+- First staging stopped before hardware: eight new negative tests omitted
+  the repository expect_error fixture's required message argument. Preserved
+  v1 evidence. Corrected v2 passed 491 CPU tests and 40 subtests, one unrelated
+  skip; hardware test collection passed. Kernel execution remains pending.
+- Started persistent qwen38-b16-priority-v2-20261010.service, PID3565241,
+  invocation f5b0da5649614052ba7b8ddf37b466d5. It waits for exact current
+  fusion/GPQA invocation a257a3e921da46a3a9c987347c196190 to finish cleanly.
+  Then B16-only 32K/64K/32K prefill-budget sweeps at 32K/16K contexts, the
+  preparation regression screen, and compact front-end tests acquire the
+  common device lock in order. Source hashes, deadlines and receipts retained.
+- At 04:58:55 UTC both controllers are live. The current control has completed
+  32K/B32 at10.60197TSU and moved to32K/B16. No active run was interrupted.
+- Audited serving scope: 8 DP x TP4, max_num_seqs16, configured256K per request,
+  shared KV pool. Chunked scheduler prefill and prefix caching remain disabled;
+  the older BFP4 continuation diagnostic passed but does not qualify the
+  current BFP8 plugin scheduler or device sampler. Internal model chunking
+  and skipping intermediate output heads are already enabled.
+- Sandbox denied the initial collector/stager/rsync SSH attempts; explicit
+  escalated retries succeeded. Only task-owned host disk/memory was changed.
+  No precision downgrade, deployment promotion, native install or NFS change.
+
+## Oct 10, 05:04 UTC: reload comparison and expected-gain communication
+
+- User requested clearer optimization plans and asked why reload bandwidth is
+  higher. Rechecked Blaze source at0ecfc5099203387554a5ca2912f066c098a45fd0:
+  its92% figure is an expert-matmul measurement, explicitly not a whole-model
+  reload utilization measurement. Bank-local contiguous reads, placement and
+  tagged in-flight transactions explain the favorable streaming design.
+- Reconciled our read-only499-508GB/s result with the already completed delivery
+  sweep275-280GB/s and current model useful-byte estimate37.4%. These are
+  distinct measurement boundaries. Delivery cost is proven for the prototype;
+  NoC saturation as the model bottleneck remains unproven.
+- Added this comparison to B16_PRIORITIES.md. Expected gains remain separate:
+  current fusion about11% decode, broader compact front end another10-20%
+  engineering target, prefill budget about10% input throughput. The queued
+  compact prototype implements only part of the broader front end.
+- Both persistent units remain active; the full-model control is running and
+  the B16 follower waits for its exact predecessor. All precommit checks pass.
