@@ -298,19 +298,20 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # `lanes == 0`. Written the other way round, its row recorded no count, so the
     # report flagged the cell every night and a re-emit could not clear it.
     if overflowed.any():
+        verdict = ulp_sweep.nonfinite_verdict(overflowed, src, golden, result, stats)
         reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
         )
     elif lanes == 0:
-        reason = "no lane a step count can describe"
-        unmeasurable = reason
+        verdict = ulp_sweep.Unmeasurable(why="no lane a step count can describe")
+        unmeasurable = verdict.why
     else:
         unmeasurable = None
     if unmeasurable:
         if ulp_sweep.EMIT:
-            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            ulp_sweep.record_unmeasurable(mathop.name, key, verdict)
             return
         if not gated:
             # Skipped, but on the record: the row names how many lanes went non-finite,

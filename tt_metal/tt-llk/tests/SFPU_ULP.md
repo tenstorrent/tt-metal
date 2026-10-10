@@ -161,14 +161,14 @@ or the sweep has nothing to feed it.
 
 ### 2. Give it a block in the table
 
-The emitter keeps an op's key line -- its name and any header comment -- and only adds
-or replaces the `measured by:` clause on it; it never writes a key line itself. So a
-*new* op needs one by hand first. Add the name and one placeholder row (a key with no
-rows fails to load):
+The emitter keeps an op's key line -- its name and any header comment -- as it is; it
+never writes a key line itself. So a *new* op needs one by hand first. Add the name and
+one placeholder row (a key with no rows fails to load, and so does a `max_ulp` row
+without the `measured` figure it came from):
 
 ```yaml
 MyOp:
-  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # placeholder, replaced by the emit run
+  - {in: Float16_b, out: Float16_b, metric: tolerance}  # placeholder, replaced by the emit run
 ```
 
 Key the placeholder on a swept `in`/`out` pair, or the emit run keeps it instead of
@@ -185,43 +185,47 @@ writes nothing.
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-09-23, except where a row says otherwise
-  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
+MyOp:
+  - {in: Float16_b, out: Float16_b, max_ulp: 2, measured: 1, run: 2026-09-23}
+  - {in: Float16, out: Float16_b, metric: tolerance, measured: 14337, run: 2026-09-23}
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance, measured: 393, run: 2026-09-23}
 ```
 
-Four verdicts:
+Every row says what it was derived from: `measured`, the worst lane, and `run`, the
+day the sweep measured it (a functional driver's hand-measured row says `sampled:`
+instead). Those fields are the provenance; the comment is for people. Five verdicts:
 
 - **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, capped at the
   output's usable ceiling when the measurement itself fits under it. A measured 0 stays
   0 on a 16-bit input the sweep enumerates, and on an op exact by construction; on the
   strided `Float32` input it is written as 1, since a sample cannot assert exactness.
-- **`max_ulp: N, near_zero_atol: A`**, "max R ULP outside a A near-zero floor (M steps
-  over every lane)" — enrolled with a floor. The step count is a difference of
+- **`max_ulp: N, near_zero_atol: A, measured: R, measured_all: M`** — enrolled with a
+  floor: `R` is the worst lane outside it, `M` the worst over every lane. The step count is a difference of
   bit-pattern ranks, so a lane where the hardware answers 0 for a 2e-9 the golden still
   holds reads as 2^29 fp32 steps, and one such lane demoted the whole cell. Lanes under
   1 % of the cell's largest golden (and under `A/0.01`) are judged on absolute error
   instead; `A` is the smallest floor that rescues the band lanes past the ceiling, with
   1.1x headroom, and `N` is the budget of everything outside it. The emitter grants a
   floor up to `ulp_sweep.EMIT_MAX_NEAR_ZERO_ATOL` (1e-3); a cell that would need more
-  is demoted with the figure it would have needed on the row.
-- **`metric: tolerance`, "budget N > ceiling C"** — the measurement itself is past
-  `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
-  tolerance it replaces; `N` is the budget it would have needed. The op keeps tolerance + PCC on that cell and the number is
-  recorded so nobody re-derives it.
-- **`metric: tolerance`, "block-quantized"** — a block float output. The sweep
+  is demoted, and its comment says what the floor would have left.
+- **`metric: tolerance, measured: N`** on a step-gateable output — demoted: the
+  measurement itself is past `usable_budget_ceiling`, so a step budget would no longer
+  be *tighter* than the tolerance it replaces. The op keeps tolerance + PCC on that
+  cell, and `measured` is what the headroom report holds it to; the budget it would
+  have needed is `_verdict`'s for that figure.
+- **`metric: tolerance, measured: N`** on a block-float output — block-quantized. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
   and the exponent fits all of them: the best case for quantization, not a
   representative one. `Abs` reads **15,616 steps** there from random mixed-magnitude
   blocks (the table's `Bfp8_b` note) and **393** from the sorted sweep of a bfloat16
   input, so neither number is enrollable.
-- **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
-  describe, or disagreed with the golden about being finite where the op claims an
-  answer (inf/NaN against a finite golden, or a finite answer to an infinite one). No budget buys that;
-  the row says why instead of leaving a hole the next emit would paper over, and it still
-  records `max N ULP` over the lanes that *were* measurable, so the rest of the cell is
-  not thrown away with the demotion. On a
+- **`metric: tolerance, measured: N, nonfinite: L`**, "not measurable: …" — `L` lanes
+  disagreed with the golden about being finite where the op claims an answer (inf/NaN
+  against a finite golden, or a finite answer to an infinite one), or the cell had no
+  lane a step count could describe (no `measured`). No budget buys that; the row says
+  why instead of leaving a hole the next emit would paper over, and `measured` is the
+  worst of the lanes that *were* measurable, so the rest of the cell is not thrown away
+  with the demotion. On a
   gateable output such a row must also be acknowledged, with its cause, in
   `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` — and if the cause is a
   tracked defect on a handful of inputs, it belongs in `_KNOWN_NONFINITE_LANES` instead,
@@ -238,12 +242,10 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py test_ulp_provenance.py -q
 
 ## The rules the table enforces
 
-- **No number is a guess.** The trailing comment on a row is the measurement it came
-  from. A budget may only be *raised* by re-measuring and updating that comment in the
-  same change. Code reads the comment only through `ulp_provenance.Provenance.parse`,
-  and writes it only through `Provenance.render`: a note that is not exactly what
-  `render` writes reads as hand-written, so rewording one cannot leave a guard
-  half-matching it. From #57527, `llk-sfpu-ulp-budget-guard` fails a pull request that raises
+- **No number is a guess.** A row's `measured` and `run`/`sampled` fields are the
+  measurement it came from, and the loader refuses a `max_ulp` row without them. A
+  budget may only be *raised* by re-measuring and updating them in the same change. The
+  comment beside a row is prose; no code reads it. From #57527, `llk-sfpu-ulp-budget-guard` fails a pull request that raises
   one without it; the `ulp-budget-raise-approved` label is the override, and it still
   reports which rows it admitted without a fresh measurement.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
@@ -255,7 +257,7 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py test_ulp_provenance.py -q
   `FastMode.Yes` and takes only a row's tolerance arm, which those flags do not move.
 - **An exhaustive budget is the emitter's number.** `test_no_step_budget_exceeds_the_measurement_it_records`
   holds every row the sweep wrote to exactly `_verdict`'s budget for the measurement
-  beside it, so widening one by hand has to falsify its comment. A sampled row may sit up
+  beside it, so widening one by hand has to falsify its `measured`. A sampled row may sit up
   to 2x its measurement.
 - **A gated cell is not parked quietly.** A `not measurable` verdict on a gateable output
   has to be acknowledged in `_UNMEASURABLE_CELLS_ACKNOWLEDGED` with its cause, or the
@@ -335,5 +337,5 @@ the floor it would have needed.
 | `python_tests/helpers/ulp_sweep.py` | what the sweep feeds, what it masks, and the emitter |
 | `python_tests/helpers/sfpu_accuracy_budget.yaml` | the table |
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
-| `python_tests/helpers/ulp_provenance.py` | the table read as rows and provenance: the one parser and renderer of its comments |
+| `python_tests/helpers/ulp_provenance.py` | the table read as rows, and each row's provenance fields |
 | `python_tests/helpers/ulp_budget_diff.py` | the CI comparison, and the headroom report (from #57527) |
