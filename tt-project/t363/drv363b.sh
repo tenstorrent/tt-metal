@@ -23,7 +23,7 @@ if [ "$(cat $B/.t363_built 2>/dev/null)" != "$REV" ]; then
   cp -a --reflink=always $F/t48 $B || fail "copy rc=$?"
   rm -rf $B/build $B/build_Release $B/python_env $B/tmp
   ( cd $B && timeout 600 git fetch -q origin ttp/t48-ltx25-integrated && git checkout -q -f $REV && git submodule update --init --recursive -q && git clean -fdq ) >> $L 2>&1 || fail "checkout rc=$?"
-  ( cd $B && timeout 5400 ./build_metal.sh --build-type Release ) > $D/build.log 2>&1; rc=$?
+  ( cd $B && CMAKE_BUILD_PARALLEL_LEVEL=32 timeout 5400 ./build_metal.sh --build-type Release ) > $D/build.log 2>&1; rc=$?
   log "build rc=$rc"; [ $rc = 0 ] || { tail -40 $D/build.log > $R/build_tail.log; fail "build rc=$rc"; }
   echo $REV > $B/.t363_built
 fi

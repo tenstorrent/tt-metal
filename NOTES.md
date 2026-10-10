@@ -31,6 +31,11 @@ Code commit ced1ac7f2bd: table entries + CPU test + sweep candidates gain T=2/4.
   retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t363/detach/drv363c
   Marker /var/tmp/fasth3/t363/drv363b.done, log drv363b.log, result res/run_ab_job*.log ("AB RESULT").
 
+- drv363c: build failed (19:31 UTC) at 1069/1445 linking tracy-capture: ld.lld 'pthread_create has failed:
+  Resource temporarily unavailable' (transient host thread limit, not a code error). No device job ran.
+- drv363d (started 12:40 PDT): same driver, build capped at CMAKE_BUILD_PARALLEL_LEVEL=32.
+  retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t363/detach/drv363d
+
 ## Next step
 Read drv363b.done and the "AB RESULT" line. If PCC>=0.999/PSNR>=45 (expect identical): git switch -c
 <branch>-land origin/ttp/t48-ltx25-integrated, cherry-pick ced1ac7f2bd, ttp push --detach.
