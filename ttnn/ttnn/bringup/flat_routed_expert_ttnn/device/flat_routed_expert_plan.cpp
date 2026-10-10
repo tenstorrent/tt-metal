@@ -540,9 +540,20 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // MIMO_FL_COLS=n (probe): down cores only in columns [0, n), e.g. 11 on a 12-column grid to reproduce the 11 x 10
     const uint32_t cols_cap = std::getenv("MIMO_FL_COLS") ? std::atoi(std::getenv("MIMO_FL_COLS")) : grid.x;
+    // MIMO_FL_SKIP_COLS="x,x,.." (probe): no down cores in these columns, e.g. 6 on a Galaxy chip (12 x 10, east
+    // readers in column 7): the column a p150's 11 x 10 doesn't have, so the plan is the p150's (cores-for-cores) on a
+    // Galaxy chip
+    std::set<uint32_t> skip_cols;
+    if (const char* sc = std::getenv("MIMO_FL_SKIP_COLS")) {
+        for (const char* q = sc; *q;) {
+            char* end = nullptr;
+            skip_cols.insert(static_cast<uint32_t>(std::strtoul(q, &end, 10)));
+            q = *end == ',' ? end + 1 : end;
+        }
+    }
     for (uint32_t y = row0; y <= std::min(row1, uint32_t(grid.y) - 1); ++y) {
         for (uint32_t x = 0; x < std::min(cols_cap, uint32_t(grid.x)); ++x) {
-            if (!taken.contains({x, y})) {
+            if (!taken.contains({x, y}) && !skip_cols.contains(x)) {
                 p.down.emplace_back(x, y);
             }
         }
