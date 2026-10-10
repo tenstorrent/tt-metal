@@ -45,13 +45,16 @@
 #include "llk_unpack_AB_api.h"
 #endif
 #ifdef TRISC_PACK
+#if defined(ARCH_BLACKHOLE)
+#include "experimental/llk_pack_sdpa_weighted_reduce.h"
+#endif
 #include "llk_pack_common.h"
 #endif
 
 namespace ckernel {
 
 // Blackhole-only: the body is written against Blackhole SFPU/packer encodings. The LLK headers included
-// above are arch-generic, so only the API surface needs gating.
+// above are arch-generic except the Blackhole-only block LLKs, which are gated at their includes.
 #if defined(ARCH_BLACKHOLE)
 
 // Re-establish the weighted-reduce unpack/math/pack config for one chunk.
@@ -154,6 +157,9 @@ inline void weighted_reduce_unpack_block_impl(
     const std::uint32_t num_chunks) {
     const std::uint32_t qk_id = get_operand_id(qk_cb);
     const std::uint32_t weights_id = get_operand_id(weights_cb);
+    LLK_ASSERT(cb_access_within_bounds(qk_id, qk_tile_index, num_chunks), "Block tile read exceeds CB boundary");
+    LLK_ASSERT(cb_access_within_bounds(weights_id, 0, 1), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(!IS_BFP_FORMAT(unpack_src_format[qk_id]), "weighted_reduce_block walks dense qk faces, not block float");
     const std::uint32_t address_a =
         get_local_cb_interface(qk_id).fifo_rd_ptr - 1 + qk_tile_index * get_local_cb_interface(qk_id).fifo_page_size;
     const std::uint32_t address_b = get_local_cb_interface(weights_id).fifo_rd_ptr - 1;
@@ -163,6 +169,10 @@ inline void weighted_reduce_unpack_block_impl(
 
 #ifdef TRISC_MATH
 inline void weighted_reduce_math_block_impl(const std::uint32_t num_chunks, const std::uint32_t first_slot) {
+    // A slot is 16 DEST rows.
+    LLK_ASSERT(
+        (first_slot + num_chunks <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile16x16>()),
+        "weighted_reduce_block slots exceed the DEST section");
     for (std::uint32_t i = 0; i < num_chunks; i++) {
         weighted_reduce_math_impl(first_slot + i);
     }
@@ -181,6 +191,7 @@ inline void weighted_reduce(
 }
 
 // weighted_reduce for num_chunks consecutive pages of qk_cb into DEST slots first_slot onwards, in one unpack context.
+// The pages must be contiguous in the CB and dense (qk_cb's faces back to back, no padding, not block float).
 // Call between tile_regs_acquire and tile_regs_commit.
 inline void weighted_reduce_block(
     const std::uint32_t weights_cb,
@@ -251,57 +262,23 @@ inline void weighted_reduce_pack(
 }
 
 #ifdef TRISC_PACK
-// weighted_reduce_pack_impl for num_chunks consecutive chunks from DEST slot first_slot: per run of up to 8 rows in one
-// partial tile, one DEST base and one L1 destination, then two PACRs per chunk, the DEST read stepping one face each.
+// weighted_reduce_pack_impl for num_chunks consecutive chunks from DEST slot first_slot: per run of rows in one partial
+// tile, one DEST base and one L1 destination, then two PACRs per chunk, the DEST read stepping one face each.
 inline void weighted_reduce_pack_block_impl(
     const std::uint32_t partial_cb,
     const std::uint32_t first_chunk,
     const std::uint32_t num_chunks,
     const std::uint32_t first_slot) {
-    constexpr std::uint32_t row_1x32_size_words = 4;
-    constexpr std::uint32_t max_run_rows = 8;
+    LLK_ASSERT(
+        (first_slot + num_chunks <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile16x16>()),
+        "weighted_reduce_pack_block slots exceed the DEST section");
     const std::uint8_t out_id = get_output_id(partial_cb);
-    const std::uint32_t end = first_chunk + num_chunks;
-    for (std::uint32_t chunk = first_chunk; chunk < end;) {
-        const std::uint32_t tile = chunk / TILE_R_DIM;
-        const std::uint32_t row = chunk % TILE_R_DIM;
-        std::uint32_t rows = end - chunk;
-        rows = rows < TILE_R_DIM - row ? rows : TILE_R_DIM - row;
-        rows = rows < max_run_rows ? rows : max_run_rows;
-        set_dst_write_addr(first_slot + chunk - first_chunk);
-        program_packer_destination(
-            get_output_tile_address<true, ckernel::PackMode::Default>(out_id, tile) + row * row_1x32_size_words);
-        for (std::uint32_t i = 0; i < 2 * rows - 1; i++) {
-            TTI_PACR(
-                p_pacr::CFG_CTXT_0,
-                p_pacr::NO_ROW_PAD_ZERO,
-                p_pacr::DST_ACCESS_NORMAL_MODE,
-                ADDR_MOD_3,
-                p_pacr::ADDR_CNT_CTXT_0,
-                p_pacr::P_ZERO_OUTPUT_DISABLED,
-                p_pacr::SINGLE_INTF_ACTIVE,
-                0,
-                0,
-                0,
-                0,
-                0);
-        }
-        TTI_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_1,
-            p_pacr::ADDR_CNT_CTXT_0,
-            p_pacr::P_ZERO_OUTPUT_DISABLED,
-            p_pacr::SINGLE_INTF_ACTIVE,
-            0,
-            0,
-            0,
-            0,
-            1);
-        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
-        chunk += rows;
-    }
+    _llk_pack_sdpa_weighted_reduce_block_(
+        get_output_tile_address<true, ckernel::PackMode::Default>(out_id, 0),
+        get_local_cb_interface(out_id).fifo_page_size,
+        first_chunk,
+        num_chunks,
+        first_slot);
 }
 #endif
 

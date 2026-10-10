@@ -4,6 +4,7 @@
 
 // Perf twin of api/compute/experimental/sdpa_weighted_reduce.h as the DSA indexer runs it; the unit is one chunk.
 // BLOCK unpacks all chunks in one context transaction (weighted_reduce_block), else one per chunk (weighted_reduce).
+// BLOCK_PACK packs them with weighted_reduce_pack_block's LLK, else one row pack per chunk (weighted_reduce_pack).
 
 #include <cstdint>
 
@@ -36,17 +37,17 @@ constexpr std::uint32_t QK_TILE_WORDS      = QK_NUM_FACES * QK_FACE_R_DIM * FACE
 inline void chunk_unpack(const std::uint32_t address_qk, const std::uint32_t address_weights)
 {
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111 /*Z0, W0, Z1, W1*/);
     wait_for_next_context(2);
     _llk_unpack_configure_addresses_(address_qk, address_weights, cfg);
     semaphore_post(semaphore::UNPACK_SYNC);
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-    TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    TTI_UNPACR(SrcB, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    TTI_UNPACR(SrcA, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1 /*OvrdThreadId*/, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcB, 0b00000000 /*no counter step*/, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(SrcA, 0b00000000 /*no counter step*/, 0, 0, 0, 1 /*OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     t6_semaphore_get(semaphore::UNPACK_SYNC);
     switch_config_context(unp_cfg_context);
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111 /*Z0, W0, Z1, W1*/);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -54,7 +55,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -65,9 +72,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             QK_FACE_R_DIM,
             WEIGHTS_FACE_R_DIM,
             QK_NUM_FACES,
-            2,
-            params.TILE_SIZE_UNPACK_B,
-            params.TILE_SIZE_UNPACK_A);
+            2 /*unpB_num_faces*/,
+            TILE_SIZE_UNPACK_B,
+            TILE_SIZE_UNPACK_A);
         // weighted_reduce_init_short: no haloize, unpacker 0 reads one 16x16 face per UNPACR; unpacker 1 keeps the
         // indexer's 8-row Q faces.
         cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
@@ -93,8 +100,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            const std::uint32_t address_qk      = L1_ADDRESS(params.buffer_B[0]);
-            const std::uint32_t address_weights = L1_ADDRESS(params.buffer_A[0]);
+            const std::uint32_t address_qk      = L1_ADDRESS(buffer_B[0]);
+            const std::uint32_t address_weights = L1_ADDRESS(buffer_A[0]);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (BLOCK)
@@ -153,10 +160,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_matmul_init_no_mop_<ckernel::MathFidelity::LoFi, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
+        _llk_math_matmul_init_no_mop_<ckernel::MathFidelity::LoFi, 0 /*THROTTLE_LEVEL*/>(
+            TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /*partial_face*/, 0 /*transpose*/, 1 /*ct_dim*/, 1 /*rt_dim*/);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         weighted_reduce_addrmod_init_math();
@@ -205,6 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_sdpa_weighted_reduce.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
@@ -224,11 +235,11 @@ inline void row_pack(const std::uint32_t dst_slot, const std::uint32_t row_addre
         p_pacr::ADDR_CNT_CTXT_0,
         p_pacr::P_ZERO_OUTPUT_DISABLED,
         p_pacr::SINGLE_INTF_ACTIVE,
-        0,
-        0,
-        0,
-        0,
-        0);
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        0 /*Last*/);
     TTI_PACR(
         p_pacr::CFG_CTXT_0,
         p_pacr::NO_ROW_PAD_ZERO,
@@ -237,62 +248,25 @@ inline void row_pack(const std::uint32_t dst_slot, const std::uint32_t row_addre
         p_pacr::ADDR_CNT_CTXT_0,
         p_pacr::P_ZERO_OUTPUT_DISABLED,
         p_pacr::SINGLE_INTF_ACTIVE,
-        0,
-        0,
-        0,
-        0,
-        1);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+        0 /*OvrdThreadId*/,
+        0 /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        1 /*Last*/);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101 /*Z0, Z1*/);
 }
 
-// weighted_reduce_pack_block: one DEST base and one destination for the section's rows, two PACRs per chunk
-inline void block_pack(const std::uint32_t address)
-{
-    set_dst_write_addr(0);
-    program_packer_destination(address);
-    for (std::uint32_t i = 0; i < 2 * NUM_CHUNKS - 1; i++)
-    {
-        TTI_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_3,
-            p_pacr::ADDR_CNT_CTXT_0,
-            p_pacr::P_ZERO_OUTPUT_DISABLED,
-            p_pacr::SINGLE_INTF_ACTIVE,
-            0,
-            0,
-            0,
-            0,
-            0);
-    }
-    TTI_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_NORMAL_MODE,
-        ADDR_MOD_1,
-        p_pacr::ADDR_CNT_CTXT_0,
-        p_pacr::P_ZERO_OUTPUT_DISABLED,
-        p_pacr::SINGLE_INTF_ACTIVE,
-        0,
-        0,
-        0,
-        0,
-        1);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
-}
-
-inline void pack_chunks(RUNTIME_PARAMETERS params)
+inline void pack_chunks(const std::uint32_t tile0_address, const std::uint32_t tile_size)
 {
     constexpr std::uint32_t row_1x32_size_words = 4;
     if constexpr (BLOCK_PACK)
     {
-        block_pack(L1_ADDRESS(params.buffer_Res[0]));
+        _llk_pack_sdpa_weighted_reduce_block_(tile0_address, tile_size, 0 /*first_chunk*/, NUM_CHUNKS, 0 /*first_slot*/);
         return;
     }
     for (std::uint32_t c = 0; c < NUM_CHUNKS; ++c)
     {
-        row_pack(c, L1_ADDRESS(params.buffer_Res[0]) + c * row_1x32_size_words);
+        row_pack(c, tile0_address + c * row_1x32_size_words);
     }
 }
 
@@ -301,19 +275,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+    const Operand& buffer_Res          = params.buffer_Res;
+#endif
+    const std::uint32_t tile0_address = L1_ADDRESS(buffer_Res[0]);
     {
         START_PERF_MEASURE("INIT")
         // The indexer's [8, 32] output layout: two 8-row faces, so DEST slots sit 16 rows apart.
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2, true);
-        _llk_pack_init_<PackMode::Default, false, false, false>(formats.pack_src, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2, 1, false);
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2 /*num_faces*/, true /*partial_face*/);
+        _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, false /*skip_packer_strides*/>(
+            formats.pack_src, WEIGHTS_FACE_R_DIM, TILE_C_DIM, 2 /*num_faces*/, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        // weighted_reduce_addrmod_init's pack ADDR_MOD_3.
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 0, .cr = 0},
-            .y_dst = {.incr = 1, .clr = 0, .cr = 0},
             .z_src = {.incr = 1, .clr = 0},
-            .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_3);
         // The DEST-read strides sdpa_custom_mm's pack init leaves for the row packs: faces 8 rows apart, slots 16
@@ -330,7 +309,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                pack_chunks(params);
+                pack_chunks(tile0_address, TILE_SIZE_PACK);
             }
         }
         else
@@ -338,7 +317,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_packer_wait_for_math_done_();
-                pack_chunks(params);
+                pack_chunks(tile0_address, TILE_SIZE_PACK);
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }

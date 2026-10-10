@@ -697,7 +697,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sdpa_weighted_reduce": {
-        "version": 2,
+        "version": 1,
         "columns": [
             "block_pack",
             "block_unpack",
