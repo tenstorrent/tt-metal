@@ -74,6 +74,10 @@ inline void sfpu_rope_configure_addrmod()
         .set(rope::ZERO_ADDR_MOD);
 }
 
+/**
+ * @note Call sfpu_rope_all_rows or sfpu_rope_fused_all_rows right after it: their first instruction is the third of
+ *       the three SFPLOAD needs after an FPU DEST write.
+ */
 inline void sfpu_rope_dest_setup()
 {
     // SFPLOAD.md: the SETC16 and the SETRWC are two of the three slots; the rope bodies fill the third.
@@ -90,7 +94,7 @@ template <bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint32_t sin_addr)
 {
     // BF16 inputs can be unpacked into FP32 DEST: use the register representation.
-    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
+    constexpr std::uint32_t FMT = rope::load_store_mod<is_fp32_dest_acc_en>();
     TT_SFPLOAD(p_sfpu::LREG0, FMT, rope::ZERO_ADDR_MOD, cos_addr);
     TT_SFPLOAD(p_sfpu::LREG1, FMT, rope::ZERO_ADDR_MOD, sin_addr);
 }
@@ -108,12 +112,6 @@ inline void sfpu_rope_mul_cos_sin()
 {
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-}
-
-inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
-{
-    sfpu_rope_load_scale(scale_fp32);
-    sfpu_rope_mul_cos_sin();
 }
 
 /**
@@ -145,7 +143,7 @@ inline void sfpu_rope_rotate()
 template <bool is_fp32_dest_acc_en = false>
 inline void sfpu_rope_face(const std::uint32_t x_addr)
 {
-    constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
+    constexpr std::uint32_t FMT = rope::load_store_mod<is_fp32_dest_acc_en>();
     constexpr std::uint8_t AM   = rope::ZERO_ADDR_MOD;
 
     TT_SFPLOAD(p_sfpu::LREG4, FMT, AM, x_addr);     // x_even
@@ -215,6 +213,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
 
     if constexpr (!has_scale)
     {
+        // The third slot after sfpu_rope_dest_setup; with a scale, its SFPLOADIs take it.
         TTI_NOP;
     }
     for (std::uint32_t w = 0; w < Wt; w++)
@@ -289,8 +288,10 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 
     if constexpr (!has_scale)
     {
+        // The third slot after sfpu_rope_dest_setup; with a scale, its SFPLOADIs take it.
         TTI_NOP;
     }
+    // Fully unrolled: every load and store address is an immediate.
     rope::unroll<Wt>(
         [&](auto w_index)
         {
@@ -308,7 +309,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                         {
                             sfpu_rope_load_scale(scale_fp32);
                         }
-                        sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2, is_fp32_dest_acc_en>();
+                        sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2 /* sin_addr */, is_fp32_dest_acc_en>();
                         if constexpr (has_scale)
                         {
                             sfpu_rope_mul_cos_sin();
@@ -320,7 +321,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                             rope::unroll<num_row_groups>(
                                 [&](auto rg_index)
                                 {
-                                    constexpr std::uint32_t row = decltype(half_index)::value * 32 + f * F + decltype(rg_index)::value * 4;
+                                    constexpr std::uint32_t row = decltype(half_index)::value * 2 * F + f * F + decltype(rg_index)::value * 4;
                                     if constexpr (cos_sin_per_row)
                                     {
                                         constexpr std::uint32_t cs_addr = cs_base + w * cs_stride + row;
@@ -328,7 +329,7 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                                         {
                                             sfpu_rope_load_scale(scale_fp32);
                                         }
-                                        sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2, is_fp32_dest_acc_en>();
+                                        sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2 /* sin_addr */, is_fp32_dest_acc_en>();
                                         if constexpr (has_scale)
                                         {
                                             sfpu_rope_mul_cos_sin();
@@ -336,7 +337,10 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                                     }
                                     rope::unroll<Ht>(
                                         [&](auto h_index)
-                                        { sfpu_rope_face_imm<x_base + w * x_stride + row + decltype(h_index)::value * head_stride, is_fp32_dest_acc_en>(); });
+                                        {
+                                            constexpr std::uint32_t x_addr = x_base + w * x_stride + row + decltype(h_index)::value * head_stride;
+                                            sfpu_rope_face_imm<x_addr, is_fp32_dest_acc_en>();
+                                        });
                                 });
                         });
                 });
