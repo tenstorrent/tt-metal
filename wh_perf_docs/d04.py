@@ -5,7 +5,7 @@ FX = "{{FX}}"
 D = dict(
     id="WH-04", short="Idle Threads",
     summary="In an isolate run type only one thread does work, but the other two still run their exit code while it is measured. Right after the barrier their instruction caches are empty, so they read every code line from L1, and those reads push the packers into the slow rhythm (WH-01). A 4-byte move of the unpack or math code changes PACK_ISOLATE by up to 28.6%.",
-    status="Open in #58068 · fix tested", status_cls="st-open",
+    status="Fixed in #58068 (52412ea8e67) · checked", status_cls="st-ok",
     depends=["WH-01", "WH-02", "WH-03"], used_by=[],
     problem="no-work change",
     what="""<ul>
@@ -43,7 +43,13 @@ D = dict(
 <tr><td>all threads</td><td class="n">36</td><td class="n">75</td><td class="n">28.6%</td></tr>
 <tr><td>pack only</td><td class="n">0</td><td class="n">3 (L1_TO_L1)</td><td class="n">5.4%</td></tr>
 <tr><td>unpack and math only</td><td class="n">36</td><td class="n">75</td><td class="n">28.6%</td></tr></table></div>""",
-    fix=f"""<p><b>Not fixed in #58068.</b> Tested fix, switch <code>LLK_ISO_SETTLE=N</code> (commits c403b67d07f, 58b9837efcc on <code>nstojictt/p58-versim</code>): in an isolate run type, after the TILE_LOOP release and before its zone opens, the measured thread runs N nops ({code("tt_metal/tt-llk/tests/helpers/include/counters.h", 628, "counters.h perf_counter_scoped")} is where it goes). The idle threads finish their exit code in that time. The wait is outside the measured window.</p>
+    fix=f"""<p><b>Fixed in #58068 by 52412ea8e67 (9 October).</b> In PACK_ISOLATE, unpack and math now wait at the end of their TILE_LOOP zone until pack is back from <code>run_kernel</code> and flips the release level once more. Their exit code (zone record, return, park) runs only after the measured loop. Only PACK_ISOLATE builds do this. The flag they compare sits after every other variable, so no other address moves.</p>
+<div class="tw"><table><tr><th>Check at the new head 24ffcccb24c (card, 276 PACK_ISOLATE values)</th><th class="n">Hold on</th><th class="n">Hold off (<code>LLK_NO_QUIET=1</code>)</th></tr>
+<tr><td>Unpack and math code +4 B: values that move &gt; 0.5%</td><td class="n">0 (largest 1 cycle)</td><td class="n">54, ±22–28%</td></tr>
+<tr><td>config12601, 0 / +4 B, card</td><td class="n">73,850 / 73,849</td><td class="n">92,260 / 92,260</td></tr>
+<tr><td>config12601, 0 / +4 B, Versim</td><td class="n">73,850 / 73,849</td><td class="n">– / 92,260</td></tr></table></div>
+<p>Details: WH-10. Our earlier fix is below for reference; it is not needed now.</p>
+<p><b>Our earlier tested fix.</b> Tested fix, switch <code>LLK_ISO_SETTLE=N</code> (commits c403b67d07f, 58b9837efcc on <code>nstojictt/p58-versim</code>): in an isolate run type, after the TILE_LOOP release and before its zone opens, the measured thread runs N nops ({code("tt_metal/tt-llk/tests/helpers/include/counters.h", 628, "counters.h perf_counter_scoped")} is where it goes). The idle threads finish their exit code in that time. The wait is outside the measured window.</p>
 <p>Better version, not built yet: the measured thread waits until the idle threads have parked, in place of a fixed count.</p>""",
     ba="""<div class="tw"><table><tr><th>Card, #58068 head</th><th class="n">Before</th><th class="n">After (settle 2,000)</th></tr>
 <tr><td>All code +4 bytes per function: values that move (1,346)</td><td class="n">75, max 28.6%</td><td class="n">25, max 6.2%</td></tr>
@@ -52,7 +58,7 @@ D = dict(
 <tr><td><b>Full suite</b> (CI, 842,256 points), +4 bytes per function: PACK_ISOLATE TILE_LOOP values that move &gt; 2%</td><td class="n">13,537 (up to 28.4%)</td><td class="n">0 (largest 0.8%)</td></tr></table></div>
 <p>Full-suite arms: #58068 head 3ff45cbd1c7 against branch <code>nstojictt/p58-final</code> b0d4d554446 (head + this settle + the two removals of WH-09 and the fixed address), each with and without one nop before every function, two CI runs each. One time, head → final: 22,560 PACK_ISOLATE values get faster by more than 2% and 454 slower (median −1.5%), because the packers no longer start in the slow rhythm.</p>
 <p>The 25 that still move are L1_TO_L1 and L1_CONGESTION, where unpack and math really run the moved code. The settle changes 133 values once (up to 22.4%): it moves the measured loop and its start.</p>""",
-    open="""<ul><li>The settle count (2,000 nops) is a first value, not tuned.</li>
+    open="""<ul><li>The hold covers PACK_ISOLATE only. In UNPACK_ISOLATE and MATH_ISOLATE at the new head, all code +4 B moves 1 value by more than 0.5% and 0 by more than 2%.</li>
 <li>UNPACK_ISOLATE and MATH_ISOLATE: only 2 values moved, so pack as the idle thread is not a problem in this set; not proven for every module.</li></ul>""",
     repro="""<ul><li>Branch <code>nstojictt/p58-versim</code>: <code>LLK_FN_NOPS_THREADS=UNPACK,MATH LLK_THREAD_FN_NOPS=1</code>; fix: <code>LLK_ISO_SETTLE=2000</code>; Versim: <code>LLK_SIM_BARRIER=1 LLK_SIM_TIMEOUT=14400</code>.</li>
 <li>Test: <code>perf_math_matmul.py::test_perf_math_matmul[MathFidelity.HiFi2-matmul_config12601-5-1]</code>, <code>LLK_PERF_RUN_TYPES=PACK_ISOLATE</code>.</li>

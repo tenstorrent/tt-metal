@@ -3,7 +3,7 @@ from common import *
 D = dict(
     id="WH-05", short="Zone Helper Size",
     summary="At #58068 head the profiler zone helpers sit in fixed, aligned slots, so other code cannot move them. But their own size still matters: one more instruction in zone_reserve moves 35 of 1,346 TILE_LOOP values by up to 17.8%. A harness change to the zone code is not neutral for the numbers.",
-    status="Open · fix tested", status_cls="st-open",
+    status="Isolate run types: no longer seen · L1_CONGESTION, L1_TO_L1: open", status_cls="st-part",
     depends=["WH-01", "WH-03", "WH-04", "WH-08"], used_by=[],
     problem="no-work change (in the harness)",
     what="""<ul>
@@ -45,7 +45,8 @@ D = dict(
 <ul><li>Give the helpers padded, fixed-size slots, and check the perf values in CI whenever the helpers change.</li>
 <li>Run the helper code that comes before a zone once before the barrier invalidates the cache, or keep it inline in the barrier's restart block, so it is not a cold L1 read inside the start of the window.</li></ul>""",
     ba="""<p>No fix yet. Before / after of the change that created it (df14044db9e): with the old record, 202 of 736 values were up to 112% higher (the store was inside the window); with the new one, the helper size matters as above.</p>""",
-    open="""<ul><li>The early-reserve fix needs the layout model to find the window without the reserve call.</li></ul>""",
+    open="""<ul><li><b>Check at the new head 24ffcccb24c</b> (449 cases, 1,539 values): <code>zone_reserve</code> +1 nop moves 14 values by more than 2% (up to 16.9%), and none of them is in an isolate run type (old head: 5 PACK_ISOLATE). The 14 are L1_CONGESTION and L1_TO_L1, which also move with any other change of a few cycles (WH-10 section 6). So the early reserve is not needed for the isolate run types any more.</li>
+<li>The early-reserve fix needs the layout model to find the window without the reserve call.</li></ul>""",
     repro="""<ul><li>Branch <code>nstojictt/p58-versim</code>: <code>LLK_ZONE_RESERVE_NOPS=1</code> (with or without <code>LLK_ISO_SETTLE=2000</code>); stress set: <code>repro_phase_tools/card_stress.sh</code>, compare with <code>advan.py</code>.</li></ul>""",
     refs=f"""<ul class="refs"><li>Code: {code("tt_metal/tt-llk/tests/helpers/include/profiler.h", 155)}, {code("tt_metal/tt-llk/tests/helpers/include/profiler.h", 160)}, {code("tt_metal/tt-llk/tests/helpers/ld/sections.ld", 61)}.</li>
 <li>ISA docs: {isa("TensixTile/BabyRISCV/InstructionCache.md", "Instruction cache")}.</li></ul>""",

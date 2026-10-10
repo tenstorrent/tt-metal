@@ -50,6 +50,7 @@ TITLES = {
     "WH-07": "Branch-type cache with random replacement",
     "WH-08": "Instruction cache set conflicts",
     "WH-09": "State left by the previous kernel",
+    "WH-10": "Check of the new #58068 fixes",
 }
 
 EXTRA_CSS = """
