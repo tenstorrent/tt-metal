@@ -41,9 +41,11 @@ void kernel_main() {
         copy_tile(cb_up, 0, kDstUp);
         tile_regs_commit();
 
-        // The SFPU frame starts with a DST offset write, a configuration write: hold it until the math thread is done.
+        // Hold the SFPU frame, which starts with a DST offset configuration write, until the math thread is done.
         PACK(TTI_SEMWAIT(
-            p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
+            p_stall::STALL_TDMA | p_stall::STALL_CFG | p_stall::STALL_SFPU,
+            semaphore::t6_sem(semaphore::MATH_PACK),
+            p_stall::STALL_ON_ZERO));
         situ_glu_tile_pack(kDstGate, kDstUp, kDstOut);
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
         pack_tile(kDstOut, cb_out);
