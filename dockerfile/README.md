@@ -182,7 +182,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
   "yq-tag": "ghcr.io/.../tools/yq:v4.44.6-<hash>",
   "zstd-tag": "ghcr.io/.../tools/zstd:1.5.7-<hash>",
   "sfpi-tag": "ghcr.io/.../tools/sfpi:<version>-<hash>",
-  "openmpi-tag": "ghcr.io/.../tools/openmpi:v5.0.7-<hash>"
+  "openmpi-tag": "ghcr.io/.../tools/openmpi:v5.0.10-<hash>"
 }
 ```
 
