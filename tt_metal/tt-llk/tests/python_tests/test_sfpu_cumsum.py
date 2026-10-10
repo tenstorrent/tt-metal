@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Column-wise cumulative sum over two tiles in one DEST block, each tile its own scan or, with `chain`,
-the second continuing the first. LLK_CUMSUM_DUMP=<path> appends the raw output bits."""
+the second continuing the first."""
 
-import os
-import struct
-
-import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
+from helpers.golden_generators import (
+    ELEMENTS_PER_TILE,
+    TILE_DIM,
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -23,7 +24,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
-    CLAMP_NEGATIVE,
     CUMSUM_CHAIN,
     FAST_MODE,
     MATH_OP,
@@ -39,6 +39,10 @@ from helpers.utils import passed_test
 INPUT_DIMENSIONS = [2 * TILE_DIM, TILE_DIM]
 TILE_CNT = 2
 
+# A 32-bit add chain of at most 64 terms is good to about 1e-6; the default tolerance would also pass a sum
+# that went through a 16-bit DEST.
+FLOAT32_TOLERANCE = {"custom_atol": 1e-4, "custom_rtol": 1e-4}
+
 
 @parametrize(
     formats=[
@@ -49,13 +53,12 @@ TILE_CNT = 2
     chain=[False, True],
 )
 def test_sfpu_cumsum(formats, dest_acc, chain):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "a Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST"
-        )
-
     torch.manual_seed(0)
     torch_format = format_dict[formats.input_format]
+    # A Float32 input unpacks straight to a 32-bit DEST; with a 16-bit DEST it goes through SrcA and the datacopy.
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
 
     # Up to 64 adds per column; |x| <= 1 keeps every partial sum inside the formats.
     src_A = (
@@ -64,13 +67,21 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
         .to(torch_format)
     )
     src_B = torch.zeros_like(src_A)
-    x = src_A.view(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]).to(torch.float32)
     if chain:
+        x = src_A.view(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]).to(torch.float32)
         golden = torch.cumsum(x, dim=0)
     else:
-        golden = torch.cat(
-            [torch.cumsum(x[:TILE_DIM], dim=0), torch.cumsum(x[TILE_DIM:], dim=0)],
-            dim=0,
+        golden = (
+            get_golden_generator(UnarySFPUGolden)(
+                MathOperation.Cumsum,
+                src_A,
+                formats.output_format,
+                dest_acc,
+                formats.input_format,
+                INPUT_DIMENSIONS,
+            )
+            .reshape(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1])
+            .to(torch.float32)
         )
     src_A_tilized = tilize_block(
         src_A, INPUT_DIMENSIONS, stimuli_format=formats.input_format
@@ -83,7 +94,6 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
             generate_input_dim(INPUT_DIMENSIONS, INPUT_DIMENSIONS),
             APPROX_MODE(ApproximationMode.No),
             FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(False),
             MATH_OP(mathop=MathOperation.Cumsum),
             CUMSUM_CHAIN(chain),
         ],
@@ -99,7 +109,7 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
             tile_count_res=TILE_CNT,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
+        unpack_to_dest=unpack_to_dest,
     )
     res_from_L1 = configuration.run().result
 
@@ -108,16 +118,7 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
         INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1]
     )
 
-    dump = os.environ.get("LLK_CUMSUM_DUMP")
-    if dump:
-        with open(dump, "a") as fh:
-            for i, v in enumerate(res.flatten().to(torch.float32).tolist()):
-                b = struct.unpack(">I", struct.pack(">f", float(v)))[0]
-                fh.write(
-                    "%s\t%s\t%d\t%d\t0x%08x\n"
-                    % (formats.input_format.name, dest_acc.name, int(chain), i, b)
-                )
-
+    tolerance = FLOAT32_TOLERANCE if unpack_to_dest else {}
     assert passed_test(
-        golden, res.to(torch.float32), formats.output_format
+        golden, res.to(torch.float32), formats.output_format, **tolerance
     ), "cumsum result does not match golden"
