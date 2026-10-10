@@ -94,9 +94,18 @@ def show(title, results, wall):
     console.print(f"{tokens:,} tokens in {wall:.1f}s wall ({tokens / wall:,.0f} tok/s)")
 
 
-def mean_latency_s(results, short):
-    picked = [r["latency_ms"] for r in results if (r["tokens"] <= 4096) == short]
-    return sum(picked) / len(picked) / 1000 if picked else 0.0
+SHORT_MAX = 4096  # prompts up to this many tokens count as short in the summaries
+
+
+def latency_change(off, on, short):
+    """'a -> b s': mean latency of the short (or long) prompts with batching off, then on; None if there are none."""
+    means = []
+    for results in (off, on):
+        picked = [r["latency_ms"] for r in results if (r["tokens"] <= SHORT_MAX) == short]
+        if not picked:
+            return None
+        means.append(sum(picked) / len(picked) / 1000)
+    return f"{means[0]:.3f}s -> {means[1]:.3f}s"
 
 
 def compare(url, sizes, gap):
@@ -111,8 +120,8 @@ def compare(url, sizes, gap):
     tokens = sum(r["tokens"] for r in on)
     line = f"whole mix {off_wall:.2f}s -> {on_wall:.2f}s ({tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f} tok/s)"
     for short, name in ((True, "short (<= 4k)"), (False, "long")):
-        if any((r["tokens"] <= 4096) == short for r in on):
-            line += f"; {name} mean latency {mean_latency_s(off, short):.2f}s -> {mean_latency_s(on, short):.2f}s"
+        if change := latency_change(off, on, short):
+            line += f"; {name} mean latency {change}"
     return line
 
 
