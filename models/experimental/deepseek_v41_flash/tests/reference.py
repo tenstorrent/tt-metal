@@ -30,8 +30,23 @@ def _sparse_attn(q, kv, attn_sink, topk_idxs, softmax_scale):
     return torch.einsum("bshk,bskd->bshd", probs, rows.float()).to(q.dtype)
 
 
+def _hc_split_sinkhorn(mixes, hc_scale, hc_base, hc_mult: int = 4, sinkhorn_iters: int = 20, eps: float = 1e-6):
+    """``mixes`` ``[b, s, (2 + hc) * hc]`` -> ``pre`` / ``post`` ``[b, s, hc]`` and the doubly stochastic
+    ``comb`` ``[b, s, hc, hc]``, as the tilelang kernel computes them."""
+    hc = hc_mult
+    pre = torch.sigmoid(mixes[..., :hc] * hc_scale[0] + hc_base[:hc]) + eps
+    post = 2 * torch.sigmoid(mixes[..., hc : 2 * hc] * hc_scale[1] + hc_base[hc : 2 * hc])
+    comb = (mixes[..., 2 * hc :] * hc_scale[2] + hc_base[2 * hc :]).unflatten(-1, (hc, hc))
+    comb = comb.softmax(-1) + eps
+    comb = comb / (comb.sum(-2, keepdim=True) + eps)
+    for _ in range(sinkhorn_iters - 1):
+        comb = comb / (comb.sum(-1, keepdim=True) + eps)
+        comb = comb / (comb.sum(-2, keepdim=True) + eps)
+    return pre, post, comb
+
+
 def _unsupported(*args, **kwargs):
-    raise NotImplementedError("quantized GEMMs / hyper-connections are not part of the attention reference")
+    raise NotImplementedError("quantized GEMMs are not part of the reference")
 
 
 def load_reference(snapshot_dir):
@@ -39,7 +54,8 @@ def load_reference(snapshot_dir):
     kernel = types.ModuleType("kernel")
     kernel.act_quant = kernel.fp4_act_quant = lambda *args, **kwargs: None
     kernel.sparse_attn = _sparse_attn
-    kernel.fp4_gemm = kernel.fp8_gemm = kernel.hc_split_sinkhorn = _unsupported
+    kernel.hc_split_sinkhorn = _hc_split_sinkhorn
+    kernel.fp4_gemm = kernel.fp8_gemm = _unsupported
     sys.modules["kernel"] = kernel
     sys.path.insert(0, str(snapshot_dir / "inference"))
     spec = importlib.util.spec_from_file_location("deepseek_v41_reference", snapshot_dir / "inference" / "model.py")
@@ -106,6 +122,33 @@ def reference_moe(model, snapshot_dir, loader, layer_id: int):
 
     moe.experts = torch.nn.ModuleList(expert(i) for i in range(moe.n_routed_experts))
     return moe.eval()
+
+
+def reference_blocks(model, snapshot_dir, loader, layer_ids, max_seq: int) -> dict:
+    """fp32 ``model.Block`` per layer id: :func:`reference_attentions` and :func:`reference_moe` for its
+    sublayers, the checkpoint's hyper-connection and norm weights for the rest.
+
+    The blocks have no Engram (``block.engram`` is ``None``); like ``Transformer.forward``, the caller
+    applies :func:`reference_engram` to the streams before an Engram layer's block.
+    """
+    args = model_args(model, snapshot_dir, max_seq)
+    attns = reference_attentions(model, snapshot_dir, loader, layer_ids, max_seq)
+
+    class Block(model.Block):
+        """``model.Block`` around the prebuilt attention, so the meta device below never reaches it."""
+
+        def attention_cls(self, layer_id, args):
+            return attns[layer_id]
+
+    blocks = {}
+    for i in layer_ids:
+        with torch.device("meta"):
+            block = Block(i, args)
+        block.ffn = reference_moe(model, snapshot_dir, loader, i)
+        own = [k for k in block.state_dict() if not k.startswith(("attn.", "ffn."))]
+        block.load_state_dict({k: dequantized(loader, f"layers.{i}.{k}")() for k in own}, strict=False, assign=True)
+        blocks[i] = block.eval()
+    return blocks
 
 
 def reference_engram_hash(model, snapshot_dir, tokenizer, max_seq: int, max_batch_size: int = 1):

@@ -181,8 +181,9 @@ Use `tests/decode/test_attention.py` as the template:
 - **Build the input exactly as the caller will** (memory config included). The first failure
   of this port was a TILE/DRAM test input going into an entry point that needs a width-sharded
   L1 row.
-- `DEEPSEEK_V41_CACHE_DIR` keeps converted weights across runs, and `skipif` covers a missing
-  snapshot.
+- Real-weight tests always cache converted weights, in `config.CACHE_DIR`: V4-Flash's cache root
+  (`$DEEPSEEK_V4_CACHE_DIR`, default `../cache`) with one subdirectory per checkpoint, as the V4
+  demos keep it. `skipif` covers a missing snapshot.
 
 Before any device run, check on the host: imports resolve, weight keys and shapes look right,
 the reference runs on CPU, and lints/pre-commit pass. The card is shared, so ask before
@@ -196,8 +197,8 @@ These come from the V4 vs V4.1 diff. The strategy column says which Step 4 patte
 | --- | --- | --- |
 | `decode/attention_csa.py`, `attention_hca.py` | replaced by the ratio-1/2 path | done in `decode/attention.py`; not ported |
 | `decode/moe.py` | hash routing removed (no `tid2eid`), new expert counts, MTP uses 128 experts top-3, `gate_temp` | done in `decode/moe.py` for the main layers; MTP (128 experts, top-3) not ported. Notes below |
-| `decode/hyperconnection.py` | the pre-mix is computed one sublayer early and carried as `pre_mix`; no `hc_head` | new variant of the collapse that takes a `pre_mix` argument; the fused op returns `(post, comb, collapsed)` from a single stream, so it needs the carried-in variant |
-| `decode/decoder_layer.py` | threads `pre_mix` through attention then FFN; engram before layers 1 and 14; layer-ordered shared caches | subclass; `pre_mix` becomes part of the residual state passed between layers |
+| `decode/hyperconnection.py` | the pre-mix is computed one sublayer early and carried as `pre_mix`; no `hc_head` | done: `fused_hyperconnection` takes `pre_mix` and returns its own `pre` fourth, and V4's `forward` passes `pre_mix` through (V4 omits it); no V4.1 class. `hc_head` not ported |
+| `decode/decoder_layer.py` | threads `pre_mix` through attention then FFN; engram before layers 1 and 14; layer-ordered shared caches | done in `decode/decoder_layer.py`: `decode(streams, pre_mix, scache, **attn.decode_inputs(pos, ...))` returns `(streams, pre_mix)` for the next layer; an Engram layer's rows are written after the dispatch |
 | Engram (new) | n-gram hash lookup into ~98 GB tables per layer, fp8 `wkv`, sigmoid gate per copy | new module from `layers.py` primitives; row gather on the host, matmul and gate on the device |
 | `embedding.py`, LM head | final collapse uses the last `f_pre`; no `hc_head` | override the collapse only |
 | `decode/dspark.py` | taps are the inputs of layers 37–39; markov weights renamed (`embed` / `head`); no `hc_head` | config + weight-name mapping; inherit the rest |

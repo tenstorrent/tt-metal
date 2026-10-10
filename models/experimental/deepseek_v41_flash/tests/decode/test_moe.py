@@ -7,12 +7,11 @@ Each case decodes random tokens one at a time through one layer's MoE. Layer 39 
 largest router bias (~57), so it is the one the bf16 ranking is most likely to get wrong.
 The routed experts are bfloat4_b, the shared expert bfloat8_b.
 
-Set ``DEEPSEEK_V41_CACHE_DIR`` to keep the converted ttnn weights (~8.5 GB per layer) across runs.
+The converted ttnn weights (~8.5 GB per layer) are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``,
+default ``../cache``, per checkpoint).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_moe.py
 """
-
-import os
 
 import pytest
 import torch
@@ -22,6 +21,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.deepseek_v41_flash.tests.reference import load_reference, reference_moe
 from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
     DEFAULT_MODEL_DIR,
     expert_provider,
     load_config,
@@ -53,7 +53,7 @@ def test_moe_decode(device, layer):
     loader = DeepseekV4WeightLoader(snapshot)
     reference = reference_moe(load_reference(snapshot), snapshot, loader, layer)
 
-    cache = WeightCache(os.environ.get("DEEPSEEK_V41_CACHE_DIR")).sub(f"layers.{layer}.ffn")
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
     experts = DeepSeekV41PreloadedExperts(
         config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
     )

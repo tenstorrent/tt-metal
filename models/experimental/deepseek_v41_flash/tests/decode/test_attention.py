@@ -7,12 +7,10 @@ A case decodes a group of layers token by token from position 0, each layer on i
 random input and in layer order -- the order their shared compressed KV / top-k needs.
 The reference (``tests/reference.py``) steps the same layers the same way.
 
-Set ``DEEPSEEK_V41_CACHE_DIR`` to keep the converted ttnn weights across runs.
+The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_attention.py
 """
-
-import os
 
 import pytest
 import torch
@@ -21,7 +19,12 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.deepseek_v41_flash.tests.reference import load_reference, reference_attentions
-from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, attention_weights, load_config
+from models.experimental.deepseek_v41_flash.tt.config import (
+    CACHE_DIR,
+    DEFAULT_MODEL_DIR,
+    attention_weights,
+    load_config,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DeepSeekV41Attention, build_decode_caches
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -55,7 +58,7 @@ def test_attention_decode(device, layers, seq_len):
     loader = DeepseekV4WeightLoader(snapshot)
     reference = reference_attentions(load_reference(snapshot), snapshot, loader, layers, seq_len)
 
-    cache = WeightCache(os.environ.get("DEEPSEEK_V41_CACHE_DIR"))
+    cache = WeightCache(CACHE_DIR)
     attns = {
         i: DeepSeekV41Attention(
             config,
