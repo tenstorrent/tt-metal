@@ -23,16 +23,33 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<LayerAckService>(mod, "LayerAckService")
         .def(
-            nb::init<
-                D2HStreamService&,
-                const std::string&,
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                std::vector<uint32_t>,
-                uint32_t>(),
+            "__init__",
+            [](LayerAckService* self,
+               D2HStreamService& d2h_service,
+               const std::string& ring_shm_name,
+               uint32_t source_rank,
+               uint32_t num_layers,
+               uint32_t first_layer_idx,
+               uint32_t local_layers,
+               uint32_t connect_timeout_ms,
+               nb::sequence ack_layer_ids_seq,
+               uint32_t protocol) {
+                std::vector<uint32_t> ack_layer_ids;
+                ack_layer_ids.reserve(nb::len(ack_layer_ids_seq));
+                for (nb::handle h : ack_layer_ids_seq) {
+                    ack_layer_ids.push_back(nb::cast<uint32_t>(h));
+                }
+                new (self) LayerAckService(
+                    d2h_service,
+                    ring_shm_name,
+                    source_rank,
+                    num_layers,
+                    first_layer_idx,
+                    local_layers,
+                    connect_timeout_ms,
+                    std::move(ack_layer_ids),
+                    protocol);
+            },
             nb::arg("d2h_service"),
             nb::arg("ring_shm_name"),
             nb::arg("source_rank"),
@@ -40,7 +57,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("first_layer_idx"),
             nb::arg("local_layers"),
             nb::arg("connect_timeout_ms") = 30'000u,
-            nb::arg("ack_layer_ids") = std::vector<uint32_t>{},
+            nb::arg("ack_layer_ids") = nb::list(),
             nb::arg("protocol") = 1u,
             // LayerAckService holds a bare reference to d2h_service and must not
             // outlive it. Tie its Python lifetime to this object so it can't be
