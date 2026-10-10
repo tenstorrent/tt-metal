@@ -134,6 +134,14 @@ void Tensor::clean_node() {
 
 void Tensor::set_requires_grad(bool requires_grad) {
     m_requires_grad = requires_grad;
+    if (!requires_grad) {
+        // Drop any gradient accumulated before freezing. add_grad() is a no-op while
+        // m_requires_grad is false, so without this the old gradient (and, via zero_grad's
+        // get_requires_grad() filter, the optimizer state built from it) would keep being
+        // reapplied by step() every subsequent call, since step() only checks
+        // is_grad_initialized() rather than get_requires_grad().
+        m_grad = ttnn::Tensor();
+    }
 }
 
 const ttnn::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
