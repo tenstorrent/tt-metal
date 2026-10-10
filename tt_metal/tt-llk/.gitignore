@@ -28,3 +28,11 @@ compile_flags.txt
 
 # Unignore .claude
 !.claude
+
+# Artifacts of the SFPU accuracy sweep: the per-comparison measurements
+# --ulp-measure records, its JUnit report, and the headroom report the PR Gate sweep folds them into.
+# Neither belongs in the tree — the budget table is the only checked-in record of a
+# measurement.
+ulp_measurements.jsonl
+ulp_headroom_report.md
+ulp_sweep_junit.xml

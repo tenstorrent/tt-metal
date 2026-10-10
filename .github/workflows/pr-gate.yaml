@@ -181,6 +181,7 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      llk-sfpu-kernels-changed: ${{ steps.find-changes.outputs.llk-sfpu-kernels-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -647,6 +648,57 @@ jobs:
         with:
           pytest-markers: "quasar and not perf"
 
+  # LLK SFPU accuracy (llk-sfpu-accuracy.yaml), two checks of
+  # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml. Both skip
+  # drafts like the rest: a job that ran there would wake workflow-status, which then
+  # fails on the skipped verify-time-budgets. Each caller grants every scope the file's
+  # jobs declare, skipped ones included, or the call is refused.
+  #
+  # The guard fails a change that loosens a gate in the table without the override
+  # label. Host-only and seconds long; it ends at once when the table is untouched. In
+  # the merge queue it judges each PR on top of the ones queued ahead of it, so two
+  # changes that each pass cannot loosen a cell between them.
+  llk-sfpu-ulp-budget-guard:
+    if: >-
+      ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name == 'merge_group' ||
+         (github.event_name == 'pull_request' && !github.event.pull_request.draft))
+      }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      issues: read
+      checks: read
+    uses: ./.github/workflows/llk-sfpu-accuracy.yaml
+    with:
+      check: guard
+
+  # The exhaustive ULP sweep on a Wormhole card, only when an SFPU kernel or the SFPI
+  # pin changed (find-changed-files: llk-sfpu-kernels-changed). Fails on a cell past its
+  # budget or its recorded measurement, and comments the failing combinations on the PR.
+  llk-sfpu-ulp-sweep:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: >-
+      ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name == 'merge_group' ||
+         (github.event_name == 'pull_request' && !github.event.pull_request.draft)) &&
+        needs.find-changed-files.outputs.llk-sfpu-kernels-changed == 'true'
+      }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      issues: read
+      checks: read
+    uses: ./.github/workflows/llk-sfpu-accuracy.yaml
+    secrets: inherit
+    with:
+      check: sweep
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -671,6 +723,8 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
+      - llk-sfpu-ulp-budget-guard
+      - llk-sfpu-ulp-sweep
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -688,6 +742,7 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar
+            llk-smoke-tests, llk-build-quasar, llk-sfpu-ulp-budget-guard,
+            llk-sfpu-ulp-sweep
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

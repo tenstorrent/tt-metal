@@ -1091,11 +1091,11 @@ def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
         )
 
 
-def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
-    """The key line is the enrolment and the only place a measurement can land, so the
-    emit set is exactly the unary ops that have one -- an op on tolerance everywhere
-    included, an unregistered-in-the-table op excluded. Sweeping the latter made every
-    whole-table emit exit red after writing the rest (65 of 93 ops had no block)."""
+def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
+    """The key line is the enrolment and the only place a measurement can land, so both
+    runs take exactly the unary ops that have one. Gating used to take only the ops with
+    a step budget somewhere, which left every op on tolerance everywhere (Erfc,
+    SigmoidAppx, ...) with recorded figures that no gate run ever re-measured."""
     import test_unary_sfpu_ulp as sweep
     from helpers import ulp_sweep
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
@@ -1104,20 +1104,17 @@ def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     emitted = set(sweep._sweep_ops())
     monkeypatch.setattr(ulp_sweep, "EMIT", False)
-    monkeypatch.setattr(
-        sweep.sys, "argv", [a for a in sweep.sys.argv if a != "--ulp-emit"]
-    )
     gated = set(sweep._sweep_ops())
 
     keyed = {op for op in _SFPU_ACCURACY_BUDGET if op in sfpu_unary_ops()}
     assert emitted == keyed - set(_UNARY_OPS_NOT_SWEPT)
-    assert gated <= emitted
+    assert gated == emitted
     tolerance_only = {
         op
-        for op in emitted
+        for op in keyed
         if not any(c.metric == Metric.ULP for c in _SFPU_ACCURACY_BUDGET[op].values())
     }
-    assert tolerance_only.isdisjoint(gated)
+    assert tolerance_only <= gated, "an op on tolerance everywhere is still measured"
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
@@ -1216,14 +1213,16 @@ def test_the_claim_is_the_singularity_not_the_sampling_guard_band(op, inside, ou
         ), value
 
 
-def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum():
+def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
     """Demoting a cell for a few non-finite lanes used to drop what the other ~64,000
-    lanes measured, and the headroom report (#57527) then held them to nothing. The
-    note carries both figures, each where its reader looks: the lane count right after
-    ``not measurable:`` and the maximum as ``max N ULP``, the shape every measured row
-    already has."""
+    lanes measured, and the headroom report then held them to nothing. The note carries
+    both figures, and the readers that judge them -- ulp_budget_diff's
+    ``recorded_nonfinite`` and ``recorded_max`` -- must find each in the row the emitter
+    actually writes. Read through them rather than through copies of their patterns: a
+    copy kept this test green while the reader's own pattern moved."""
     from helpers.ulp import ulp_distance, ulp_stats
-    from helpers.ulp_sweep import nonfinite_reason
+    from helpers.ulp_budget_diff import parse_table, recorded_max, recorded_nonfinite
+    from helpers.ulp_sweep import nonfinite_reason, record_unmeasurable
 
     src = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
@@ -1231,18 +1230,20 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum():
     overflowed = torch.tensor([False, True, False, False])
     mask = ~overflowed
     stats = ulp_stats(ulp_distance(golden, result), mask)
-    note = "not measurable: " + nonfinite_reason(
-        overflowed, src, golden, result, stats, int(mask.sum())
-    )
-    # The two readers' own patterns (ulp_budget_diff._RECORDED_NONFINITE / _RECORDED_MAX
-    # from #57527 on); spelled out here so this PR pins the shape they will read.
-    lanes = re.search(
-        r"not measurable: (\d+) lane\(s\) disagreeing with the golden", note
-    )
-    assert lanes and lanes.group(1) == "1", note
-    worst = re.search(r"\bmax (\d+) ULP", note)
-    assert worst and worst.group(1) == "1", note  # 3.0 -> 3.015625 is one bf16 step
-    assert "x=2: 2 -> inf" in note and "over the 3 measurable lanes" in note
+    reason = nonfinite_reason(overflowed, src, golden, result, stats, int(mask.sum()))
+    assert "x=2: 2 -> inf" in reason and "over the 3 measurable lanes" in reason
+
+    record("Gelu", _CELL, 5)
+    record_unmeasurable("Gelu", ("Float16", "Float16", "Yes", "No"), reason)
+    write_table(table, "today")
+    (row,) = [
+        row
+        for row in parse_table(table.read_text(encoding="utf-8")).values()
+        if "not measurable" in row.provenance
+    ]
+    assert recorded_nonfinite(row) == 1, row.provenance
+    # 3.0 -> 3.015625 is one bf16 step.
+    assert recorded_max(row) == 1, row.provenance
 
 
 def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):

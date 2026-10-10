@@ -44,6 +44,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-common-changed }}
   llk-sfpi-changed:
     value: ${{ steps.find-changed-files.outputs.llk-sfpi-changed }}
+  llk-sfpu-kernels-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-sfpu-kernels-changed }}
   llk-quasar-changed:
     value: ${{ steps.find-changed-files.outputs.llk-quasar-changed }}
   llk-tests-changed:

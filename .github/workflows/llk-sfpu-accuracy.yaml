@@ -1,0 +1,413 @@
+name: "LLK SFPU accuracy"
+
+# Two checks on the SFPU accuracy table, both called from PR Gate (pr-gate.yaml), so a
+# failure of either fails the required "PR Gate Status" and blocks the merge.
+#
+#   check: guard  -- whenever the table changes. No hardware: it fails a change that
+#                    loosens a gate in the table unless the override label is set.
+#   check: sweep  -- whenever an SFPU kernel or the SFPI pin changes. On a Wormhole card:
+#                    every finite bf16/fp16 value (and a stride of fp32) through every
+#                    enrolled unary op, held against the table. On failure it comments
+#                    on the PR with each failing (op, in, out, approx, dest_acc) and
+#                    its measured value.
+#
+# Each catches what the other cannot. The sweep compares the hardware with the PR's own
+# table, so a PR that raised a budget would pass it; the guard stops the PR raising it.
+#
+# Guard: a raised `max_ulp`, a widened `near_zero_atol`, a row demoted to `metric:
+# tolerance` or a gated row deleted all weaken a gate, and all fail. So does loosening
+# what a tolerance cell is still held to: its declared `atol`/`rtol`, or the measurement
+# and non-finite count its row records for the sweep's headroom comparison. The report
+# says for each one whether the deciding row's provenance changed too, which is what
+# separates a genuine re-measurement from a number edited until a test went green. How
+# a row records its provenance is the table's business (its header, and
+# tt_metal/tt-llk/tests/SFPU_ULP.md); this workflow only runs the comparison.
+# To land a deliberate raise: re-measure, update the row's provenance in the same
+# commit, and have a reviewer add the override label below; then re-run this job
+# ("Re-run failed jobs" on the PR Gate run), since PR Gate does not trigger on a label.
+#
+# Sweep: a gated cell over its budget fails in pytest; a tolerance cell past the
+# `max N ULP` or the non-finite lane count its row records fails the `headroom`
+# comparison (helpers/ulp_budget_diff.py). The command is the llk_sfpu_ulp_sweep_wormhole
+# entry of tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      check:
+        description: "guard (table edits, no hardware) or sweep (the device sweep)"
+        required: true
+        type: string
+      docker-image:
+        description: "The LLK Docker image the sweep runs in (sweep only)"
+        required: false
+        type: string
+        default: ""
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+  TABLE: tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml
+  # The label turns a guard failure into a report, under two conditions checked below:
+  # it was applied by someone other than the PR's author, and after the latest push. So
+  # it admits what a second person saw, and a later push that loosens another gate needs
+  # it applied again. It is a review aid, not a security boundary: anyone with write
+  # access can still apply it.
+  OVERRIDE_LABEL: "ulp-budget-raise-approved"
+
+jobs:
+  budget-guard:
+    name: "SFPU ULP budgets"
+    if: ${{ inputs.check == 'guard' }}
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      pull-requests: write
+      # The label's history (who applied it, and when) and the head commit's push time.
+      issues: read
+      checks: read
+    steps:
+      - name: Checkout the change
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          # The commit and its first parent, which is all the comparison reads.
+          fetch-depth: 2
+
+      - name: Take the base revision of the table
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The checkout is the merge the PR proposes (pull_request) or the queue's
+          # commit (merge_group). Its first parent is what the change lands on, with
+          # everything queued ahead of it, so the diff is exactly this change -- unlike
+          # the event's base.sha, which can be absent after a base-branch force-push
+          # and would then make every row read as new.
+          if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
+            echo "::error title=SFPU ULP budget guard::The checkout has no first parent to compare against."
+            exit 1
+          fi
+          echo "Comparing HEAD $(git rev-parse HEAD) against HEAD^1 $(git rev-parse HEAD^1)"
+          if git diff --quiet HEAD^1 HEAD -- "$TABLE"; then
+            echo "The budget table is unchanged; nothing to judge."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          # A change that introduces the table has no base version of it; an empty file
+          # makes every row read as new, which is correct and not a regression.
+          if git cat-file -e "HEAD^1:$TABLE" 2> /dev/null; then
+            git show "HEAD^1:$TABLE" > /tmp/base_budget.yaml
+          else
+            : > /tmp/base_budget.yaml
+          fi
+
+      - name: Install dependencies
+        if: steps.base.outputs.changed == 'true'
+        run: pip3 install PyYAML
+
+      - name: Decide whether the override label counts
+        id: label
+        if: steps.base.outputs.changed == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = process.env.OVERRIDE_LABEL;
+            const { owner, repo } = context.repo;
+            // The PR: the event's own, or the one a merge-queue ref names
+            // (gh-readonly-queue/<base>/pr-<number>-<sha>).
+            let number = context.payload.pull_request?.number;
+            if (!number && context.eventName === 'merge_group') {
+              const found = /\/pr-(\d+)-[0-9a-f]+$/.exec(context.payload.merge_group.head_ref);
+              number = found && Number(found[1]);
+            }
+            const decide = (counts, why) => {
+              core.setOutput('overridden', counts ? 'true' : 'false');
+              core.setOutput('why', why);
+              core.info(why);
+            };
+            if (!number) {
+              return decide(false, 'there is no pull request to read a label from');
+            }
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            // The label's current application: the last `labeled` with no `unlabeled`
+            // after it. The payload's label list says only that it is set, not by whom.
+            const events = await github.paginate(github.rest.issues.listEvents, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            let applied = null;
+            for (const event of events) {
+              if (event.label?.name !== label) continue;
+              if (event.event === 'labeled') applied = event;
+              if (event.event === 'unlabeled') applied = null;
+            }
+            if (!applied) {
+              return decide(false, `the '${label}' label is not set`);
+            }
+            const by = applied.actor?.login;
+            if (by === pr.user.login) {
+              return decide(false,
+                `the '${label}' label was applied by the pull request's author (${by}); ` +
+                'it stands for a second person\'s judgement, so someone else has to apply it');
+            }
+            // When this PR last moved to its head commit. A commit's own dates say when
+            // it was written, not when it arrived. GitHub opens a check suite when a
+            // commit is pushed to a branch, so the earliest suite on the head SHA *from
+            // this PR's branch* is the push that brought it here; a suite from another
+            // branch the same commit was pushed to first does not count. That misses
+            // only a branch moved back to a commit it already carried, which takes a
+            // force-push (or a restored branch, or a reopened PR), and each of those
+            // leaves an event on the PR: the later of the two is when the head moved.
+            const suites = await github.paginate(github.rest.checks.listSuitesForRef, {
+              owner, repo, ref: pr.head.sha, per_page: 100,
+            });
+            const pushes = suites
+              .filter((s) => s.head_branch === pr.head.ref)
+              .map((s) => Date.parse(s.created_at));
+            if (!pushes.length) {
+              return decide(false,
+                `no check suite on ${pr.head.sha.slice(0, 10)} comes from this PR's branch, ` +
+                'so there is no push time to hold the label against');
+            }
+            const moves = events
+              .filter((e) => ['head_ref_force_pushed', 'head_ref_restored', 'reopened'].includes(e.event))
+              .map((e) => Date.parse(e.created_at));
+            const pushed = Math.max(Math.min(...pushes), ...moves);
+            if (Date.parse(applied.created_at) < pushed) {
+              return decide(false,
+                `the '${label}' label was applied by ${by} at ${applied.created_at}, before ` +
+                `the latest push (${pr.head.sha.slice(0, 10)}); it admits what was reviewed ` +
+                'when it was applied, so remove it and apply it again to admit this push');
+            }
+            decide(true, `the '${label}' label was applied by ${by} after the latest push`);
+
+      - name: Compare the budgets
+        id: compare
+        if: steps.base.outputs.changed == 'true'
+        shell: bash
+        env:
+          OVERRIDDEN: ${{ steps.label.outputs.overridden }}
+          WHY: ${{ steps.label.outputs.why }}
+        run: |
+          set -uo pipefail
+          ARGS=()
+          if [[ "$OVERRIDDEN" == "true" ]]; then
+            echo "Override label counts; loosened gates will be reported, not blocked."
+            ARGS+=(--allow-raises)
+          fi
+          # By path, not `-m helpers.ulp_budget_diff`: the package __init__ imports
+          # ttexalens, which is not on this runner. The tool itself needs only PyYAML,
+          # and `test_the_tool_imports_nothing_but_the_standard_library_and_yaml` keeps
+          # it that way.
+          status=0
+          python3 tt_metal/tt-llk/tests/python_tests/helpers/ulp_budget_diff.py diff \
+            --base /tmp/base_budget.yaml \
+            --head "$TABLE" \
+            --label-hint "$OVERRIDE_LABEL" \
+            --out "$RUNNER_TEMP/ulp_budget_report.md" \
+            "${ARGS[@]}" || status=$?
+          if grep -q "loosen a gate" "$RUNNER_TEMP/ulp_budget_report.md" 2> /dev/null; then
+            printf '\n_Override label: %s._\n' "$WHY" >> "$RUNNER_TEMP/ulp_budget_report.md"
+          fi
+          # A verdict word rather than the exit code: the Fail step below compares it
+          # with 'pass', so an output that was never written fails the job instead of
+          # reading as 0.
+          if [[ "$status" == 0 ]]; then
+            echo "verdict=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the report
+        if: ${{ !cancelled() && steps.base.outputs.changed == 'true' }}
+        shell: bash
+        run: |
+          if [[ -s "$RUNNER_TEMP/ulp_budget_report.md" ]]; then
+            cat "$RUNNER_TEMP/ulp_budget_report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The comparison produced no report; see the step above." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Comment on the pull request
+        # A fork PR's token is read-only, so the comment is best effort. The job
+        # summary and the check result carry the same verdict either way. The merge
+        # queue does not comment: the PR's own run already did.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base.outputs.changed == 'true' }}
+        continue-on-error: true
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            // Written outside the checkout, so nothing in the tree has to ignore it.
+            const report = `${process.env.RUNNER_TEMP}/ulp_budget_report.md`;
+            if (!fs.existsSync(report)) return;
+            const marker = '<!-- llk-ulp-budget-guard -->';
+            const body = `${marker}\n${fs.readFileSync(report, 'utf8')}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            // One comment, edited in place, so a series of pushes does not bury the
+            // conversation. Only a bot's comment: a person quoting the marker in a
+            // reply is never overwritten.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Warn when the label admitted a gate
+        # Green is not silent: an override still annotates the run, and the report
+        # names any row it admitted without a fresh measurement.
+        if: ${{ steps.compare.outputs.verdict == 'pass' && steps.label.outputs.overridden == 'true' }}
+        shell: bash
+        run: |
+          if grep -q "loosen a gate" "$RUNNER_TEMP/ulp_budget_report.md"; then
+            echo "::warning title=SFPU ULP budget loosened under label::A gate was \
+          loosened and the '$OVERRIDE_LABEL' label admitted it. See the job summary \
+          for which rows, and whether each was re-measured."
+          fi
+
+      - name: Fail if a gate was loosened
+        if: ${{ steps.base.outputs.changed == 'true' && steps.compare.outputs.verdict != 'pass' }}
+        shell: bash
+        env:
+          WHY: ${{ steps.label.outputs.why }}
+        run: |
+          echo "::error title=SFPU ULP budget loosened::A budget was raised, a row lost its \
+          step gate, or a tolerance cell's recorded figures loosened -- or the table cannot \
+          load. See the job summary and the PR comment. Override: $WHY. If this is a \
+          genuine re-measurement, update the row's provenance in the same change, \
+          have a reviewer add the '$OVERRIDE_LABEL' label, and re-run this job."
+          exit 1
+
+  load-test-matrix:
+    if: ${{ inputs.check == 'sweep' }}
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        # The checkout's own copy, not @main: a required check must run the code its
+        # change was reviewed with, not a ref that can move under it. It is still
+        # current, since a PR checks out its merge with the base branch and a queue
+        # entry the queue's commit. The event would route the merge queue to a
+        # priority SKU, but wh_n150_civ2 has no `merge_queue_sku` (there is no
+        # priority N150 pool), so the queue runs on the regular N150s, as
+        # llk_smoke_wormhole does.
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+
+  ulp-sweep:
+    needs: load-test-matrix
+    if: ${{ inputs.check == 'sweep' && needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      REPORT: tt_metal/tt-llk/tests/python_tests/ulp_headroom_report.md
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      # The sweep, then the headroom comparison over what it measured. The cmd runs both
+      # whatever the first returns, publishes the report to the job summary, and exits
+      # with either one's failure.
+      - name: Run the ULP sweep and compare it with the table
+        id: sweep
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          CHIP_ARCH: wormhole
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      # Only on a failure, so a passing PR is not commented on at all; a later passing
+      # run edits the failure comment to say so rather than leaving it stale. Best
+      # effort: a fork PR's token is read-only, and the job's result is the gate.
+      - name: Comment the failures on the pull request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          OUTCOME: ${{ steps.sweep.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- llk-sfpu-ulp-sweep -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.slice(0, 10);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker));
+            let body;
+            if (process.env.OUTCOME === 'success') {
+              if (!mine) return;
+              body = `${marker}\n### SFPU ULP sweep: passes as of ${sha}\n\n` +
+                `The failure reported here earlier no longer reproduces. [Run](${process.env.RUN_URL})\n`;
+            } else {
+              const report = fs.existsSync(process.env.REPORT)
+                ? fs.readFileSync(process.env.REPORT, 'utf8')
+                : 'The sweep stopped before it wrote a report; see the job log.\n';
+              body = `${marker}\n### SFPU ULP sweep: failed on Wormhole at ${sha}\n\n` +
+                'Each row names the failing combination (op, input format, output format, ' +
+                'approximation mode, dest accumulation) and the value it measured. ' +
+                `[Run](${process.env.RUN_URL})\n\n${report}`;
+            }
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload the measurements and the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ulp-sweep-wormhole
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_measurements.jsonl
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_sweep_junit.xml
+          if-no-files-found: warn

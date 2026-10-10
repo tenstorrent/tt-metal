@@ -534,10 +534,11 @@ _ULP_REPORT: bool = False
 
 #: Set by ``--ulp-measure=<path>``: append one JSON row per comparison that follows
 #: exactly one ``accuracy_contract`` lookup in the same test, on a variant that ran as
-#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep skips tolerance
-#: cells before comparing and, under ``--ulp-emit``, returns before comparing at all, so
-#: those write nothing. Like ``_ULP_REPORT`` it is written after the verdict and never
-#: read back into one, so it cannot change a result.
+#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep writes one for
+#: every cell it measures, gated or not -- it records a tolerance cell, and every cell
+#: under ``--ulp-emit``, itself rather than through ``passed_test`` -- and a non-finite
+#: lane count for a tolerance cell it cannot measure. Like ``_ULP_REPORT`` it is written
+#: after the verdict and never read back into one, so it cannot change a result.
 _ULP_MEASURE_PATH: Optional[str] = None
 
 #: Set once a recorder write has failed, so the warning is printed once per process.
@@ -599,7 +600,7 @@ def _consume_ulp_query() -> None:
         budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
-def _record_ulp_measurement(distance, *, mask) -> None:
+def _record_ulp_measurement(distance, *, mask, nonfinite: int = 0) -> None:
     """Append the worst measurable lane of one comparison, tagged with its variant.
 
     ``ulp_stats`` rather than a bare ``max()``, so the number is the one the log
@@ -609,6 +610,10 @@ def _record_ulp_measurement(distance, *, mask) -> None:
     is missing, ambiguous, from another test, or names a ``dest_acc`` TestConfig did not
     run (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under
     the wrong variant is not.
+
+    *nonfinite* is how many lanes the hardware and the golden disagree about being
+    finite (``ulp_sweep.nonfinite_failures``), written as the row's ``nonfinite``; the
+    headroom report fails a cell with more of them than its table row accounts for.
 
     A failed write warns once and is otherwise ignored: a full disk must not turn into a
     failing test, or hide a failing comparison's summary.
@@ -638,6 +643,11 @@ def _record_ulp_measurement(distance, *, mask) -> None:
         "arch": arch.name,
         # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
         **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
+        # Lanes where the hardware and the golden disagree about being finite: inf/NaN
+        # against a finite golden, a finite answer to an infinite one, or opposite
+        # infinities. A step count cannot describe them, so they ride alongside it for
+        # the headroom report.
+        "nonfinite": int(nonfinite),
     }
     try:
         with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
