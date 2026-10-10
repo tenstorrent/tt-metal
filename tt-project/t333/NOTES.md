@@ -34,3 +34,9 @@ State at 2026-10-10 06:45 UTC (run 1317):
 - Old logs moved to t333/fail_vae25/. drv333.sh relaunched (pgid 2945444) at 06:44 UTC; it waits for the t337 job now
   on the blx01 broker (the driver skips while any smarton job runs or queues). Same marker drv333.done.
 - AICLK: all first-pass jobs logged 32 "AICLK failed to settle" warnings -> blx01 is clamped; label results relative only.
+
+State at 2026-10-10 07:50 UTC (run 1343): DONE. drv333.done: c6a job 386 failed (pytest-timeout 570 s during cold JIT
+compile; acted as cache fill), c6 job 388 PASSED (gen#1 total 7.58 s, VAE 0.70 s), c10 job 392 PASSED (gen#1 12.06 s,
+VAE 1.09 s). All clamped at 900 MHz -> relative only. Results in RESULTS.md and results/. blx01 cleanup done: t333/b
+worktree removed, jit/out/logs deleted (t333 now 40 KB). Kept /var/tmp/fasth3/models/ltx-2.5 (67 GB): the #235 fetch
+task put the 2.5 conv VAE there and its 2.5-VAE e2e will reuse it.

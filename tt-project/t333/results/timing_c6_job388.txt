@@ -1,0 +1,36 @@
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t333/out_c6/ltx_av_fast_1920x1088_0.mp4     │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├────────────────────────────────────────────────────────────────┬─────────┤
+│ Stage                                                          │    Time │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Encoder                                                        │  0.49 s │
+│ Stage 1 denoise                                                │ 22.59 s │
+│ Latent upsample                                                │  0.23 s │
+│ Stage 2 denoise                                                │ 22.21 s │
+│ VAE decode                                                     │  3.33 s │
+│ Audio decode                                                   │  1.47 s │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Total                                                          │ 50.32 s │
+└────────────────────────────────────────────────────────────────┴─────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t333/out_c6/ltx_av_fast_1920x1088_1.mp4     │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.26 s │
+│ Stage 1 denoise                                                 │ 2.79 s │
+│ Latent upsample                                                 │ 0.23 s │
+│ Stage 2 denoise                                                 │ 3.05 s │
+│ VAE decode                                                      │ 0.70 s │
+│ Audio decode                                                    │ 0.55 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 7.58 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
