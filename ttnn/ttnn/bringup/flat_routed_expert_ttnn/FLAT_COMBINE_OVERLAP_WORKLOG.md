@@ -457,7 +457,8 @@ both moved (y 1, forward 0) like y alone. Did not work: the shared VCs are not w
   requests the NIU has taken; right after issuing, the last read can still sit in the read command buffer, so the
   barrier returned early and the sender sent partly landed tokens (1-3 wrong slots per failing case, even without
   pipelining; `CMBF2D_NO_TRID` = global barriers fixed it). Fix: wait for the read command buffer to drain before
-  polling the id.
+  polling the id. Repro written down (not yet run): `flat_combine_tools/trid_read_barrier_race/` (README with the
+  theory, open questions, a single-core kernel + pytest, and the in-situ recipe).
 - Results (64 gu + 19 down, pin 1, completion order + progressive; bit-identical, both calls):
 
 | | combine alone Kimi bal / hot / GLM bal / hot | overlap Kimi bal / hot / GLM bal / hot |
