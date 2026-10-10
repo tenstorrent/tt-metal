@@ -274,6 +274,22 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_TERNARY_PRIOR_UNARY_INIT(TemplateParameter):
+    """Run a unary SFPU op's init before the ternary op's init, in ``sfpu_ternary_test.cpp``.
+
+    Emits ``#define SFPU_TERNARY_PRIOR_UNARY_INIT SfpuType::<op>``. A fused compute kernel
+    runs several SFPU inits back to back, so the ternary op's init must program every
+    constant register its body reads rather than inherit what the previous init left there.
+    Variants that leave this out compile exactly as before.
+    """
+
+    prior_unary_mathop: MathOperation = None
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_TERNARY_PRIOR_UNARY_INIT SfpuType::{self.prior_unary_mathop.cpp_enum_value}"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 

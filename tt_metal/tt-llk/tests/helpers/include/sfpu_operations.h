@@ -2356,7 +2356,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else
