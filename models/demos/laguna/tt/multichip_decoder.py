@@ -292,6 +292,9 @@ class MultichipDecoder(OptimizedDecoder):
         # batch-1 decode: all-reduce only row 0 of the partials, fused with the residual add (allreduce_rows.py)
         self._ar_rows = _parse_binary_env("TT_LAGUNA_AR_ROWS", True)
         self._ar_broadcast = _parse_binary_env("TT_LAGUNA_AR_BROADCAST", True)  # all_broadcast, no concat (see above)
+        # largest decode batch on the packed-rows all-reduce (6-row DFlash verify: 32-row tile all_gather + reduce
+        # + add ~24 us -> packed rows); 1 keeps it batch-1 only
+        self._ar_rows_max = int(os.environ.get("TT_LAGUNA_AR_ROWS_MAX", "8"))
         # batch-1 decode attention prologue as one op (attn_prologue1.py); TT_LAGUNA_AP1=0 restores the op chain
         self._ap1 = _parse_binary_env("TT_LAGUNA_AP1", True)
         # batch-1 decode attention epilogue (gate slice + softplus gate + flatten into WO's input) as one op
@@ -488,11 +491,12 @@ class MultichipDecoder(OptimizedDecoder):
         return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
 
     def _rows_ok(self, B, partial, residual):
-        """allreduce_rows applies: batch-1 decode on a mesh, bf16 TILE partial and residual, bf16 collective."""
+        """allreduce_rows applies: batch-1 (or up to TT_LAGUNA_AR_ROWS_MAX rows: the DFlash verify) decode on a mesh,
+        bf16 TILE partial and residual, bf16 collective."""
         return (
             self._ar_rows
             and self.D > 1
-            and B == 1
+            and 1 <= B <= self._ar_rows_max
             and getattr(self.policy, "ccl", ttnn.bfloat16) == ttnn.bfloat16
             and partial.dtype == ttnn.bfloat16
             and residual.dtype == ttnn.bfloat16
@@ -500,10 +504,10 @@ class MultichipDecoder(OptimizedDecoder):
             and residual.layout == ttnn.TILE_LAYOUT
         )
 
-    def _reduce_rows_add(self, partial, residual, memory_config):
-        """residual + all-reduce(partial) for a batch-1 decode partial: row 0 packed to a 6 KB row-major row, gathered,
-        summed with the residual's row 0 in fp32 (allreduce_rows.py). 13.4 vs 25.2 us for tile all_gather +
-        fast_reduce + add on the p150x4 ring."""
+    def _reduce_rows_add(self, partial, residual, memory_config, rows=1):
+        """residual + all-reduce(partial) for a ``rows``-row decode partial: rows 0..rows-1 packed to a row-major
+        [rows, H] tensor (6 KB per row), gathered, summed with the residual's rows in fp32 (allreduce_rows.py). Batch 1:
+        13.4 vs 25.2 us for tile all_gather + fast_reduce + add on the p150x4 ring."""
         from .allreduce_rows import pack_row0, sum_rows_add
 
         if os.environ.get("TT_LAGUNA_AR_ROWS_DEBUG") == "1":
@@ -511,7 +515,7 @@ class MultichipDecoder(OptimizedDecoder):
                 print(f"[ar_rows] {nm} shape={t.shape} padded={t.padded_shape} dtype={t.dtype} tile={t.tile} "
                       f"mem={t.memory_config()}", flush=True)
             print(f"[ar_rows] out mem={memory_config}", flush=True)
-        row = pack_row0(partial)
+        row = pack_row0(partial, rows)
         if self._ar_broadcast:
             # all_gather of the row is AllBroadcast + Concat; the sum reads the D broadcast rows directly instead
             rows = ttnn.all_broadcast(
@@ -2212,7 +2216,7 @@ class MultichipDecoder(OptimizedDecoder):
         res_mem = _width_sharded_l1(TILE, cfg.hidden, res_cores) if res_cores else None
         rows = self._rows_ok(B, o, residual)
         if rows:
-            h = self._reduce_rows_add(o, residual, res_mem)
+            h = self._reduce_rows_add(o, residual, res_mem, B)
         else:
             if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
                 o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
@@ -2233,7 +2237,7 @@ class MultichipDecoder(OptimizedDecoder):
             finally:
                 self._defer_reduce = False
             if self._rows_ok(B, partial, h):
-                return self._reduce_rows_add(partial, h, out_mem)
+                return self._reduce_rows_add(partial, h, out_mem, B)
             return ttnn.add(h, self._reduce(partial), memory_config=out_mem)
         mlp_out = self._mlp(ln2, B, sharded=True)
         return ttnn.add(h, mlp_out, memory_config=out_mem)
