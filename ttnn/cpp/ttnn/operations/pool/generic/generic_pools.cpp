@@ -556,7 +556,6 @@ public:
         }
         uint32_t width_rounding_value = (output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
         uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-        uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
         if (output_slice_width % width_rounding_value != 0) {
             uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
             log_trace(
@@ -565,8 +564,14 @@ public:
                 additional_padded_width);
 
             output_slice_width += additional_padded_width;
-            pad_right = (output_slice_width - 1) * stride[1] - input_slice_width +
-                        ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+            // Each extra output needs stride[1] more input columns. Append them after the right padding (after the
+            // ceil padding if there is one, so the last real window keeps its ceil-mode divisor); the real outputs
+            // keep their windows, and the extra ones are dropped when the slice is written back.
+            if (this_ceil_pad[1] > 0) {
+                this_ceil_pad[1] += additional_padded_width * stride[1];
+            } else {
+                pad_right += additional_padded_width * stride[1];
+            }
         }
         return {
             {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
@@ -594,6 +599,12 @@ public:
         // Get the memory config for this slice
         auto sliced_input_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
 
+        // Size the halo with this slice's own ceil padding, as run_L1_op passes it to pool2d_L1 (it can include
+        // width-rounding columns). Otherwise it is recomputed from the slice's size and padding, missing those columns.
+        auto slice_sliding_window_config = sliding_window_config;
+        slice_sliding_window_config.ceil_pad_hw = sliding_window::uint32_pair_t{this_ceil_pad[0], this_ceil_pad[1]};
+        slice_sliding_window_config.ceil_mode = ceil_mode || this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0;
+
         // Calculate complete L1 usage for this slice
         auto pool_l1_usage = pool::calculate_L1_usage_for_pool2d_slice(
             input_slice_height,
@@ -611,7 +622,7 @@ public:
             input_layout,
             output_layout,
             sliced_input_memory_config,
-            sliding_window_config,
+            slice_sliding_window_config,
             config_tensor_in_dram);
 
         log_trace(
