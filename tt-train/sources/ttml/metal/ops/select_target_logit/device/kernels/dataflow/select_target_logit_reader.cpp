@@ -40,7 +40,7 @@ void kernel_main() {
     constexpr auto logit_accessor_args = TensorAccessorArgs<4>();
     constexpr auto target_accessor_args = TensorAccessorArgs<logit_accessor_args.next_compile_time_args_offset()>();
     const auto logit_addr_gen = TensorAccessor(logit_accessor_args, logit_address);
-    const auto target_addr_gen = TensorAccessor(target_accessor_args, target_address, target_page_size);
+    const auto target_addr_gen = TensorAccessor(target_accessor_args, target_address);
 
     Noc noc;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {

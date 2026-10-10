@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <limits>
+#include <tt-metalium/buffer.hpp>
 
 #include "select_target_logit_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -133,15 +134,14 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // first_v / local_V only affect runtime args (they're patched by override_runtime_arguments
-    // per coord). cluster_axis, however, determines the mesh-workload structure (one program per
-    // TP slab when set vs one per coordinate when unset) and the program-to-coordinate mapping,
-    // so it must be part of the hash. value_or keeps nullopt distinct from axis 0 (an optional
-    // hashes its payload directly, so nullopt and 0 would otherwise collide); the sentinel can
-    // never be a valid axis.
+    // per coord). cluster_axis determines the mesh-workload structure and target aligned page size
+    // is compiled into TensorAccessorArgs, so both are part of the hash. value_or keeps nullopt
+    // distinct from axis 0; the sentinel can never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
         args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
         tensor_args.logit.dtype(),
-        tensor_args.logit.logical_shape());
+        tensor_args.logit.logical_shape(),
+        tensor_args.target.buffer()->aligned_page_size());
 }
 
 }  // namespace ttml::metal::ops::select_target_logit::device
