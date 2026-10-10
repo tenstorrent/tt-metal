@@ -176,8 +176,20 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
     return r;
 }
 
+bool bf16_dest_expm1();
+template <int ITERATIONS>
+void calculate_expm1_bf16();
+// Whether BF16 DEST runs the generated expm1 kernel as one call over the whole tile.
+inline constexpr bool expm1_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_expm1()) {
+            calculate_expm1_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat y = _sfpu_expm1_<is_fp32_dest_acc_en>(x);
@@ -188,6 +200,8 @@ inline void calculate_expm1() {
         sfpi::dst_reg++;
     }
 }
+
+void init_expm1_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
@@ -200,6 +214,11 @@ void expm1_init() {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
     }
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_expm1_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_expm1_bf16.h"

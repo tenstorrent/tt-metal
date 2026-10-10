@@ -176,6 +176,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
     return r;
 }
 
+// Whether BF16 DEST runs the generated expm1 kernel as one call over the whole tile.
+inline constexpr bool expm1_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
     for (int d = 0; d < ITERATIONS; d++) {
