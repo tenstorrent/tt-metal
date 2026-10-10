@@ -69,10 +69,12 @@ class SpecIndexer(DSV41DecodeIndexer):
             kc = own.__dict__.get("_kc_view")
             if kc is None:
                 kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        if self.nb is not None:  # position bucket (``set_pos_bucket``): the first nb entries of every user's slab
+            kc = ttnn.slice(kc, [0, 0, 0, 0], [U, 1, self.nb, DIM])
         s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32n,T]
-        s = ttnn.reshape(s, (R, 1, HEADS, self.n_alloc))
+        s = ttnn.reshape(s, (R, 1, HEADS, self.n_score))
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [R,1,1(32),T]
-        return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [R, 1, 1, self.n_alloc]), ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [R, 1, 1, self.n_score]), ttnn.ROW_MAJOR_LAYOUT)
 
     def _ent_per_j(self, st):
         """int32 [U] row-major per block index j: key slab entry written by row j (pos // ratio) when the row completes a group, else -1 (skip)."""

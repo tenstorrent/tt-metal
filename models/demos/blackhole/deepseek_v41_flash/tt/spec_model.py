@@ -27,6 +27,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, eff
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, PAD_HEADS
+from models.demos.blackhole.deepseek_v41_flash.tt.indexer import pos_buckets  # noqa: F401 (re-exported)
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
 from models.demos.blackhole.deepseek_v41_flash.tt.mtp import (
@@ -249,6 +250,10 @@ class SpecRunner:
                 temperature=float(t_), top_k=int(k_), top_p=float(p_), gens=torch.Generator().manual_seed(1234)
             )
         self.tid = None
+        # position buckets (tt/indexer.py ``set_pos_bucket``): one set of traces per bucket, replayed while every position of the block stays below it
+        self.idx_views = list(idx_by_id.values())
+        self.pos_buckets = pos_buckets(self.max_pos) if self.idx_views else []
+        self.tr, self.cur_bucket = {}, None
         # sampled verify (adapter): a round with sampled rows replays three traces, A (verify block -> logits) | S (the in-trace sampler draws every block row) | B (accept / commit / draft over the
         # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace
         self.pack_mono = self.pack_b = None
@@ -302,6 +307,7 @@ class SpecRunner:
 
     def _round(self, X, base, force=None):
         self._ensure(base)
+        self._use(base)
         self.dec.set_force(-1 if force is None else force)
         self._feed(X, base)
         if self.sample_cfg is not None:
@@ -345,11 +351,17 @@ class SpecRunner:
         dec = self.dec
         self.snaps = dec.snapshot_states()
         self._ensure(base)
-        dec.set_force(self.n - 1)
-        self._feed(X, base)
-        dec.forward()
-        ttnn.synchronize_device(self.md)
-        dec.restore_states(self.snaps)
+        for (
+            P
+        ) in (
+            self.bucket_list()
+        ):  # every bucket's shapes are compiled (and its constants created) before ANY trace exists
+            self.set_bucket(P)
+            dec.set_force(self.n - 1)
+            self._feed(X, base)
+            dec.forward()
+            ttnn.synchronize_device(self.md)
+            dec.restore_states(self.snaps)
         root = self.drafter_root
         if (
             self.phys is None
@@ -366,38 +378,73 @@ class SpecRunner:
         if (
             self.sampled
         ):  # compile pass of the three parts of the sampled round (creates their lazily built tensors before any trace exists)
-            dec.set_force(self.n - 1)
-            self._feed(X, base)
-            dec.forward_verify()
-            dec.forward_sampler(False)
-            dec.forward_sampler(True)
-            dec.forward_tail()
-            ttnn.synchronize_device(self.md)
-            dec.restore_states(self.snaps)
+            for i, P in enumerate(self.bucket_list()):
+                self.set_bucket(P)
+                dec.set_force(self.n - 1)
+                self._feed(X, base)
+                dec.forward_verify()
+                if i == 0:  # (the sampler does not depend on the context)
+                    dec.forward_sampler(False)
+                    dec.forward_sampler(True)
+                dec.forward_tail()
+                ttnn.synchronize_device(self.md)
+                dec.restore_states(self.snaps)
+        self.set_bucket(None)
+
+    def bucket_list(self):
+        """position buckets of this runner, ascending, ending with None (the whole key slab)."""
+        return list(self.pos_buckets) + [None]
+
+    def set_bucket(self, P):
+        for iv in self.idx_views:
+            iv.set_pos_bucket(P)
+        self.cur_bucket = P
+
+    def _use(self, base):
+        """bind the traces of the smallest position bucket that covers the block rows (base + n) of every user."""
+        mx = int(base.max()) + self.n + 1
+        P = next((b for b in self.pos_buckets if mx <= b), None)
+        t = self.tr[P]
+        self.tid, self.tid_a, self.tid_s, self.tid_b, self.pack_mono, self.pack_b = (
+            t["tid"],
+            t["tid_a"],
+            t["tid_s"],
+            t["tid_b"],
+            t["pack_mono"],
+            t["pack_b"],
+        )
+        self.cur_bucket = P
 
     def capture_trace(self):
         dec = self.dec
-        self.tid = ttnn.begin_trace_capture(self.md, cq_id=0)
-        dec.forward()
-        ttnn.end_trace_capture(self.md, self.tid, cq_id=0)
-        ttnn.synchronize_device(self.md)
-        dec.restore_states(self.snaps)
-        if self.sampled:
-            self.pack_mono = dec.pack
-            self.tid_a = ttnn.begin_trace_capture(self.md, cq_id=0)
-            dec.forward_verify()
-            ttnn.end_trace_capture(self.md, self.tid_a, cq_id=0)
-            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
+        from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
 
-            self.tid_s = SamplerTraces(self.samp)
-            self.tid_s.capture(dec.forward_sampler)
-            self.tid_b = ttnn.begin_trace_capture(self.md, cq_id=0)
-            dec.forward_tail()
-            ttnn.end_trace_capture(self.md, self.tid_b, cq_id=0)
-            self.pack_b = dec.pack
+        self.tr = {}
+        for P in self.bucket_list():
+            self.set_bucket(P)
+            t = {"tid_a": None, "tid_b": None, "tid_s": None, "pack_mono": None, "pack_b": None}
+            t["tid"] = ttnn.begin_trace_capture(self.md, cq_id=0)
+            dec.forward()
+            ttnn.end_trace_capture(self.md, t["tid"], cq_id=0)
             ttnn.synchronize_device(self.md)
             dec.restore_states(self.snaps)
-        self.m.log_dram("spec: after trace capture")
+            t["pack_mono"] = dec.pack  # (the output buffer of THIS trace: every capture binds a new one)
+            if self.sampled:
+                t["tid_a"] = ttnn.begin_trace_capture(self.md, cq_id=0)
+                dec.forward_verify()
+                ttnn.end_trace_capture(self.md, t["tid_a"], cq_id=0)
+                t["tid_s"] = SamplerTraces(self.samp)  # (reads the logits buffer of THIS bucket's verify trace)
+                t["tid_s"].capture(dec.forward_sampler)
+                t["tid_b"] = ttnn.begin_trace_capture(self.md, cq_id=0)
+                dec.forward_tail()
+                ttnn.end_trace_capture(self.md, t["tid_b"], cq_id=0)
+                t["pack_b"] = dec.pack
+                ttnn.synchronize_device(self.md)
+                dec.restore_states(self.snaps)
+            self.tr[P] = t
+            self.m.log_dram(f"spec: after trace capture (pos bucket {P})")
+        self.set_bucket(None)
+        self._use(torch.full((self.B,), self.max_pos))  # (the full-slab traces)
 
     def calibrate(self, X, base, reps):
         """Round-time calibration: replay the captured block with all drafts forced accepted (state restored afterwards)."""
@@ -421,13 +468,15 @@ class SpecRunner:
             self.calibrate(X, base, reps)
 
     def release(self):
-        for name in ("tid", "tid_a", "tid_s", "tid_b"):
-            if getattr(self, name, None) is not None:
-                if name == "tid_s":
-                    self.tid_s.release()
-                else:
-                    ttnn.release_trace(self.md, getattr(self, name))
-                setattr(self, name, None)
+        for t in self.tr.values():
+            for name in ("tid", "tid_a", "tid_b"):
+                if t.get(name) is not None:
+                    ttnn.release_trace(self.md, t[name])
+            if t.get("tid_s") is not None:
+                t["tid_s"].release()
+        self.tr = {}
+        self.tid = self.tid_a = self.tid_s = self.tid_b = None
+        self.pack_mono = self.pack_b = None
 
     # ---- hand-off: drafter seeding ----------------------------------------------------------------------------------------------
     def _capture_all(self, block_of, b0):

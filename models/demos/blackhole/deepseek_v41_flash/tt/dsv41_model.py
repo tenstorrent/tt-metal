@@ -26,6 +26,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
 from models.demos.blackhole.deepseek_v41_flash.tt.engram import DSV41DeviceEngram, HostEngramRows
 from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
+from models.demos.blackhole.deepseek_v41_flash.tt.indexer import pos_buckets
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import load_layer
 from models.demos.blackhole.deepseek_v41_flash.tt.model import DSV41DecodeChain
@@ -255,6 +256,7 @@ class Model:
         self.engram_kin = {l: e.kin for l, e in dev_engram.items()}
         self.rows_cat = None
         self.trace_id = None
+        self.dtr, self._dpos = {}, None  # decode traces per position bucket, host-tracked positions of the device loop
         self.samp_trace = None  # trace of the sampler (replayed after the step trace by a step with sampled rows)
         self.admitted = False
         self.pool_pages_free = None
@@ -725,11 +727,17 @@ class Model:
             self._warm = True
             return
         snaps = self.dec.snapshot_states()
-        self.last_logits = (
-            self.dec.forward()
-        )  # compile pass (writes pool rows at position = prompt length: rewritten by the prefill / first real step)
-        ttnn.synchronize_device(self.md)
-        self.dec.restore_states(snaps)
+        for (
+            P
+        ) in (
+            self._dec_bucket_list()
+        ):  # (position buckets: every scored length is compiled, its constants created, before the first trace)
+            self._dec_set_bucket(P)
+            self.last_logits = (
+                self.dec.forward()
+            )  # compile pass (writes pool rows at position = prompt length: rewritten by the prefill / first real step)
+            ttnn.synchronize_device(self.md)
+            self.dec.restore_states(snaps)
         del snaps
         if self.samp is not None:  # compile pass of the sampler (it writes the token buffer: set again below)
             self.dec.forward_sampler(self.last_logits, False)
@@ -1477,6 +1485,9 @@ class Model:
         )  # pages for the next replays (no-op, no upload, unless a page boundary is near)
         if reload_inputs or getattr(self.dec, "tok_dev", None) is None:
             self._set_loop_state(tokens, current_pos)
+            self._dpos = torch.as_tensor(current_pos).reshape(-1).long().clone()
+        elif getattr(self, "_dpos", None) is None:
+            self._dpos = torch.as_tensor(current_pos).reshape(-1).long().clone()
         host_rows = self.prepare_inputs_decode(tokens, current_pos)
         t1 = time.perf_counter()
         self._upload_rows(host_rows)
@@ -1484,6 +1495,9 @@ class Model:
             self._capture_decode(tokens, current_pos)
             self._set_loop_state(tokens, current_pos)
             self._upload_rows(host_rows)
+        if enable_trace:
+            self._dec_bind(self._dec_bucket_for(self._dpos))  # the traces of the position bucket this step falls in
+            self._dpos = self._dpos + 1  # (the device loop advances every position by one per replay)
         t2 = time.perf_counter()
         if samp is not None and self.samp is not None:
             self.samp.set_params(*samp)
@@ -1506,28 +1520,71 @@ class Model:
         self.timing["decode_device_read"] = t3 - t2
         return out
 
+    # ---- position buckets of the plain decode step (tt/indexer.py ``set_pos_bucket``): one trace set per bucket ------------------------------------------------
+    def _dec_indexers(self):
+        seen, out = set(), []
+        for idx in self.dec_idx.values():
+            if id(idx) not in seen:
+                seen.add(id(idx))
+                out.append(idx)
+        return out
+
+    def _dec_bucket_list(self):
+        """position buckets (ascending, DSV41_POS_BUCKETS) of the decode traces, then None = the whole key slab."""
+        key = (self.max_ctx, os.environ.get("DSV41_POS_BUCKETS"))
+        c = self.__dict__.get("_dbl")
+        if c is None or c[0] != key:
+            if not any(getattr(i, "backend", None) == "matmul" for i in self._dec_indexers()):
+                c = (key, [None])
+            else:
+                c = (key, pos_buckets(self.max_ctx + 64) + [None])
+            self._dbl = c
+        return c[1]
+
+    def _dec_set_bucket(self, P):
+        for idx in self._dec_indexers():
+            idx.set_pos_bucket(P)
+
+    def _dec_bucket_for(self, pos):
+        """smallest bucket that covers every position fed by this step (the entries written / read stay below it)."""
+        mx = int(pos.max()) + 1
+        return next((b for b in self._dec_bucket_list() if b is not None and mx <= b), None)
+
+    def _dec_bind(self, P):
+        t = self.dtr[P]
+        self.trace_id, self.samp_trace, self.last_logits = t["trace_id"], t["samp_trace"], t["last_logits"]
+
     def _capture_decode(self, tokens, current_pos, compile_pass=True):
-        """Compile pass (restores the step-carried compressor state) + trace capture of one device-loop step. ``compile_pass=False``: everything was compiled before (warm_serving)."""
+        """Compile pass (restores the step-carried compressor state) + trace capture of one device-loop step, for every position bucket. ``compile_pass=False``: everything was compiled before (warm_serving)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+        from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
+
         snaps = self.dec.snapshot_states()
+        Ps = self._dec_bucket_list()
         if compile_pass:
-            self.dec.forward()
+            for P in Ps:  # every bucket's shapes / constants before ANY trace exists
+                self._dec_set_bucket(P)
+                self.dec.forward()
+                ttnn.synchronize_device(self.md)
+                self.dec.restore_states(snaps)
+            self._set_loop_state(tokens, current_pos)
+        self.dtr = {}
+        for P in Ps:
+            self._dec_set_bucket(P)
+            t = {"samp_trace": None}
+            t["trace_id"] = ttnn.begin_trace_capture(self.md, cq_id=0)
+            with corruptible(self.md):
+                t["last_logits"] = self.dec.forward()
+            ttnn.end_trace_capture(self.md, t["trace_id"], cq_id=0)
             ttnn.synchronize_device(self.md)
             self.dec.restore_states(snaps)
-            self._set_loop_state(tokens, current_pos)
-        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
-
-        self.trace_id = ttnn.begin_trace_capture(self.md, cq_id=0)
-        with corruptible(self.md):
-            self.last_logits = self.dec.forward()
-        ttnn.end_trace_capture(self.md, self.trace_id, cq_id=0)
-        ttnn.synchronize_device(self.md)
-        self.dec.restore_states(snaps)
-        if self.samp is not None:  # the sampler's own trace over the logits of the step trace
-            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
-
-            self.samp_trace = SamplerTraces(self.samp)
-            self.samp_trace.capture(lambda fast: self.dec.forward_sampler(self.last_logits, fast))
-            ttnn.synchronize_device(self.md)
+            if self.samp is not None:  # the sampler's own trace over the logits of the step trace
+                t["samp_trace"] = SamplerTraces(self.samp)
+                t["samp_trace"].capture(lambda fast, t=t: self.dec.forward_sampler(t["last_logits"], fast))
+                ttnn.synchronize_device(self.md)
+            self.dtr[P] = t
+        self._dec_set_bucket(None)
+        self._dec_bind(None)
 
     def read_logits(self):
         """Host copy [B, vocab] fp32 of the logits of the last decode step (diagnostics; the loop itself only reads tokens)."""
@@ -1535,12 +1592,14 @@ class Model:
         return self.head.gather_logits(self.last_logits)[: self.B]
 
     def release_trace(self):
-        if self.trace_id is not None:
-            ttnn.release_trace(self.md, self.trace_id)
-            self.trace_id = None
-        if getattr(self, "samp_trace", None) is not None:
-            self.samp_trace.release()
-            self.samp_trace = None
+        for t in getattr(self, "dtr", {}).values():
+            if t.get("trace_id") is not None:
+                ttnn.release_trace(self.md, t["trace_id"])
+            if t.get("samp_trace") is not None:
+                t["samp_trace"].release()
+        self.dtr = {}
+        self.trace_id = None
+        self.samp_trace = None
         for b in getattr(self, "buckets", {}).values():
             b.release_trace()
 
@@ -1748,6 +1807,7 @@ class Model:
             self.__dict__.pop(name, None)
         self.trace_id, self.admitted, self.pool_pages_free = None, False, None
         self.samp_trace = None
+        self.dtr, self._dpos = {}, None
         # EVERY persistent L1 allocation goes (the CCL semaphores too, they are re-created first by the rebuild like in a fresh process): the L1 allocator is
         # first-fit, so gaps left by buffers of the old batch size would shift the new persistent buffers below the static circular-buffer region of the
         # big programs ('Statically allocated circular buffers ... clash with L1 buffers')

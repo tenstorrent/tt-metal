@@ -23,6 +23,8 @@ Shared position: all users of a call share the valid length (the single ``valid_
 additive mask on the scores first (``mask`` argument of ``select``).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -62,6 +64,14 @@ def default_backend(n_entries: int) -> str:
     if forced:
         return forced
     return "matmul" if n_entries <= int(os.environ.get("DSV41_IDX_SWITCH", "65536")) else "fused"
+
+
+def pos_buckets(max_pos):
+    """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='2048,8192,32768' (default; '0' = none)."""
+    raw = os.environ.get("DSV41_POS_BUCKETS", "2048,8192,32768")
+    if raw.strip() in ("", "0"):
+        return []
+    return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
 
 
 class DSV41DecodeIndexer:
@@ -123,6 +133,40 @@ class DSV41DecodeIndexer:
             q_chunk_size=32, k_chunk_size=min(k_chunk, n_alloc), head_group_size=head_group
         )
         self.k_cache = None
+        self.nb = None  # scored key length of the traces being captured (position bucket, see ``set_pos_bucket``); None = the whole slab
+
+    def set_pos_bucket(self, pos_bucket):
+        """Score / rank only the first ``nb`` entries of the key slab (matmul backend): ``nb`` covers every entry that a position < ``pos_bucket`` can hold (+ the 32 of the block / group in
+        progress). A trace captured with a bucket is replayed only while every user's position (+ the verify block) stays below it, so the per-step cost follows the positions, not the
+        allocated maximum (the score matmuls, the validity mask and the top-k all scale with ``nb``). ``None`` / a bucket >= the slab: the whole slab.
+        """
+        if pos_bucket is None or self.backend != "matmul":
+            self.nb = None
+            self._arange_for(self.n_alloc)
+            return self.n_alloc
+        nb = -(-(int(pos_bucket) // self.ratio + 32) // 32) * 32
+        nb = max(nb, -(-(self.topk + 32) // 32) * 32)
+        self.nb = None if nb >= self.n_alloc else nb
+        self._arange_for(self.n_score)
+        return self.n_score
+
+    @property
+    def n_score(self):
+        return self.nb or self.n_alloc
+
+    def _arange_for(self, n):
+        """[1,1,1,n] float32 tile 0..n-1 (the per-user validity mask of ``select``), one per scored length; created before any trace exists (``set_pos_bucket`` of every bucket runs in the compile pass)."""
+        ar = self.__dict__.setdefault("_aranges", {})
+        if n not in ar:
+            ar[n] = ttnn.from_torch(
+                torch.arange(n, dtype=torch.float32).reshape(1, 1, 1, -1),
+                device=self.md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+        return ar[n]
 
     # ---- state ---------------------------------------------------------------------------------------------------------------
     def load_keys(self, index_k: torch.Tensor):
@@ -312,9 +356,11 @@ class DSV41DecodeIndexer:
             kc = own.__dict__.get("_kc_view")
             if kc is None:
                 kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [self.T, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        if self.nb is not None:  # position bucket: the first nb entries of every user's slab
+            kc = ttnn.slice(kc, [0, 0, 0, 0], [self.T, 1, self.nb, DIM])
         s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32,T]
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [U,1,1(32),T]
-        return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [self.T, 1, 1, self.n_alloc]), ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [self.T, 1, 1, self.n_score]), ttnn.ROW_MAJOR_LAYOUT)
 
     def select(self, scores, st):
         """top-``topk`` entry ids: uint32 [U,1,1,topk] (descending score, 0xFFFFFFFF where fewer valid entries), ONE ``topk_large_indices`` call
@@ -327,16 +373,8 @@ class DSV41DecodeIndexer:
         if (
             "nvalid" in st
         ):  # ragged batch: entries >= the user's own valid count must never be ranked (the shared valid length is the batch maximum)
-            if getattr(self, "_arange", None) is None:
-                self._arange = ttnn.from_torch(
-                    torch.arange(self.n_alloc, dtype=torch.float32).reshape(1, 1, 1, -1),
-                    device=self.md,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
-                )
-            keep = ttnn.lt(self._arange, st["nvalid"])  # [U,1,1,n_alloc]
+            ar = self._arange_for(self.n_score)
+            keep = ttnn.lt(ar, st["nvalid"])  # [U,1,1,n_alloc]
             masked = ttnn.where(keep, ttnn.typecast(ttnn.to_layout(scores, ttnn.TILE_LAYOUT), ttnn.float32), -1e30)
             scores = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
