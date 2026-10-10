@@ -48,3 +48,11 @@ ttp checks -- 'pytest -q models/tt_dit/tests/unit/test_ltx_*.py ...'; ttp push -
   Open question for the push: should ltx-rt-next keep ltx-rt's DEFAULT_LTX_PROMPT (spec: keep upstream behaviour where our
   change need not replace it)? Check who uses DEFAULT_LTX_PROMPT (ltx-server default?) before pushing.
   Then git fetch; if origin/ltx-rt still b9f8587ce6c -> git push origin <next head>:refs/heads/ltx-rt (fast-forward only).
+
+## Run 1257 (2026-10-10 04:05 UTC)
+- Job 363 (next f6547442b30, ltx-rt prompt, seed 10, 8+3): PASSED, pipeline total 7.32 s (timing_job363.txt; blx01 clamped 900 MHz, relative only).
+- vs job 359 ltx-rt: PCC 0.755, PSNR 16.65 dB (min 15.55, max 17.44). Still (vis/small_p.jpg): same woman, guitar, mic, pose;
+  background details differ a little (window vs amp); both clean, no artifacts. Judged not visibly worse.
+- DEFAULT_LTX_PROMPT is used only by tests/utils, not by ltx-server: left as t48 has it.
+- git fetch: origin/ltx-rt still b9f8587ce6c. Pushed f6547442b30 -> ltx-rt (fast-forward, no force). origin/ltx-rt now f6547442b30.
+- blx01 /var/tmp/fasth3/t313: logs + stills only (<10 GB); root fs 54%.

@@ -1,0 +1,19 @@
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t313/out_nextp/ltx_av_fast_1920x1088_1.mp4  │
+│ Prompt       A young woman with shoulder-length wavy brown hair sits o...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.24 s │
+│ Stage 1 denoise                                                 │ 2.79 s │
+│ Latent upsample                                                 │ 0.18 s │
+│ Stage 2 denoise                                                 │ 3.04 s │
+│ VAE decode                                                      │ 0.60 s │
+│ Audio decode                                                    │ 0.47 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 7.32 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
+PASSED
