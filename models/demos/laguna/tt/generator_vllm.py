@@ -35,6 +35,7 @@ compute fidelities, fp32/HiFi4 SDPA. The serving path therefore uses the selecte
 """
 from __future__ import annotations
 
+import math
 import os
 import secrets
 import time
@@ -531,12 +532,37 @@ class LagunaForCausalLM:
                 lg = tile_regroup.regroup(lg, [((1, C, 32, V // C), 0)], ttnn.DRAM_MEMORY_CONFIG)[0]
             m = ttnn.max(ttnn.max(lg, dim=-1, keepdim=True), dim=1, keepdim=True)
             z = ttnn.sum(ttnn.sum(ttnn.exp(ttnn.subtract(lg, m)), dim=-1, keepdim=True), dim=1, keepdim=True)
+            if getattr(self, "_dflash_verify_active", None) is not None:
+                self._dflash_depth_on_device(m, z, st)
+                return
             ms = ttnn.concat([m, z], dim=-1)
             ms = ttnn.pad(ms, [(0, 0), (0, 0), (0, 32 - int(ms.shape[-2])), (0, 30)], 0.0)
             layer0 = core.layers[0]
             g = ttnn.all_gather(ms, dim=3, cluster_axis=layer0.tp_axis, topology=layer0.ccl_topology,
                                 num_links=layer0.num_links)  # fmt: skip
             ttnn.copy(ttnn.typecast(g, ttnn.bfloat16) if g.dtype != ttnn.bfloat16 else g, st["conf"])
+
+    def _dflash_depth_on_device(self, m, z, st):
+        """The adaptive verify depth inside the draft trace: from each chip's (max logit, sum exp) per proposal row,
+        p1 = 1 / sum_c z_c exp(m_c - max_c m_c); depth = the leading rows whose running log p1 stays >= log TAU (1..5).
+        Writes depth + 1 into the verify's active-rows input and into slot 31 of the draft ids (the host reads it with
+        the drafts): no separate read of the probabilities, no upload of the depth."""
+        layer0 = self._dflash_core.layers[0]
+        rows = int(m.shape[-2])
+        gather = lambda t: ttnn.all_gather(t, dim=3, cluster_axis=layer0.tp_axis, topology=layer0.ccl_topology,
+                                           num_links=layer0.num_links)  # fmt: skip
+        gm = gather(ttnn.pad(m, [(0, 0), (0, 0), (0, 32 - rows), (0, 31)], -1e4))
+        gz = gather(ttnn.pad(z, [(0, 0), (0, 0), (0, 32 - rows), (0, 31)], 0.0))
+        top = ttnn.max(gm, dim=-1, keepdim=True)
+        Z = ttnn.sum(ttnn.multiply(gz, ttnn.exp(ttnn.subtract(gm, top))), dim=-1, keepdim=True)
+        run = ttnn.cumsum(ttnn.neg(ttnn.log(Z)), dim=2)
+        ok = ttnn.multiply(ttnn.ge(run, math.log(self._DFLASH_DEPTH_TAU)), self._dflash_depth_valid)
+        active = ttnn.add(ttnn.clamp(ttnn.sum(ok, dim=2, keepdim=True), min=1.0), 1.0)  # [1, 1, 1, 1]
+        arow = ttnn.to_layout(ttnn.typecast(ttnn.add(self._dflash_zero_row, active), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy(ttnn.reshape(arow, (1, 32)), self._dflash_verify_active)
+        ids = ttnn.concat([ttnn.slice(st["tok32"], [0, 0, 0, 0], [1, 1, 1, 31]), ttnn.slice(arow, [0, 0, 0, 0], [1, 1, 1, 1])],
+                          dim=-1)  # fmt: skip
+        ttnn.copy(ids, st["tok32"])
 
     def _dflash_draft_conf(self, st, n):
         """Top-1 probability of each of the n proposal rows, from the draft trace's per-chip (max, sum exp) pairs."""
@@ -712,8 +738,13 @@ class LagunaForCausalLM:
     def _dflash_read_drafts(self, st):
         """The traced proposal's draft tokens; with adaptive depth also sets this round's verify depth."""
         n = int(self._dflash_core.config.max_speculative_tokens)
-        drafts = [int(t) for t in self.gen._read_token(st["tok32"], n)]
         self._dflash_depth = None
+        if getattr(self, "_dflash_verify_active", None) is not None:
+            ids = [int(t) for t in self.gen._read_token(st["tok32"], 32)]
+            self._dflash_depth = ids[31] - 1  # the trace already wrote the verify's active rows
+            self._dflash_depth_written = True
+            return ids[:n]
+        drafts = [int(t) for t in self.gen._read_token(st["tok32"], n)]
         stv = getattr(self, "_verify_dec", {}).get("dflash")
         if self._DFLASH_DEPTH_TAU > 0 and st.get("conf") is not None and stv is not None and "active" in stv:
             k_max = int(stv["rows"]) - 1
@@ -3391,7 +3422,10 @@ class LagunaForCausalLM:
         elif st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
-        if "active" in st:
+        if "active" in st and getattr(self, "_dflash_depth_written", False):
+            self._dflash_depth_written = False
+            st["active_last"] = None  # the draft trace wrote it
+        elif "active" in st:
             depth = getattr(self, "_dflash_depth", None)
             active = B if depth is None else min(B, depth + 1)
             if active != st["active_last"]:
@@ -4290,6 +4324,15 @@ class LagunaForCausalLM:
                 if self._DFLASH_DRAFT_TRACE:
                     if self._DFLASH_DRAFT_VARIANTS and "tok32" in staged:
                         self._dflash_verify_tok32, self._dflash_verify_rows = staged["tok32"], int(staged["rows"])
+                        if self._DFLASH_DEPTH_TAU > 0 and os.environ.get("TT_LAGUNA_DFLASH_DEPTH_DEVICE", "1") == "1":
+                            kmax = int(staged["rows"]) - 1
+                            valid = torch.zeros((1, 1, 32, 1))
+                            valid[:, :, :kmax] = 1.0
+                            mk = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                                           device=self.mesh_device, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+                            self._dflash_depth_valid = mk(valid)
+                            self._dflash_zero_row = mk(torch.zeros((1, 1, 1, 32)))
+                            self._dflash_verify_active = staged["active"]
                     self._dflash_draft_prepare()
                     self._dflash_controller.draft_tokens = self._dflash_draft_tokens
                     self._dflash_controller.verify_depth = self._dflash_verify_depth
