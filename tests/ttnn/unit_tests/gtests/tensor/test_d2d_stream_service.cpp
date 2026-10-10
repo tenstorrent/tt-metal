@@ -2120,6 +2120,18 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     auto receiver_mesh = this->mesh_device_->create_submesh(                                           \
         MeshShape(1, 1), (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0))
 
+// Row 0 (1x2) sends to row 1 (1x2): two coords per side.
+#define D2D_ROW_PAIR_GUARD()                                                                      \
+    if (!service_cores_supported()) {                                                             \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";        \
+    }                                                                                             \
+    const auto shape = this->mesh_device_->shape();                                               \
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {                                      \
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;       \
+    }                                                                                             \
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0)); \
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0))
+
 // Disabled by default: no gates, and the gate API refuses to run.
 TEST_F(D2DStreamServiceTest, StageGateDisabledByDefault) {
     D2D_SINGLE_CHIP_PAIR_GUARD();
@@ -2151,29 +2163,13 @@ TEST_F(D2DStreamServiceTest, StageGateSemanticsSingleChipPair) {
 // Same walk across a 1x2 row pair: each coord's gates are independent words on its own
 // receiver service core, and the host opens them on every coord.
 TEST_F(D2DStreamServiceTest, StageGateSemanticsRowPair) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
-        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
-    }
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    D2D_ROW_PAIR_GUARD();
     verify_stage_gate_semantics(sender_mesh, receiver_mesh);
 }
 
 // Row pair: opening gate 2 on one coord releases only that coord.
 TEST_F(D2DStreamServiceTest, StageGatePerCoordIndependenceRowPair) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
-        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
-    }
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    D2D_ROW_PAIR_GUARD();
     verify_stage_gate_per_coord_independence(sender_mesh, receiver_mesh);
 }
 
@@ -2245,15 +2241,7 @@ TEST_F(D2DStreamServiceTest, StageGateLeaseModeSingleChipPair) {
 }
 
 TEST_F(D2DStreamServiceTest, StageGateLeaseModeRowPair) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
-        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
-    }
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    D2D_ROW_PAIR_GUARD();
     verify_stage_gate_lease_mode(sender_mesh, receiver_mesh);
 }
 

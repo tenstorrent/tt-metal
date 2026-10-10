@@ -25,8 +25,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"  // tt::tt_fabric::WorkerToFabricEdmSender
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-
-constexpr uint32_t kStageGateOpen = 1;  // mirrors ttnn::kStageGateOpen
+#include "ttnn/api/ttnn/tensor/d2d_stage_gate.hpp"
 
 void kernel_main() {
     size_t rt_idx = 0;
@@ -39,20 +38,17 @@ void kernel_main() {
 
     auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_idx);
     connection.open();
-
     PacketHeaderPool::reset();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-    tt::tt_fabric::fabric_set_unicast_route(
-        header, static_cast<uint16_t>(dst_dev_id), static_cast<uint16_t>(dst_mesh_id));
+    tt::tt_fabric::fabric_set_unicast_route(header, dst_dev_id, dst_mesh_id);
     const uint64_t gate_noc_addr = get_noc_addr(gate_noc_x, gate_noc_y, gate_addr);
     if (mode == 0) {
         header->to_noc_unicast_inline_write(
-            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{gate_noc_addr, kStageGateOpen});
+            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{gate_noc_addr, ttnn::kStageGateOpen});
     } else {
         header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{gate_noc_addr, 1, /*flush=*/true});
     }
-
     connection.wait_for_empty_write_slot();
     connection.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
     connection.close();

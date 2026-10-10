@@ -34,6 +34,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/api/ttnn/tensor/d2d_stage_gate.hpp"
 
 // CT-arg layout (must stay in sync with build_receiver_program in
 // ttnn/core/tensor/d2d_stream_service.cpp).
@@ -80,17 +81,16 @@ constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
 // Optional per-slot stage gate (block after the accessor args). num_stage_gates == 0
 // compiles it out. stage_gate_addr is this service core's num_stage_gates-word gate
 // array (one binary word per slot); the slot-id and gate_flags words are read from the
-// landed metadata blob at the given byte offsets. Values mirror ttnn::kStageGate* in
-// d2d_stream_service.hpp.
+// landed metadata blob at the given byte offsets.
 constexpr uint32_t kStageGateCtBase = output_tensor_accessor_args.next_compile_time_args_offset();
 constexpr uint32_t num_stage_gates = get_compile_time_arg_val(kStageGateCtBase);
 constexpr uint32_t stage_gate_addr = get_compile_time_arg_val(kStageGateCtBase + 1);
 constexpr uint32_t stage_gate_slot_offset = get_compile_time_arg_val(kStageGateCtBase + 2);
 constexpr uint32_t stage_gate_flags_offset = get_compile_time_arg_val(kStageGateCtBase + 3);
-constexpr uint32_t kStageGateClosed = 0;
-constexpr uint32_t kStageGateOpen = 1;
-constexpr uint32_t kStageGateFlagCloseOnTransit = 1u << 0;
-constexpr uint32_t kStageGateFlagBypass = 1u << 31;
+using ttnn::kStageGateClosed;
+using ttnn::kStageGateFlagBypass;
+using ttnn::kStageGateFlagCloseOnTransit;
+using ttnn::kStageGateOpen;
 
 void kernel_main() {
     size_t rt_args_idx = 0;

@@ -83,42 +83,27 @@ using stream_service_common::derive_chunk_plan;
 using stream_service_common::make_worker_sync_args;
 using stream_service_common::WorkerSyncArgs;
 
-// Allocate one zero-initialised uint32 L1 word on a service core, recording the
-// address per coord. Used for the per-coord counters and termination words that
-// can't be GlobalSemaphores (service cores differ per device, and
-// GlobalSemaphore's reset path requires a MeshBuffer-backed buffer).
+// Allocate `num_words` contiguous zero-initialised uint32 L1 words on a service core,
+// recording the base address per coord. Used for the per-coord counters and
+// termination words that can't be GlobalSemaphores (service cores differ per device,
+// and GlobalSemaphore's reset path requires a MeshBuffer-backed buffer), and for the
+// stage-gate array (zero == kStageGateClosed).
 std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
-    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores) {
-    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
-    std::vector<uint32_t> zero_word{0};
-    std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
-    for (const auto& [coord, core] : service_cores) {
-        auto* d = mesh->get_device(coord);
-        const DeviceAddr addr = svc.allocate_l1(d, core, sizeof(uint32_t));
-        tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero_word);
-        addrs.emplace(coord, addr);
-    }
-    return addrs;
-}
-
-// Allocate the stage-gate array (num_gates contiguous uint32 words, all
-// kStageGateClosed) on each coord's receiver service core.
-std::map<distributed::MeshCoordinate, DeviceAddr> allocate_stage_gate_words(
-    const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
-    uint32_t num_gates) {
+    uint32_t num_words = 1) {
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
-    std::vector<uint32_t> closed(num_gates, kStageGateClosed);
+    std::vector<uint32_t> zero_words(num_words, 0);
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
         auto* d = mesh->get_device(coord);
-        const DeviceAddr addr = svc.allocate_l1(d, core, num_gates * sizeof(uint32_t));
-        tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), closed);
+        const DeviceAddr addr = svc.allocate_l1(d, core, num_words * sizeof(uint32_t));
+        tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero_words);
         addrs.emplace(coord, addr);
     }
     return addrs;
 }
+static_assert(kStageGateClosed == 0, "allocate_service_core_words zero-fills the stage-gate array");
 
 // Build the SocketConnection list: one connection per participating coord, wiring
 // sender coord (x, y) on its service core 1:1 to receiver coord (x, y) on its
@@ -485,6 +470,22 @@ struct D2DStreamServiceReceiver::Impl {
     D2DStageGateConfig stage_gate;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
 
+    // L1 address of `gate` on `coord`'s service core; TT_FATALs on a disabled gate, a
+    // gate index out of range, or a coord this receiver does not own.
+    DeviceAddr stage_gate_addr(
+        const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, const char* fn) const {
+        TT_FATAL(stage_gate.num_gates > 0, "D2DStreamServiceReceiver::{}: stage gate not configured", fn);
+        TT_FATAL(
+            gate < stage_gate.num_gates,
+            "D2DStreamServiceReceiver::{}: gate {} out of range (num_gates = {})",
+            fn,
+            gate,
+            stage_gate.num_gates);
+        auto it = stage_gate_addrs.find(coord);
+        TT_FATAL(it != stage_gate_addrs.end(), "D2DStreamServiceReceiver::{}: no stage gate at coord {}", fn, coord);
+        return it->second + (gate * sizeof(uint32_t));
+    }
+
     // Persistent receiver workload, launched once at create_pair.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> workload;
     bool launched = false;
@@ -790,30 +791,9 @@ void D2DStreamServiceReceiver::release_fabric_links() {
 
 uint32_t D2DStreamServiceReceiver::get_num_stage_gates() const { return impl_->stage_gate.num_gates; }
 
-namespace CMAKE_UNIQUE_NAMESPACE {
-DeviceAddr stage_gate_addr(
-    const D2DStageGateConfig& stage_gate,
-    const std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr>& stage_gate_addrs,
-    const tt::tt_metal::distributed::MeshCoordinate& coord,
-    uint32_t gate,
-    const char* fn) {
-    TT_FATAL(stage_gate.num_gates > 0, "D2DStreamServiceReceiver::{}: stage gate not configured", fn);
-    TT_FATAL(
-        gate < stage_gate.num_gates,
-        "D2DStreamServiceReceiver::{}: gate {} out of range (num_gates = {})",
-        fn,
-        gate,
-        stage_gate.num_gates);
-    auto it = stage_gate_addrs.find(coord);
-    TT_FATAL(it != stage_gate_addrs.end(), "D2DStreamServiceReceiver::{}: no stage gate at coord {}", fn, coord);
-    return it->second + (gate * sizeof(uint32_t));
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-
 D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
     const tt::tt_metal::distributed::MeshCoordinate& coord) const {
-    const DeviceAddr base = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
-        impl_->stage_gate, impl_->stage_gate_addrs, coord, 0, "get_stage_gate_descriptor");
+    const DeviceAddr base = impl_->stage_gate_addr(coord, 0, "get_stage_gate_descriptor");
     auto* mesh = impl_->mesh_device.get();
     const CoreCoord logical = impl_->service_cores.at(coord);
     const auto node = mesh->get_fabric_node_id(coord);
@@ -830,8 +810,7 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
 
 void D2DStreamServiceReceiver::set_stage_gate(
     const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open) {
-    const DeviceAddr addr = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
-        impl_->stage_gate, impl_->stage_gate_addrs, coord, gate, "set_stage_gate");
+    const DeviceAddr addr = impl_->stage_gate_addr(coord, gate, "set_stage_gate");
     std::vector<uint32_t> word{open ? kStageGateOpen : kStageGateClosed};
     tt::tt_metal::detail::WriteToDeviceL1(
         impl_->mesh_device->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), word);
@@ -839,8 +818,7 @@ void D2DStreamServiceReceiver::set_stage_gate(
 
 bool D2DStreamServiceReceiver::is_stage_gate_open(
     const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const {
-    const DeviceAddr addr = CMAKE_UNIQUE_NAMESPACE::stage_gate_addr(
-        impl_->stage_gate, impl_->stage_gate_addrs, coord, gate, "is_stage_gate_open");
+    const DeviceAddr addr = impl_->stage_gate_addr(coord, gate, "is_stage_gate_open");
     std::vector<uint32_t> word;
     tt::tt_metal::detail::ReadFromDeviceL1(
         impl_->mesh_device->get_device(coord),
@@ -1343,7 +1321,7 @@ ReceiverSideResources build_receiver_side(
             gate.slot_id_offset_bytes != gate.gate_flags_offset_bytes,
             "D2DStreamService: stage-gate slot_id and gate_flags must be distinct metadata words (both at offset {})",
             gate.slot_id_offset_bytes);
-        stage_gate_addrs = allocate_stage_gate_words(mesh, service_cores, gate.num_gates);
+        stage_gate_addrs = allocate_service_core_words(mesh, service_cores, gate.num_gates);
     }
 
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(

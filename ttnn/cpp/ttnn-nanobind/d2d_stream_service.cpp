@@ -74,6 +74,19 @@ void py_module_types(nb::module_& mod) {
     mod.attr("STAGE_GATE_FLAG_CLOSE_ON_TRANSIT") = ttnn::kStageGateFlagCloseOnTransit;
     mod.attr("STAGE_GATE_FLAG_BYPASS") = ttnn::kStageGateFlagBypass;
 
+    nb::class_<D2DStageGateConfig>(mod, "D2DStageGateConfig", R"doc(
+        Receiver stage-gate config: num_gates (0 disables it) and the byte offsets of the
+        slot-id and gate-flags words in the per-transfer metadata.
+    )doc")
+        .def(
+            nb::init<uint32_t, uint32_t, uint32_t>(),
+            nb::arg("num_gates") = 0u,
+            nb::arg("slot_id_offset_bytes") = 0u,
+            nb::arg("gate_flags_offset_bytes") = 0u)
+        .def_rw("num_gates", &D2DStageGateConfig::num_gates)
+        .def_rw("slot_id_offset_bytes", &D2DStageGateConfig::slot_id_offset_bytes)
+        .def_rw("gate_flags_offset_bytes", &D2DStageGateConfig::gate_flags_offset_bytes);
+
     nb::class_<D2DStageGateDescriptor>(mod, "D2DStageGateDescriptor", R"doc(
         Where one coord's stage gates live: the chip (mesh_id, chip_id), the receiver
         service core (logical and virtual NoC coords), and the gate array. Gate i is the
@@ -246,9 +259,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
-               uint32_t num_stage_gates,
-               uint32_t stage_gate_slot_offset_bytes,
-               uint32_t stage_gate_flags_offset_bytes) {
+               const D2DStageGateConfig& stage_gate) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -258,10 +269,7 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
-                    D2DStageGateConfig{
-                        .num_gates = num_stage_gates,
-                        .slot_id_offset_bytes = stage_gate_slot_offset_bytes,
-                        .gate_flags_offset_bytes = stage_gate_flags_offset_bytes});
+                    stage_gate);
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
             },
             nb::arg("sender_mesh"),
@@ -274,14 +282,11 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
-            nb::arg("num_stage_gates") = 0u,
-            nb::arg("stage_gate_slot_offset_bytes") = 0u,
-            nb::arg("stage_gate_flags_offset_bytes") = 0u,
+            nb::arg("stage_gate") = D2DStageGateConfig{},
             R"doc(
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
-                num_stage_gates > 0 enables the receiver's per-slot stage gate (see
-                D2DStreamServiceReceiver.set_stage_gate); it reads the slot id and gate
-                flags from the metadata at the given byte offsets.
+                stage_gate (num_gates > 0) enables the receiver's per-slot stage gate; it
+                reads the slot id and gate flags from the metadata at the given byte offsets.
 
                 Returns:
                     Tuple[D2DStreamServiceSender, D2DStreamServiceReceiver]
@@ -352,9 +357,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
-               uint32_t num_stage_gates,
-               uint32_t stage_gate_slot_offset_bytes,
-               uint32_t stage_gate_flags_offset_bytes) {
+               const D2DStageGateConfig& stage_gate) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -364,10 +367,7 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
-                    D2DStageGateConfig{
-                        .num_gates = num_stage_gates,
-                        .slot_id_offset_bytes = stage_gate_slot_offset_bytes,
-                        .gate_flags_offset_bytes = stage_gate_flags_offset_bytes});
+                    stage_gate);
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -385,9 +385,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
-            nb::arg("num_stage_gates") = 0u,
-            nb::arg("stage_gate_slot_offset_bytes") = 0u,
-            nb::arg("stage_gate_flags_offset_bytes") = 0u,
+            nb::arg("stage_gate") = D2DStageGateConfig{},
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in

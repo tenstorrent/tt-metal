@@ -18,6 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_stage_gate.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -34,12 +35,8 @@ namespace ttnn {
 // 32-bit store of kStageGateOpen; the receiver closes it itself when a transfer flagged
 // kStageGateFlagCloseOnTransit passes, so exactly one burst is admitted per open. No
 // writer ever does a read-modify-write, so host (PCIe) and remote (NoC/fabric) writers
-// need no atomics. See models/demos/common/prefill/docs/STAGE_GATE_DESIGN.md.
-inline constexpr uint32_t kStageGateClosed = 0;
-inline constexpr uint32_t kStageGateOpen = 1;
-// gate_flags word in the per-transfer metadata.
-inline constexpr uint32_t kStageGateFlagCloseOnTransit = 1u << 0;  // close the gate behind this transfer
-inline constexpr uint32_t kStageGateFlagBypass = 1u << 31;         // do not gate this transfer
+// need no atomics. Word values / flag bits are in d2d_stage_gate.hpp. See
+// models/demos/common/prefill/docs/STAGE_GATE_DESIGN.md.
 
 // Compile-time stage-gate configuration. num_gates == 0 (the default) compiles the gate
 // out entirely: no L1 is allocated and the receiver kernel is unchanged.
