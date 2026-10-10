@@ -1870,3 +1870,9 @@ No session connection is needed for that queue to continue.
   compact prototype implements only part of the broader front end.
 - Both persistent units remain active; the full-model control is running and
   the B16 follower waits for its exact predecessor. All precommit checks pass.
+- Reconstructed operation-family costs from the B16 control's exclusive
+  operation rows, scaling representative layers48/16 and outer work once.
+  Rank-median estimates: matmul18.69ms, SDPA12.59ms, layout/padding/slicing/
+  conversion19.49ms, other13.60ms. Explained these as extrapolation, not a
+  completed full-trace P0 reconciliation. Useful-byte stage estimates74%/71%
+  of peak explain why whole-step37.4% does not mean every reader is that slow.

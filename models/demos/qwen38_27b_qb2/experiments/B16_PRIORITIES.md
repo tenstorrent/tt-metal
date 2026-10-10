@@ -89,6 +89,34 @@ and depths four/eight are almost equal in the best delivery configuration.
 Evidence: [read calibration](../galaxy-evidence/shared-qk-and-bandwidth-v1/README.md)
 and [completed delivery sweep](../galaxy-evidence/delivery-extended-v2/README.md).
 
+At the user's request, reconstructed the control's approximate model cost from
+the current two-layer profile: multiply layer-0 exclusive operations by 48,
+layer-3 operations by 16, count outer model operations once, then take medians
+across ranks. This extrapolates representative eager kernels; it is not a
+full-model traced critical-path measurement and does not complete the P0 gate.
+
+| Operation family | Extrapolated time per B16/32K step |
+|---|---:|
+| Matmuls | 18.69 ms |
+| SDPA | 12.59 ms |
+| Layout, padding, slicing and conversions | 19.49 ms |
+| Remaining kernels, including recurrence, norms and collectives | 13.60 ms |
+
+The layout family includes tilize, untilize, slice, reshape, fill-pad, reshard,
+typecast, concat, transpose and interleaved/sharded conversion operations.
+Their entire runtime is not necessarily removable. Family medians sum to
+64.37 ms versus measured traced model TPOT 67.25 ms; that numerical agreement
+does not establish identical traces, activations or per-layer timings.
+Dividing modeled weight bytes by matmul time suggests 380 GB/s (74% of peak),
+and modeled KV bytes by SDPA time suggests 363 GB/s (71%). These are estimates,
+not physical traffic counters. They support removing intermediate operations
+as a major opportunity rather than diagnosing every reader as running at 37%.
+At 90% of peak, useful traffic alone takes 27.96 ms; the roughly 39-ms gap to
+the measured step includes necessary compute, extra traffic and overhead.
+It is not a promise of 39 ms recoverable time.
+
+Source: [control profile](../galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/profile-summary.json).
+
 ## Queued work and scope
 
 `qwen38-b16-priority-v2-20261010.service` waits for the exact invocation of
