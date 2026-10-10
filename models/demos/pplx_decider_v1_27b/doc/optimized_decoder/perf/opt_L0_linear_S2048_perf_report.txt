@@ -1,0 +1,97 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 130
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PREFILL_START'.
+Using operations until 'PREFILL_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID  Total %  Bound  OP Code                                           Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+59    1.9 %         LayerNormDeviceOperation                                0       192 μs                   64                                                  BF16, BF16 => BF16
+60    7.9 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 10240        0       779 μs          0 μs    130  148 GB/s  28.9 %  275.7 TFLOPs   76.7 %  HiFi2 BF16 x BFP8 => BF16
+61    5.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 6272         0       503 μs          1 μs    130  157 GB/s  30.6 %  261.7 TFLOPs   72.8 %  HiFi2 BF16 x BFP8 => BF16
+62    1.3 %         SliceDeviceOperation                                    0       123 μs          1 μs    130                                                        BF16 => BF16
+63    0.0 %         SliceDeviceOperation                                    0         3 μs          1 μs    128                                                        BF16 => BF16
+64    0.0 %         UnaryDeviceOperation                                    0         3 μs          1 μs    130                                                        BF16 => BF16
+65    0.0 %         SliceDeviceOperation                                    0         3 μs          1 μs    128                                                        BF16 => BF16
+66    0.0 %         TypecastDeviceOperation                                 0         3 μs          1 μs    128                                                        BF16 => FP32
+67    2.2 %         UntilizeDeviceOperation                                 0       212 μs          1 μs    125                                                        BF16 => BF16
+68    4.8 %         QkvCausalConv1dSiluOperation                            0       473 μs          1 μs    130                                                  BF16, BF16 => BF16
+69    0.0 %         SliceDeviceOperation                                    0         2 μs          1 μs      3                                                        BF16 => BF16
+70    0.1 %         BinaryNgDeviceOperation                                 0         9 μs          1 μs    130                                                  FP32, FP32 => FP32
+71    0.1 %         BinaryNgDeviceOperation                                 0        10 μs          1 μs    130                                                  FP32, FP32 => FP32
+72    0.0 %         TransposeDeviceOperation                                0         3 μs          1 μs    128                                                        FP32 => FP32
+73    0.0 %         TypecastDeviceOperation                                 0         3 μs          0 μs    128                                                        BF16 => FP32
+74    0.0 %         TransposeDeviceOperation                                0         3 μs          1 μs    128                                                        FP32 => FP32
+75    1.1 %         ReshapeViewDeviceOperation                              0       112 μs          1 μs    130                                                        FP32 => FP32
+76    1.1 %         ReshapeViewDeviceOperation                              0       112 μs          0 μs    130                                                        FP32 => FP32
+77   12.2 %         ChunkGdnPrepOperation                                   0     1,145 μs         57 μs    130                                                  BF16, BF16 => FP32
+78    7.4 %         ChunkGdnScanOperation                                   0       730 μs          1 μs     96                                                  FP32, FP32 => FP32
+79    3.3 %         SigmoidGatedRmsNormOperation                            0       328 μs          1 μs    128                                                  FP32, BF16 => BF16
+80    1.7 %         BinaryNgDeviceOperation                                 0       170 μs          1 μs    130                                                  BF16, BF16 => BF16
+81    5.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 6144 x 5120         0       504 μs          1 μs    130  154 GB/s  30.1 %  255.7 TFLOPs   71.1 %  HiFi2 BF16 x BFP8 => BF16
+82    1.4 %         BinaryNgDeviceOperation                                 0       139 μs          1 μs    130                                                  BF16, BF16 => BF16
+83    2.0 %         LayerNormDeviceOperation                                0       192 μs          1 μs     64                                                  BF16, BF16 => BF16
+84   26.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 34816        0     2,565 μs          0 μs    130  105 GB/s  20.6 %  284.6 TFLOPs   79.2 %  HiFi2 BF16 x BFP8 => BF16
+85   13.4 %   FLOP  MinimalMatmulDeviceOperation 2048 x 17408 x 5120        0     1,317 μs          1 μs    130  138 GB/s  26.9 %  277.2 TFLOPs   77.1 %  HiFi2 BF16 x BFP8 => BF16
+86    1.4 %         BinaryNgDeviceOperation                                 0       138 μs          1 μs    130                                                  BF16, BF16 => BF16
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    100.0 %         28 device ops, 0 host ops, 0 signposts                        9,773 μs         71 μs
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+77   12.2 %         ChunkGdnPrepOperation                                   0     1,145 μs         57 μs    130                                                  BF16, BF16 => FP32
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 51 μs (0.5% of overall time)
+Alternatively ensure device is not waiting for the host and use device.enable_async(True). Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+60    7.9 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 10240        0       779 μs          0 μs    130  148 GB/s  28.9 %  275.7 TFLOPs   76.7 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+61    5.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 6272         0       503 μs          1 μs    130  157 GB/s  30.6 %  261.7 TFLOPs   72.8 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+81    5.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 6144 x 5120         0       504 μs          1 μs    130  154 GB/s  30.1 %  255.7 TFLOPs   71.1 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+84   26.1 %   FLOP  MinimalMatmulDeviceOperation 2048 x 5120 x 34816        0     2,565 μs          0 μs    130  105 GB/s  20.6 %  284.6 TFLOPs   79.2 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+85   13.4 %   FLOP  MinimalMatmulDeviceOperation 2048 x 17408 x 5120        0     1,317 μs          1 μs    130  138 GB/s  26.9 %  277.2 TFLOPs   77.1 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+Warning: Unclassified operation 'MinimalMatmulDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'QkvCausalConv1dSiluOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ChunkGdnPrepOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ChunkGdnScanOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SigmoidGatedRmsNormOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                              Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+58.00 %  MinimalMatmulDeviceOperation (in0:dram_interleaved)      5,667.89 μs         5        Other    71.13 %    79.19 %     75.39 %     3.31 %              77.08 %
+11.71 %  ChunkGdnPrepOperation (in0:dram_interleaved)             1,144.61 μs         1        Other
+ 7.47 %  ChunkGdnScanOperation (in0:dram_interleaved)               729.67 μs         1        Other
+ 4.84 %  QkvCausalConv1dSiluOperation (in0:dram_interleaved)        473.23 μs         1        Other
+ 4.77 %  BinaryNgDeviceOperation (in0:dram_interleaved)             466.59 μs         5      Compute
+ 3.92 %  LayerNormDeviceOperation (in0:dram_interleaved)            383.58 μs         2      Compute
+ 3.36 %  SigmoidGatedRmsNormOperation (in0:dram_interleaved)        327.98 μs         1        Other
+ 2.29 %  ReshapeViewDeviceOperation (in0:dram_interleaved)          223.63 μs         2        Other
+ 2.17 %  UntilizeDeviceOperation (in0:dram_interleaved)             211.72 μs         1           TM
+ 1.33 %  SliceDeviceOperation (in0:dram_interleaved)                129.89 μs         4           TM
+ 0.06 %  TransposeDeviceOperation (in0:dram_interleaved)              5.83 μs         2           TM
+ 0.06 %  TypecastDeviceOperation (in0:dram_interleaved)               5.57 μs         2           TM
+ 0.03 %  UnaryDeviceOperation (in0:dram_interleaved)                  2.77 μs         1      Compute
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------

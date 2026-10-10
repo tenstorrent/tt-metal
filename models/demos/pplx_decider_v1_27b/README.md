@@ -14,6 +14,13 @@ every row. Warmed request latency at batch 1 runs from 148 ms (128 bucket) to 3.
 for an isolated request, and is 1.25-1.36x higher under sustained back-to-back load. Details:
 [`doc/full_model/README.md`](doc/full_model/README.md).
 
+Stage 3A (prefill matmul configs, same weights and precision) brings the isolated-request latency
+to 126 / 339 / 619 / 1366 / 3267 ms at the 128 / 1024 / 2048 / 4096 / 8192 buckets (from 149 /
+366 / 665 / 1481 / 3498 ms in the same run, -15 % at 128 and -7 % to -8 % above). Per-layer warmed
+prefill: linear_attention 2.03 / 5.60 / 9.94 / 20.28 / 41.95 ms, full_attention 1.82 / 4.55 / 8.49 /
+19.54 / 51.21 ms. Decisions stay 25/25 (text) and 8/8 (image). Details:
+[`doc/optimized_decoder/README.md`](doc/optimized_decoder/README.md).
+
 Stage 8 (datatype sweep, short) kept the all-BFP8 HiFi2 policy (person decision) and stage 6's numbers stand.
 The policy is now `doc/datatype_sweep/selected_precision_config.json`, which the default construction path
 reads. A BFP4 MLP (C1/C2) agrees on 25/25 rows but fails the per-row logit-PCC bar on one row (0.98895 < 0.99).
@@ -85,6 +92,7 @@ Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details ar
 | `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
 | `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
 | `doc/fused_decoder/` | Stage-2 (graph fusing) README, work log and `perf/` (tt-perf-report at S=128/2048/8192). |
+| `doc/optimized_decoder/` | Stage-3A (prefill matmul configs) README, work log (topology audit, sweep, A/B) and `perf/` (tt-perf-report with advice at S=128/2048/8192). |
 | `doc/full_model/` | Stage-6 README (latency, agreement table, layer trace), work log, `perf/` (tt-perf-report summary of one 2048 forward). |
 
 ## Setup
