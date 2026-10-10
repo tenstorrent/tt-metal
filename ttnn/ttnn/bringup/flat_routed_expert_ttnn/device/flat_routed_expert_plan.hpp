@@ -107,6 +107,10 @@ struct FlatRoutedExpertPlan {
     bool rdown = false;
     uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;
     uint32_t out_tiles_r = 0, h_tiles = 0, hbuf = 3, nd_sg = 1;
+    // h units: the down cores take h in units of HU row tiles (0: whole sub-blocks), HBUF unit buffers deep, so the
+    // sub-block (x delivery, gate/up) keeps MT row tiles while the down cores' h buffers stay small; the gate/up
+    // h_local holds HL_SLOTS sub-blocks
+    uint32_t hu = 0, hl_slots = 3;
     float dring = 2.0f;
     std::vector<uint32_t> pcds, col0s;
     // arena (per core, 2 KB aligned offsets)

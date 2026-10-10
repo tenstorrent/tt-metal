@@ -111,3 +111,24 @@ H 3584 I 3072 bfp8   48.4  50.3  55.3  67.4 104.1 204.6 405.1 | 67%          | m
 All pass. bf16 costs <= 4% up to M 128 at every shape. H 7168 runs 64-row sub-blocks even in bfp8 and still reaches
 83%: the 64-row penalty seen at H 4096 is shape-specific. H 6144 bfp8 equals H 7168 bfp8 at M 2048 with 6/7 of the
 work (71% vs 83%): not explained yet. I 3072: bf16 h only gets 2 h buffers (+65% at 2048) -> idea A matters most here.
+
+## The two next ideas, implemented (GLM Flash shape, us per expert, balanced sweep; outputs bit-identical, 4 regimes)
+A. h units (MIMO_FL_HU = 1 | 2 row tiles; plan hu, up to 8 unit buffers, gather semaphores SE_HU_GATH): the down cores
+   take h unit by unit, every unit a virtual expert on the down side (se_dyn_units), so bf16 h keeps 128-row
+   sub-blocks. First cut: 1-row units 655 vs 275 (bfp8, M 2048): the h chain still cut each buffer into 32 pieces,
+   4x smaller with 3 in flight per link (round-trip bound); pieces now 32 HU / MT per unit. Then bf16 h compute cost
+   ~9 (was ~21; 282 with nothing moving vs 273), but x and y movement still cost ~100 together (x alone +52, y alone
+   +23) and bf16 x at 128 rows costs what the 64-row penalty did: bf16 / bf16 391 vs 374, bfp8 x + bf16 h 385 vs 383.
+   With B (below) A is worse than B alone (bfp8 x + bf16 h 362 vs 350). Kept as a probe, off by default (the
+   research builder's plan-parity check fails with it on: the Python builder has no h units).
+B. y writes on the down cores' NCRISC (NOC0, se6_dw.cpp polls the y writer in its waits) instead of the BRISC (NOC1,
+   the h chain). Default (MIMO_FL_Y_NC=0 restores the BRISC writer).
+   M:                      32    64   128   160   256   512  1024  2048  5120
+   bfp8/bfp8      before 34.2  36.6  40.8  44.2  50.8  73.6 140.4 275.6 681.7
+                  B      34.6  37.0  40.9  44.4  51.3  70.7 138.2 273.5 679.6
+   bfp8 x+bf16 h  before 34.4  36.8  41.9  44.3  55.7 102.3 195.8 383.5 966.5
+                  B      34.7  37.3  41.7  44.0  52.3  93.0 178.4 350.1 862.2
+   bf16 x+bfp8 h  before 34.3  36.6  40.9  44.2  49.7  91.5 183.1 366.1 917.0
+                  B      34.6  37.1  41.0  45.9  50.5  90.4 179.7 358.6 895.0
+   bf16/bf16      before 34.4  36.8  41.8  44.3  55.6 100.4 190.5 373.9 938.1
+                  B      34.8  37.3  41.5  44.0  53.6  95.9 184.7 362.8 897.4

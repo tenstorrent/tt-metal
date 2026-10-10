@@ -16,6 +16,12 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
+#ifdef SE_Y_NC
+// Row-major y written from here (NOC0) instead of the down core's BRISC (NOC1, the h chain's network): the weight
+// reads' waits poll the y writer (CT 10 Y_MT: row tiles per virtual expert, 11 PCD, 12 HT; RT after the se_dyn.hpp
+// args: y address, first y tile column)
+#include "se_yrm.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);
@@ -65,6 +71,26 @@ void kernel_main() {
     auto blk = [](uint32_t b) { return b; };
     auto dst = [&](uint32_t, uint32_t i) { return get_write_ptr(cb) + i * slot * tile_bytes; };
 #endif
+#ifdef SE_Y_NC
+    static_assert(get_compile_time_arg_val(10) >= 1);
+#ifdef SE_HU
+    se_dyn_units(dyn);  // y rows per h unit (the weight loads above do not depend on it)
+#endif
+    const uint32_t ya = 3 + SE_DYN_NARGS;
+    SeYRmWriter<
+        tt::CBIndex::c_16,
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(12)>
+        yw(get_arg_val<uint32_t>(ya), get_arg_val<uint32_t>(ya + 1));
+    uint32_t y_done = 0;
+    auto y_poll = [&]() {
+        yw.issue(dyn);
+        y_done += yw.retire(dyn);
+    };
+#else
+    auto y_poll = []() {};
+#endif
     for (uint32_t b = 0; b < total;) {
         uint32_t n = total - b < batch ? total - b : batch;
 #if defined(SE_DYN) && defined(SE_DN_REG)
@@ -74,11 +100,17 @@ void kernel_main() {
 #endif
         uint32_t l1[batch];
         for (uint32_t i = 0; i < n; ++i) {
+            while (!cb_pages_reservable_at_back(cb, (i + 1) * slot)) {
+                y_poll();
+            }
             cb_reserve_back(cb, (i + 1) * slot);
             l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_read(src + blk(b + i) * slot * tile_bytes, l1[i], slot * tile_bytes);
+        }
+        while (!ncrisc_noc_reads_flushed(noc_index)) {
+            y_poll();
         }
         noc_async_read_barrier();
         cb_push_back(cb, n * slot);
@@ -106,6 +138,14 @@ void kernel_main() {
 #endif
         b += n;
     }
+#ifdef SE_Y_NC
+    while (y_done < dyn.num_v) {
+        invalidate_l1_cache();
+        y_poll();
+    }
+    noc_async_write_barrier();
+    noc_async_write_set_trid(0);  // (the next program's plain writes carry ID 0)
+#endif
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
     noc_async_full_barrier();
 }
