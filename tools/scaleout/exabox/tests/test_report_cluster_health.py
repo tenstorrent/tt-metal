@@ -770,6 +770,31 @@ class TestStoreWrite(unittest.TestCase):
             for ancestor in (store, Path(tmp) / "nested"):
                 self.assertEqual(ancestor.stat().st_mode & 0o777, expected_mode, f"{ancestor} was modified")
 
+    def test_record_file_is_world_readable_under_restrictive_umask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                tmp,
+            ]
+            previous_umask = os.umask(0o007)
+            try:
+                rc, out, err = _run(argv)
+            finally:
+                os.umask(previous_umask)
+            self.assertEqual(rc, 0, err)
+            record = loads_and_validate(out.strip(), file_written=True)
+            self.assertEqual(Path(record["record_uri"]).stat().st_mode & 0o777, 0o644)
+
     def test_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             rc, out, err = _run(_base_argv("--store-root", tmp))
