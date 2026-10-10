@@ -104,3 +104,15 @@ copy mp4s as reference, ffmpeg a still, copy stills+logs to tt-project/baselines
 - fill1-r2 submitted as blx03 broker job 794 (02:44:54 UTC).
 ## Next step
 Wait on g14blx03:/var/tmp/fasth3/runner/done/t286-t5-r2.done, then steps 3-4 above.
+
+## 2026-10-10 (run 1247): all three -r2 jobs failed, no timing yet
+- fill1-r2 = blx03 broker job 794: TIMEOUT at 600 s (cold JIT/cache fill did not finish in the cap).
+  Post-job health OK. Not a drop.
+- t10-r2 = job 800, t5-r2 = job 803: exit 5 after ~2 min each. pytest exit 5 = no tests collected:
+  the test selector in run286.sh / specs t10,t5 likely does not match a test id. Logs:
+  /var/log/tt-device-broker/2026-10-10_030204_800.log, ..._030356_803.log (blx03).
+- Weights (models/MiniMax-H3, lightx2v-h3-turbo) and the ~/fasth3/t286 build are still on blx03.
+## Next step
+1. `--collect-only` the test (no device) in ~/fasth3/t286 to fix the selector for t10/t5.
+2. Split fill: the cold cache fill must fit 600 s (e.g. fill per stage, or fewer blocks per job).
+3. Then rerun t10, t5; cleanup per steps 3-4 above.
