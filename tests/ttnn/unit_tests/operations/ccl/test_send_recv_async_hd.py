@@ -26,6 +26,35 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def _assert_pages_equal(expected, actual, context):
+    assert torch.equal(expected, actual), (
+        f"{context}: output mismatch.\n"
+        f"Expected first row: {expected[0, :8].tolist()}\n"
+        f"Got first row:      {actual[0, :8].tolist()}"
+    )
+
+
+def _assert_num_program_cache_entries(mesh_device, expected, context):
+    actual = mesh_device.num_program_cache_entries()
+    assert actual == expected, f"{context}: expected {expected} program cache entries, found {actual}"
+
+
+# Socket-move cases for the program-cache tests: the first socket always sits on device (0, 0),
+# core (0, 0); the second one moves either to another core or to another device.
+_SOCKET_MOVE_PARAMS = pytest.mark.parametrize(
+    "mesh_device, second_device_coord, second_core_coord",
+    [
+        pytest.param((1, 1), (0, 0), (1, 0), id="new_core"),
+        pytest.param((1, 2), (0, 1), (0, 0), id="new_device"),
+    ],
+    indirect=["mesh_device"],
+)
+
+
+def _device_index(mesh_device, device_coord):
+    return device_coord[0] * mesh_device.shape[1] + device_coord[1]
+
+
 # ---------------------------------------------------------------------------
 # recv_async_h2d
 # ---------------------------------------------------------------------------
@@ -139,6 +168,139 @@ def test_recv_async_h2d_basic(
     )
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("page_size_bytes, num_pages, fifo_size_bytes", [(64, 4, 256), (256, 4, 1024)])
+def test_recv_async_h2d_program_cache(mesh_device, page_size_bytes, num_pages, fifo_size_bytes):
+    """Second call hits the program cache and must write into the new output tensor.
+
+    The first output tensor is kept alive so the second one gets a different address; a stale
+    output binding would make the hit write into the first tensor instead.
+    """
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    page_size_datums = page_size_bytes // 4
+    tensor_shape = (num_pages, page_size_datums)
+    socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
+    h2d_socket = ttnn.H2DSocket(mesh_device, socket_core, ttnn.BufferType.L1, fifo_size_bytes, ttnn.H2DMode.HOST_PUSH)
+    h2d_socket.set_page_size(page_size_bytes)
+
+    def allocate_output():
+        return ttnn.from_torch(
+            torch.zeros(tensor_shape, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    num_datums = num_pages * page_size_datums
+    torch_input_miss = torch.arange(0, num_datums, dtype=torch.int32).reshape(tensor_shape)
+    torch_input_hit = torch.arange(num_datums, 2 * num_datums, dtype=torch.int32).reshape(tensor_shape)
+
+    output_miss = allocate_output()
+    ttnn.experimental.recv_async_h2d(output_miss, h2d_socket)
+    h2d_socket.write_tensor(torch_input_miss)
+    ttnn.synchronize_device(mesh_device)
+    _assert_pages_equal(torch_input_miss, ttnn.to_torch(output_miss).to(torch.int32), "recv_async_h2d miss")
+    num_cache_entries = mesh_device.num_program_cache_entries()
+
+    output_hit = allocate_output()
+    ttnn.experimental.recv_async_h2d(output_hit, h2d_socket)
+    h2d_socket.write_tensor(torch_input_hit)
+    ttnn.synchronize_device(mesh_device)
+
+    _assert_num_program_cache_entries(
+        mesh_device, num_cache_entries, "recv_async_h2d second call with the same socket must hit the cache"
+    )
+    _assert_pages_equal(torch_input_hit, ttnn.to_torch(output_hit).to(torch.int32), "recv_async_h2d hit")
+    # A stale output binding on the hit would have overwritten the miss output.
+    _assert_pages_equal(
+        torch_input_miss, ttnn.to_torch(output_miss).to(torch.int32), "recv_async_h2d miss output after hit"
+    )
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@_SOCKET_MOVE_PARAMS
+def test_recv_async_h2d_program_cache_new_socket_core(mesh_device, second_device_coord, second_core_coord):
+    """A socket on another core or device must miss the program cache and run there.
+
+    The second socket is created after the first one is freed, so it reuses the first socket's
+    config buffer address; only its active core differs. A key without the active core would hit
+    and dispatch the cached program on the first socket's core.
+    """
+    page_size_bytes, num_pages, fifo_size_bytes = 64, 4, 256
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    page_size_datums = page_size_bytes // 4
+    tensor_shape = (num_pages, page_size_datums)
+    first_device_coord, first_core_coord = (0, 0), (0, 0)
+
+    def make_socket(device_coord, core_coord):
+        socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(*device_coord), ttnn.CoreCoord(*core_coord))
+        socket = ttnn.H2DSocket(mesh_device, socket_core, ttnn.BufferType.L1, fifo_size_bytes, ttnn.H2DMode.HOST_PUSH)
+        socket.set_page_size(page_size_bytes)
+        return socket
+
+    def allocate_output():
+        return ttnn.from_torch(
+            torch.zeros(tensor_shape, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def read_device_copies(output_tensor):
+        return [ttnn.to_torch(t).to(torch.int32) for t in ttnn.get_device_tensors(output_tensor)]
+
+    num_datums = num_pages * page_size_datums
+    torch_input_miss = torch.arange(0, num_datums, dtype=torch.int32).reshape(tensor_shape)
+    torch_input_hit = torch.arange(num_datums, 2 * num_datums, dtype=torch.int32).reshape(tensor_shape)
+    torch_zeros = torch.zeros(tensor_shape, dtype=torch.int32)
+
+    # Both outputs are allocated before the first socket so the second socket can take over the
+    # L1 the first one frees.
+    output_miss = allocate_output()
+    output_hit = allocate_output()
+
+    first_socket = make_socket(first_device_coord, first_core_coord)
+    first_config_address = first_socket.get_config_buffer_address()
+    ttnn.experimental.recv_async_h2d(output_miss, first_socket)
+    first_socket.write_tensor(torch_input_miss)
+    ttnn.synchronize_device(mesh_device)
+    first_index = _device_index(mesh_device, first_device_coord)
+    _assert_pages_equal(torch_input_miss, read_device_copies(output_miss)[first_index], "recv_async_h2d miss")
+    num_cache_entries = mesh_device.num_program_cache_entries()
+    del first_socket
+
+    second_socket = make_socket(second_device_coord, second_core_coord)
+    assert second_socket.get_config_buffer_address() == first_config_address, (
+        "test precondition: the second H2DSocket must reuse the first socket's config buffer address "
+        f"({first_config_address:#x}) so that only the active core distinguishes the two calls, "
+        f"got {second_socket.get_config_buffer_address():#x}"
+    )
+
+    ttnn.experimental.recv_async_h2d(output_hit, second_socket)
+    # Checked before the host write: a stale hit runs on the first socket's core and never completes.
+    _assert_num_program_cache_entries(
+        mesh_device, num_cache_entries + 1, "recv_async_h2d with a socket on a new core must miss the cache"
+    )
+    second_socket.write_tensor(torch_input_hit)
+    ttnn.synchronize_device(mesh_device)
+
+    second_index = _device_index(mesh_device, second_device_coord)
+    for index, device_copy in enumerate(read_device_copies(output_hit)):
+        expected = torch_input_hit if index == second_index else torch_zeros
+        _assert_pages_equal(expected, device_copy, f"recv_async_h2d second socket, device index {index}")
+    _assert_pages_equal(
+        torch_input_miss, read_device_copies(output_miss)[first_index], "recv_async_h2d miss output after second call"
+    )
+
+
 # ---------------------------------------------------------------------------
 # send_async_d2h
 # ---------------------------------------------------------------------------
@@ -242,6 +404,140 @@ def test_send_async_d2h_basic(
         num_pages=num_pages,
         fifo_size_bytes=fifo_size_bytes,
         num_iterations=num_iterations,
+    )
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("page_size_bytes, num_pages, fifo_size_bytes", [(64, 4, 256), (256, 4, 1024)])
+def test_send_async_d2h_program_cache(mesh_device, page_size_bytes, num_pages, fifo_size_bytes):
+    """Second call hits the program cache and must stream the new input tensor.
+
+    The first input tensor is kept alive so the second one gets a different address; a stale
+    input binding would make the hit stream the first tensor's data instead.
+    """
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    page_size_datums = page_size_bytes // 4
+    tensor_shape = (num_pages, page_size_datums)
+    socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
+    d2h_socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size_bytes)
+    d2h_socket.set_page_size(page_size_bytes)
+
+    def send_and_read(torch_input):
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.experimental.send_async_d2h(input_tensor, d2h_socket)
+        result = torch.zeros(tensor_shape, dtype=torch.uint32)
+        d2h_socket.read_tensor(result)
+        ttnn.synchronize_device(mesh_device)
+        return input_tensor, result.to(torch.int32)
+
+    num_datums = num_pages * page_size_datums
+    torch_input_miss = torch.arange(0, num_datums, dtype=torch.int32).reshape(tensor_shape)
+    torch_input_hit = torch.arange(num_datums, 2 * num_datums, dtype=torch.int32).reshape(tensor_shape)
+
+    input_miss, result_miss = send_and_read(torch_input_miss)
+    _assert_pages_equal(torch_input_miss, result_miss, "send_async_d2h miss")
+    num_cache_entries = mesh_device.num_program_cache_entries()
+
+    input_hit, result_hit = send_and_read(torch_input_hit)
+    _assert_num_program_cache_entries(
+        mesh_device, num_cache_entries, "send_async_d2h second call with the same socket must hit the cache"
+    )
+    _assert_pages_equal(torch_input_hit, result_hit, "send_async_d2h hit")
+    # Both inputs stay alive until here so the hit could not reuse the miss input's address.
+    assert (
+        input_miss.is_allocated() and input_hit.is_allocated()
+    ), "send_async_d2h: both input tensors must stay allocated so the hit cannot reuse the miss input's address"
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@_SOCKET_MOVE_PARAMS
+def test_send_async_d2h_program_cache_new_socket_core(mesh_device, second_device_coord, second_core_coord):
+    """A socket on another core or device must miss the program cache and stream from there.
+
+    The second socket is created after the first one is freed, so it reuses the first socket's
+    config buffer address; only its active core differs. A key without the active core would hit
+    and dispatch the cached program on the first socket's core. Every device holds different
+    input data, so the host result also identifies the device that streamed it.
+    """
+    page_size_bytes, num_pages, fifo_size_bytes = 64, 4, 256
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    page_size_datums = page_size_bytes // 4
+    tensor_shape = (num_pages, page_size_datums)
+    num_devices = mesh_device.get_num_devices()
+    first_device_coord, first_core_coord = (0, 0), (0, 0)
+
+    def make_socket(device_coord, core_coord):
+        socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(*device_coord), ttnn.CoreCoord(*core_coord))
+        socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size_bytes)
+        socket.set_page_size(page_size_bytes)
+        return socket
+
+    def make_input(start):
+        # One (num_pages, page_size_datums) slice per device, each with distinct data.
+        torch_input = torch.arange(
+            start, start + num_devices * num_pages * page_size_datums, dtype=torch.int32
+        ).reshape(num_devices * num_pages, page_size_datums)
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        return input_tensor, torch.chunk(torch_input, num_devices, dim=0)
+
+    def read_from(socket):
+        result = torch.zeros(tensor_shape, dtype=torch.uint32)
+        socket.read_tensor(result)
+        ttnn.synchronize_device(mesh_device)
+        return result.to(torch.int32)
+
+    # Both inputs are allocated before the first socket so the second socket can take over the
+    # L1 the first one frees.
+    input_miss, torch_slices_miss = make_input(0)
+    input_hit, torch_slices_hit = make_input(num_devices * num_pages * page_size_datums)
+
+    first_socket = make_socket(first_device_coord, first_core_coord)
+    first_config_address = first_socket.get_config_buffer_address()
+    ttnn.experimental.send_async_d2h(input_miss, first_socket)
+    result_miss = read_from(first_socket)
+    _assert_pages_equal(
+        torch_slices_miss[_device_index(mesh_device, first_device_coord)], result_miss, "send_async_d2h miss"
+    )
+    num_cache_entries = mesh_device.num_program_cache_entries()
+    del first_socket
+
+    second_socket = make_socket(second_device_coord, second_core_coord)
+    assert second_socket.get_config_buffer_address() == first_config_address, (
+        "test precondition: the second D2HSocket must reuse the first socket's config buffer address "
+        f"({first_config_address:#x}) so that only the active core distinguishes the two calls, "
+        f"got {second_socket.get_config_buffer_address():#x}"
+    )
+
+    ttnn.experimental.send_async_d2h(input_hit, second_socket)
+    # Checked before the host read: a stale hit runs on the first socket's core and never completes.
+    _assert_num_program_cache_entries(
+        mesh_device, num_cache_entries + 1, "send_async_d2h with a socket on a new core must miss the cache"
+    )
+    result_hit = read_from(second_socket)
+    _assert_pages_equal(
+        torch_slices_hit[_device_index(mesh_device, second_device_coord)], result_hit, "send_async_d2h second socket"
+    )
+    assert input_miss.is_allocated() and input_hit.is_allocated(), (
+        "send_async_d2h: both input tensors must stay allocated so the second call cannot reuse the first "
+        "input's address"
     )
 
 
