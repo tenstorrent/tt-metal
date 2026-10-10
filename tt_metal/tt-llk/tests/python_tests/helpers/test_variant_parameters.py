@@ -855,6 +855,16 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
 
 @dataclass
+class PACK_BLOCK_CONTIGUOUS(TemplateParameter):
+    """True packs a block with one _llk_pack_block_contiguous_ call, False with one standard _llk_pack_ per tile."""
+
+    pack_block_contiguous: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool PACK_BLOCK_CONTIGUOUS = {'true' if self.pack_block_contiguous else 'false'};"
+
+
+@dataclass
 class VECTOR_MODE(TemplateParameter):
     vector_mode: VectorMode = VectorMode.RC
 
