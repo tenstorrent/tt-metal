@@ -1685,7 +1685,12 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // The init of calculate_sfpu_binary_pow, the body power_binary_tile runs.
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
+#else
         SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+#endif
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1883,14 +1888,40 @@ void call_binary_sfpu_operation(
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
     // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside
-    // _llk_math_eltwise_binary_sfpu_params_, which already loops over 4 faces
-    // (for VectorMode::RC) and emits 2x TTI_SETRWC cr_d 8 between calls to
-    // advance the dst-write counter. The per-call inner ITERATIONS must
-    // therefore be 8 (one face's worth of SFPU rows), not 32 (a full tile),
-    // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
-    // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
-    static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+    // _llk_math_eltwise_binary_sfpu_params_, which loops over the faces of the
+    // vector mode (4 for VectorMode::RC) and emits 2x TTI_SETRWC cr_d 8 between
+    // calls to advance the dst-write counter, so PER_FACE_ITERATIONS is 8 (one
+    // face), as in the production llk_math_eltwise_binary_sfpu_* wrappers. On
+    // Blackhole, a full tile with ITERATIONS 32 of an entry point the compute API
+    // issues as one 32-row call runs that way: 32 rows in VectorMode::None.
+    static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests take 8 or 32 iterations; 32 asks for a full tile.");
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+    constexpr bool one_call =
+        ITERATIONS == 32 &&
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
+         ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) ||
+         ((BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE) &&
+          !is_int32) ||
+         BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER || BINOP == BinaryOp::ATAN2 ||
+         BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 || BINOP == BinaryOp::BITWISE_AND ||
+         BINOP == BinaryOp::BITWISE_OR || BINOP == BinaryOp::BITWISE_XOR || BINOP == BinaryOp::LSHFT || BINOP == BinaryOp::RSHFT ||
+         BINOP == BinaryOp::LOGICAL_RSHFT || BINOP == BinaryOp::GCD);
+    constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
+    if constexpr (one_call)
+    {
+        if (vector_mode != ckernel::VectorMode::RC)
+        {
+            // A partial tile runs per face.
+            call_binary_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, APPROXIMATION_MODE, BINOP, 8, MATH_FORMAT>(
+                dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+            return;
+        }
+        vector_mode = ckernel::VectorMode::None;
+    }
+#else
     constexpr int PER_FACE_ITERATIONS = 8;
+#endif
     if constexpr (BINOP == BinaryOp::DIV)
     {
         // Route DIV to the dedicated production kernel (calculate_sfpu_binary_div),
@@ -1940,6 +1971,21 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#if defined(ARCH_BLACKHOLE)
+    else if constexpr (BINOP == BinaryOp::POW)
+    {
+        // The body power_binary_tile runs; the generic loop's POW arm has no compute API caller.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_pow,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
