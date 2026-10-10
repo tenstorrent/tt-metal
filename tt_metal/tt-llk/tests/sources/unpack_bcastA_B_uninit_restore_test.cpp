@@ -150,11 +150,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig(&formats_array)[2] = params.formats;
 #endif
-    constexpr std::uint32_t num_faces = 4;
-    const std::uint32_t res_dst_idx   = 0;
+    const std::uint32_t res_dst_idx = 0;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats_array[0].pack_src, formats_array[0].pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats_array[0].pack_src, formats_array[0].pack_dst);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats_array[0].pack_dst);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 

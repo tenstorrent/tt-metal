@@ -24,7 +24,7 @@ def hw_configure_pack(
 ) -> str:
     return (
         f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
-        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_size}, {output.tile_shape.face_r_dim}, {output.tile_shape.total_num_faces()}\n"
+        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_shape.face_r_dim}, {output.tile_shape.total_num_faces()}\n"
         f");\n"
     )
 
@@ -37,7 +37,7 @@ def configure_pack(
 ) -> str:
     return (
         f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
-        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_size}\n"
+        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}\n"
         f");\n"
     )
 

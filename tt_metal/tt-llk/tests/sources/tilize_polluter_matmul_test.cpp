@@ -196,12 +196,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 0: pack the (discarded) polluter tilize result to scratch ----
     int run = 0;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-        formats_array[run].pack_src,
-        formats_array[run].pack_dst,
-        pol_face_r_dim * params.TEST_FACE_C_DIM * pol_num_faces /* tile_size */,
-        pol_face_r_dim,
-        TILE_C_DIM,
-        pol_num_faces);
+        formats_array[run].pack_src, formats_array[run].pack_dst, pol_face_r_dim, TILE_C_DIM, pol_num_faces);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats_array[run].pack_dst, pol_face_r_dim, TILE_C_DIM, pol_num_faces);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
@@ -219,11 +214,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // reconfig would pack the regular result with a tiny face layout. Re-run the full pack
     // hw_configure + init for the regular geometry (Default mode). NOTE: deliberately NO
     // `_llk_pack_dest_init_` here -- the SyncHalf dest-bank counter is initialised once in run-0.
-    run                                   = 1;
-    constexpr std::uint32_t mm_num_faces  = 4;
-    const std::uint32_t mm_pack_tile_size = FACE_R_DIM * TILE_C_DIM * mm_num_faces;
+    run                                  = 1;
+    constexpr std::uint32_t mm_num_faces = 4;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats_array[run].pack_src, formats_array[run].pack_dst, mm_pack_tile_size, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
+        formats_array[run].pack_src, formats_array[run].pack_dst, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
     _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
 
     _llk_packer_wait_for_math_done_();

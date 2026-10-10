@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint8_t PACK_FMT = resolve_ternary_format(UNPACK_A_IN);
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT);
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(PACK_FMT);
 

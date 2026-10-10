@@ -45,7 +45,6 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t face_r_dim                  = FACE_R_DIM,
     [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces                   = 4,
@@ -54,15 +53,13 @@ inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t relu_config                 = 0)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack hw configure supports PackMode::Default or PackMode::Untilize only");
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en /*maybe_unused*/ = false>
 inline void _llk_pack_reconfig_data_format_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t face_r_dim                  = FACE_R_DIM,
     [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces                   = 4,
@@ -70,7 +67,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     const bool narrow_tile                          = false,
     [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
@@ -168,7 +165,6 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t face_r_dim          = FACE_R_DIM,
     const std::uint32_t tile_c_dim          = TILE_C_DIM,
     const std::uint32_t num_faces           = 4,
@@ -176,15 +172,13 @@ inline void _llk_pack_hw_configure_wrapper_(
     [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config         = 0)
 {
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en /*maybe_unused*/ = false>
 inline void _llk_pack_reconfig_data_format_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t tile_c_dim                  = TILE_C_DIM,
     const std::uint32_t num_faces                   = 4,
@@ -192,7 +186,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     [[maybe_unused]] const bool narrow_tile         = false,
     [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_c_dim, num_faces, partial_face);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>

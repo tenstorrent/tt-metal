@@ -530,7 +530,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     if (first_hardware_configuration)
                     {
-                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */);
+                        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_src_format, pack_dst_format);
                     }
                     else
                     {
@@ -539,7 +539,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
                             pack_src_format,
                             pack_dst_format,
-                            16 * 16 * 4 /* tile_size */,
                             FACE_R_DIM,
                             TILE_C_DIM,
                             4 /* num_faces */,

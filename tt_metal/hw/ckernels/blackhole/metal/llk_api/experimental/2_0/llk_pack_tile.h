@@ -102,18 +102,14 @@ inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
 // llk_pack_init (which does NOT touch the format registers -- only addrmod/mop/strides), this programs the
 // out/in data formats, dest-read control and exp/section sizes. Used by the id-free pack_untilize init so
 // the packer formats are correct regardless of the prior op (the CB-id path calls reconfig for the same
-// reason). tile_size is the one-tile L1 size derived from the descriptor via tile_stride_words (the id-free
-// stand-in for fifo_page_size): geometry-exact for linear formats, exp section included for block floats.
+// reason).
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
     SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    // tile_size in 16B words (fifo_page_size units) == a single tile's L1 size.
-    constexpr std::uint32_t tile_size = ckernel::experimental::tile_stride_words(DESC.format, DESC.shape);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         RegFmt,
         static_cast<std::uint32_t>(DESC.format),
-        tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
         false /* partial_face */);

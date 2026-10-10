@@ -37,7 +37,7 @@ inline void _llk_packer_wait_for_math_done_()
 template <std::uint32_t WaitRes = p_stall::NONE>
 inline void _llk_packer_set_math_semaphore_()
 {
-    t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
+    t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done
 }
 
 /**
@@ -50,7 +50,7 @@ inline void _llk_packer_set_math_semaphore_()
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  */
-// Wait for all writes to complete in L1 (header + data)
+// Wait for all writes to complete in L1
 // Tell math it can write again
 // Clear dest
 template <DstSync Dst, bool is_fp32_dest_acc_en>

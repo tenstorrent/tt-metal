@@ -211,12 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 0: pack the (discarded) polluter tilize result to scratch ----
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-        formats_array[0].pack_src,
-        formats_array[0].pack_dst,
-        g0_face_r_dim * params.TEST_FACE_C_DIM * g0_num_faces /* tile_size */,
-        g0_face_r_dim,
-        TILE_C_DIM,
-        g0_num_faces);
+        formats_array[0].pack_src, formats_array[0].pack_dst, g0_face_r_dim, TILE_C_DIM, g0_num_faces);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats_array[0].pack_dst, g0_face_r_dim, TILE_C_DIM, g0_num_faces);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();

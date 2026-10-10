@@ -52,8 +52,7 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_7, output_tile_offset + row + 34);
     // }
 
-    // Skip tile header, hence + 16:
-    volatile tt_l1_ptr std::uint8_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint8_t*>(idx_addr + 16);
+    volatile tt_l1_ptr std::uint8_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint8_t*>(idx_addr);
 
     // TODO: Add dynamic assert for idx_ptr being within L1 memory bounds
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE

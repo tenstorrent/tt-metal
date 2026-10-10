@@ -181,15 +181,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t face_r_dim  = params.TEST_FACE_R_DIM;
     const std::uint32_t res_dst_idx = 0;
-    // Tilized datum count for the (possibly tiny) tile being packed.
-    const std::uint32_t tile_size  = face_r_dim * params.TEST_FACE_C_DIM * num_faces;
-    static constexpr bool UNTILIZE = false;
-    static constexpr bool TILIZE   = true;
+    static constexpr bool UNTILIZE  = false;
+    static constexpr bool TILIZE    = true;
 
     // ---- Run 0: pack the tilized tile to the scratch buffer ----
     int run = 0;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-        formats_array[run].pack_src, formats_array[run].pack_dst, tile_size, face_r_dim, TILE_C_DIM, num_faces);
+        formats_array[run].pack_src, formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
@@ -207,8 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Blackhole run-0 used PackMode::Tilize; re-establish a Default-mode packer
     // for the plain datacopy result. Wormhole's tilize pack cfg mode is already
     // Default, so it needs no reconfig here.
-    _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(
-        formats_array[run].pack_src, formats_array[run].pack_dst, tile_size, face_r_dim, TILE_C_DIM, num_faces);
+    _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst, face_r_dim, TILE_C_DIM, num_faces);
 #endif
 

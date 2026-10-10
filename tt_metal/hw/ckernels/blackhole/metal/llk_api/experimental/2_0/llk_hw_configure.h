@@ -77,7 +77,6 @@ inline void llk_pack_hw_configure() {
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src,
         static_cast<std::uint32_t>(OUT_DESC.format),
-        ckernel::experimental::tile_stride_words(OUT_DESC.format, OUT_DESC.shape),
         OUT_DESC.shape.face_r_dim,
         OUT_DESC.shape.total_col_dim(),
         OUT_DESC.shape.total_num_faces(),

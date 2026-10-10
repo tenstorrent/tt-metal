@@ -103,10 +103,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t face_r_dim  = params.TEST_FACE_R_DIM;
     const std::uint32_t res_dst_idx = 0;
-    const std::uint32_t tile_size   = face_r_dim * params.TEST_FACE_C_DIM * num_faces;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, face_r_dim, TILE_C_DIM, num_faces);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats.pack_dst, face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>();
 

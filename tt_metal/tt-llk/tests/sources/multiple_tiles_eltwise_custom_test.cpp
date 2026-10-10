@@ -89,12 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src,
-        formats.pack_dst,
-        params.TEST_FACE_R_DIM * FACE_C_DIM * params.num_faces /* tile_size */,
-        params.TEST_FACE_R_DIM,
-        TILE_C_DIM,
-        params.num_faces);
+        formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
 
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
 

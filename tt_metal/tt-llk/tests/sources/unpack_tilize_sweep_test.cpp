@@ -105,11 +105,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    static constexpr bool UNTILIZE  = false;
-    const std::uint32_t DATUM_COUNT = 16 * 16 * params.num_faces;
+    static constexpr bool UNTILIZE = false;
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-        formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params.num_faces, false /* partial_face */, params.NARROW_TILE);
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false /* partial_face */, params.NARROW_TILE);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false /* partial_face */, params.NARROW_TILE);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
