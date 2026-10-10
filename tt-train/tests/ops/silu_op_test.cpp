@@ -12,8 +12,10 @@
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 class SiLUOpTest : public ::testing::Test {
 protected:
@@ -179,6 +181,87 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape
 TEST_F(SiLUOpTest, SiLU_Compare_Small) {
     // C=8, Wt=1, Wt%4=1
     CompareKernelVsReferenceWithShape({1, 1, 1, 8});
+}
+
+TEST_F(SiLUOpTest, SiLUBackwardRejectsLogicalShapeMismatchWithSamePadding) {
+    using namespace ttml;
+
+    auto make_tensor = [](const std::vector<uint32_t>& shape) {
+        xt::xarray<float> data = xt::ones<float>(shape);
+        return core::from_xtensor(data, &autograd::ctx().get_device());
+    };
+
+    const auto input = make_tensor({1, 1, 31, 32});
+    const auto grad = make_tensor({1, 1, 32, 31});
+    ASSERT_EQ(input.padded_shape(), grad.padded_shape());
+    EXPECT_THROW(metal::silu_bw(input, grad), std::runtime_error);
+
+    const auto matching_grad = make_tensor({1, 1, 31, 32});
+    const auto wrong_preallocated_output = make_tensor({1, 1, 32, 31});
+    ASSERT_EQ(input.padded_shape(), wrong_preallocated_output.padded_shape());
+    EXPECT_THROW(metal::silu_bw(input, matching_grad, wrong_preallocated_output), std::runtime_error);
+}
+
+TEST_F(SiLUOpTest, SiLUBackwardRejectsPaddedShapeMismatchWithSameLogicalShape) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> logical_shape = {1, 1, 60, 60};
+    xt::xarray<float> data = xt::ones<float>(logical_shape);
+    auto* device = &autograd::ctx().get_device();
+    const auto input = core::from_xtensor(data, device);
+    const auto row_major = core::from_xtensor(data, device, ttnn::Layout::ROW_MAJOR);
+    const auto overpadded = ttnn::tilize_with_val_padding(row_major, ttsl::SmallVector<uint32_t>{1, 1, 64, 96}, 0.0F);
+
+    ASSERT_EQ(input.logical_shape(), overpadded.logical_shape());
+    ASSERT_NE(input.padded_shape(), overpadded.padded_shape());
+    EXPECT_THROW(metal::silu_bw(input, overpadded), std::runtime_error);
+    EXPECT_THROW(metal::silu_bw(input, input, overpadded), std::runtime_error);
+}
+
+TEST_F(SiLUOpTest, SiLUBackwardPreservesExplicitPhysicalPadding) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> logical_shape = {1, 1, 40, 40};
+    xt::xarray<float> data = xt::ones<float>(logical_shape);
+    auto* device = &autograd::ctx().get_device();
+    const auto row_major = core::from_xtensor(data, device, ttnn::Layout::ROW_MAJOR);
+    const auto input = ttnn::tilize_with_val_padding(row_major, ttsl::SmallVector<uint32_t>{1, 1, 96, 96}, 0.0F);
+
+    const auto output = metal::silu_bw(input, input);
+    EXPECT_EQ(output.logical_shape(), input.logical_shape());
+    EXPECT_EQ(output.padded_shape(), input.padded_shape());
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(output), silu_backward_reference(data, data), 1.0e-3F, 3e-2F));
+}
+
+TEST_F(SiLUOpTest, SiLUBackwardUsesDistinctProgramsForDistinctPaddedGeometry) {
+    using namespace ttml;
+
+    const std::vector<uint32_t> logical_shape = {1, 1, 60, 60};
+    xt::xarray<float> data = xt::ones<float>(logical_shape);
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    auto make_overpadded = [&](const ttsl::SmallVector<uint32_t>& padded_shape) {
+        const auto row_major = core::from_xtensor(data, device, ttnn::Layout::ROW_MAJOR);
+        return ttnn::tilize_with_val_padding(row_major, padded_shape, 0.0F);
+    };
+    const auto input_64x64 = make_overpadded({1, 1, 64, 64});
+    const auto input_64x96 = make_overpadded({1, 1, 64, 96});
+
+    const auto entries_before_first = device->num_program_cache_entries();
+    const auto output_64x64 = metal::silu_bw(input_64x64, input_64x64);
+    const auto entries_after_first = device->num_program_cache_entries();
+    ASSERT_GT(entries_after_first, entries_before_first);
+
+    const auto entries_before_second = device->num_program_cache_entries();
+    const auto output_64x96 = metal::silu_bw(input_64x96, input_64x96);
+    const auto entries_after_second = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_second, entries_before_second)
+        << "SiLU backward reused a program compiled for different padded geometry";
+
+    EXPECT_EQ(output_64x64.padded_shape(), input_64x64.padded_shape());
+    EXPECT_EQ(output_64x96.padded_shape(), input_64x96.padded_shape());
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(output_64x96), silu_backward_reference(data, data), 1.0e-3F, 3e-2F));
 }
 
 // Test block_size alignment patterns
