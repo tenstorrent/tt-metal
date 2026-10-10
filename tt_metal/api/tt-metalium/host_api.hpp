@@ -80,10 +80,13 @@ void SetRootDir(const std::string& root_dir);
 size_t GetNumAvailableDevices();
 
 /**
- * Returns whether Tenstorrent devices are in a Galaxy cluster
+ * Returns whether Tenstorrent devices are in a Galaxy cluster.
+ *
+ * @deprecated This API always returns false and will be removed.
  *
  * Return value: bool
  */
+[[deprecated("This API always returns false and will be removed.")]]
 bool IsGalaxyCluster();
 
 /**
