@@ -64,6 +64,7 @@ inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi() 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, is_32bit>();
 }
 
+// The direct forms: see the _llk_math_generalized_moe_gate_*_direct_ functions for what each needs before it runs.
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct() {
     SAN_HOOK(unsupported());
