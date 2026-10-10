@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "prepare_chunk_recurrence_nanobind.hpp"
+
+#include "prepare_chunk_recurrence.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+
+namespace ttnn::operations::bringup::prepare_chunk_recurrence::detail {
+
+void bind_prepare_chunk_recurrence(nb::module_& mod) {
+    ttnn::bind_function<"prepare_chunk_recurrence", "ttnn.bringup.">(
+        mod,
+        R"doc(
+        Convert flat KDA Q, K, V, gate, and beta tensors into the seven chunk-local
+        terms consumed by ``recurrent_chunk_scan``.
+
+        The operation partitions the sequence into 32-token chunks, normalizes Q and
+        K, accumulates the log-decay gate, constructs causal within-chunk interactions,
+        and computes the triangular correction used by the recurrence.
+
+        Optional ``actual_start`` and ``actual_end`` are replicated device UINT32
+        row-major scalars defining a nonempty global interval. ``actual_start`` is
+        32-token aligned; ``actual_end`` need not be. Rows of a partial last chunk
+        past ``actual_end`` become identity recurrence steps: their gate, beta,
+        key, and value inputs are replaced by zeros, so any padding, including
+        NaN, is ignored. ``actual_end`` requires ``actual_start``. Omitting both bounds preserves the
+        original unbounded call without allocating a scalar.
+        Omitting ``actual_end`` retains full physical
+        capacity. Their contents may change during trace replay. Padded chunk/group
+        outputs are unspecified. Bounds are caller preconditions, not read on host.
+
+        Args:
+            q (ttnn.Tensor): Flat queries ``[1, T, H*K]`` in BFLOAT16.
+            k (ttnn.Tensor): Flat keys ``[1, T, H*K]`` in BFLOAT16.
+            v (ttnn.Tensor): Flat values ``[1, T, H*V]`` in BFLOAT16.
+            g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16.
+            beta (ttnn.Tensor): Per-token update strengths in FLOAT32 TILE layout, either
+                by chunk ``[H, N, 32, 1]`` or token-major ``[1, T, H]``, where ``N = T / 32``.
+                With ``beta_logits_column_offset``, BFLOAT16 pre-sigmoid logits instead (see below).
+            num_heads (int): Number of heads ``H``. Flat Q/K/G and V widths must be
+                divisible by ``H``.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
+                configuration. Defaults to DRAM.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
+                Compute-kernel configuration. Defaults to HiFi4 with approximate
+                math and FP32 destination accumulation.
+            output_bf16_mask (int): Bit mask selecting BFLOAT16 storage for outputs.
+                Bits 0, 1, 2, 4, and 5 are supported; unselected outputs use FLOAT32.
+                Defaults to 0.
+            gate_scale (float): Multiplies ``g`` before its within-chunk cumulative sum, so a
+                caller can fold a constant gate scale into preparation. The device product is exact for
+                any BF16-representable scale, so it is bit-identical to host-scaled ``g`` whenever that
+                host product is itself exact in BF16. Defaults to 1.0.
+            beta_logits_column_offset (int, optional): When given, ``beta`` is a token-major BF16 tensor
+                ``[1, T, columns]`` holding pre-sigmoid logits at these tile-aligned columns, such as the fused
+                input projection; preparation reads them in place and applies the sigmoid in FP32.
+                Defaults to None.
+            precise_gate_factors (bool): Bring-up option (GLM-5.3). Forms the anchored exponents G - G_last/2
+                and G_last/2 as matmuls of ``g`` with constant masks (exact for BF16 ``g``) and exponentiates them
+                in DST, so no large FP32 exponent is read at TF32 precision; the default path's TF32 subtraction
+                biases k_dec_t / q_decay / kd / intra near a -5 gate bound. Defaults to False (the source op).
+
+        Returns:
+            list[ttnn.Tensor]: Seven new TILE-layout tensors, in order:
+
+                * ``v_beta[H,N,32,V]``
+                * ``kd[H,N,32,K]``
+                * ``q_decay[H,N,32,K]``
+                * ``intra[H,N,32,32]``
+                * ``k_dec_t[H,N,K,32]``
+                * ``final_decay[H,N,K,1]``
+                * ``t_inv[H,N,32,32]``
+
+        Note:
+            ``T`` must be positive and divisible by 32; ``K`` and ``V`` must be
+            positive and tile-aligned. All inputs must be interleaved TILE-layout
+            device tensors on the same device and are not modified.
+        )doc",
+        &ttnn::experimental::kda::bringup::prepare_chunk_recurrence,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::arg("num_heads"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output_bf16_mask") = 0,
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("gate_scale") = 1.0F,
+        nb::arg("beta_logits_column_offset") = nb::none(),
+        nb::arg("precise_gate_factors") = false);
+}
+
+}  // namespace ttnn::operations::bringup::prepare_chunk_recurrence::detail
