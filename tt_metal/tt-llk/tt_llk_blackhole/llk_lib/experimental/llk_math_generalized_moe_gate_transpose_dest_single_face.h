@@ -272,8 +272,34 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_()
     ckernel_template::run();
 }
 
+/**
+ * @brief SrcB rows 16, 18, ..., 30 back to DEST rows b2d_base to b2d_base + 7; the last move advances Dest by ADDR_MOD_2.
+ */
+template <std::uint32_t b2d_base>
+inline void _llk_math_generalized_moe_gate_movb2d_8rows_()
+{
+    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 0);
+    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 1);
+    TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 2);
+    TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 3);
+    TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 4);
+    TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
+    TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
+    TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
+}
+
 // Direct forms of steps 0 and 1, step1_hi and copy4rows: each DEST region's words issued as they are, with no MOP, record
 // or replay; the same FPU stream as the init and runner pair.
+
+/**
+ * @brief Step 0 of the gate's DEST transpose, issued directly: per tile of four, rows 0 to 7 to SrcB, a SrcB transpose
+ *        and the rows back.
+ * @tparam is_fp32_dest_acc_en Must be false (16-bit DEST).
+ * @tparam is_32bit Must be false.
+ * @note Run _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_ first and keep its ADDR_MOD_2 (Dest
+ *       +64) and ADDR_MOD_3; post SrcB valid from unpack; set the Dest offset to tile 0. Only this step configures the
+ *       preserve-zero-flag state.
+ */
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_()
 {
@@ -292,17 +318,19 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_dire
         TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 6);
         TTI_MOVD2B(0, 30, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 7);
         TTI_TRNSPSRCB;
-        TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
-        TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
-        TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
-        TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
-        TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
-        TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
-        TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
-        TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
+        _llk_math_generalized_moe_gate_movb2d_8rows_<0>();
     }
 }
 
+/**
+ * @brief Step1_hi of the gate's DEST transpose, issued directly: per tile of three, two 4-row moves from row d2b_dst to
+ *        SrcB, a SrcB transpose and eight rows back from b2d_base.
+ * @tparam is_fp32_dest_acc_en Must be false (16-bit DEST).
+ * @tparam d2b_dst First DEST row moved to SrcB.
+ * @tparam b2d_base First DEST row written back.
+ * @tparam is_32bit Must be false.
+ * @note As step 0, without its preserve-zero-flag configure.
+ */
 template <bool is_fp32_dest_acc_en, std::uint32_t d2b_dst, std::uint32_t b2d_base, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_()
 {
@@ -314,24 +342,28 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_d
         TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
         TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
         TTI_TRNSPSRCB;
-        TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 0);
-        TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 1);
-        TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 2);
-        TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 3);
-        TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 4);
-        TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
-        TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
-        TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
+        _llk_math_generalized_moe_gate_movb2d_8rows_<b2d_base>();
     }
 }
 
-// step1 records the same words as step1_hi<0, 0>.
+/**
+ * @brief Step 1 of the gate's DEST transpose, issued directly: the same words as step1_hi<0, 0>.
+ * @note As step1_hi.
+ */
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_()
 {
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 0, 0, is_32bit>();
 }
 
+/**
+ * @brief Copy of DEST rows src to src + 3 to rows dst to dst + 3 in each of three tiles, through SrcB rows srcb to
+ *        srcb + 3, issued directly.
+ * @tparam is_fp32_dest_acc_en Must be false (16-bit DEST).
+ * @tparam srcb First SrcB scratch row; back-to-back copies use disjoint windows.
+ * @tparam is_32bit Must be false.
+ * @note As step1_hi.
+ */
 template <bool is_fp32_dest_acc_en, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_copy4rows_direct_()
 {

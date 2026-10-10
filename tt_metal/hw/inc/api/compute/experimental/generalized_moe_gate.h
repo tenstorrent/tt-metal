@@ -234,30 +234,30 @@ ALWI void generalized_moe_gate(
         // later MOVB2D can't read a previous (back-to-back) copy's SrcB leftover.
         //
         // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
-        generalized_moe_gate_fpu_copy4rows<4, 8, 16, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_copy4rows<4 /* src */, 8 /* dst */, 16 /* srcb */, is_fp32_dest_acc_en, is_32bit>();
         // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
-        generalized_moe_gate_fpu_step1_hi<0, 0, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_step1_hi<0 /* d2b_dst */, 0 /* b2d_base */, is_fp32_dest_acc_en, is_32bit>();
         MATH((GMG_SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             generalized_moe_gate_merge4_top8,
-            (APPROX, is_fp32_dest_acc_en, 0, 0, 2),
+            (APPROX, is_fp32_dest_acc_en, 0 /* read_base */, 0 /* store_lo */, 2 /* store_hi */),
             0,
             VectorMode::RC_custom)));
         // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
-        generalized_moe_gate_fpu_copy4rows<0, 12, 20, is_fp32_dest_acc_en, is_32bit>();
-        generalized_moe_gate_fpu_copy4rows<8, 4, 24, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_copy4rows<0 /* src */, 12 /* dst */, 20 /* srcb */, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_copy4rows<8 /* src */, 4 /* dst */, 24 /* srcb */, is_fp32_dest_acc_en, is_32bit>();
         // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
-        generalized_moe_gate_fpu_step1_hi<4, 0, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_step1_hi<4 /* d2b_dst */, 0 /* b2d_base */, is_fp32_dest_acc_en, is_32bit>();
         MATH((GMG_SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             generalized_moe_gate_merge4_top8,
-            (APPROX, is_fp32_dest_acc_en, 0, 4, 6),
+            (APPROX, is_fp32_dest_acc_en, 0 /* read_base */, 4 /* store_lo */, 6 /* store_hi */),
             0,
             VectorMode::RC_custom)));
         // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
-        generalized_moe_gate_fpu_copy4rows<12, 0, 28, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_copy4rows<12 /* src */, 0 /* dst */, 28 /* srcb */, is_fp32_dest_acc_en, is_32bit>();
         if constexpr (produce_run) {
             // Multi-block: emit this block's top-8 as a re-mergeable RUN at {run_store_lo, run_store_hi}
             // (idx += idx_offset for global ids). No normalize/step2 here — the combine does that.
