@@ -15,6 +15,18 @@
   LTX_FUSE_YUV_OUTPUT=1), then md5/PCC/PSNR.
 - Results: /var/tmp/fasth3/t362/drv362.done (DONE job=<id>:<status>), run_job<id>.log, arm{0,1}_job<id>.log, unit_job<id>.log.
 
+## Job 459 (blx01, 2026-10-10 19:05-19:08 UTC): failed in arm 1, no drop
+- unit test PASSED (3 shapes); arm 0 (unfused) ran: decode_s 0.5759 0.5606 0.5695 min 0.5606 (900 MHz clamp, relative only).
+- arm 1 died: TT_FATAL rgb_to_yuv_device_op.cpp:60 'Padded input is not supported (logical [1,145,68,60,48] vs padded
+  [...,64])'. conv3d rounds C_out up to a tile. The reader already reads pages at aligned_page_size and uses only the
+  first 48 channels, so b5d8b7f567e relaxes the check (patchified input may pad the last dim) and adds a padded unit case.
+- Logs moved to /var/tmp/fasth3/t362/old459/.
+
+## Rerun (started 2026-10-10 ~19:20 UTC)
+- drv362.sh now builds b5d8b7f567e (git checkout in the existing t362/b worktree, incremental build).
+- `ttp detach --remote g15blx01 --dir /var/tmp/fasth3/t362/detach drv362b`; probe:
+  `ttp detach --check --host g15blx01 /var/tmp/fasth3/t362/detach/drv362b`.
+
 ## Next step
 1. Read drv362.done and run_job<id>.log (T362_EXIT, identical=True per seed, AB decode_s min per arm).
 2. If identical on all 5 seeds: separate commit flipping LTX_VAE_FUSE_UNPATCH default to 1 (vae_ltx.py, and A/B test default).

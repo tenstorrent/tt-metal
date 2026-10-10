@@ -1,11 +1,11 @@
 #!/bin/bash
-# t362 driver on blx01 (no device work itself): (1) worktree of /var/tmp/fasth3/t48's repo at 695a102dc1c8ab5b31f02a6b237273433f733d10 (from t362.bundle)
+# t362 driver on blx01 (no device work itself): (1) worktree of /var/tmp/fasth3/t48's repo at b5d8b7f567eb9acca5f342b83f2260a0331413db (from t362.bundle)
 # + Release build in t362/b; (2) one broker job (-t 600, unmeasured) run362.sh, submitted only when the broker shows no
 # upgrade/hold/health/reset/fabric-check job and no other smarton job. No T362_EXIT line = drop, rerun once.
 # Logs: t362/drv362.log, t362/run_job<id>.log. Marker: t362/drv362.done.
 set -o pipefail
 F=/var/tmp/fasth3; A=$F/t48; D=$F/t362; B=$D/b; M=$D/drv362.done; L=$D/drv362.log
-REV=695a102dc1c8ab5b31f02a6b237273433f733d10
+REV=b5d8b7f567eb9acca5f342b83f2260a0331413db
 trap 'rc=$?; echo "exit=$rc $(date -u +%T)" >> $L; [ -e $M ] || echo "DRIVER_EXIT rc=$rc" > $M' EXIT
 log() { echo "$(date -u '+%F %T') $*" >> $L; }
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp CPM_SOURCE_CACHE=$F/.cpmcache
@@ -15,6 +15,7 @@ build() {
   git -C $A cat-file -e $REV^{commit} || return 12
   [ -d $B ] || git -C $A worktree add --detach $B $REV || return 13
   cd $B || return 14
+  git checkout -q --detach $REV || return 21
   [ "$(git rev-parse HEAD)" = $REV ] || return 15
   git submodule update --init tt_metal/third_party/tracy tt_metal/third_party/tt-cluster-descriptors \
     tt_metal/third_party/umd || return 16
