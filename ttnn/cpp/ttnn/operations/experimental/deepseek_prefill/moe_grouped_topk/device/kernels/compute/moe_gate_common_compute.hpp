@@ -137,13 +137,28 @@ template <uint32_t score_func>
 void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_activated_scores(cb_activated_scores_id);
+#if defined(ARCH_BLACKHOLE)
+    // Nothing in the sigmoid loop changes these, so they are set up once a row; the softplus and sqrt inits alternate.
+    constexpr bool setup_once = score_func != SCORE_FUNC_SQRTSOFTPLUS;
+#else
+    constexpr bool setup_once = false;
+#endif
+    if constexpr (setup_once) {
+        // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
+        reconfig_data_format_srca(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
+        sigmoid_tile_init();
+        pack_reconfig_data_format(cb_activated_scores_id);
+    }
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_scores.wait_front(1);
         tile_regs_acquire();
-        // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
-        reconfig_data_format_srca(cb_in_scores_id);
-        // copy tile from scores cb to destination register 0
-        copy_init(cb_in_scores_id);
+        if constexpr (!setup_once) {
+            // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
+            reconfig_data_format_srca(cb_in_scores_id);
+            // copy tile from scores cb to destination register 0
+            copy_init(cb_in_scores_id);
+        }
         copy_tile(cb_in_scores_id, 0, 0);
         if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
@@ -154,7 +169,9 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
             sqrt_tile_init();
             sqrt_tile(0);
         } else {
-            sigmoid_tile_init();
+            if constexpr (!setup_once) {
+                sigmoid_tile_init();
+            }
             sigmoid_tile(0);
         }
         tile_regs_commit();
@@ -162,7 +179,9 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
 
         cb_activated_scores.reserve_back(1);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_activated_scores_id);
+        if constexpr (!setup_once) {
+            pack_reconfig_data_format(cb_activated_scores_id);
+        }
         pack_tile(0, cb_activated_scores_id);
         tile_regs_release();
         cb_activated_scores.push_back(1);
@@ -182,6 +201,12 @@ void add_bias(
     CircularBuffer cb_biased_dump(cb_biased_dump_id);
     // Perform add bias on sigmoid scores
     add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool pack_setup_once = true;
+    pack_reconfig_data_format(cb_biased_scores_id);
+#else
+    constexpr bool pack_setup_once = false;
+#endif
     cb_sigmoid_scores.wait_front(width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
@@ -195,7 +220,9 @@ void add_bias(
             cb_biased_dump.reserve_back(1);
         }
         tile_regs_wait();
-        pack_reconfig_data_format(cb_biased_scores_id);
+        if constexpr (!pack_setup_once) {
+            pack_reconfig_data_format(cb_biased_scores_id);
+        }
         pack_tile(0, cb_biased_scores_id);
         if constexpr (dump_biased) {
             pack_tile(0, cb_biased_dump_id);
