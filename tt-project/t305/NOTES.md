@@ -54,3 +54,10 @@ Same scripts as t301 (t301/run301.sh, env.yaml on blx01 /var/tmp/fasth3/t301), k
   Output: blx01 /var/tmp/fasth3/t305/out_main/run.log. /var/tmp/fasth3 was 145G before (cap 150G), df / 53%.
 - Next: when 349 ends, check its clamp (expect 32 warnings), quote its gen #2 table, compare with 242.
   Then final report; cleanup t301/pr worktree, t301/jit-*, t301/out_*, t305/out_* (keep run logs).
+- 02:25 UTC coordinator update: no more clamped arms. 349 had been submitted 02:25:29 just before it and was already
+  running; left to finish (own job, device otherwise idle). It is relative-only data (pairs with 242) for condition (c).
+- Wait conditions (probe tt-project/t305/wake305.sh, also requires 349 done): (a) blx01 newest device job at full
+  AICLK -> both arms on blx01; (b) blx03 ssh + tt-project/state/ready/g14blx03.READY -> BOTH arms on blx03 (needs
+  setup first: blx03 has gemma but no ltx-2.3-22b-distilled-1.1 checkpoint and no main/PR builds; needs
+  g14blx03-device resource); (c) 2026-10-11 02:00 UTC -> both arms clamped on blx01 (242 + 349 may already serve), relative only.
+- 02:26 UTC: blx03 answers ssh (up 2:20), broker healthy and serving ltx-host 792; no READY marker.
