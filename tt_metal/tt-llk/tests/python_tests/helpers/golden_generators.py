@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Optional
 
+import mpmath
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -2483,6 +2484,34 @@ class UnarySFPUGolden:
         self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
+    def _round_once_to_dest(self, value) -> float:
+        """The mpmath *value* rounded once, to nearest even, onto Dest's grid (its subnormals included).
+
+        A float64 or float32 intermediate would round twice. A magnitude past the format's largest
+        finite value is an infinity; a nonzero value that rounds to zero keeps its sign.
+        """
+        if mpmath.isnan(value):
+            return math.nan
+        if mpmath.isinf(value) or value == 0:
+            return float(value)
+        info = torch.finfo(format_dict[self.dst_format])
+        significand_bits = 1 - round(math.log2(info.eps))
+        _, exponent = mpmath.frexp(value)
+        exponent = max(exponent, round(math.log2(info.smallest_normal)) + 1)
+        quantum = mpmath.ldexp(1, exponent - significand_bits)
+        rounded = mpmath.nint(value / quantum) * quantum
+        if abs(rounded) > info.max:
+            return math.copysign(math.inf, value)
+        return float(rounded) if rounded != 0 else math.copysign(0.0, value)
+
+    def _infinite(self, value: float) -> float:
+        """An infinite result as Dest's format returns it (see handle_infinite_numbers)."""
+        return (
+            math.copysign(self.handle_infinite_numbers(math.inf), value)
+            if math.isinf(value)
+            else value
+        )
+
     def __call__(
         self,
         operation,
@@ -3423,14 +3452,23 @@ class UnarySFPUGolden:
         )
 
     def _i1_bessel(self, x):
-        # Modified Bessel I1; the kernel poly approx is valid on |x| <= ~3.75. Same torch
-        # limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf. I1 stays
-        # outside SPECIALS_READY_OPS because the kernel saturates a non-finite input.
+        # Generated from activations/i1.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact i1(x) elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 13 of the 65,536 BF16 inputs.
         if math.isnan(x):
-            return x
+            return self._infinite(math.nan)
         if math.isinf(x):
-            return math.copysign(self.handle_infinite_numbers(math.inf), x)
-        return self._torch_unary(x, torch.special.i1)
+            return self._infinite(math.nan) if x > 0 else self._infinite(math.nan)
+        if x == 0.0:
+            return (
+                self._infinite(0.0)
+                if math.copysign(1.0, x) > 0
+                else self._infinite(0.0)
+            )
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._infinite(self._round_once_to_dest(mpmath.besseli(1, x)))
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
