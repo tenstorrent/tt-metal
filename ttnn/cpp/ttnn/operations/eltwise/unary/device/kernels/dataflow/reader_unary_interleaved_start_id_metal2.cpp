@@ -15,6 +15,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef IMPLICIT_SYNC
+#include "api/kernel_thread_globals.h"
+#endif
 
 void kernel_main() {
     const auto num_pages = get_arg(args::num_pages);
@@ -31,6 +34,13 @@ void kernel_main() {
 
     const auto s = TensorAccessor(tensor::src);
 
+#ifdef IMPLICIT_SYNC
+    // Thread t of N reads pages start_id + t, start_id + t + N, ...: each TXN_ID read fills the next
+    // entry of the strided DFB and posts its credit when it lands.
+    for (uint32_t i = start_id + get_my_thread_id(); i < start_id + num_pages; i += get_num_threads()) {
+        noc.async_read<NocOptions::TXN_ID>(s, dfb, {.page_id = i}, {});
+    }
+#else
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
@@ -44,4 +54,5 @@ void kernel_main() {
         noc.async_read_barrier();
         dfb.push_back(onepage);
     }
+#endif
 }

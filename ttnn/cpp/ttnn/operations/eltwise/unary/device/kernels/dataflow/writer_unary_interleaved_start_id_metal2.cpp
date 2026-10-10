@@ -18,6 +18,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef IMPLICIT_SYNC
+#include "api/kernel_thread_globals.h"
+#endif
 
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
@@ -36,6 +39,14 @@ void kernel_main() {
     // leave the DFB balanced.
     dfb.wait_front(num_pages);
     dfb.pop_front(num_pages);
+#elif defined(IMPLICIT_SYNC)
+    const auto s = TensorAccessor(tensor::dst);
+
+    // Thread t of N writes pages start_id + t, start_id + t + N, ...: each TXN_ID write drains the
+    // next posted entry of the strided DFB and acks it when it lands.
+    for (uint32_t i = start_id + get_my_thread_id(); i < start_id + num_pages; i += get_num_threads()) {
+        noc.async_write<NocOptions::TXN_ID>(dfb, s, {}, {.page_id = i});
+    }
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
