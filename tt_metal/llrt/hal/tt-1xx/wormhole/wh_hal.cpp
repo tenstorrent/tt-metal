@@ -166,6 +166,11 @@ public:
             defines.push_back("COOPERATIVE_ERISC");
         }
         defines.push_back("ARCH_WORMHOLE");
+        // ttsim does not model every config register (RISC_PREFETCH_CTRL). UMD picks ttsim over RTL emulation by the
+        // same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         return defines;
     }
 
