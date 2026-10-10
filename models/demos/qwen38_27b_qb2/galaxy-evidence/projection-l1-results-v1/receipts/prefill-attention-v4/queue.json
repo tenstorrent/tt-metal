@@ -1,0 +1,36 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-projection-sweep-v7-20261010.service",
+  "predecessor_invocation": "fe9095edf11a4a5f8035ce8ef9c9602a",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668809.2353067,
+  "updated_at": "2026-10-10T21:48:07Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/models/demos/qwen38_27b_qb2/tests/test_prefill_attention_batch.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=5400",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v4/hardware.xml"
+  ],
+  "error": "CalledProcessError",
+  "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/scripts/run_safe_pytest.sh', '/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/models/demos/qwen38_27b_qb2/tests/test_prefill_attention_batch.py', '--rootdir=/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1', '-c', '/home/ttuser/qwen38-artifacts-20261007/prefill-attention-source-v1/pytest.ini', '-vv', '-s', '--tb=short', '--timeout=5400', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v4/hardware.xml']' returned non-zero exit status 1.",
+  "finished_at": 1791668887.3419466
+}

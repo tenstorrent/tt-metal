@@ -1,0 +1,30 @@
+[
+  {
+    "COMPUTE KERNEL SOURCE": "['Inline source']",
+    "COMPUTE KERNEL HASH": "['Kernel_Source_Code/6860069656320669842/']",
+    "DATA MOVEMENT KERNEL SOURCE": "['Inline source']",
+    "DATA MOVEMENT KERNEL HASH": "['Kernel_Source_Code/2289107953262935442/']",
+    "ATTRIBUTES": "{'num_mesh_programs': '1'}"
+  },
+  {
+    "COMPUTE KERNEL SOURCE": "['Inline source']",
+    "COMPUTE KERNEL HASH": "['Kernel_Source_Code/4661025558761494470/']",
+    "DATA MOVEMENT KERNEL SOURCE": "['Inline source']",
+    "DATA MOVEMENT KERNEL HASH": "['Kernel_Source_Code/1470466873064864940/']",
+    "ATTRIBUTES": "{'num_mesh_programs': '1'}"
+  },
+  {
+    "COMPUTE KERNEL SOURCE": "['Inline source']",
+    "COMPUTE KERNEL HASH": "['Kernel_Source_Code/17084414253584832726/']",
+    "DATA MOVEMENT KERNEL SOURCE": "['Inline source']",
+    "DATA MOVEMENT KERNEL HASH": "['Kernel_Source_Code/130699331572451429/']",
+    "ATTRIBUTES": "{'num_mesh_programs': '1'}"
+  },
+  {
+    "COMPUTE KERNEL SOURCE": "['Inline source']",
+    "COMPUTE KERNEL HASH": "['Kernel_Source_Code/7273627570779443425/']",
+    "DATA MOVEMENT KERNEL SOURCE": "['Inline source']",
+    "DATA MOVEMENT KERNEL HASH": "['Kernel_Source_Code/6512072540104660486/']",
+    "ATTRIBUTES": "{'num_mesh_programs': '1'}"
+  }
+]

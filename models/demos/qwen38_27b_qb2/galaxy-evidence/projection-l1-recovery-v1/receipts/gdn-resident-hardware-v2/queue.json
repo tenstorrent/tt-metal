@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-compact-long-horizon-v4-20261010.service",
+  "predecessor_invocation": "4e1de31068f34e1c95bfef609775e511",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668809.3100224,
+  "updated_at": "2026-10-10T21:47:29Z",
+  "predecessor": {
+    "MainPID": "462655",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "4e1de31068f34e1c95bfef609775e511"
+  }
+}

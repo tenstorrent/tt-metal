@@ -1,0 +1,288 @@
+{
+  "captured_at": "2026-10-10T21:40:58.950335+00:00",
+  "files": {
+    "receipts/compact-followup-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/queue.json",
+      "uncompressed_bytes": 6911,
+      "uncompressed_sha256": "9e643635080fc3b02059e383f14788756877ca98d2a7d65ac0961d32f71ab8ef"
+    },
+    "receipts/export-recovery-v2/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/queue.json",
+      "uncompressed_bytes": 1897,
+      "uncompressed_sha256": "0841e2655ea4aa09683e8655b801fc64373665109d4145df6ec8c1f2721479ad"
+    },
+    "receipts/operator-profile-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-v1/queue.json",
+      "uncompressed_bytes": 607,
+      "uncompressed_sha256": "7a60ea517632266bec9ed858ee0f374c7a3df9fd0e48038d141bcaffbdd3fde2"
+    },
+    "receipts/export-recovery-v2/report/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report/queue.json",
+      "uncompressed_bytes": 2543,
+      "uncompressed_sha256": "113570d1b42f1bd3402b4f3ac83d28e88d536406c9581e91594e6ba3c070116f"
+    },
+    "receipts/export-recovery-v2/report/profile.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report/profile.json",
+      "uncompressed_bytes": 34816,
+      "uncompressed_sha256": "2e3b57472a43a6cb5446b2e82f358e0c08d360d745e1916715b9f9507ac907ee"
+    },
+    "receipts/export-recovery-v2/report/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report/hardware.xml",
+      "uncompressed_bytes": 541,
+      "uncompressed_sha256": "8e906006441fd62ca6510dac9ba35310906053417b9f996c03d781d3a68ba18e"
+    },
+    "receipts/export-recovery-v2/report/analysis.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report/analysis.json",
+      "uncompressed_bytes": 129263,
+      "uncompressed_sha256": "e57943c78b1fd0c28399ee9045d1eacce5ff62de50c7b87c00de2da3731ea3e5"
+    },
+    "receipts/operator-profile-v1/report/analysis.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-v1/report/analysis.json",
+      "uncompressed_bytes": 48542,
+      "uncompressed_sha256": "5fbbae0ec01c1037ecd48cafd328ccfa34120fb87409615e582bcbb712d37ed5"
+    },
+    "receipts/operator-profile-v1/report/INVENTORY.md": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-v1/report/INVENTORY.md",
+      "uncompressed_bytes": 5980,
+      "uncompressed_sha256": "ece252993c591bfafc3865422b265c55393c2992d72a0cb2b24d61a967aff69a"
+    },
+    "receipts/export-recovery-control-v2/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-control-v2/run.log",
+      "uncompressed_bytes": 1323,
+      "uncompressed_sha256": "1df2546b336dbd5b342cbf719662cb7b87a6f5e6187cd1d7a25d9ecd628e8e8d"
+    },
+    "receipts/operator-profile-control-v1/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/operator-profile-control-v1/run.log",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "receipts/projection-sweep-v6/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6/queue.json",
+      "uncompressed_bytes": 723,
+      "uncompressed_sha256": "f5b21cd0e73c4e281c771a76f8a5ec2318f41f35cc411881a88c89baf6cbe1ab"
+    },
+    "receipts/projection-sweep-v6-export-recovery1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1/queue.json",
+      "uncompressed_bytes": 1881,
+      "uncompressed_sha256": "1754d98e2733db901a82bc03e45714596b3ce25cddfd7635645fca3fb5393fba"
+    },
+    "receipts/projection-sweep-control-v6-export-recovery1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6-export-recovery1/launch.json",
+      "uncompressed_bytes": 1839,
+      "uncompressed_sha256": "347ed6a1643ffe3a459b191753a592fb059bfdda9fbfcd4f18da0cecd5f7defa"
+    },
+    "receipts/projection-sweep-control-v6-export-recovery1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v6-export-recovery1/launch-unit.json",
+      "uncompressed_bytes": 333,
+      "uncompressed_sha256": "826078e0dee5e63dd7f17c60b25beb588437d6daf510ec521e8b3a29638e0c8e"
+    },
+    "receipts/prefill-attention-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v3/queue.json",
+      "uncompressed_bytes": 722,
+      "uncompressed_sha256": "ad3074f912e185b112d4e649493858bfce535f154e0b04cc3ea29544ff4454f9"
+    },
+    "receipts/prefill-attention-v3-export-recovery1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v3-export-recovery1/queue.json",
+      "uncompressed_bytes": 739,
+      "uncompressed_sha256": "44db9519265b8fbdfd5a5b489cbbfaeb77a9f4e2777355b54aabde4410f17fad"
+    },
+    "receipts/prefill-attention-control-v3-export-recovery1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-control-v3-export-recovery1/launch.json",
+      "uncompressed_bytes": 1883,
+      "uncompressed_sha256": "b58876307997114a9083b47aabcfb2748056e83b2c7ac025786498a55e823960"
+    },
+    "receipts/prefill-attention-control-v3-export-recovery1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-control-v3-export-recovery1/launch-unit.json",
+      "uncompressed_bytes": 334,
+      "uncompressed_sha256": "30b6886bfc7c3e4bb30ff4239cc52d7cbe3104a480d7e212f2bdc4811a025afc"
+    },
+    "receipts/compact-long-horizon-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v3/queue.json",
+      "uncompressed_bytes": 724,
+      "uncompressed_sha256": "42582f374e744ef8136ae0994d7cd5568951073ff02d573da5d2ee7b2a3ca5af"
+    },
+    "receipts/compact-long-horizon-v3-export-recovery1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v3-export-recovery1/queue.json",
+      "uncompressed_bytes": 741,
+      "uncompressed_sha256": "5985e296133afaddca693425b183b06afa01de4c725531802a7a2ac8281c5f82"
+    },
+    "receipts/compact-long-horizon-control-v3-export-recovery1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v3-export-recovery1/launch.json",
+      "uncompressed_bytes": 1909,
+      "uncompressed_sha256": "e9eec21dd1ae38d1ccc1ae5426cc62be2e3f6867b5e6c306d613ceb19c5d0258"
+    },
+    "receipts/compact-long-horizon-control-v3-export-recovery1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v3-export-recovery1/launch-unit.json",
+      "uncompressed_bytes": 337,
+      "uncompressed_sha256": "947fade7ff434e071e63472436d8341951f4c79b32c4fe63e3c80fa604b6d20b"
+    },
+    "receipts/gdn-resident-hardware-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v1/queue.json",
+      "uncompressed_bytes": 726,
+      "uncompressed_sha256": "d1a16abc267492582b9453bafdade0572a0ec8c48fe89c31ffdcd94e87eb590a"
+    },
+    "receipts/gdn-resident-hardware-v1-export-recovery1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v1-export-recovery1/queue.json",
+      "uncompressed_bytes": 744,
+      "uncompressed_sha256": "259b172fc489ff480db6ae950534dfda9d375ef0a3b6a051b8d31785cbe8ce63"
+    },
+    "receipts/gdn-resident-hardware-control-v1-export-recovery1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v1-export-recovery1/launch.json",
+      "uncompressed_bytes": 2182,
+      "uncompressed_sha256": "4af61ffc7ee74b211d8932b13eba9bc4ddf2a024836559aaceacf671c77bd1cd"
+    },
+    "receipts/gdn-resident-hardware-control-v1-export-recovery1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v1-export-recovery1/launch-unit.json",
+      "uncompressed_bytes": 338,
+      "uncompressed_sha256": "265f42e6cdccb40755c7186f1c882c28745614ed9ada38a6953f3743c9b8b5f3"
+    },
+    "receipts/gdn-compact-gates-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1/queue.json",
+      "uncompressed_bytes": 727,
+      "uncompressed_sha256": "1688ee01a4ead66152c9e224614d2f21bb8c72171ecffca8506d1836d9086adc"
+    },
+    "receipts/gdn-compact-gates-v1-export-recovery1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1-export-recovery1/queue.json",
+      "uncompressed_bytes": 744,
+      "uncompressed_sha256": "f2edd92b7b36b3610f782479927e142712e12fa3c24f3d1ebd48cf1a0fa2d358"
+    },
+    "receipts/gdn-compact-gates-control-v1-export-recovery1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1-export-recovery1/launch.json",
+      "uncompressed_bytes": 2153,
+      "uncompressed_sha256": "b0d65e3d0472d6833c9f42031df52203bdda54f0487810bdcba52efc567a520d"
+    },
+    "receipts/gdn-compact-gates-control-v1-export-recovery1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v1-export-recovery1/launch-unit.json",
+      "uncompressed_bytes": 334,
+      "uncompressed_sha256": "f27d9addb75ffe45ec29baed24ea0ff84ff1d70a932f00e12092492b1af217ce"
+    }
+  },
+  "csv": {
+    "remote_path": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report/tracy/reports/2026_10_10_21_38_14/ops_perf_results_2026_10_10_21_38_14.csv",
+    "uncompressed_bytes": 104361705,
+    "uncompressed_sha256": "a9f1cde108a9ab05065330f811373fb442da03621b2fb30eeb50023130f215e9",
+    "compressed_sha256": "7a526018c07085c6b76eb51c882f78b6b3df7e773c3c425fc53fcea86bc19895",
+    "parts": [
+      {
+        "path": "csv/ops.csv.gz.part000",
+        "bytes": 400000,
+        "sha256": "23d58381ca6c5d31a48c8f37db66db2cf6a18b9321cd3adb2d214410d7674079"
+      },
+      {
+        "path": "csv/ops.csv.gz.part001",
+        "bytes": 400000,
+        "sha256": "59f1741a37979798452b9d36269343b6846829cd82aa3a70ff7cabd4b54e02bd"
+      },
+      {
+        "path": "csv/ops.csv.gz.part002",
+        "bytes": 400000,
+        "sha256": "54b58430020acd027020af01e132467653471eb8cfa9ee6cc10104c746c0e680"
+      },
+      {
+        "path": "csv/ops.csv.gz.part003",
+        "bytes": 400000,
+        "sha256": "970432533c3409f443801be25fa35f0e3cc46737a34c03eac305fa3f0bf48daf"
+      },
+      {
+        "path": "csv/ops.csv.gz.part004",
+        "bytes": 400000,
+        "sha256": "e2619ab00a31222cace33d24c9b410ed6e16f1bb940766a72d59302be869e32e"
+      },
+      {
+        "path": "csv/ops.csv.gz.part005",
+        "bytes": 400000,
+        "sha256": "8f06538bd486da05bb51a2a990cfd315543ec3a1666172b1c5248652e3653599"
+      },
+      {
+        "path": "csv/ops.csv.gz.part006",
+        "bytes": 400000,
+        "sha256": "8a7acfc9e55aa481a0e8ab0cedfa7bd96c78ed792a9c4c6965d10649fd414a17"
+      },
+      {
+        "path": "csv/ops.csv.gz.part007",
+        "bytes": 400000,
+        "sha256": "cac1c5c8f2b965dfa75935df8ee4c750e9fe216f9816ff9e6072bf80f1761519"
+      },
+      {
+        "path": "csv/ops.csv.gz.part008",
+        "bytes": 400000,
+        "sha256": "8c4dbe24bc02b64c9acf24304521249a5506751246ca5c1666a2711907b0531d"
+      },
+      {
+        "path": "csv/ops.csv.gz.part009",
+        "bytes": 400000,
+        "sha256": "88aca6c09e7147d54d9dad682146e1ea69e1b6252caca7f265f604880ab289c1"
+      },
+      {
+        "path": "csv/ops.csv.gz.part010",
+        "bytes": 400000,
+        "sha256": "a480c7c0c4892b6fb2be3a615886ce5c51b8b1e0ad0e08d8a188e02bf18f1a93"
+      },
+      {
+        "path": "csv/ops.csv.gz.part011",
+        "bytes": 400000,
+        "sha256": "1da9c86908a14b8f9bb53e977beeeb4bec66167411ae2773eb914a2b02561c9f"
+      },
+      {
+        "path": "csv/ops.csv.gz.part012",
+        "bytes": 400000,
+        "sha256": "7cc2aba8b7d0ab179468e79491d9400a98344c9d7cd6eb23e67a53f2080e274b"
+      },
+      {
+        "path": "csv/ops.csv.gz.part013",
+        "bytes": 400000,
+        "sha256": "788e1c9b5cbabc07012506e8b2c776595a2e1d791629d7946a6dca6b96a2d230"
+      },
+      {
+        "path": "csv/ops.csv.gz.part014",
+        "bytes": 400000,
+        "sha256": "67f7bf473e26ae581c23ea58ce47ec3847cad2204a2d5e4ea4d8e42d8080a14d"
+      },
+      {
+        "path": "csv/ops.csv.gz.part015",
+        "bytes": 400000,
+        "sha256": "5d1f647bd71fe5dbe951bc0e363b0e484c4214eb309ade9c9b9f3857f31ae4fd"
+      },
+      {
+        "path": "csv/ops.csv.gz.part016",
+        "bytes": 400000,
+        "sha256": "b6db44685ca49df5e5e52610d0f6f95f17658824e9c2adddf61a941ec066817f"
+      },
+      {
+        "path": "csv/ops.csv.gz.part017",
+        "bytes": 400000,
+        "sha256": "2f4c2bef777a1f46886ea82ef305d43b39621cdff5714cf65b4386340fcd183b"
+      },
+      {
+        "path": "csv/ops.csv.gz.part018",
+        "bytes": 400000,
+        "sha256": "180e51b26986a2ef1f30b5092861c2c7f7d640a660fc744666f8a4e2e7ad8aaa"
+      },
+      {
+        "path": "csv/ops.csv.gz.part019",
+        "bytes": 400000,
+        "sha256": "7f782fb495df578bcef0f4bf82491ca8158a252091c3e8531f3d128894c7d7a8"
+      },
+      {
+        "path": "csv/ops.csv.gz.part020",
+        "bytes": 400000,
+        "sha256": "e9e6feb592d7a0772cf71f6cb939e43d5cc5075aac0faa41a7a2173af577e18a"
+      },
+      {
+        "path": "csv/ops.csv.gz.part021",
+        "bytes": 400000,
+        "sha256": "ed9ab44c67d30d11c72aa12c66a1e4dbb028de67873581756c1fe4f285a83b34"
+      },
+      {
+        "path": "csv/ops.csv.gz.part022",
+        "bytes": 400000,
+        "sha256": "8617603b71e06d52afe1b9e6f97478e273d9d6c5ba581100d151db6be25f62b7"
+      },
+      {
+        "path": "csv/ops.csv.gz.part023",
+        "bytes": 389606,
+        "sha256": "e1e2895dce65b4131c1d5e9c8399abadf127b4952710943f26bc044d68714ece"
+      }
+    ]
+  }
+}

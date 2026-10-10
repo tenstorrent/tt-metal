@@ -1,0 +1,9 @@
+{
+  "MainPID": "452544",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "1517236f9515446d80c90ac85b68949c",
+  "updated_at": "2026-10-10T21:38:58Z"
+}

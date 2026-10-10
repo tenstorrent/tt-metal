@@ -63,8 +63,8 @@ class ProjectionSweepTest(unittest.TestCase):
 
     def test_report_requires_separate_complete_producer_boundaries(self):
         report = self.complete_report()
-        self.assertEqual(len(report["cases"]), 66)
-        self.assertEqual(len(validate_report(report)), 54)
+        self.assertEqual(len(report["cases"]), 62)
+        self.assertEqual(len(validate_report(report)), 50)
         for change in ("missing_layout", "wrong_geometry", "mixed_layout", "wrong_comparison"):
             damaged = copy.deepcopy(report)
             if change == "missing_layout":
@@ -81,9 +81,10 @@ class ProjectionSweepTest(unittest.TestCase):
     def test_plan_is_bounded_and_covers_controls(self):
         for role, spec in ROLES.items():
             configs = candidates(role)
-            self.assertEqual(len(configs), 10)
+            count = 10 if role == "output" else 8
+            self.assertEqual(len(configs), count)
             self.assertEqual(configs[0], dict(readers=2, cores=8, block=spec["block"]))
-            self.assertEqual(len({tuple(c.values()) for c in configs}), 10)
+            self.assertEqual(len({tuple(c.values()) for c in configs}), count)
             for config in configs:
                 dims = geometry(role, config)
                 self.assertEqual(dims["padded_n"] % (8 * config["readers"] * 32), 0)

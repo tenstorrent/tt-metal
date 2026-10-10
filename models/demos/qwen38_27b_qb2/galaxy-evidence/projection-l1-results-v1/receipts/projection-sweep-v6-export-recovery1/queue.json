@@ -1,0 +1,36 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-compact-export-fallback-v2-20261010.service",
+  "predecessor_invocation": "e37b2f244e924e2f9b03f58af90d47ba",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668338.3758984,
+  "updated_at": "2026-10-10T21:40:42Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=5400",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1/hardware.xml"
+  ],
+  "error": "CalledProcessError",
+  "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/scripts/run_safe_pytest.sh', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py', '--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2', '-c', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/pytest.ini', '-vv', '-s', '--tb=short', '--timeout=5400', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1/hardware.xml']' returned non-zero exit status 1.",
+  "finished_at": 1791668442.5102248
+}

@@ -1,0 +1,23 @@
+{
+  "qwen38-compact-long-horizon-v6-20261010.service": {
+    "MainPID": "467344",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "3e818cd8174c45b2a50af75aad61f7c2"
+  },
+  "qwen38-gdn-resident-hardware-v3-20261010.service": {
+    "MainPID": "467348",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "7effa827159e4f9cb36e5023d6630b0b"
+  },
+  "qwen38-gdn-compact-gates-v3-20261010.service": {
+    "MainPID": "467359",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "9d7889e59af942ef8e45967635e28d95"
+  }
+}

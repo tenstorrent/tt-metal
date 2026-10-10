@@ -1,0 +1,49 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_started": false,
+  "physical_devices_accessed": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791666695.2855256,
+  "replacements": [
+    {
+      "unit": "qwen38-projection-sweep-v6-export-recovery1-20261010.service",
+      "invocation": "fc6fca6ac9e147198d52782c998e4ddb",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1"
+    },
+    {
+      "unit": "qwen38-prefill-attention-v3-export-recovery1-20261010.service",
+      "invocation": "d1d81a7ed3604d8aadb27acc4d9ef785",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v3-export-recovery1"
+    },
+    {
+      "unit": "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+      "invocation": "1517236f9515446d80c90ac85b68949c",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v3-export-recovery1"
+    },
+    {
+      "unit": "qwen38-gdn-resident-hardware-v1-export-recovery1-20261010.service",
+      "invocation": "6c0f0f9d756f4e3a91760437f7d866ec",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v1-export-recovery1"
+    },
+    {
+      "unit": "qwen38-gdn-compact-gates-v1-export-recovery1-20261010.service",
+      "invocation": "0b2f9ba4d0c240198f1a9795378a0984",
+      "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v1-export-recovery1"
+    }
+  ],
+  "updated_at": "2026-10-10T21:38:58Z",
+  "parent": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "ControlGroup": "",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "InvocationID": "28c688b7780445999483523a9cbc75fc"
+  },
+  "recovery_needed": true,
+  "original_failure_preserved": true,
+  "report": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report",
+  "finished_at": 1791668338.4888732
+}

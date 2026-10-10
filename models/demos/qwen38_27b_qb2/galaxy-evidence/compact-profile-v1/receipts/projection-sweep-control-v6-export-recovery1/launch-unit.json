@@ -1,0 +1,9 @@
+{
+  "MainPID": "452537",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-projection-sweep-v6-export-recovery1-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "fc6fca6ac9e147198d52782c998e4ddb",
+  "updated_at": "2026-10-10T21:38:58Z"
+}

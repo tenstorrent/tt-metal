@@ -1,0 +1,370 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cleanup_completed": true,
+  "cases": [
+    {
+      "batch": 2,
+      "start_pos": 0,
+      "chunk_tokens": 128,
+      "total_context": 128,
+      "page_table_sha256": "8061ab89fbaf61ca8dc8b51b700b084061dfbdf43f7879c1904213919d5e5d8a",
+      "state": "completed",
+      "arms": [
+        {
+          "name": "before",
+          "wall_ms": [
+            0.6767231971025467,
+            0.6590262055397034,
+            0.6675887852907181,
+            0.6607593968510628,
+            0.6429017521440983
+          ],
+          "median_ms": 0.6607593968510628,
+          "output_sha256_per_rank": [
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa"
+          ],
+          "accuracy_per_rank": [
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            }
+          ],
+          "cache_sha256_per_rank": [
+            [
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869"
+            ],
+            [
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d"
+            ]
+          ]
+        },
+        {
+          "name": "batched",
+          "wall_ms": [
+            0.21822983399033546,
+            0.22226478904485703,
+            0.20788470283150673,
+            0.20865583792328835,
+            0.2149650827050209
+          ],
+          "median_ms": 0.2149650827050209,
+          "output_sha256_per_rank": [
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa"
+          ],
+          "accuracy_per_rank": [
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            }
+          ],
+          "cache_sha256_per_rank": [
+            [
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869"
+            ],
+            [
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d"
+            ]
+          ]
+        },
+        {
+          "name": "after",
+          "wall_ms": [
+            1.710906159132719,
+            1.741632353514433,
+            1.7058481462299824,
+            1.6708457842469215,
+            1.7420933581888676
+          ],
+          "median_ms": 1.710906159132719,
+          "output_sha256_per_rank": [
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa",
+            "b8c21d6858bb5109277674ea6bce535738b4ba7554abc8a31ba1bfb0284558fa"
+          ],
+          "accuracy_per_rank": [
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            },
+            {
+              "passed": true,
+              "pcc_per_user": [
+                0.999984860420227,
+                0.9999828934669495
+              ],
+              "relative_rms": 0.009627624414861202,
+              "relative_rms_per_user": [
+                0.009664534591138363,
+                0.00958971492946148
+              ],
+              "max_abs_error": 0.03125
+            }
+          ],
+          "cache_sha256_per_rank": [
+            [
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+              "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869"
+            ],
+            [
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d",
+              "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d"
+            ]
+          ]
+        }
+      ],
+      "live_query_heads": 6,
+      "kv_heads": 1,
+      "head_dim": 256,
+      "expected_cache_sha256": [
+        "f8c7ea27d64da96b90bba3ae5d95d8904a84e89d45c606fe16039b6332de9869",
+        "e9b7c0b9a5822c0dd95be07a417d61bcbf089ab0eeaeccdff278b60cacabd83d"
+      ],
+      "reference_query_rows": [
+        0,
+        64,
+        127
+      ],
+      "reference_output_sha256": "d4fa614529af6b1ceda092cc367d64d4a89de5c2224830f133ff75c5b2302e6d",
+      "active_arm": "after",
+      "outputs_bit_identical": true,
+      "control_drift_fraction": 1.5893028041466697,
+      "timing_qualified": false,
+      "speedup": null
+    },
+    {
+      "batch": 3,
+      "start_pos": 32,
+      "chunk_tokens": 65,
+      "total_context": 97,
+      "page_table_sha256": "eca7c4f18b13c7205bd5f4ce11a2e9fc1ac988e219befa273abb3c74996ce6c2",
+      "state": "measuring",
+      "arms": [],
+      "live_query_heads": 6,
+      "kv_heads": 1,
+      "head_dim": 256,
+      "expected_cache_sha256": [
+        "2e46b7769b3487c1d4b74d8b85e0d2936ac46119f57e1ff1e5fee3affcc898e6",
+        "497e062e142a51ac7be2d2e379c159f5f45dc7c8f855c9c358fdfc84e248cce6"
+      ],
+      "reference_query_rows": [
+        0,
+        32,
+        64
+      ],
+      "reference_output_sha256": "46b913aa89f8881a54144a3b21d4a37f48fc058d28a762b09f389a9b66bf2050",
+      "active_arm": "before"
+    }
+  ],
+  "scope": "One TP4 replica, prefill cache-fill and attention boundary; no projection, model or eval gain claimed",
+  "source_sha256": {
+    "tt/decoder.py": "e75329d642aacf588d5e4d56be50c2b8be0fc97ad65bdc11b8203bde73630894",
+    "tt/precision.py": "e0e0b83d544cc4798ea51aab73fdd8aa58cf83b3b7dee23aa82f8d09894b3bab",
+    "tt/dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "tt/generator.py": "74cde91a050d40f2d5a7e678c929b9854c0d9d7a7e9ef9dcb0e357619c0b557f",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/decoder_tp.py": "2733f5481b8d746274ab2d2603a1358b6c83c65eeb07c5bcad8333c7f3773b0b",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/prefill_attention.py": "66884d5326d1920ce3d4504e440aa5c2e2f4b3d0d886405daed21124060f75c2",
+    "tt/dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "tt/prefill_schedule.py": "a18a210057682998669c995e86b0ad8c471a20f5161670f2087f0f165af98a59",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf",
+    "tt/model.py": "989a6edf72c922be3eb76c5f07a45a8a51c959447fc8c59d00e9de1de2862e3f",
+    "tt/gdn_epilogue/reader.cpp": "d5469ca6ab322049eeacbabaa424cdada6e474d4f1255606c06877679d8fe0e9",
+    "tt/gdn_epilogue/writer.cpp": "cc3f7c63a0d1a68b80460ab53e6ddd63450c8909c41331d08a44724772a6cf85",
+    "tt/gdn_epilogue/op.py": "9204033e1f4273062b142cdf4227cf2ad19b6ce325c70dd2f138c9633c3d8468",
+    "tt/gdn_epilogue/compute.cpp": "5e380a87e72c8f28afbf44be441a8a2dd9289df4ae8c68137a5af4dc5c914568",
+    "tt/gdn_frontend/reader.cpp": "be6504a70741ce19d889428ca9aa1797b69f22eb57f1b4cbaa67cf47a73942c8",
+    "tt/gdn_frontend/writer.cpp": "6330d7833351d2452467559504ed28e22d008c0fa3c56e7f8687c50a043c3120",
+    "tt/gdn_frontend/op.py": "0ab52f0345bd133ec0b5ef536b63bd7444b14297cb45267fda8b913a8c2a5d75",
+    "tt/gdn_frontend/compute.cpp": "dd70841da8058264a5ef179516e4a79123a170797e75fa4a936559c6ad4b1259",
+    "tt/gdn_step/shared_qk.py": "a4e71be1421024d8cb59a7a83ab8c549fe1598a7b0e4f1f1ba610567fe9aa713",
+    "tt/gdn_step/model_adapter.py": "b872ca310ce15741a17a778710dac8251a786d0b1d864ed73dc2e5df0066b069",
+    "tt/gdn_step/reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/gdn_step/op.py": "834c3f6b4f3980a6bc335ab7078767211eb0e3bb1aa8b7ee4c45a6bece2472dc",
+    "tt/gdn_step/compute_math.hpp": "c3f00d246fa3f99eb216140776b735fecf053613fb40262f7fff557063f5e639",
+    "tt/gdn_step/flat_prepare_reader.cpp": "bbbcbb7fad128f39fa105e7a57f3ed68ada87a8de0484b4b146850acc18f7e40",
+    "tt/gdn_step/prepare_reader.cpp": "c9f30a86d923b85ec5c1d006e2bf3cd6b79e675267db0a1bb2e11ede384e52ca",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/prepare_compute.cpp": "0e9f16810ef84e0441e43431a425ebe461c41672b99769ff480f7d8549195c8e",
+    "tt/gdn_step/prepare_writer.cpp": "c76787b3bffea7861c043aad2233ddc21075fa577827efb4bd80ca44835c85a2",
+    "tt/gdn_step/flat_prepare.py": "0e8abc89cf6126a6efabc263a2214fb9a3389526041f3c8b55578b27f1276632",
+    "tt/gdn_step/compute.cpp": "bda53aae8011aa35e99a8888a638f8fc1581968199f6f374ea2848f388b176d0",
+    "tt/gdn_step/workspace.py": "7d0b35d0ede839d938bcea482619dc8d19997cf41bac9f60a0daa966c9845b17"
+  },
+  "precision": {
+    "query": "bfloat16",
+    "kv_cache": "bfloat8_b",
+    "native_sdpa_defaults": true
+  },
+  "timing": "Two eager warmups then five synchronized calls per arm; includes host dispatch, not trace replay",
+  "updated_at": "2026-10-10T21:48:02Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "error": {
+    "type": "AssertionError",
+    "message": "Prefill attention failed selected-row dense reference\nassert (4 == 4 and False)\n +  where 4 = len([{'passed': False, 'pcc_per_user': [0.9997953176498413, 0.9997686147689819, 0.999735951423645], 'relative_rms': 0.023426497355103493, 'relative_rms_per_user': [0.023722246289253235, 0.02252274937927723, 0.024003786966204643], 'max_abs_error': 0.03514067083597183}, {'passed': False, 'pcc_per_user': [0.9997953176498413, 0.9997686147689819, 0.999735951423645], 'relative_rms': 0.023426497355103493, 'relative_rms_per_user': [0.023722246289253235, 0.02252274937927723, 0.024003786966204643], 'max_abs_error': 0.03514067083597183}, {'passed': False, 'pcc_per_user': [0.9997953176498413, 0.9997686147689819, 0.999735951423645], 'relative_rms': 0.023426497355103493, 'relative_rms_per_user': [0.023722246289253235, 0.02252274937927723, 0.024003786966204643], 'max_abs_error': 0.03514067083597183}, {'passed': False, 'pcc_per_user': [0.9997953176498413, 0.9997686147689819, 0.999735951423645], 'relative_rms': 0.023426497355103493, 'relative_rms_per_user': [0.023722246289253235, 0.02252274937927723, 0.024003786966204643], 'max_abs_error': 0.03514067083597183}])\n +  and   False = all(<generator object run_case.<locals>.<genexpr> at 0x7cb15cd4c900>)"
+  }
+}

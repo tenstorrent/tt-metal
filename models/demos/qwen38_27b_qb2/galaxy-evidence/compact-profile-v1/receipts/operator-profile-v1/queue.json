@@ -1,0 +1,28 @@
+{
+  "state": "completed",
+  "physical_devices_accessed": false,
+  "cleanup_completed": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791667470.4543703,
+  "updated_at": "2026-10-10T21:39:14Z",
+  "capture": "/home/ttuser/qwen38-artifacts-20261007/export-recovery-v2/report",
+  "operation_types": 33,
+  "device_op_rows": [
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553,
+    2553
+  ],
+  "unprofiled_step_ms": 50.087304785847664,
+  "profiled_step_ms": 52.30569327250123,
+  "finished_at": 1791668354.469767
+}

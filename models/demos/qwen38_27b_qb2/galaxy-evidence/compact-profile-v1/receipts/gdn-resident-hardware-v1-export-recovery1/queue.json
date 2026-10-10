@@ -1,0 +1,23 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+  "predecessor_invocation": "1517236f9515446d80c90ac85b68949c",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668338.4629526,
+  "updated_at": "2026-10-10T21:40:58Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "InvocationID": "1517236f9515446d80c90ac85b68949c"
+  },
+  "error": "ValueError",
+  "detail": "Predecessor exited unsuccessfully",
+  "finished_at": 1791668458.6253562
+}

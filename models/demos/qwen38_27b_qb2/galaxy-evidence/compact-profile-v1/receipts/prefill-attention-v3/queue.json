@@ -1,0 +1,23 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-projection-sweep-v6-20261010.service",
+  "predecessor_invocation": "960d702be457402a92d32d88b4a4a591",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791658344.7990384,
+  "updated_at": "2026-10-10T21:38:17Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "InvocationID": "960d702be457402a92d32d88b4a4a591"
+  },
+  "error": "ValueError",
+  "detail": "Predecessor exited unsuccessfully",
+  "finished_at": 1791668297.521548
+}

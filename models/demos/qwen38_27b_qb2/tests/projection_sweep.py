@@ -32,11 +32,16 @@ def candidates(role):
     block = ROLES[role]["block"]
     # The pinned kernel supports at most three readers per DRAM bank. Larger
     # blocks gather adjacent activation shards before multicast (M is one tile).
-    values = [(2, 8, block), (1, 8, block), (3, 8, block), (2, 8, 1), (2, 8, block * 2)]
+    values = [(2, 8, block), (1, 8, block), (3, 8, block), (2, 8, 1)]
     if role == "output":
-        values += [(2, 8, 24), (3, 8, 12), (3, 8, 24), (2, 16, 3), (2, 24, 2)]
+        values += [(2, 8, 12), (2, 8, 24), (3, 8, 12), (3, 8, 24), (2, 16, 3), (2, 24, 2)]
     else:
-        values += [(3, 8, 34), (2, 17, 8), (2, 17, 4), (2, 34, 4), (3, 17, 8)]
+        # The B16 compact-L1 two-reader block-34 program needs static buffers
+        # through 1504000, overlapping a live L1 allocation at 1441024. Defer
+        # block-34 variants until their buffer budget is redesigned; the
+        # three-reader variant is untested, not an observed hardware failure.
+        # Keep the failed attempt and all its comparisons as separate evidence.
+        values += [(2, 17, 8), (2, 17, 4), (2, 34, 4), (3, 17, 8)]
     return [dict(readers=r, cores=c, block=b) for r, c, b in values]
 
 

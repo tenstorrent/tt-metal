@@ -2193,3 +2193,43 @@ No session connection is needed for that queue to continue.
 - Replaced hardcoded5001-row/38-type assumptions in a new dynamic analysis tool, leaving historical artifacts untouched. It revalidates complete model/sampler traces and paired source/input/output/precision, includes unknown operations, reports per-rank disjoint firmware family timelines with overlap/gaps, retains wait-inclusive RISC statistics, and derives BFP8 weight bytes from every observed padded DRAM matrix. It does not claim physical DRAM or active-compute utilization, program counts, or additive family medians. This tooling adds no direct model speedup; it enables selecting the remaining16.58ms target from actual compact costs.
 - Frozen CPU suite601 passed,1 skipped,91 subtests in4.12s. Running the new analysis on the previously recovered P0 capture exactly reproduces all operation median timings/counts and7,111,516,160 encoded weight bytes/chip. Whole-step overhead remains7.4637%. New CPU-only qwen38-operator-profile-v1-20261010 PID434474 invocation725ee5aec59b4e32a96822a627a58686 waits for a clean normal profile or verified recovery, with frozen-source hashes,16GiB/four-CPU/28h bounds. Validation invocationf48c4a12aa854a82b6acebb52bb11fb9 completed successfully. Host report path operator-profile-v1/report/INVENTORY.md; disconnect-persistent,not reboot-persistent.
 - Issues: initial profiler-column probe looked for KERNEL PATH while this exporter uses KERNEL SOURCE; no kernel-stage claim was inferred from the empty result. Formatting required isort. Initial collector assumed the old frozen source contained the separate GPQA audit helper and that followup-v3 owned its own source manifest; corrected to execute the checked-in audit in memory and resolve the exact manifest from launch arguments. A broad temporary-file search encountered an unrelated protected directory and was narrowed to named task helpers. SSH staging/collection needed prescribed escalation. Dataset/private answers, active frozen model source, native installation and NFS remained untouched. Receipts and source/audit evidence are in galaxy-evidence/compact-qualified-v1.
+
+## October 10, 21:38-21:47 UTC: compact profile and projection recovery
+
+- Completed compact hardware profile: three identical replays, unprofiled
+  50.0873 ms versus profiled 52.3057 ms (4.43% overhead), 2553 operation records
+  per rank/replay. The standard exporter exceeded 8 GiB; the prequeued CPU
+  recovery completed from retained artifacts. Inventory identifies matmul,
+  attention and custom GDN stages as the largest remaining kernel-time totals.
+  [Evidence and accounting caveats](../galaxy-evidence/compact-profile-v1/README.md).
+- Projection sweep produced nine valid B16 compact output-projection comparisons;
+  all were slower than the existing configuration. The subsequent two-reader,
+  eight-core down-projection block-34 candidate failed an L1 allocation check
+  (static buffers end 1504000; live allocation begins 1441024). Teardown completed.
+  It did not modify the qualified model or invalidate GPQA.
+- Deferred both block-34 down variants; the three-reader variant remains untested.
+  The revised 62-case plan passed frozen-source CPU preflight: 572 passed,
+  one skipped and 73 subtests passed. Relaunched projection v7 and four verified
+  unstarted followers in fresh persistent bounded units, preserving all failures.
+  [Recovery receipts and exact launch commands](../galaxy-evidence/projection-l1-recovery-v1/README.md).
+- No new TSU gain is claimed: qualified native B16/32K remains 20.035, and full
+  compact GPQA remains 177/198. Resident-state and compact-gate kernel candidates
+  still need physical results; estimated 0.5-1.5-ms savings each are not additive
+  guarantees. The output-projection null result reduces the prior projection
+  gain estimate's confidence.
+
+### 21:47-21:50 UTC update: completed sweep and independent GDN queue
+
+Projection v7 finished all 62 cases. All 25 B16 comparisons passed accuracy and
+matched-control checks but were slower; at B32, 13 passed but were slower and
+12 failed numerical checks. The forecast projection gain did not materialize.
+Prefill then failed its existing before-arm reference check for B3, prefix 32,
+chunk 65; no batched-candidate comparison exists for that case. Its first B2
+case was bit-identical but timing-unqualified due to 159% control drift.
+[Completed evidence](../galaxy-evidence/projection-l1-results-v1/README.md).
+
+The independent recurrence checks now follow the completed projection: compact
+long-horizon v6, resident GDN v3, compact gates v3. Old unstarted failures and all
+sources are preserved. A staging import error occurred before any hardware
+launch; corrected launch used a fresh directory.
+[Exact persistent queue](../galaxy-evidence/gdn-independent-queue-v1/README.md).

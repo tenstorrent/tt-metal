@@ -1,0 +1,96 @@
+{
+  "captured_at": "2026-10-10T21:40:58.950335+00:00",
+  "units": {
+    "qwen38-compact-followup-v3-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "28c688b7780445999483523a9cbc75fc"
+    },
+    "qwen38-compact-export-fallback-v2-20261010.service": {
+      "MainPID": "0",
+      "Result": "success",
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "InvocationID": ""
+    },
+    "qwen38-operator-profile-v1-20261010.service": {
+      "MainPID": "0",
+      "Result": "success",
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "InvocationID": ""
+    },
+    "qwen38-projection-sweep-v6-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "960d702be457402a92d32d88b4a4a591"
+    },
+    "qwen38-projection-sweep-v6-export-recovery1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "fc6fca6ac9e147198d52782c998e4ddb"
+    },
+    "qwen38-prefill-attention-v3-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "d7501d6753824d31846a13ecef289c32"
+    },
+    "qwen38-prefill-attention-v3-export-recovery1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "d1d81a7ed3604d8aadb27acc4d9ef785"
+    },
+    "qwen38-compact-long-horizon-v3-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "6f0ee1599ae144d6a6843b49bf22455b"
+    },
+    "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "1517236f9515446d80c90ac85b68949c"
+    },
+    "qwen38-gdn-resident-hardware-v1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "9a87b6620b6c4892b407a17f7c54f04e"
+    },
+    "qwen38-gdn-resident-hardware-v1-export-recovery1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "6c0f0f9d756f4e3a91760437f7d866ec"
+    },
+    "qwen38-gdn-compact-gates-v1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "37fb5d460eed4792841823a8ba71d855"
+    },
+    "qwen38-gdn-compact-gates-v1-export-recovery1-20261010.service": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "0b2f9ba4d0c240198f1a9795378a0984"
+    }
+  }
+}

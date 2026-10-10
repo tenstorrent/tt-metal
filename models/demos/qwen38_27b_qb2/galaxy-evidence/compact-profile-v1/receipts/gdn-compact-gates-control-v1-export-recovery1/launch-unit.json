@@ -1,0 +1,9 @@
+{
+  "MainPID": "452552",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-compact-gates-v1-export-recovery1-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "0b2f9ba4d0c240198f1a9795378a0984",
+  "updated_at": "2026-10-10T21:38:58Z"
+}

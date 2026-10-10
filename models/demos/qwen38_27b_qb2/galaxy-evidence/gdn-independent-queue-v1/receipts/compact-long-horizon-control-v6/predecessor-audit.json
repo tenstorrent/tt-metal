@@ -1,0 +1,34 @@
+{
+  "properties": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "ControlGroup": "",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "InvocationID": "4e1de31068f34e1c95bfef609775e511"
+  },
+  "queue": {
+    "state": "failed",
+    "cleanup_completed": false,
+    "hardware_started": false,
+    "survives_disconnect": true,
+    "resumes_after_reboot": false,
+    "promoted_to_serving": false,
+    "predecessor_unit": "qwen38-prefill-attention-v4-20261010.service",
+    "predecessor_invocation": "1fef76e1882c4ac1b2c9b2ff5e8dc2b1",
+    "hardware_lock": "/tmp/tt-device.lock",
+    "started_at": 1791668809.2708688,
+    "updated_at": "2026-10-10T21:48:09Z",
+    "predecessor": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "1fef76e1882c4ac1b2c9b2ff5e8dc2b1"
+    },
+    "error": "ValueError",
+    "detail": "Predecessor exited unsuccessfully",
+    "finished_at": 1791668889.3891537
+  },
+  "manifest_sha256": "42a56b73d1f752e5e49e5bfe9624d9dccae33ab5d3beba6c0f5c6d0424f69998"
+}

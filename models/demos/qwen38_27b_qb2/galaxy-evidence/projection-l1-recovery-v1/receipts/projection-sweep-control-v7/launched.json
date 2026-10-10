@@ -1,0 +1,62 @@
+[
+  {
+    "unit": "qwen38-projection-sweep-v7-20261010.service",
+    "properties": {
+      "MainPID": "462639",
+      "Result": "success",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-projection-sweep-v7-20261010.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "fe9095edf11a4a5f8035ce8ef9c9602a"
+    },
+    "output": "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v7"
+  },
+  {
+    "unit": "qwen38-prefill-attention-v4-20261010.service",
+    "properties": {
+      "MainPID": "462643",
+      "Result": "success",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-prefill-attention-v4-20261010.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "1fef76e1882c4ac1b2c9b2ff5e8dc2b1"
+    },
+    "output": "/home/ttuser/qwen38-artifacts-20261007/prefill-attention-v4"
+  },
+  {
+    "unit": "qwen38-compact-long-horizon-v4-20261010.service",
+    "properties": {
+      "MainPID": "462655",
+      "Result": "success",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-compact-long-horizon-v4-20261010.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "4e1de31068f34e1c95bfef609775e511"
+    },
+    "output": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v4"
+  },
+  {
+    "unit": "qwen38-gdn-resident-hardware-v2-20261010.service",
+    "properties": {
+      "MainPID": "462659",
+      "Result": "success",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-resident-hardware-v2-20261010.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "bc1621a45a50411c9b8be8ac3150a2fa"
+    },
+    "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v2"
+  },
+  {
+    "unit": "qwen38-gdn-compact-gates-v2-20261010.service",
+    "properties": {
+      "MainPID": "462671",
+      "Result": "success",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-compact-gates-v2-20261010.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "InvocationID": "69bd534cec5a4302a3e384afd926c429"
+    },
+    "output": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v2"
+  }
+]

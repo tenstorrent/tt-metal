@@ -1,0 +1,8 @@
+{
+  "MainPID": "462643",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-prefill-attention-v4-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "1fef76e1882c4ac1b2c9b2ff5e8dc2b1"
+}

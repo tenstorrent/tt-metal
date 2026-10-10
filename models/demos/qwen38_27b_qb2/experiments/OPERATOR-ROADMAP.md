@@ -37,12 +37,20 @@ and labeled measured Galaxy throughput. This continues the Metal path.
 - The full profile is the shared-QK baseline. Current candidate two-layer
   profiles locate opportunities remaining after preparation/epilogue fusion;
   multiplying them by layer count is an extrapolation, explicitly labeled.
+- The completed compact profile now covers 33 operation types / 2553 records
+  per rank/replay with matching outputs and 4.43% whole-step profiling overhead.
+  Its largest kernel sums are matmul 18.987 ms, attention 12.627 ms, custom GDN
+  stages 9.184 ms and all-reduce 2.647 ms; these are not additive wall time.
+  [Compact profile and interpretation](../galaxy-evidence/compact-profile-v1/README.md).
 - No physical DRAM-utilization, active-compute or NoC-congestion counter
-  conclusion follows from wait-inclusive RISC intervals. No new full decode
-  P0 run is needed to choose the compact intervention. A matched whole-model
-  compact profile is queued after its timing/accuracy gates to attribute the
-  remaining cost after the graph changes. A matched prefill stage
-  profile is still needed before assigning prefill compute-stage savings.
+  conclusion follows from wait-inclusive RISC intervals. Overlapping firmware
+  lifetimes also do not establish useful compute overlap. A matched prefill
+  stage profile is still needed before assigning prefill compute-stage savings.
+- Nine B16 compact output-projection candidates passed accuracy but all lost to
+  the baseline. An oversized down-projection block then hit an L1 allocation
+  clash. The failed attempt is preserved, and the remaining sweep/followers
+  were relaunched with block-34 variants deferred; no model change was promoted.
+  [Failure and recovery](../galaxy-evidence/projection-l1-recovery-v1/README.md).
 
 The [complete inventory and matmul table](../galaxy-evidence/operator-scope-v1/INVENTORY.md)
 are generated from the retained CSV and checked against every rank/replay's
@@ -301,3 +309,14 @@ unchanged sources. See the linked receipts for exact unit identities;
 historical launch files are not live status. The larger
 compact-pipeline work remains the primary native opportunity;
 projection tuning is a bounded supporting experiment, not a promised path to 30.
+
+## Latest completed knob sweep, 21:47 UTC
+
+The revised projection sweep finished 62 cases / 50 comparisons. All qualified
+comparisons were slower than baseline; no knob change is promoted. This does
+not rule out kernel redesign, but the prior 1.5-3.5-ms estimated gain has not
+been realized. The prefill batching test failed the existing before-arm dense
+reference on a ragged chunk with prefix and requires a separate investigation.
+The three GDN experiments are queued independently behind successful projection.
+[Results](../galaxy-evidence/projection-l1-results-v1/README.md) and
+[queue](../galaxy-evidence/gdn-independent-queue-v1/README.md).

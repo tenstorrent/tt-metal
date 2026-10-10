@@ -1,0 +1,190 @@
+[
+  {
+    "unit": "qwen38-projection-sweep-v6-export-recovery1-20261010.service",
+    "properties": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ControlGroup": "",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "fc6fca6ac9e147198d52782c998e4ddb"
+    },
+    "queue": {
+      "state": "failed",
+      "cleanup_completed": false,
+      "hardware_started": true,
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "promoted_to_serving": false,
+      "predecessor_unit": "qwen38-compact-export-fallback-v2-20261010.service",
+      "predecessor_invocation": "e37b2f244e924e2f9b03f58af90d47ba",
+      "hardware_lock": "/tmp/tt-device.lock",
+      "started_at": 1791668338.3758984,
+      "updated_at": "2026-10-10T21:40:42Z",
+      "predecessor": {
+        "MainPID": "0",
+        "Result": "success",
+        "LoadState": "not-found",
+        "ActiveState": "inactive",
+        "InvocationID": ""
+      },
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5400",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1/hardware.xml"
+      ],
+      "error": "CalledProcessError",
+      "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/scripts/run_safe_pytest.sh', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/models/demos/qwen38_27b_qb2/tests/test_projection_sweep.py', '--rootdir=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2', '-c', '/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v2/pytest.ini', '-vv', '-s', '--tb=short', '--timeout=5400', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v6-export-recovery1/hardware.xml']' returned non-zero exit status 1.",
+      "finished_at": 1791668442.5102248
+    },
+    "manifest_sha256": "89e197d429c5718817c32b75e475fedce9017482a449f336ac107065531c111b"
+  },
+  {
+    "unit": "qwen38-prefill-attention-v3-export-recovery1-20261010.service",
+    "properties": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ControlGroup": "",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "d1d81a7ed3604d8aadb27acc4d9ef785"
+    },
+    "queue": {
+      "state": "failed",
+      "cleanup_completed": false,
+      "hardware_started": false,
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "promoted_to_serving": false,
+      "predecessor_unit": "qwen38-projection-sweep-v6-export-recovery1-20261010.service",
+      "predecessor_invocation": "fc6fca6ac9e147198d52782c998e4ddb",
+      "hardware_lock": "/tmp/tt-device.lock",
+      "started_at": 1791668338.406657,
+      "updated_at": "2026-10-10T21:40:58Z",
+      "predecessor": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "fc6fca6ac9e147198d52782c998e4ddb"
+      },
+      "error": "ValueError",
+      "detail": "Predecessor exited unsuccessfully",
+      "finished_at": 1791668458.5678117
+    },
+    "manifest_sha256": "fe137d035be02981ae31327d81771e256678f744fbdf127e526c92d7fe92712e"
+  },
+  {
+    "unit": "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+    "properties": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ControlGroup": "",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "1517236f9515446d80c90ac85b68949c"
+    },
+    "queue": {
+      "state": "failed",
+      "cleanup_completed": false,
+      "hardware_started": false,
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "promoted_to_serving": false,
+      "predecessor_unit": "qwen38-prefill-attention-v3-export-recovery1-20261010.service",
+      "predecessor_invocation": "d1d81a7ed3604d8aadb27acc4d9ef785",
+      "hardware_lock": "/tmp/tt-device.lock",
+      "started_at": 1791668338.4301941,
+      "updated_at": "2026-10-10T21:40:58Z",
+      "predecessor": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "d1d81a7ed3604d8aadb27acc4d9ef785"
+      },
+      "error": "ValueError",
+      "detail": "Predecessor exited unsuccessfully",
+      "finished_at": 1791668458.5962613
+    },
+    "manifest_sha256": "42a56b73d1f752e5e49e5bfe9624d9dccae33ab5d3beba6c0f5c6d0424f69998"
+  },
+  {
+    "unit": "qwen38-gdn-resident-hardware-v1-export-recovery1-20261010.service",
+    "properties": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ControlGroup": "",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "6c0f0f9d756f4e3a91760437f7d866ec"
+    },
+    "queue": {
+      "state": "failed",
+      "cleanup_completed": false,
+      "hardware_started": false,
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "promoted_to_serving": false,
+      "predecessor_unit": "qwen38-compact-long-horizon-v3-export-recovery1-20261010.service",
+      "predecessor_invocation": "1517236f9515446d80c90ac85b68949c",
+      "hardware_lock": "/tmp/tt-device.lock",
+      "started_at": 1791668338.4629526,
+      "updated_at": "2026-10-10T21:40:58Z",
+      "predecessor": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "1517236f9515446d80c90ac85b68949c"
+      },
+      "error": "ValueError",
+      "detail": "Predecessor exited unsuccessfully",
+      "finished_at": 1791668458.6253562
+    },
+    "manifest_sha256": "5966a8e77186270e631556229a8eae5473e01e6dcc74ab7c1a1170fbfaf3a3f0"
+  },
+  {
+    "unit": "qwen38-gdn-compact-gates-v1-export-recovery1-20261010.service",
+    "properties": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ControlGroup": "",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "0b2f9ba4d0c240198f1a9795378a0984"
+    },
+    "queue": {
+      "state": "failed",
+      "cleanup_completed": false,
+      "hardware_started": false,
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "promoted_to_serving": false,
+      "predecessor_unit": "qwen38-gdn-resident-hardware-v1-export-recovery1-20261010.service",
+      "predecessor_invocation": "6c0f0f9d756f4e3a91760437f7d866ec",
+      "hardware_lock": "/tmp/tt-device.lock",
+      "started_at": 1791668338.4997158,
+      "updated_at": "2026-10-10T21:40:58Z",
+      "predecessor": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "6c0f0f9d756f4e3a91760437f7d866ec"
+      },
+      "error": "ValueError",
+      "detail": "Predecessor exited unsuccessfully",
+      "finished_at": 1791668458.660908
+    },
+    "manifest_sha256": "94cebbb2d36cdb8c6ab697aee08b9f1badcc8937270f842182030c25a65448f1"
+  }
+]

@@ -1,0 +1,3762 @@
+{
+  "state": "completed",
+  "measurements_complete": true,
+  "scope": "Full 64-layer model plus split device sampler, real weights and synthetic populated caches; three restored-state trace replays, not natural-prompt accuracy or unprofiled serving throughput",
+  "ranks": [
+    {
+      "device": 0,
+      "replay": 0,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51979742.96296296,
+      "disjoint_stage_ns": {
+        "model_other": 1048052.5925925925,
+        "uncovered_gap": 199496.2962962963,
+        "overlap": 1565.9259259259259,
+        "L0": 640405.1851851852,
+        "L1": 629356.2962962963,
+        "L2": 629771.1111111111,
+        "L3": 1329422.962962963,
+        "L4": 626365.9259259258,
+        "L5": 615495.5555555555,
+        "L6": 614303.7037037037,
+        "L7": 1319175.5555555555,
+        "L8": 614630.3703703703,
+        "L9": 620928.1481481481,
+        "L10": 621260.0,
+        "L11": 1321309.6296296294,
+        "L12": 614378.5185185184,
+        "L13": 615935.5555555555,
+        "L14": 615481.4814814815,
+        "L15": 1317311.8518518517,
+        "L16": 615631.8518518518,
+        "L17": 614947.4074074074,
+        "L18": 610715.5555555555,
+        "L19": 1310760.7407407407,
+        "L20": 615960.0,
+        "L21": 610541.4814814815,
+        "L22": 612972.5925925926,
+        "L23": 1304152.5925925926,
+        "L24": 611268.1481481481,
+        "L25": 604576.2962962963,
+        "L26": 608652.5925925926,
+        "L27": 1301501.4814814813,
+        "L28": 605422.9629629629,
+        "L29": 605662.9629629629,
+        "L30": 609834.8148148148,
+        "L31": 1304188.8888888888,
+        "L32": 605038.5185185184,
+        "L33": 608016.2962962963,
+        "L34": 610855.5555555555,
+        "L35": 1297026.6666666665,
+        "L36": 601356.2962962963,
+        "L37": 607888.1481481481,
+        "L38": 608505.1851851852,
+        "L39": 1298464.4444444443,
+        "L40": 605304.4444444444,
+        "L41": 608574.074074074,
+        "L42": 611262.9629629629,
+        "L43": 1301578.5185185184,
+        "L44": 606143.7037037037,
+        "L45": 605003.7037037037,
+        "L46": 605656.2962962963,
+        "L47": 1302308.148148148,
+        "L48": 612528.1481481481,
+        "L49": 610899.2592592592,
+        "L50": 607465.1851851852,
+        "L51": 1303168.8888888888,
+        "L52": 602648.1481481481,
+        "L53": 606843.7037037037,
+        "L54": 609377.037037037,
+        "L55": 1294112.5925925926,
+        "L56": 604062.2222222221,
+        "L57": 603131.1111111111,
+        "L58": 606660.0,
+        "L59": 1299593.3333333333,
+        "L60": 601372.5925925926,
+        "L61": 604843.7037037037,
+        "L62": 608921.4814814815,
+        "L63": 1297227.4074074074,
+        "sampler": 482468.1481481481
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 949088.0,
+          "reader_wait_inclusive_ns": 946229.0,
+          "writer_wait_inclusive_ns": 816316.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6708.0,
+          "reader_wait_inclusive_ns": 6690.0,
+          "writer_wait_inclusive_ns": 5737.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15363.0,
+          "reader_wait_inclusive_ns": 15124.0,
+          "writer_wait_inclusive_ns": 13847.0,
+          "compute_wait_inclusive_ns": 460.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 26885.0,
+          "reader_wait_inclusive_ns": 20012.0,
+          "writer_wait_inclusive_ns": 26878.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 957264.0,
+          "reader_wait_inclusive_ns": 953875.0,
+          "writer_wait_inclusive_ns": 899025.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 198588.0,
+          "reader_wait_inclusive_ns": 194581.0,
+          "writer_wait_inclusive_ns": 194654.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1089944.0,
+          "reader_wait_inclusive_ns": 954518.0,
+          "writer_wait_inclusive_ns": 516408.0,
+          "compute_wait_inclusive_ns": 984999.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 556296.0,
+          "reader_wait_inclusive_ns": 201570.0,
+          "writer_wait_inclusive_ns": 515103.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18986250.0,
+          "reader_wait_inclusive_ns": 18982088.0,
+          "writer_wait_inclusive_ns": 16851148.0,
+          "compute_wait_inclusive_ns": 18734229.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223009.0,
+          "reader_wait_inclusive_ns": 222706.0,
+          "writer_wait_inclusive_ns": 82514.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 370468.0,
+          "reader_wait_inclusive_ns": 370160.0,
+          "writer_wait_inclusive_ns": 233304.0,
+          "compute_wait_inclusive_ns": 323776.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 90320.0,
+          "reader_wait_inclusive_ns": 87743.0,
+          "writer_wait_inclusive_ns": 64650.0,
+          "compute_wait_inclusive_ns": 49851.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1264479.0,
+          "reader_wait_inclusive_ns": 1224537.0,
+          "writer_wait_inclusive_ns": 745889.0,
+          "compute_wait_inclusive_ns": 1133159.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9183448.0,
+          "reader_wait_inclusive_ns": 9180567.0,
+          "writer_wait_inclusive_ns": 7007215.0,
+          "compute_wait_inclusive_ns": 8864426.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2621906.0,
+          "reader_wait_inclusive_ns": 1321291.0,
+          "writer_wait_inclusive_ns": 2565709.0,
+          "compute_wait_inclusive_ns": 144704.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73498.0,
+          "reader_wait_inclusive_ns": 73488.0,
+          "writer_wait_inclusive_ns": 72738.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 213898.0,
+          "reader_wait_inclusive_ns": 211639.0,
+          "writer_wait_inclusive_ns": 160920.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 137497.0,
+          "reader_wait_inclusive_ns": 132342.0,
+          "writer_wait_inclusive_ns": 116010.0,
+          "compute_wait_inclusive_ns": 123086.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 233050.0,
+          "reader_wait_inclusive_ns": 232989.0,
+          "writer_wait_inclusive_ns": 224152.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70374.0,
+          "reader_wait_inclusive_ns": 70329.0,
+          "writer_wait_inclusive_ns": 45384.0,
+          "compute_wait_inclusive_ns": 52201.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108447.0,
+          "reader_wait_inclusive_ns": 108335.0,
+          "writer_wait_inclusive_ns": 58214.0,
+          "compute_wait_inclusive_ns": 102280.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12619562.0,
+          "reader_wait_inclusive_ns": 12613689.0,
+          "writer_wait_inclusive_ns": 12242860.0,
+          "compute_wait_inclusive_ns": 12605680.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3050.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3050.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24293.0,
+          "reader_wait_inclusive_ns": 24284.0,
+          "writer_wait_inclusive_ns": 21904.0,
+          "compute_wait_inclusive_ns": 22627.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 272422.0,
+          "reader_wait_inclusive_ns": 272417.0,
+          "writer_wait_inclusive_ns": 265555.0,
+          "compute_wait_inclusive_ns": 271993.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20576.0,
+          "reader_wait_inclusive_ns": 20575.0,
+          "writer_wait_inclusive_ns": 20216.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 26524.0,
+          "reader_wait_inclusive_ns": 18723.0,
+          "writer_wait_inclusive_ns": 26524.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4286.0,
+          "reader_wait_inclusive_ns": 4181.0,
+          "writer_wait_inclusive_ns": 1727.0,
+          "compute_wait_inclusive_ns": 2110.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4182.0,
+          "reader_wait_inclusive_ns": 3901.0,
+          "writer_wait_inclusive_ns": 1711.0,
+          "compute_wait_inclusive_ns": 3402.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18601.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17216.0,
+          "compute_wait_inclusive_ns": 18601.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21479.0,
+          "reader_wait_inclusive_ns": 21479.0,
+          "writer_wait_inclusive_ns": 15787.0,
+          "compute_wait_inclusive_ns": 20288.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2893.0,
+          "reader_wait_inclusive_ns": 2891.0,
+          "writer_wait_inclusive_ns": 2641.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6222.0,
+          "reader_wait_inclusive_ns": 6222.0,
+          "writer_wait_inclusive_ns": 5924.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 0,
+      "replay": 1,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51998713.33333333,
+      "disjoint_stage_ns": {
+        "model_other": 1052435.5555555555,
+        "uncovered_gap": 190400.74074074073,
+        "overlap": 1684.4444444444443,
+        "L0": 642452.5925925926,
+        "L1": 631492.5925925926,
+        "L2": 629745.1851851852,
+        "L3": 1334368.148148148,
+        "L4": 623541.4814814815,
+        "L5": 613951.8518518518,
+        "L6": 610408.1481481481,
+        "L7": 1321289.6296296294,
+        "L8": 615800.7407407407,
+        "L9": 620420.7407407407,
+        "L10": 621221.4814814815,
+        "L11": 1320937.7777777778,
+        "L12": 611178.5185185184,
+        "L13": 614728.1481481481,
+        "L14": 614240.7407407407,
+        "L15": 1320022.2222222222,
+        "L16": 618844.4444444444,
+        "L17": 613202.2222222221,
+        "L18": 611619.2592592592,
+        "L19": 1311306.6666666665,
+        "L20": 615058.5185185184,
+        "L21": 610311.1111111111,
+        "L22": 612074.074074074,
+        "L23": 1305908.8888888888,
+        "L24": 609167.4074074074,
+        "L25": 602524.4444444444,
+        "L26": 610000.0,
+        "L27": 1298874.074074074,
+        "L28": 603833.3333333333,
+        "L29": 606145.1851851852,
+        "L30": 612006.6666666666,
+        "L31": 1303328.8888888888,
+        "L32": 605862.9629629629,
+        "L33": 613281.4814814815,
+        "L34": 612731.8518518518,
+        "L35": 1298733.3333333333,
+        "L36": 604934.8148148148,
+        "L37": 604555.5555555555,
+        "L38": 609120.7407407407,
+        "L39": 1302912.5925925926,
+        "L40": 609962.2222222221,
+        "L41": 608440.7407407407,
+        "L42": 611012.5925925926,
+        "L43": 1301794.074074074,
+        "L44": 608532.5925925926,
+        "L45": 607270.3703703703,
+        "L46": 606072.5925925926,
+        "L47": 1300785.1851851852,
+        "L48": 613300.7407407407,
+        "L49": 610431.1111111111,
+        "L50": 608473.3333333333,
+        "L51": 1302834.8148148148,
+        "L52": 605357.7777777778,
+        "L53": 611478.5185185184,
+        "L54": 608831.1111111111,
+        "L55": 1294004.4444444443,
+        "L56": 604854.074074074,
+        "L57": 604420.7407407407,
+        "L58": 605046.6666666666,
+        "L59": 1304248.148148148,
+        "L60": 602345.9259259258,
+        "L61": 605450.3703703703,
+        "L62": 608399.2592592592,
+        "L63": 1294407.4074074074,
+        "sampler": 474299.2592592592
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 945995.0,
+          "reader_wait_inclusive_ns": 943186.0,
+          "writer_wait_inclusive_ns": 812659.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6940.0,
+          "reader_wait_inclusive_ns": 6939.0,
+          "writer_wait_inclusive_ns": 5910.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15456.0,
+          "reader_wait_inclusive_ns": 15184.0,
+          "writer_wait_inclusive_ns": 13869.0,
+          "compute_wait_inclusive_ns": 481.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 26473.0,
+          "reader_wait_inclusive_ns": 19864.0,
+          "writer_wait_inclusive_ns": 26466.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 964024.0,
+          "reader_wait_inclusive_ns": 960874.0,
+          "writer_wait_inclusive_ns": 905817.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 203104.0,
+          "reader_wait_inclusive_ns": 199041.0,
+          "writer_wait_inclusive_ns": 199065.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1095159.0,
+          "reader_wait_inclusive_ns": 959312.0,
+          "writer_wait_inclusive_ns": 517739.0,
+          "compute_wait_inclusive_ns": 989967.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 557713.0,
+          "reader_wait_inclusive_ns": 197880.0,
+          "writer_wait_inclusive_ns": 516379.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18987860.0,
+          "reader_wait_inclusive_ns": 18983685.0,
+          "writer_wait_inclusive_ns": 16840302.0,
+          "compute_wait_inclusive_ns": 18734674.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 224170.0,
+          "reader_wait_inclusive_ns": 223942.0,
+          "writer_wait_inclusive_ns": 83207.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 367940.0,
+          "reader_wait_inclusive_ns": 367647.0,
+          "writer_wait_inclusive_ns": 226372.0,
+          "compute_wait_inclusive_ns": 316953.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 89650.0,
+          "reader_wait_inclusive_ns": 87237.0,
+          "writer_wait_inclusive_ns": 64669.0,
+          "compute_wait_inclusive_ns": 49415.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1260449.0,
+          "reader_wait_inclusive_ns": 1220222.0,
+          "writer_wait_inclusive_ns": 742932.0,
+          "compute_wait_inclusive_ns": 1129104.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9184385.0,
+          "reader_wait_inclusive_ns": 9181630.0,
+          "writer_wait_inclusive_ns": 7002334.0,
+          "compute_wait_inclusive_ns": 8865389.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2646535.0,
+          "reader_wait_inclusive_ns": 1325045.0,
+          "writer_wait_inclusive_ns": 2590308.0,
+          "compute_wait_inclusive_ns": 144549.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73542.0,
+          "reader_wait_inclusive_ns": 73528.0,
+          "writer_wait_inclusive_ns": 72827.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 208720.0,
+          "reader_wait_inclusive_ns": 206364.0,
+          "writer_wait_inclusive_ns": 154908.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 136144.0,
+          "reader_wait_inclusive_ns": 130917.0,
+          "writer_wait_inclusive_ns": 114604.0,
+          "compute_wait_inclusive_ns": 121734.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 237597.0,
+          "reader_wait_inclusive_ns": 237537.0,
+          "writer_wait_inclusive_ns": 227241.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70250.0,
+          "reader_wait_inclusive_ns": 70200.0,
+          "writer_wait_inclusive_ns": 45310.0,
+          "compute_wait_inclusive_ns": 52110.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 109362.0,
+          "reader_wait_inclusive_ns": 109278.0,
+          "writer_wait_inclusive_ns": 57105.0,
+          "compute_wait_inclusive_ns": 103117.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12626113.0,
+          "reader_wait_inclusive_ns": 12620381.0,
+          "writer_wait_inclusive_ns": 12247375.0,
+          "compute_wait_inclusive_ns": 12612227.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3055.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3055.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24402.0,
+          "reader_wait_inclusive_ns": 24399.0,
+          "writer_wait_inclusive_ns": 22020.0,
+          "compute_wait_inclusive_ns": 22744.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 271596.0,
+          "reader_wait_inclusive_ns": 271593.0,
+          "writer_wait_inclusive_ns": 264721.0,
+          "compute_wait_inclusive_ns": 271169.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20298.0,
+          "reader_wait_inclusive_ns": 20293.0,
+          "writer_wait_inclusive_ns": 19838.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 18224.0,
+          "reader_wait_inclusive_ns": 10270.0,
+          "writer_wait_inclusive_ns": 18222.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4285.0,
+          "reader_wait_inclusive_ns": 4181.0,
+          "writer_wait_inclusive_ns": 1730.0,
+          "compute_wait_inclusive_ns": 2104.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4143.0,
+          "reader_wait_inclusive_ns": 3874.0,
+          "writer_wait_inclusive_ns": 1719.0,
+          "compute_wait_inclusive_ns": 3373.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18623.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17256.0,
+          "compute_wait_inclusive_ns": 18623.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21470.0,
+          "reader_wait_inclusive_ns": 21469.0,
+          "writer_wait_inclusive_ns": 15791.0,
+          "compute_wait_inclusive_ns": 20303.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2859.0,
+          "reader_wait_inclusive_ns": 2859.0,
+          "writer_wait_inclusive_ns": 2618.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6333.0,
+          "reader_wait_inclusive_ns": 6330.0,
+          "writer_wait_inclusive_ns": 6035.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 0,
+      "replay": 2,
+      "cycles_per_ns": 1.35,
+      "span_ns": 52005855.55555555,
+      "disjoint_stage_ns": {
+        "model_other": 1055334.8148148148,
+        "uncovered_gap": 199664.44444444444,
+        "overlap": 1637.7777777777776,
+        "L0": 641782.9629629629,
+        "L1": 630004.4444444444,
+        "L2": 629302.2222222221,
+        "L3": 1333979.259259259,
+        "L4": 623915.5555555555,
+        "L5": 615768.8888888889,
+        "L6": 613206.6666666666,
+        "L7": 1321728.148148148,
+        "L8": 617719.2592592592,
+        "L9": 624593.3333333333,
+        "L10": 621190.3703703703,
+        "L11": 1323120.0,
+        "L12": 615829.6296296295,
+        "L13": 615248.8888888889,
+        "L14": 614849.6296296295,
+        "L15": 1325926.6666666665,
+        "L16": 620794.8148148148,
+        "L17": 614213.3333333333,
+        "L18": 612111.8518518518,
+        "L19": 1314122.2222222222,
+        "L20": 610916.2962962963,
+        "L21": 607491.1111111111,
+        "L22": 611961.4814814815,
+        "L23": 1298265.1851851852,
+        "L24": 610254.074074074,
+        "L25": 607127.4074074074,
+        "L26": 608957.7777777778,
+        "L27": 1299016.2962962962,
+        "L28": 605400.7407407407,
+        "L29": 605891.8518518518,
+        "L30": 611614.8148148148,
+        "L31": 1302057.7777777778,
+        "L32": 606025.1851851852,
+        "L33": 611447.4074074074,
+        "L34": 613451.1111111111,
+        "L35": 1297611.111111111,
+        "L36": 600939.2592592592,
+        "L37": 608125.9259259258,
+        "L38": 610365.9259259258,
+        "L39": 1304571.8518518517,
+        "L40": 611868.8888888889,
+        "L41": 606562.2222222221,
+        "L42": 609045.9259259258,
+        "L43": 1306780.7407407407,
+        "L44": 605685.1851851852,
+        "L45": 602814.8148148148,
+        "L46": 605324.4444444444,
+        "L47": 1300062.962962963,
+        "L48": 610037.7777777778,
+        "L49": 608123.7037037037,
+        "L50": 607437.7777777778,
+        "L51": 1307642.962962963,
+        "L52": 601456.2962962963,
+        "L53": 607688.1481481481,
+        "L54": 610237.037037037,
+        "L55": 1290299.259259259,
+        "L56": 601594.8148148148,
+        "L57": 601874.074074074,
+        "L58": 605663.7037037037,
+        "L59": 1301287.4074074074,
+        "L60": 604217.037037037,
+        "L61": 607058.5185185184,
+        "L62": 606577.7777777778,
+        "L63": 1291480.7407407407,
+        "sampler": 477495.5555555555
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 942492.0,
+          "reader_wait_inclusive_ns": 939646.0,
+          "writer_wait_inclusive_ns": 807835.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6779.0,
+          "reader_wait_inclusive_ns": 6779.0,
+          "writer_wait_inclusive_ns": 5808.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15491.0,
+          "reader_wait_inclusive_ns": 15233.0,
+          "writer_wait_inclusive_ns": 13900.0,
+          "compute_wait_inclusive_ns": 475.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 26857.0,
+          "reader_wait_inclusive_ns": 18205.0,
+          "writer_wait_inclusive_ns": 26849.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 959356.0,
+          "reader_wait_inclusive_ns": 956066.0,
+          "writer_wait_inclusive_ns": 901150.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 200878.0,
+          "reader_wait_inclusive_ns": 196918.0,
+          "writer_wait_inclusive_ns": 196821.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1092294.0,
+          "reader_wait_inclusive_ns": 954405.0,
+          "writer_wait_inclusive_ns": 513796.0,
+          "compute_wait_inclusive_ns": 987680.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 563253.0,
+          "reader_wait_inclusive_ns": 202222.0,
+          "writer_wait_inclusive_ns": 521861.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18978450.0,
+          "reader_wait_inclusive_ns": 18974307.0,
+          "writer_wait_inclusive_ns": 16844200.0,
+          "compute_wait_inclusive_ns": 18725261.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223643.0,
+          "reader_wait_inclusive_ns": 223358.0,
+          "writer_wait_inclusive_ns": 83317.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 370037.0,
+          "reader_wait_inclusive_ns": 369684.0,
+          "writer_wait_inclusive_ns": 232905.0,
+          "compute_wait_inclusive_ns": 323430.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 90147.0,
+          "reader_wait_inclusive_ns": 87618.0,
+          "writer_wait_inclusive_ns": 64036.0,
+          "compute_wait_inclusive_ns": 50249.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1258734.0,
+          "reader_wait_inclusive_ns": 1218576.0,
+          "writer_wait_inclusive_ns": 741149.0,
+          "compute_wait_inclusive_ns": 1128404.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9184544.0,
+          "reader_wait_inclusive_ns": 9181653.0,
+          "writer_wait_inclusive_ns": 7005039.0,
+          "compute_wait_inclusive_ns": 8867072.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2648767.0,
+          "reader_wait_inclusive_ns": 1320796.0,
+          "writer_wait_inclusive_ns": 2592443.0,
+          "compute_wait_inclusive_ns": 145235.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73607.0,
+          "reader_wait_inclusive_ns": 73592.0,
+          "writer_wait_inclusive_ns": 72868.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 201675.0,
+          "reader_wait_inclusive_ns": 199386.0,
+          "writer_wait_inclusive_ns": 147259.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 137674.0,
+          "reader_wait_inclusive_ns": 132354.0,
+          "writer_wait_inclusive_ns": 116257.0,
+          "compute_wait_inclusive_ns": 123263.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 240810.0,
+          "reader_wait_inclusive_ns": 240774.0,
+          "writer_wait_inclusive_ns": 231344.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 71048.0,
+          "reader_wait_inclusive_ns": 71010.0,
+          "writer_wait_inclusive_ns": 46088.0,
+          "compute_wait_inclusive_ns": 52907.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108304.0,
+          "reader_wait_inclusive_ns": 108245.0,
+          "writer_wait_inclusive_ns": 56140.0,
+          "compute_wait_inclusive_ns": 102000.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12630865.0,
+          "reader_wait_inclusive_ns": 12625164.0,
+          "writer_wait_inclusive_ns": 12252069.0,
+          "compute_wait_inclusive_ns": 12617033.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3075.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3075.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24467.0,
+          "reader_wait_inclusive_ns": 24467.0,
+          "writer_wait_inclusive_ns": 22070.0,
+          "compute_wait_inclusive_ns": 22800.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 270723.0,
+          "reader_wait_inclusive_ns": 270723.0,
+          "writer_wait_inclusive_ns": 263884.0,
+          "compute_wait_inclusive_ns": 270307.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21271.0,
+          "reader_wait_inclusive_ns": 21264.0,
+          "writer_wait_inclusive_ns": 20775.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 23332.0,
+          "reader_wait_inclusive_ns": 15605.0,
+          "writer_wait_inclusive_ns": 23329.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4289.0,
+          "reader_wait_inclusive_ns": 4187.0,
+          "writer_wait_inclusive_ns": 1735.0,
+          "compute_wait_inclusive_ns": 2110.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4227.0,
+          "reader_wait_inclusive_ns": 3930.0,
+          "writer_wait_inclusive_ns": 1753.0,
+          "compute_wait_inclusive_ns": 3460.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18624.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17211.0,
+          "compute_wait_inclusive_ns": 18622.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21461.0,
+          "reader_wait_inclusive_ns": 21459.0,
+          "writer_wait_inclusive_ns": 15801.0,
+          "compute_wait_inclusive_ns": 20298.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2827.0,
+          "reader_wait_inclusive_ns": 2824.0,
+          "writer_wait_inclusive_ns": 2582.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6240.0,
+          "reader_wait_inclusive_ns": 6240.0,
+          "writer_wait_inclusive_ns": 5944.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 4,
+      "replay": 0,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51991814.07407407,
+      "disjoint_stage_ns": {
+        "model_other": 1056520.7407407407,
+        "uncovered_gap": 200673.3333333333,
+        "overlap": 1797.7777777777776,
+        "L0": 636671.8518518518,
+        "L1": 627734.8148148147,
+        "L2": 632073.3333333333,
+        "L3": 1333108.8888888888,
+        "L4": 630122.9629629629,
+        "L5": 615774.8148148148,
+        "L6": 613642.9629629629,
+        "L7": 1322724.4444444443,
+        "L8": 620232.5925925926,
+        "L9": 622438.5185185184,
+        "L10": 621414.074074074,
+        "L11": 1323049.6296296294,
+        "L12": 611110.3703703703,
+        "L13": 611502.2222222221,
+        "L14": 612639.2592592592,
+        "L15": 1317179.259259259,
+        "L16": 611951.1111111111,
+        "L17": 613145.1851851852,
+        "L18": 610633.3333333333,
+        "L19": 1305631.8518518517,
+        "L20": 610292.5925925926,
+        "L21": 610438.5185185184,
+        "L22": 611108.8888888889,
+        "L23": 1298527.4074074074,
+        "L24": 611674.074074074,
+        "L25": 607060.0,
+        "L26": 608615.5555555555,
+        "L27": 1301997.7777777778,
+        "L28": 608485.9259259258,
+        "L29": 607154.074074074,
+        "L30": 609502.2222222221,
+        "L31": 1307591.111111111,
+        "L32": 610630.3703703703,
+        "L33": 612300.7407407407,
+        "L34": 610633.3333333333,
+        "L35": 1296850.3703703703,
+        "L36": 604351.1111111111,
+        "L37": 606131.1111111111,
+        "L38": 608577.7777777778,
+        "L39": 1300919.259259259,
+        "L40": 605628.8888888889,
+        "L41": 605902.9629629629,
+        "L42": 611407.4074074074,
+        "L43": 1298985.1851851852,
+        "L44": 602577.037037037,
+        "L45": 606005.9259259258,
+        "L46": 606214.8148148148,
+        "L47": 1298491.8518518517,
+        "L48": 609402.9629629629,
+        "L49": 610828.8888888889,
+        "L50": 607168.8888888889,
+        "L51": 1301282.962962963,
+        "L52": 605579.2592592592,
+        "L53": 610979.2592592592,
+        "L54": 609392.5925925926,
+        "L55": 1295557.7777777778,
+        "L56": 607942.2222222221,
+        "L57": 602953.3333333333,
+        "L58": 606797.7777777778,
+        "L59": 1302037.0370370368,
+        "L60": 606957.037037037,
+        "L61": 607260.7407407407,
+        "L62": 609087.4074074074,
+        "L63": 1296422.2222222222,
+        "sampler": 472334.07407407404
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 944756.0,
+          "reader_wait_inclusive_ns": 941736.0,
+          "writer_wait_inclusive_ns": 812303.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6980.0,
+          "reader_wait_inclusive_ns": 6980.0,
+          "writer_wait_inclusive_ns": 5963.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15595.0,
+          "reader_wait_inclusive_ns": 15355.0,
+          "writer_wait_inclusive_ns": 14090.0,
+          "compute_wait_inclusive_ns": 477.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20248.0,
+          "reader_wait_inclusive_ns": 20248.0,
+          "writer_wait_inclusive_ns": 16499.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 958379.0,
+          "reader_wait_inclusive_ns": 954817.0,
+          "writer_wait_inclusive_ns": 899796.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 199739.0,
+          "reader_wait_inclusive_ns": 195875.0,
+          "writer_wait_inclusive_ns": 195744.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1089658.0,
+          "reader_wait_inclusive_ns": 953114.0,
+          "writer_wait_inclusive_ns": 516879.0,
+          "compute_wait_inclusive_ns": 983370.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 560114.0,
+          "reader_wait_inclusive_ns": 198389.0,
+          "writer_wait_inclusive_ns": 518364.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 19003305.0,
+          "reader_wait_inclusive_ns": 18999242.0,
+          "writer_wait_inclusive_ns": 16870957.0,
+          "compute_wait_inclusive_ns": 18750160.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 224699.0,
+          "reader_wait_inclusive_ns": 224406.0,
+          "writer_wait_inclusive_ns": 84024.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 374465.0,
+          "reader_wait_inclusive_ns": 374191.0,
+          "writer_wait_inclusive_ns": 237085.0,
+          "compute_wait_inclusive_ns": 327191.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 89516.0,
+          "reader_wait_inclusive_ns": 87105.0,
+          "writer_wait_inclusive_ns": 64205.0,
+          "compute_wait_inclusive_ns": 49768.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1267237.0,
+          "reader_wait_inclusive_ns": 1227710.0,
+          "writer_wait_inclusive_ns": 749622.0,
+          "compute_wait_inclusive_ns": 1135890.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9190026.0,
+          "reader_wait_inclusive_ns": 9187257.0,
+          "writer_wait_inclusive_ns": 7007018.0,
+          "compute_wait_inclusive_ns": 8868722.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2623281.0,
+          "reader_wait_inclusive_ns": 2006745.0,
+          "writer_wait_inclusive_ns": 2566897.0,
+          "compute_wait_inclusive_ns": 144682.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 75292.0,
+          "reader_wait_inclusive_ns": 73514.0,
+          "writer_wait_inclusive_ns": 74603.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 206861.0,
+          "reader_wait_inclusive_ns": 204491.0,
+          "writer_wait_inclusive_ns": 154024.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 136445.0,
+          "reader_wait_inclusive_ns": 131320.0,
+          "writer_wait_inclusive_ns": 114961.0,
+          "compute_wait_inclusive_ns": 121995.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 231094.0,
+          "reader_wait_inclusive_ns": 231029.0,
+          "writer_wait_inclusive_ns": 222122.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70378.0,
+          "reader_wait_inclusive_ns": 70340.0,
+          "writer_wait_inclusive_ns": 45314.0,
+          "compute_wait_inclusive_ns": 52213.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 107865.0,
+          "reader_wait_inclusive_ns": 107817.0,
+          "writer_wait_inclusive_ns": 55800.0,
+          "compute_wait_inclusive_ns": 101648.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12623934.0,
+          "reader_wait_inclusive_ns": 12618338.0,
+          "writer_wait_inclusive_ns": 12250348.0,
+          "compute_wait_inclusive_ns": 12609965.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3136.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3136.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24606.0,
+          "reader_wait_inclusive_ns": 24606.0,
+          "writer_wait_inclusive_ns": 22196.0,
+          "compute_wait_inclusive_ns": 22916.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 273367.0,
+          "reader_wait_inclusive_ns": 273367.0,
+          "writer_wait_inclusive_ns": 266518.0,
+          "compute_wait_inclusive_ns": 272939.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20486.0,
+          "reader_wait_inclusive_ns": 20486.0,
+          "writer_wait_inclusive_ns": 20125.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 13844.0,
+          "reader_wait_inclusive_ns": 7901.0,
+          "writer_wait_inclusive_ns": 13844.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4259.0,
+          "reader_wait_inclusive_ns": 4164.0,
+          "writer_wait_inclusive_ns": 1724.0,
+          "compute_wait_inclusive_ns": 2085.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4164.0,
+          "reader_wait_inclusive_ns": 3886.0,
+          "writer_wait_inclusive_ns": 1701.0,
+          "compute_wait_inclusive_ns": 3391.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18629.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17221.0,
+          "compute_wait_inclusive_ns": 18629.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21459.0,
+          "reader_wait_inclusive_ns": 21459.0,
+          "writer_wait_inclusive_ns": 15950.0,
+          "compute_wait_inclusive_ns": 20281.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2872.0,
+          "reader_wait_inclusive_ns": 2868.0,
+          "writer_wait_inclusive_ns": 2623.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6304.0,
+          "reader_wait_inclusive_ns": 6304.0,
+          "writer_wait_inclusive_ns": 6007.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 4,
+      "replay": 1,
+      "cycles_per_ns": 1.35,
+      "span_ns": 52011967.4074074,
+      "disjoint_stage_ns": {
+        "model_other": 1050705.9259259258,
+        "uncovered_gap": 197747.4074074074,
+        "overlap": 1720.7407407407406,
+        "L0": 638105.1851851852,
+        "L1": 629187.4074074074,
+        "L2": 631217.7777777778,
+        "L3": 1335470.3703703703,
+        "L4": 627355.5555555555,
+        "L5": 615114.074074074,
+        "L6": 613596.2962962963,
+        "L7": 1325581.4814814813,
+        "L8": 621633.3333333333,
+        "L9": 621792.5925925926,
+        "L10": 621440.7407407407,
+        "L11": 1321648.148148148,
+        "L12": 613246.6666666666,
+        "L13": 613044.4444444444,
+        "L14": 616134.074074074,
+        "L15": 1319446.6666666665,
+        "L16": 612995.5555555555,
+        "L17": 612024.4444444444,
+        "L18": 611545.9259259258,
+        "L19": 1307547.4074074074,
+        "L20": 609577.7777777778,
+        "L21": 610179.2592592592,
+        "L22": 610972.5925925926,
+        "L23": 1303740.0,
+        "L24": 614655.5555555555,
+        "L25": 607291.1111111111,
+        "L26": 609957.037037037,
+        "L27": 1301302.962962963,
+        "L28": 607529.6296296295,
+        "L29": 606309.6296296295,
+        "L30": 611367.4074074074,
+        "L31": 1306719.259259259,
+        "L32": 611702.9629629629,
+        "L33": 614500.7407407407,
+        "L34": 612691.8518518518,
+        "L35": 1299627.4074074074,
+        "L36": 602074.8148148148,
+        "L37": 600809.6296296295,
+        "L38": 609140.0,
+        "L39": 1302843.7037037036,
+        "L40": 606250.3703703703,
+        "L41": 605560.7407407407,
+        "L42": 611061.4814814815,
+        "L43": 1298581.4814814813,
+        "L44": 602969.6296296295,
+        "L45": 606010.3703703703,
+        "L46": 606076.2962962963,
+        "L47": 1297977.7777777778,
+        "L48": 610369.6296296295,
+        "L49": 610147.4074074074,
+        "L50": 606680.7407407407,
+        "L51": 1305054.8148148148,
+        "L52": 606534.074074074,
+        "L53": 610914.074074074,
+        "L54": 608196.2962962963,
+        "L55": 1297369.6296296294,
+        "L56": 608591.8518518518,
+        "L57": 604268.1481481481,
+        "L58": 604307.4074074074,
+        "L59": 1302545.9259259258,
+        "L60": 607665.9259259258,
+        "L61": 607384.4444444444,
+        "L62": 608154.8148148148,
+        "L63": 1296611.8518518517,
+        "sampler": 471386.6666666666
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 940148.0,
+          "reader_wait_inclusive_ns": 937367.0,
+          "writer_wait_inclusive_ns": 807802.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6743.0,
+          "reader_wait_inclusive_ns": 6734.0,
+          "writer_wait_inclusive_ns": 5843.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15472.0,
+          "reader_wait_inclusive_ns": 15192.0,
+          "writer_wait_inclusive_ns": 13891.0,
+          "compute_wait_inclusive_ns": 502.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21850.0,
+          "reader_wait_inclusive_ns": 21850.0,
+          "writer_wait_inclusive_ns": 17148.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 963048.0,
+          "reader_wait_inclusive_ns": 959749.0,
+          "writer_wait_inclusive_ns": 904967.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 202292.0,
+          "reader_wait_inclusive_ns": 198191.0,
+          "writer_wait_inclusive_ns": 198270.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1086677.0,
+          "reader_wait_inclusive_ns": 950532.0,
+          "writer_wait_inclusive_ns": 514774.0,
+          "compute_wait_inclusive_ns": 982052.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 557409.0,
+          "reader_wait_inclusive_ns": 199392.0,
+          "writer_wait_inclusive_ns": 515979.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18990162.0,
+          "reader_wait_inclusive_ns": 18985902.0,
+          "writer_wait_inclusive_ns": 16853859.0,
+          "compute_wait_inclusive_ns": 18737021.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223699.0,
+          "reader_wait_inclusive_ns": 223419.0,
+          "writer_wait_inclusive_ns": 82987.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 371684.0,
+          "reader_wait_inclusive_ns": 371392.0,
+          "writer_wait_inclusive_ns": 233555.0,
+          "compute_wait_inclusive_ns": 324103.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 88625.0,
+          "reader_wait_inclusive_ns": 86135.0,
+          "writer_wait_inclusive_ns": 63640.0,
+          "compute_wait_inclusive_ns": 49398.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1263536.0,
+          "reader_wait_inclusive_ns": 1223357.0,
+          "writer_wait_inclusive_ns": 745988.0,
+          "compute_wait_inclusive_ns": 1132120.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9187641.0,
+          "reader_wait_inclusive_ns": 9184801.0,
+          "writer_wait_inclusive_ns": 7005880.0,
+          "compute_wait_inclusive_ns": 8865826.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2655878.0,
+          "reader_wait_inclusive_ns": 1994755.0,
+          "writer_wait_inclusive_ns": 2599543.0,
+          "compute_wait_inclusive_ns": 145514.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 75162.0,
+          "reader_wait_inclusive_ns": 73567.0,
+          "writer_wait_inclusive_ns": 74510.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 205229.0,
+          "reader_wait_inclusive_ns": 202913.0,
+          "writer_wait_inclusive_ns": 152230.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 135816.0,
+          "reader_wait_inclusive_ns": 130615.0,
+          "writer_wait_inclusive_ns": 114293.0,
+          "compute_wait_inclusive_ns": 121380.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 243123.0,
+          "reader_wait_inclusive_ns": 243048.0,
+          "writer_wait_inclusive_ns": 234155.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70650.0,
+          "reader_wait_inclusive_ns": 70618.0,
+          "writer_wait_inclusive_ns": 45669.0,
+          "compute_wait_inclusive_ns": 52466.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108175.0,
+          "reader_wait_inclusive_ns": 108093.0,
+          "writer_wait_inclusive_ns": 56020.0,
+          "compute_wait_inclusive_ns": 101908.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12630944.0,
+          "reader_wait_inclusive_ns": 12625024.0,
+          "writer_wait_inclusive_ns": 12253757.0,
+          "compute_wait_inclusive_ns": 12617110.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3143.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3143.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24251.0,
+          "reader_wait_inclusive_ns": 24249.0,
+          "writer_wait_inclusive_ns": 21869.0,
+          "compute_wait_inclusive_ns": 22596.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 273201.0,
+          "reader_wait_inclusive_ns": 273199.0,
+          "writer_wait_inclusive_ns": 266373.0,
+          "compute_wait_inclusive_ns": 272774.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20204.0,
+          "reader_wait_inclusive_ns": 20201.0,
+          "writer_wait_inclusive_ns": 19840.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 13871.0,
+          "reader_wait_inclusive_ns": 7843.0,
+          "writer_wait_inclusive_ns": 13871.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4276.0,
+          "reader_wait_inclusive_ns": 4185.0,
+          "writer_wait_inclusive_ns": 1727.0,
+          "compute_wait_inclusive_ns": 2090.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4215.0,
+          "reader_wait_inclusive_ns": 3949.0,
+          "writer_wait_inclusive_ns": 1787.0,
+          "compute_wait_inclusive_ns": 3443.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18640.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17224.0,
+          "compute_wait_inclusive_ns": 18640.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21473.0,
+          "reader_wait_inclusive_ns": 21472.0,
+          "writer_wait_inclusive_ns": 15862.0,
+          "compute_wait_inclusive_ns": 20321.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2849.0,
+          "reader_wait_inclusive_ns": 2849.0,
+          "writer_wait_inclusive_ns": 2604.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6327.0,
+          "reader_wait_inclusive_ns": 6327.0,
+          "writer_wait_inclusive_ns": 6031.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 4,
+      "replay": 2,
+      "cycles_per_ns": 1.35,
+      "span_ns": 52010354.07407407,
+      "disjoint_stage_ns": {
+        "model_other": 1051977.7777777778,
+        "uncovered_gap": 198031.85185185182,
+        "overlap": 1677.7777777777776,
+        "L0": 638901.4814814815,
+        "L1": 631381.4814814815,
+        "L2": 629486.6666666666,
+        "L3": 1336195.5555555555,
+        "L4": 627577.037037037,
+        "L5": 614672.5925925926,
+        "L6": 614220.7407407407,
+        "L7": 1320685.1851851852,
+        "L8": 621101.4814814815,
+        "L9": 622911.1111111111,
+        "L10": 623237.037037037,
+        "L11": 1326257.7777777778,
+        "L12": 612552.5925925926,
+        "L13": 612810.3703703703,
+        "L14": 615062.2222222221,
+        "L15": 1321417.0370370368,
+        "L16": 614982.9629629629,
+        "L17": 613417.7777777778,
+        "L18": 611606.6666666666,
+        "L19": 1308194.074074074,
+        "L20": 611094.8148148148,
+        "L21": 609921.4814814815,
+        "L22": 610229.6296296295,
+        "L23": 1300399.259259259,
+        "L24": 611241.4814814815,
+        "L25": 606073.3333333333,
+        "L26": 608017.7777777778,
+        "L27": 1299057.7777777778,
+        "L28": 610660.7407407407,
+        "L29": 607900.0,
+        "L30": 611690.3703703703,
+        "L31": 1305690.3703703703,
+        "L32": 606089.6296296295,
+        "L33": 607994.074074074,
+        "L34": 612531.8518518518,
+        "L35": 1302008.148148148,
+        "L36": 600685.1851851852,
+        "L37": 604942.2222222221,
+        "L38": 610270.3703703703,
+        "L39": 1301856.2962962962,
+        "L40": 608116.2962962963,
+        "L41": 607595.5555555555,
+        "L42": 609857.7777777778,
+        "L43": 1304444.4444444443,
+        "L44": 604940.0,
+        "L45": 605283.7037037037,
+        "L46": 605647.4074074074,
+        "L47": 1297825.9259259258,
+        "L48": 610214.8148148148,
+        "L49": 610613.3333333333,
+        "L50": 607550.3703703703,
+        "L51": 1309040.0,
+        "L52": 605188.8888888889,
+        "L53": 608876.2962962963,
+        "L54": 609642.9629629629,
+        "L55": 1292829.6296296294,
+        "L56": 607244.4444444444,
+        "L57": 604582.2222222221,
+        "L58": 605480.0,
+        "L59": 1300965.9259259258,
+        "L60": 606928.8888888889,
+        "L61": 605662.2222222221,
+        "L62": 607997.037037037,
+        "L63": 1295850.3703703703,
+        "sampler": 471261.48148148146
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 940098.0,
+          "reader_wait_inclusive_ns": 937053.0,
+          "writer_wait_inclusive_ns": 808066.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7041.0,
+          "reader_wait_inclusive_ns": 7039.0,
+          "writer_wait_inclusive_ns": 6060.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15522.0,
+          "reader_wait_inclusive_ns": 15254.0,
+          "writer_wait_inclusive_ns": 13981.0,
+          "compute_wait_inclusive_ns": 505.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20387.0,
+          "reader_wait_inclusive_ns": 20387.0,
+          "writer_wait_inclusive_ns": 16931.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 961203.0,
+          "reader_wait_inclusive_ns": 957858.0,
+          "writer_wait_inclusive_ns": 902923.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 205314.0,
+          "reader_wait_inclusive_ns": 201234.0,
+          "writer_wait_inclusive_ns": 201212.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1087718.0,
+          "reader_wait_inclusive_ns": 950988.0,
+          "writer_wait_inclusive_ns": 516104.0,
+          "compute_wait_inclusive_ns": 982043.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 562896.0,
+          "reader_wait_inclusive_ns": 200802.0,
+          "writer_wait_inclusive_ns": 521824.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18995886.0,
+          "reader_wait_inclusive_ns": 18991738.0,
+          "writer_wait_inclusive_ns": 16855232.0,
+          "compute_wait_inclusive_ns": 18743441.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 224670.0,
+          "reader_wait_inclusive_ns": 224386.0,
+          "writer_wait_inclusive_ns": 84022.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 368067.0,
+          "reader_wait_inclusive_ns": 367772.0,
+          "writer_wait_inclusive_ns": 230671.0,
+          "compute_wait_inclusive_ns": 321236.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 87731.0,
+          "reader_wait_inclusive_ns": 85434.0,
+          "writer_wait_inclusive_ns": 63101.0,
+          "compute_wait_inclusive_ns": 48935.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1269729.0,
+          "reader_wait_inclusive_ns": 1230043.0,
+          "writer_wait_inclusive_ns": 751133.0,
+          "compute_wait_inclusive_ns": 1137070.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9181640.0,
+          "reader_wait_inclusive_ns": 9178658.0,
+          "writer_wait_inclusive_ns": 7005306.0,
+          "compute_wait_inclusive_ns": 8863168.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2647052.0,
+          "reader_wait_inclusive_ns": 2003156.0,
+          "writer_wait_inclusive_ns": 2590734.0,
+          "compute_wait_inclusive_ns": 144689.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 75432.0,
+          "reader_wait_inclusive_ns": 73489.0,
+          "writer_wait_inclusive_ns": 74799.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 206022.0,
+          "reader_wait_inclusive_ns": 203774.0,
+          "writer_wait_inclusive_ns": 152854.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 135555.0,
+          "reader_wait_inclusive_ns": 130308.0,
+          "writer_wait_inclusive_ns": 114125.0,
+          "compute_wait_inclusive_ns": 121172.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 245500.0,
+          "reader_wait_inclusive_ns": 245432.0,
+          "writer_wait_inclusive_ns": 236584.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70644.0,
+          "reader_wait_inclusive_ns": 70615.0,
+          "writer_wait_inclusive_ns": 45638.0,
+          "compute_wait_inclusive_ns": 52468.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108558.0,
+          "reader_wait_inclusive_ns": 108491.0,
+          "writer_wait_inclusive_ns": 56272.0,
+          "compute_wait_inclusive_ns": 102370.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12627356.0,
+          "reader_wait_inclusive_ns": 12621728.0,
+          "writer_wait_inclusive_ns": 12249214.0,
+          "compute_wait_inclusive_ns": 12613438.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3060.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3060.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24421.0,
+          "reader_wait_inclusive_ns": 24419.0,
+          "writer_wait_inclusive_ns": 22001.0,
+          "compute_wait_inclusive_ns": 22738.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 273280.0,
+          "reader_wait_inclusive_ns": 273279.0,
+          "writer_wait_inclusive_ns": 266427.0,
+          "compute_wait_inclusive_ns": 272853.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20429.0,
+          "reader_wait_inclusive_ns": 20427.0,
+          "writer_wait_inclusive_ns": 20070.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 13787.0,
+          "reader_wait_inclusive_ns": 7815.0,
+          "writer_wait_inclusive_ns": 13787.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4302.0,
+          "reader_wait_inclusive_ns": 4190.0,
+          "writer_wait_inclusive_ns": 1732.0,
+          "compute_wait_inclusive_ns": 2119.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4162.0,
+          "reader_wait_inclusive_ns": 3883.0,
+          "writer_wait_inclusive_ns": 1729.0,
+          "compute_wait_inclusive_ns": 3387.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18873.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17456.0,
+          "compute_wait_inclusive_ns": 18873.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21484.0,
+          "reader_wait_inclusive_ns": 21484.0,
+          "writer_wait_inclusive_ns": 15970.0,
+          "compute_wait_inclusive_ns": 20325.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2916.0,
+          "reader_wait_inclusive_ns": 2915.0,
+          "writer_wait_inclusive_ns": 2674.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6253.0,
+          "reader_wait_inclusive_ns": 6252.0,
+          "writer_wait_inclusive_ns": 5962.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 8,
+      "replay": 0,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51980696.29629629,
+      "disjoint_stage_ns": {
+        "model_other": 1049865.9259259258,
+        "uncovered_gap": 199996.2962962963,
+        "overlap": 1747.4074074074074,
+        "L0": 639779.2592592592,
+        "L1": 630583.7037037037,
+        "L2": 632488.1481481481,
+        "L3": 1329035.5555555555,
+        "L4": 626108.1481481481,
+        "L5": 618678.5185185184,
+        "L6": 614550.3703703703,
+        "L7": 1319450.3703703703,
+        "L8": 617795.5555555555,
+        "L9": 621956.2962962963,
+        "L10": 621831.8518518518,
+        "L11": 1319914.8148148148,
+        "L12": 616498.5185185184,
+        "L13": 615881.4814814815,
+        "L14": 615344.4444444444,
+        "L15": 1320082.2222222222,
+        "L16": 618033.3333333333,
+        "L17": 614755.5555555555,
+        "L18": 610407.4074074074,
+        "L19": 1308528.8888888888,
+        "L20": 609922.9629629629,
+        "L21": 607688.8888888889,
+        "L22": 612847.4074074074,
+        "L23": 1300960.7407407407,
+        "L24": 608497.7777777778,
+        "L25": 605731.8518518518,
+        "L26": 608445.1851851852,
+        "L27": 1298794.8148148148,
+        "L28": 602638.5185185184,
+        "L29": 605977.037037037,
+        "L30": 608489.6296296295,
+        "L31": 1298435.5555555555,
+        "L32": 606333.3333333333,
+        "L33": 612288.1481481481,
+        "L34": 610797.7777777778,
+        "L35": 1301999.259259259,
+        "L36": 605227.4074074074,
+        "L37": 605300.0,
+        "L38": 607873.3333333333,
+        "L39": 1303837.0370370368,
+        "L40": 611190.3703703703,
+        "L41": 608569.6296296295,
+        "L42": 611270.3703703703,
+        "L43": 1301059.259259259,
+        "L44": 602340.0,
+        "L45": 603948.1481481481,
+        "L46": 606103.7037037037,
+        "L47": 1300517.7777777778,
+        "L48": 606634.8148148148,
+        "L49": 606114.8148148148,
+        "L50": 604440.0,
+        "L51": 1299477.7777777778,
+        "L52": 602688.8888888889,
+        "L53": 608834.8148148148,
+        "L54": 609720.7407407407,
+        "L55": 1292061.4814814813,
+        "L56": 604037.7777777778,
+        "L57": 605928.1481481481,
+        "L58": 606557.037037037,
+        "L59": 1301473.3333333333,
+        "L60": 607043.7037037037,
+        "L61": 606982.9629629629,
+        "L62": 609353.3333333333,
+        "L63": 1302110.3703703703,
+        "sampler": 476836.2962962963
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 947930.0,
+          "reader_wait_inclusive_ns": 944662.0,
+          "writer_wait_inclusive_ns": 815112.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 6892.0,
+          "reader_wait_inclusive_ns": 6857.0,
+          "writer_wait_inclusive_ns": 5939.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15375.0,
+          "reader_wait_inclusive_ns": 15126.0,
+          "writer_wait_inclusive_ns": 13803.0,
+          "compute_wait_inclusive_ns": 453.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 17901.0,
+          "reader_wait_inclusive_ns": 11081.0,
+          "writer_wait_inclusive_ns": 17885.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 956974.0,
+          "reader_wait_inclusive_ns": 953625.0,
+          "writer_wait_inclusive_ns": 898727.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 203082.0,
+          "reader_wait_inclusive_ns": 199103.0,
+          "writer_wait_inclusive_ns": 199075.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1089099.0,
+          "reader_wait_inclusive_ns": 954894.0,
+          "writer_wait_inclusive_ns": 515335.0,
+          "compute_wait_inclusive_ns": 984388.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 552754.0,
+          "reader_wait_inclusive_ns": 198189.0,
+          "writer_wait_inclusive_ns": 510386.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18992815.0,
+          "reader_wait_inclusive_ns": 18988929.0,
+          "writer_wait_inclusive_ns": 16852189.0,
+          "compute_wait_inclusive_ns": 18741179.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 225065.0,
+          "reader_wait_inclusive_ns": 224819.0,
+          "writer_wait_inclusive_ns": 84514.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 361237.0,
+          "reader_wait_inclusive_ns": 361003.0,
+          "writer_wait_inclusive_ns": 223907.0,
+          "compute_wait_inclusive_ns": 314275.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 89187.0,
+          "reader_wait_inclusive_ns": 86849.0,
+          "writer_wait_inclusive_ns": 64041.0,
+          "compute_wait_inclusive_ns": 49219.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1259159.0,
+          "reader_wait_inclusive_ns": 1219204.0,
+          "writer_wait_inclusive_ns": 741214.0,
+          "compute_wait_inclusive_ns": 1128591.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9188640.0,
+          "reader_wait_inclusive_ns": 9186048.0,
+          "writer_wait_inclusive_ns": 7011105.0,
+          "compute_wait_inclusive_ns": 8869910.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2614431.0,
+          "reader_wait_inclusive_ns": 1253386.0,
+          "writer_wait_inclusive_ns": 2558266.0,
+          "compute_wait_inclusive_ns": 143236.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73447.0,
+          "reader_wait_inclusive_ns": 73415.0,
+          "writer_wait_inclusive_ns": 72798.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 216175.0,
+          "reader_wait_inclusive_ns": 213824.0,
+          "writer_wait_inclusive_ns": 163112.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 138458.0,
+          "reader_wait_inclusive_ns": 133225.0,
+          "writer_wait_inclusive_ns": 116987.0,
+          "compute_wait_inclusive_ns": 124049.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 236026.0,
+          "reader_wait_inclusive_ns": 235996.0,
+          "writer_wait_inclusive_ns": 227075.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70576.0,
+          "reader_wait_inclusive_ns": 70542.0,
+          "writer_wait_inclusive_ns": 45688.0,
+          "compute_wait_inclusive_ns": 52463.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108231.0,
+          "reader_wait_inclusive_ns": 108152.0,
+          "writer_wait_inclusive_ns": 58181.0,
+          "compute_wait_inclusive_ns": 101967.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12632857.0,
+          "reader_wait_inclusive_ns": 12627322.0,
+          "writer_wait_inclusive_ns": 12255863.0,
+          "compute_wait_inclusive_ns": 12618987.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3059.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3059.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24230.0,
+          "reader_wait_inclusive_ns": 24230.0,
+          "writer_wait_inclusive_ns": 21811.0,
+          "compute_wait_inclusive_ns": 22544.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 274217.0,
+          "reader_wait_inclusive_ns": 274216.0,
+          "writer_wait_inclusive_ns": 267372.0,
+          "compute_wait_inclusive_ns": 273790.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20187.0,
+          "reader_wait_inclusive_ns": 20187.0,
+          "writer_wait_inclusive_ns": 19831.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 19654.0,
+          "reader_wait_inclusive_ns": 17517.0,
+          "writer_wait_inclusive_ns": 19654.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4282.0,
+          "reader_wait_inclusive_ns": 4179.0,
+          "writer_wait_inclusive_ns": 1726.0,
+          "compute_wait_inclusive_ns": 2111.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4156.0,
+          "reader_wait_inclusive_ns": 3892.0,
+          "writer_wait_inclusive_ns": 1708.0,
+          "compute_wait_inclusive_ns": 3385.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18697.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17294.0,
+          "compute_wait_inclusive_ns": 18692.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21519.0,
+          "reader_wait_inclusive_ns": 21518.0,
+          "writer_wait_inclusive_ns": 16064.0,
+          "compute_wait_inclusive_ns": 20333.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2884.0,
+          "reader_wait_inclusive_ns": 2884.0,
+          "writer_wait_inclusive_ns": 2647.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6276.0,
+          "reader_wait_inclusive_ns": 6276.0,
+          "writer_wait_inclusive_ns": 5977.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 8,
+      "replay": 1,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51993218.518518515,
+      "disjoint_stage_ns": {
+        "model_other": 1041201.4814814815,
+        "uncovered_gap": 197457.77777777775,
+        "overlap": 1675.5555555555554,
+        "L0": 642131.1111111111,
+        "L1": 630020.0,
+        "L2": 630451.8518518518,
+        "L3": 1332068.8888888888,
+        "L4": 622897.7777777778,
+        "L5": 618538.5185185184,
+        "L6": 611254.8148148148,
+        "L7": 1322009.6296296294,
+        "L8": 621093.3333333333,
+        "L9": 622212.5925925926,
+        "L10": 620978.5185185184,
+        "L11": 1325218.5185185184,
+        "L12": 616524.4444444444,
+        "L13": 613727.4074074074,
+        "L14": 613239.2592592592,
+        "L15": 1317532.5925925926,
+        "L16": 615874.074074074,
+        "L17": 611273.3333333333,
+        "L18": 611316.2962962963,
+        "L19": 1308869.6296296294,
+        "L20": 609331.1111111111,
+        "L21": 606677.037037037,
+        "L22": 612371.1111111111,
+        "L23": 1302556.2962962962,
+        "L24": 609376.2962962963,
+        "L25": 605488.8888888889,
+        "L26": 610219.2592592592,
+        "L27": 1296703.7037037036,
+        "L28": 603987.4074074074,
+        "L29": 609033.3333333333,
+        "L30": 609733.3333333333,
+        "L31": 1297904.4444444443,
+        "L32": 606248.8888888889,
+        "L33": 614071.1111111111,
+        "L34": 612461.4814814815,
+        "L35": 1300120.7407407407,
+        "L36": 607996.2962962963,
+        "L37": 605350.3703703703,
+        "L38": 608767.4074074074,
+        "L39": 1305881.4814814813,
+        "L40": 612235.5555555555,
+        "L41": 608444.4444444444,
+        "L42": 611092.5925925926,
+        "L43": 1301750.3703703703,
+        "L44": 605662.9629629629,
+        "L45": 605451.1111111111,
+        "L46": 605940.7407407407,
+        "L47": 1298273.3333333333,
+        "L48": 607408.1481481481,
+        "L49": 607702.2222222221,
+        "L50": 609046.6666666666,
+        "L51": 1304011.111111111,
+        "L52": 602545.1851851852,
+        "L53": 611861.4814814815,
+        "L54": 608783.7037037037,
+        "L55": 1293354.8148148148,
+        "L56": 604934.074074074,
+        "L57": 606662.2222222221,
+        "L58": 604762.9629629629,
+        "L59": 1303873.3333333333,
+        "L60": 606389.6296296295,
+        "L61": 607340.7407407407,
+        "L62": 607922.9629629629,
+        "L63": 1296522.2222222222,
+        "sampler": 479398.5185185185
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 954906.0,
+          "reader_wait_inclusive_ns": 951987.0,
+          "writer_wait_inclusive_ns": 821064.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7283.0,
+          "reader_wait_inclusive_ns": 7283.0,
+          "writer_wait_inclusive_ns": 6271.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15504.0,
+          "reader_wait_inclusive_ns": 15230.0,
+          "writer_wait_inclusive_ns": 13879.0,
+          "compute_wait_inclusive_ns": 492.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 17939.0,
+          "reader_wait_inclusive_ns": 11024.0,
+          "writer_wait_inclusive_ns": 17922.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 955978.0,
+          "reader_wait_inclusive_ns": 952546.0,
+          "writer_wait_inclusive_ns": 898078.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 199684.0,
+          "reader_wait_inclusive_ns": 195469.0,
+          "writer_wait_inclusive_ns": 195689.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1087683.0,
+          "reader_wait_inclusive_ns": 952832.0,
+          "writer_wait_inclusive_ns": 513709.0,
+          "compute_wait_inclusive_ns": 982281.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 549826.0,
+          "reader_wait_inclusive_ns": 195767.0,
+          "writer_wait_inclusive_ns": 508041.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18990354.0,
+          "reader_wait_inclusive_ns": 18986422.0,
+          "writer_wait_inclusive_ns": 16847374.0,
+          "compute_wait_inclusive_ns": 18737120.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 226181.0,
+          "reader_wait_inclusive_ns": 225975.0,
+          "writer_wait_inclusive_ns": 85432.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 369125.0,
+          "reader_wait_inclusive_ns": 368895.0,
+          "writer_wait_inclusive_ns": 228348.0,
+          "compute_wait_inclusive_ns": 318933.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 88256.0,
+          "reader_wait_inclusive_ns": 85731.0,
+          "writer_wait_inclusive_ns": 63593.0,
+          "compute_wait_inclusive_ns": 49157.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1261001.0,
+          "reader_wait_inclusive_ns": 1220954.0,
+          "writer_wait_inclusive_ns": 745021.0,
+          "compute_wait_inclusive_ns": 1131099.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9188428.0,
+          "reader_wait_inclusive_ns": 9185847.0,
+          "writer_wait_inclusive_ns": 7005839.0,
+          "compute_wait_inclusive_ns": 8869455.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2617812.0,
+          "reader_wait_inclusive_ns": 1247890.0,
+          "writer_wait_inclusive_ns": 2561589.0,
+          "compute_wait_inclusive_ns": 143785.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73461.0,
+          "reader_wait_inclusive_ns": 73448.0,
+          "writer_wait_inclusive_ns": 72793.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 210797.0,
+          "reader_wait_inclusive_ns": 208430.0,
+          "writer_wait_inclusive_ns": 157062.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 137666.0,
+          "reader_wait_inclusive_ns": 132523.0,
+          "writer_wait_inclusive_ns": 116241.0,
+          "compute_wait_inclusive_ns": 123279.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 244024.0,
+          "reader_wait_inclusive_ns": 243992.0,
+          "writer_wait_inclusive_ns": 234327.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70781.0,
+          "reader_wait_inclusive_ns": 70761.0,
+          "writer_wait_inclusive_ns": 45771.0,
+          "compute_wait_inclusive_ns": 52589.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 107744.0,
+          "reader_wait_inclusive_ns": 107676.0,
+          "writer_wait_inclusive_ns": 55589.0,
+          "compute_wait_inclusive_ns": 101565.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12636135.0,
+          "reader_wait_inclusive_ns": 12630374.0,
+          "writer_wait_inclusive_ns": 12257856.0,
+          "compute_wait_inclusive_ns": 12622380.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3046.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3046.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24254.0,
+          "reader_wait_inclusive_ns": 24254.0,
+          "writer_wait_inclusive_ns": 21859.0,
+          "compute_wait_inclusive_ns": 22584.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 271544.0,
+          "reader_wait_inclusive_ns": 271543.0,
+          "writer_wait_inclusive_ns": 264691.0,
+          "compute_wait_inclusive_ns": 271121.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20467.0,
+          "reader_wait_inclusive_ns": 20467.0,
+          "writer_wait_inclusive_ns": 20112.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 23146.0,
+          "reader_wait_inclusive_ns": 21039.0,
+          "writer_wait_inclusive_ns": 23145.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4305.0,
+          "reader_wait_inclusive_ns": 4199.0,
+          "writer_wait_inclusive_ns": 1727.0,
+          "compute_wait_inclusive_ns": 2112.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4186.0,
+          "reader_wait_inclusive_ns": 3925.0,
+          "writer_wait_inclusive_ns": 1719.0,
+          "compute_wait_inclusive_ns": 3423.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18724.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17357.0,
+          "compute_wait_inclusive_ns": 18716.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21495.0,
+          "reader_wait_inclusive_ns": 21495.0,
+          "writer_wait_inclusive_ns": 15861.0,
+          "compute_wait_inclusive_ns": 20315.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2874.0,
+          "reader_wait_inclusive_ns": 2874.0,
+          "writer_wait_inclusive_ns": 2623.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6219.0,
+          "reader_wait_inclusive_ns": 6219.0,
+          "writer_wait_inclusive_ns": 5927.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 8,
+      "replay": 2,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51987634.81481481,
+      "disjoint_stage_ns": {
+        "model_other": 1054438.5185185184,
+        "uncovered_gap": 202103.70370370368,
+        "overlap": 1744.4444444444443,
+        "L0": 641776.2962962963,
+        "L1": 630818.5185185184,
+        "L2": 631153.3333333333,
+        "L3": 1329140.7407407407,
+        "L4": 624071.1111111111,
+        "L5": 617445.9259259258,
+        "L6": 611602.2222222221,
+        "L7": 1322231.8518518517,
+        "L8": 620305.9259259258,
+        "L9": 619602.2222222221,
+        "L10": 621050.3703703703,
+        "L11": 1323928.148148148,
+        "L12": 615079.2592592592,
+        "L13": 612840.0,
+        "L14": 614928.8888888889,
+        "L15": 1320541.4814814813,
+        "L16": 614710.3703703703,
+        "L17": 610740.0,
+        "L18": 612725.1851851852,
+        "L19": 1310947.4074074074,
+        "L20": 608170.3703703703,
+        "L21": 607854.8148148148,
+        "L22": 611638.5185185184,
+        "L23": 1299874.8148148148,
+        "L24": 607191.8518518518,
+        "L25": 606844.4444444444,
+        "L26": 609162.2222222221,
+        "L27": 1298105.1851851852,
+        "L28": 605801.4814814815,
+        "L29": 608182.2222222221,
+        "L30": 611322.2222222221,
+        "L31": 1306264.4444444443,
+        "L32": 609975.5555555555,
+        "L33": 609038.5185185184,
+        "L34": 611947.4074074074,
+        "L35": 1304211.8518518517,
+        "L36": 604742.2222222221,
+        "L37": 605362.9629629629,
+        "L38": 609887.4074074074,
+        "L39": 1304031.8518518517,
+        "L40": 610677.7777777778,
+        "L41": 607039.2592592592,
+        "L42": 610005.9259259258,
+        "L43": 1304425.9259259258,
+        "L44": 602543.7037037037,
+        "L45": 601808.8888888889,
+        "L46": 605988.8888888889,
+        "L47": 1297136.2962962962,
+        "L48": 608100.0,
+        "L49": 608037.037037037,
+        "L50": 606777.037037037,
+        "L51": 1300092.5925925926,
+        "L52": 601127.4074074074,
+        "L53": 610908.1481481481,
+        "L54": 609874.8148148148,
+        "L55": 1289545.1851851852,
+        "L56": 604529.6296296295,
+        "L57": 604772.5925925926,
+        "L58": 605428.8888888889,
+        "L59": 1302879.259259259,
+        "L60": 607384.4444444444,
+        "L61": 608040.0,
+        "L62": 607891.1111111111,
+        "L63": 1297759.259259259,
+        "sampler": 471324.44444444444
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 940667.0,
+          "reader_wait_inclusive_ns": 937652.0,
+          "writer_wait_inclusive_ns": 807893.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7102.0,
+          "reader_wait_inclusive_ns": 7082.0,
+          "writer_wait_inclusive_ns": 6161.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 15847.0,
+          "reader_wait_inclusive_ns": 15569.0,
+          "writer_wait_inclusive_ns": 14261.0,
+          "compute_wait_inclusive_ns": 486.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18201.0,
+          "reader_wait_inclusive_ns": 10867.0,
+          "writer_wait_inclusive_ns": 18184.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 957687.0,
+          "reader_wait_inclusive_ns": 954146.0,
+          "writer_wait_inclusive_ns": 899266.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 201358.0,
+          "reader_wait_inclusive_ns": 197203.0,
+          "writer_wait_inclusive_ns": 197434.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1085405.0,
+          "reader_wait_inclusive_ns": 950747.0,
+          "writer_wait_inclusive_ns": 512599.0,
+          "compute_wait_inclusive_ns": 980041.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 557408.0,
+          "reader_wait_inclusive_ns": 196683.0,
+          "writer_wait_inclusive_ns": 516807.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18983039.0,
+          "reader_wait_inclusive_ns": 18979272.0,
+          "writer_wait_inclusive_ns": 16834877.0,
+          "compute_wait_inclusive_ns": 18731304.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 224355.0,
+          "reader_wait_inclusive_ns": 224167.0,
+          "writer_wait_inclusive_ns": 84211.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 362892.0,
+          "reader_wait_inclusive_ns": 362652.0,
+          "writer_wait_inclusive_ns": 224133.0,
+          "compute_wait_inclusive_ns": 314598.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 89733.0,
+          "reader_wait_inclusive_ns": 87283.0,
+          "writer_wait_inclusive_ns": 63843.0,
+          "compute_wait_inclusive_ns": 50182.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1259937.0,
+          "reader_wait_inclusive_ns": 1220161.0,
+          "writer_wait_inclusive_ns": 743401.0,
+          "compute_wait_inclusive_ns": 1130477.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9183533.0,
+          "reader_wait_inclusive_ns": 9180891.0,
+          "writer_wait_inclusive_ns": 7006388.0,
+          "compute_wait_inclusive_ns": 8865957.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 2640180.0,
+          "reader_wait_inclusive_ns": 1254232.0,
+          "writer_wait_inclusive_ns": 2583816.0,
+          "compute_wait_inclusive_ns": 143857.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73459.0,
+          "reader_wait_inclusive_ns": 73434.0,
+          "writer_wait_inclusive_ns": 72796.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 206586.0,
+          "reader_wait_inclusive_ns": 204252.0,
+          "writer_wait_inclusive_ns": 153415.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 137750.0,
+          "reader_wait_inclusive_ns": 132597.0,
+          "writer_wait_inclusive_ns": 116319.0,
+          "compute_wait_inclusive_ns": 123348.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 242129.0,
+          "reader_wait_inclusive_ns": 242091.0,
+          "writer_wait_inclusive_ns": 232565.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 71149.0,
+          "reader_wait_inclusive_ns": 71101.0,
+          "writer_wait_inclusive_ns": 46138.0,
+          "compute_wait_inclusive_ns": 52945.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108708.0,
+          "reader_wait_inclusive_ns": 108638.0,
+          "writer_wait_inclusive_ns": 58300.0,
+          "compute_wait_inclusive_ns": 102448.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12640788.0,
+          "reader_wait_inclusive_ns": 12635245.0,
+          "writer_wait_inclusive_ns": 12267236.0,
+          "compute_wait_inclusive_ns": 12626953.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3056.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3056.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24147.0,
+          "reader_wait_inclusive_ns": 24147.0,
+          "writer_wait_inclusive_ns": 21756.0,
+          "compute_wait_inclusive_ns": 22489.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 272035.0,
+          "reader_wait_inclusive_ns": 272034.0,
+          "writer_wait_inclusive_ns": 265222.0,
+          "compute_wait_inclusive_ns": 271621.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20568.0,
+          "reader_wait_inclusive_ns": 20561.0,
+          "writer_wait_inclusive_ns": 20215.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 16102.0,
+          "reader_wait_inclusive_ns": 14002.0,
+          "writer_wait_inclusive_ns": 16098.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4324.0,
+          "reader_wait_inclusive_ns": 4225.0,
+          "writer_wait_inclusive_ns": 1755.0,
+          "compute_wait_inclusive_ns": 2141.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4233.0,
+          "reader_wait_inclusive_ns": 3973.0,
+          "writer_wait_inclusive_ns": 1779.0,
+          "compute_wait_inclusive_ns": 3459.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18589.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17223.0,
+          "compute_wait_inclusive_ns": 18589.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21484.0,
+          "reader_wait_inclusive_ns": 21484.0,
+          "writer_wait_inclusive_ns": 15874.0,
+          "compute_wait_inclusive_ns": 20301.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2864.0,
+          "reader_wait_inclusive_ns": 2864.0,
+          "writer_wait_inclusive_ns": 2621.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6106.0,
+          "reader_wait_inclusive_ns": 6106.0,
+          "writer_wait_inclusive_ns": 5810.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 12,
+      "replay": 0,
+      "cycles_per_ns": 1.35,
+      "span_ns": 51977485.18518518,
+      "disjoint_stage_ns": {
+        "model_other": 1039675.5555555555,
+        "uncovered_gap": 200913.3333333333,
+        "overlap": 1588.148148148148,
+        "L0": 638338.5185185184,
+        "L1": 627777.7777777778,
+        "L2": 630922.2222222221,
+        "L3": 1328239.259259259,
+        "L4": 626323.7037037037,
+        "L5": 617608.8888888889,
+        "L6": 612800.7407407407,
+        "L7": 1316323.7037037036,
+        "L8": 618860.0,
+        "L9": 622228.8888888889,
+        "L10": 621862.2222222221,
+        "L11": 1320520.7407407407,
+        "L12": 616637.7777777778,
+        "L13": 615917.037037037,
+        "L14": 615446.6666666666,
+        "L15": 1315022.962962963,
+        "L16": 615130.3703703703,
+        "L17": 611988.8888888889,
+        "L18": 610411.8518518518,
+        "L19": 1308266.6666666665,
+        "L20": 609860.0,
+        "L21": 607985.9259259258,
+        "L22": 612739.2592592592,
+        "L23": 1300675.5555555555,
+        "L24": 608708.1481481481,
+        "L25": 605896.2962962963,
+        "L26": 608382.2222222221,
+        "L27": 1298099.259259259,
+        "L28": 602663.7037037037,
+        "L29": 606109.6296296295,
+        "L30": 610202.9629629629,
+        "L31": 1304205.9259259258,
+        "L32": 609520.7407407407,
+        "L33": 612270.3703703703,
+        "L34": 610644.4444444444,
+        "L35": 1301050.3703703703,
+        "L36": 607151.1111111111,
+        "L37": 607935.5555555555,
+        "L38": 608131.1111111111,
+        "L39": 1302864.4444444443,
+        "L40": 611426.6666666666,
+        "L41": 607651.8518518518,
+        "L42": 608364.4444444444,
+        "L43": 1299935.5555555555,
+        "L44": 604974.8148148148,
+        "L45": 605753.3333333333,
+        "L46": 605789.6296296295,
+        "L47": 1299409.6296296294,
+        "L48": 606620.7407407407,
+        "L49": 607442.2222222221,
+        "L50": 607385.9259259258,
+        "L51": 1300541.4814814813,
+        "L52": 602744.4444444444,
+        "L53": 609573.3333333333,
+        "L54": 610254.8148148148,
+        "L55": 1292007.4074074074,
+        "L56": 603883.7037037037,
+        "L57": 606243.7037037037,
+        "L58": 604840.7407407407,
+        "L59": 1299434.8148148148,
+        "L60": 606935.5555555555,
+        "L61": 606955.5555555555,
+        "L62": 609336.2962962963,
+        "L63": 1302202.962962963,
+        "sampler": 489872.5925925926
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 946513.0,
+          "reader_wait_inclusive_ns": 943132.0,
+          "writer_wait_inclusive_ns": 810988.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7591.0,
+          "reader_wait_inclusive_ns": 7590.0,
+          "writer_wait_inclusive_ns": 6654.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 14595.0,
+          "reader_wait_inclusive_ns": 14325.0,
+          "writer_wait_inclusive_ns": 13051.0,
+          "compute_wait_inclusive_ns": 477.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 16350.0,
+          "reader_wait_inclusive_ns": 16350.0,
+          "writer_wait_inclusive_ns": 13606.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 964555.0,
+          "reader_wait_inclusive_ns": 960877.0,
+          "writer_wait_inclusive_ns": 906262.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 202382.0,
+          "reader_wait_inclusive_ns": 198137.0,
+          "writer_wait_inclusive_ns": 198388.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1087113.0,
+          "reader_wait_inclusive_ns": 952989.0,
+          "writer_wait_inclusive_ns": 512285.0,
+          "compute_wait_inclusive_ns": 981515.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 563038.0,
+          "reader_wait_inclusive_ns": 194215.0,
+          "writer_wait_inclusive_ns": 521905.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18849767.0,
+          "reader_wait_inclusive_ns": 18845605.0,
+          "writer_wait_inclusive_ns": 16759939.0,
+          "compute_wait_inclusive_ns": 18596272.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223925.0,
+          "reader_wait_inclusive_ns": 223655.0,
+          "writer_wait_inclusive_ns": 84516.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 359499.0,
+          "reader_wait_inclusive_ns": 359077.0,
+          "writer_wait_inclusive_ns": 220126.0,
+          "compute_wait_inclusive_ns": 309919.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 92400.0,
+          "reader_wait_inclusive_ns": 89978.0,
+          "writer_wait_inclusive_ns": 66333.0,
+          "compute_wait_inclusive_ns": 51626.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1260468.0,
+          "reader_wait_inclusive_ns": 1220684.0,
+          "writer_wait_inclusive_ns": 742412.0,
+          "compute_wait_inclusive_ns": 1129103.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9184574.0,
+          "reader_wait_inclusive_ns": 9181525.0,
+          "writer_wait_inclusive_ns": 6998535.0,
+          "compute_wait_inclusive_ns": 8866633.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 3301685.0,
+          "reader_wait_inclusive_ns": 2004296.0,
+          "writer_wait_inclusive_ns": 3245486.0,
+          "compute_wait_inclusive_ns": 144857.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73668.0,
+          "reader_wait_inclusive_ns": 73656.0,
+          "writer_wait_inclusive_ns": 72974.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 206418.0,
+          "reader_wait_inclusive_ns": 204111.0,
+          "writer_wait_inclusive_ns": 152519.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 136255.0,
+          "reader_wait_inclusive_ns": 131102.0,
+          "writer_wait_inclusive_ns": 114826.0,
+          "compute_wait_inclusive_ns": 121838.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 240177.0,
+          "reader_wait_inclusive_ns": 240118.0,
+          "writer_wait_inclusive_ns": 229477.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 71129.0,
+          "reader_wait_inclusive_ns": 71102.0,
+          "writer_wait_inclusive_ns": 46199.0,
+          "compute_wait_inclusive_ns": 52979.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108526.0,
+          "reader_wait_inclusive_ns": 108456.0,
+          "writer_wait_inclusive_ns": 56754.0,
+          "compute_wait_inclusive_ns": 102363.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12094043.0,
+          "reader_wait_inclusive_ns": 12088342.0,
+          "writer_wait_inclusive_ns": 11716509.0,
+          "compute_wait_inclusive_ns": 12080231.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3063.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3063.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24180.0,
+          "reader_wait_inclusive_ns": 24177.0,
+          "writer_wait_inclusive_ns": 21767.0,
+          "compute_wait_inclusive_ns": 22495.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 272110.0,
+          "reader_wait_inclusive_ns": 272110.0,
+          "writer_wait_inclusive_ns": 265296.0,
+          "compute_wait_inclusive_ns": 271683.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20527.0,
+          "reader_wait_inclusive_ns": 20521.0,
+          "writer_wait_inclusive_ns": 20179.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 32830.0,
+          "reader_wait_inclusive_ns": 29670.0,
+          "writer_wait_inclusive_ns": 32826.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4319.0,
+          "reader_wait_inclusive_ns": 4217.0,
+          "writer_wait_inclusive_ns": 1775.0,
+          "compute_wait_inclusive_ns": 2137.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4175.0,
+          "reader_wait_inclusive_ns": 3908.0,
+          "writer_wait_inclusive_ns": 1735.0,
+          "compute_wait_inclusive_ns": 3399.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18616.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17196.0,
+          "compute_wait_inclusive_ns": 18616.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21590.0,
+          "reader_wait_inclusive_ns": 21590.0,
+          "writer_wait_inclusive_ns": 15890.0,
+          "compute_wait_inclusive_ns": 20407.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2896.0,
+          "reader_wait_inclusive_ns": 2896.0,
+          "writer_wait_inclusive_ns": 2650.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6100.0,
+          "reader_wait_inclusive_ns": 6100.0,
+          "writer_wait_inclusive_ns": 5801.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 12,
+      "replay": 1,
+      "cycles_per_ns": 1.35,
+      "span_ns": 52002255.55555555,
+      "disjoint_stage_ns": {
+        "model_other": 1041180.7407407407,
+        "uncovered_gap": 207437.77777777775,
+        "overlap": 1677.7777777777776,
+        "L0": 640335.5555555555,
+        "L1": 630574.074074074,
+        "L2": 629615.5555555555,
+        "L3": 1330962.962962963,
+        "L4": 623028.8888888889,
+        "L5": 618201.4814814815,
+        "L6": 613111.8518518518,
+        "L7": 1325556.2962962962,
+        "L8": 619607.4074074074,
+        "L9": 619399.2592592592,
+        "L10": 620927.4074074074,
+        "L11": 1326043.7037037036,
+        "L12": 616517.7777777778,
+        "L13": 613548.1481481481,
+        "L14": 613059.2592592592,
+        "L15": 1316488.8888888888,
+        "L16": 615819.2592592592,
+        "L17": 611528.1481481481,
+        "L18": 611554.8148148148,
+        "L19": 1309590.3703703703,
+        "L20": 609381.4814814815,
+        "L21": 607377.7777777778,
+        "L22": 612683.7037037037,
+        "L23": 1300954.074074074,
+        "L24": 608726.6666666666,
+        "L25": 606063.7037037037,
+        "L26": 610053.3333333333,
+        "L27": 1296201.4814814813,
+        "L28": 604117.037037037,
+        "L29": 609277.037037037,
+        "L30": 611456.2962962963,
+        "L31": 1306851.111111111,
+        "L32": 609997.037037037,
+        "L33": 611777.037037037,
+        "L34": 610867.4074074074,
+        "L35": 1299129.6296296294,
+        "L36": 608005.1851851852,
+        "L37": 605187.4074074074,
+        "L38": 609006.6666666666,
+        "L39": 1305081.4814814813,
+        "L40": 609327.4074074074,
+        "L41": 606628.1481481481,
+        "L42": 610974.8148148148,
+        "L43": 1302066.6666666665,
+        "L44": 605416.2962962963,
+        "L45": 605752.5925925926,
+        "L46": 605955.5555555555,
+        "L47": 1297299.259259259,
+        "L48": 607547.4074074074,
+        "L49": 607867.4074074074,
+        "L50": 608908.1481481481,
+        "L51": 1303445.1851851852,
+        "L52": 602442.9629629629,
+        "L53": 612295.5555555555,
+        "L54": 608665.1851851852,
+        "L55": 1291893.3333333333,
+        "L56": 605031.8518518518,
+        "L57": 607239.2592592592,
+        "L58": 604891.8518518518,
+        "L59": 1306337.0370370368,
+        "L60": 608055.5555555555,
+        "L61": 607100.7407407407,
+        "L62": 608434.8148148148,
+        "L63": 1296722.962962963,
+        "sampler": 473992.5925925926
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 947949.0,
+          "reader_wait_inclusive_ns": 944918.0,
+          "writer_wait_inclusive_ns": 816172.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7818.0,
+          "reader_wait_inclusive_ns": 7817.0,
+          "writer_wait_inclusive_ns": 6773.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 14744.0,
+          "reader_wait_inclusive_ns": 14480.0,
+          "writer_wait_inclusive_ns": 13162.0,
+          "compute_wait_inclusive_ns": 500.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 16177.0,
+          "reader_wait_inclusive_ns": 16176.0,
+          "writer_wait_inclusive_ns": 13208.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 959466.0,
+          "reader_wait_inclusive_ns": 956042.0,
+          "writer_wait_inclusive_ns": 901122.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 199314.0,
+          "reader_wait_inclusive_ns": 195272.0,
+          "writer_wait_inclusive_ns": 195263.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1086923.0,
+          "reader_wait_inclusive_ns": 952550.0,
+          "writer_wait_inclusive_ns": 512456.0,
+          "compute_wait_inclusive_ns": 980530.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 581037.0,
+          "reader_wait_inclusive_ns": 189891.0,
+          "writer_wait_inclusive_ns": 539836.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18870126.0,
+          "reader_wait_inclusive_ns": 18865995.0,
+          "writer_wait_inclusive_ns": 16773034.0,
+          "compute_wait_inclusive_ns": 18616449.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223971.0,
+          "reader_wait_inclusive_ns": 223724.0,
+          "writer_wait_inclusive_ns": 84325.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 363370.0,
+          "reader_wait_inclusive_ns": 363050.0,
+          "writer_wait_inclusive_ns": 224917.0,
+          "compute_wait_inclusive_ns": 315523.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 89194.0,
+          "reader_wait_inclusive_ns": 86760.0,
+          "writer_wait_inclusive_ns": 63956.0,
+          "compute_wait_inclusive_ns": 49304.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1267310.0,
+          "reader_wait_inclusive_ns": 1227368.0,
+          "writer_wait_inclusive_ns": 747425.0,
+          "compute_wait_inclusive_ns": 1134830.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9183660.0,
+          "reader_wait_inclusive_ns": 9180515.0,
+          "writer_wait_inclusive_ns": 6994209.0,
+          "compute_wait_inclusive_ns": 8864643.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 3287824.0,
+          "reader_wait_inclusive_ns": 2022996.0,
+          "writer_wait_inclusive_ns": 3231688.0,
+          "compute_wait_inclusive_ns": 144991.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 75146.0,
+          "reader_wait_inclusive_ns": 73455.0,
+          "writer_wait_inclusive_ns": 74509.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 206354.0,
+          "reader_wait_inclusive_ns": 203995.0,
+          "writer_wait_inclusive_ns": 152748.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 137864.0,
+          "reader_wait_inclusive_ns": 132701.0,
+          "writer_wait_inclusive_ns": 116380.0,
+          "compute_wait_inclusive_ns": 123426.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 237333.0,
+          "reader_wait_inclusive_ns": 237238.0,
+          "writer_wait_inclusive_ns": 228298.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70988.0,
+          "reader_wait_inclusive_ns": 70949.0,
+          "writer_wait_inclusive_ns": 46010.0,
+          "compute_wait_inclusive_ns": 52826.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108646.0,
+          "reader_wait_inclusive_ns": 108590.0,
+          "writer_wait_inclusive_ns": 56746.0,
+          "compute_wait_inclusive_ns": 102463.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12102715.0,
+          "reader_wait_inclusive_ns": 12097033.0,
+          "writer_wait_inclusive_ns": 11724415.0,
+          "compute_wait_inclusive_ns": 12088958.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3055.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3055.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24583.0,
+          "reader_wait_inclusive_ns": 24580.0,
+          "writer_wait_inclusive_ns": 22174.0,
+          "compute_wait_inclusive_ns": 22898.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 272633.0,
+          "reader_wait_inclusive_ns": 272631.0,
+          "writer_wait_inclusive_ns": 265865.0,
+          "compute_wait_inclusive_ns": 272287.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20580.0,
+          "reader_wait_inclusive_ns": 20579.0,
+          "writer_wait_inclusive_ns": 20224.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 17709.0,
+          "reader_wait_inclusive_ns": 14521.0,
+          "writer_wait_inclusive_ns": 17709.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4270.0,
+          "reader_wait_inclusive_ns": 4167.0,
+          "writer_wait_inclusive_ns": 1732.0,
+          "compute_wait_inclusive_ns": 2096.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4137.0,
+          "reader_wait_inclusive_ns": 3884.0,
+          "writer_wait_inclusive_ns": 1716.0,
+          "compute_wait_inclusive_ns": 3358.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18598.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17195.0,
+          "compute_wait_inclusive_ns": 18597.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21488.0,
+          "reader_wait_inclusive_ns": 21487.0,
+          "writer_wait_inclusive_ns": 15690.0,
+          "compute_wait_inclusive_ns": 20314.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2876.0,
+          "reader_wait_inclusive_ns": 2874.0,
+          "writer_wait_inclusive_ns": 2626.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6238.0,
+          "reader_wait_inclusive_ns": 6237.0,
+          "writer_wait_inclusive_ns": 5946.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    },
+    {
+      "device": 12,
+      "replay": 2,
+      "cycles_per_ns": 1.35,
+      "span_ns": 52015017.777777776,
+      "disjoint_stage_ns": {
+        "model_other": 1033108.1481481481,
+        "uncovered_gap": 202098.5185185185,
+        "overlap": 1819.9999999999998,
+        "L0": 638720.7407407407,
+        "L1": 627973.3333333333,
+        "L2": 629566.6666666666,
+        "L3": 1333028.148148148,
+        "L4": 624194.074074074,
+        "L5": 617778.5185185184,
+        "L6": 613275.5555555555,
+        "L7": 1325951.111111111,
+        "L8": 621802.9629629629,
+        "L9": 622639.2592592592,
+        "L10": 622760.0,
+        "L11": 1329125.9259259258,
+        "L12": 615258.5185185184,
+        "L13": 612768.8888888889,
+        "L14": 614997.037037037,
+        "L15": 1323452.5925925926,
+        "L16": 614748.8888888889,
+        "L17": 611332.5925925926,
+        "L18": 612761.4814814815,
+        "L19": 1311085.1851851852,
+        "L20": 607666.6666666666,
+        "L21": 608780.0,
+        "L22": 612242.2222222221,
+        "L23": 1301476.2962962962,
+        "L24": 610157.7777777778,
+        "L25": 608822.2222222221,
+        "L26": 609248.1481481481,
+        "L27": 1297192.5925925926,
+        "L28": 605410.3703703703,
+        "L29": 608213.3333333333,
+        "L30": 611322.2222222221,
+        "L31": 1306375.5555555555,
+        "L32": 609563.7037037037,
+        "L33": 609442.9629629629,
+        "L34": 612802.9629629629,
+        "L35": 1304029.6296296294,
+        "L36": 606351.8518518518,
+        "L37": 606868.8888888889,
+        "L38": 608016.2962962963,
+        "L39": 1302587.4074074074,
+        "L40": 607851.1111111111,
+        "L41": 605553.3333333333,
+        "L42": 610117.037037037,
+        "L43": 1303730.3703703703,
+        "L44": 602440.0,
+        "L45": 601526.6666666666,
+        "L46": 605882.2222222221,
+        "L47": 1296652.5925925926,
+        "L48": 608448.1481481481,
+        "L49": 608033.3333333333,
+        "L50": 606571.1111111111,
+        "L51": 1302520.0,
+        "L52": 604028.1481481481,
+        "L53": 611480.7407407407,
+        "L54": 608168.8888888889,
+        "L55": 1286956.2962962962,
+        "L56": 604979.2592592592,
+        "L57": 604897.037037037,
+        "L58": 605566.6666666666,
+        "L59": 1305575.5555555555,
+        "L60": 609862.2222222221,
+        "L61": 607982.9629629629,
+        "L62": 607778.5185185184,
+        "L63": 1298462.2222222222,
+        "sampler": 493134.07407407404
+      },
+      "device_op_rows": 2553,
+      "operations": {
+        "SliceDeviceOperation": {
+          "calls": 497,
+          "kernel_ns": 945643.0,
+          "reader_wait_inclusive_ns": 942607.0,
+          "writer_wait_inclusive_ns": 811451.0,
+          "compute_unavailable_rows": 497
+        },
+        "EmbeddingsDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 7875.0,
+          "reader_wait_inclusive_ns": 7868.0,
+          "writer_wait_inclusive_ns": 6944.0,
+          "compute_unavailable_rows": 3
+        },
+        "TilizeWithValPaddingDeviceOperation": {
+          "calls": 3,
+          "kernel_ns": 14543.0,
+          "reader_wait_inclusive_ns": 14279.0,
+          "writer_wait_inclusive_ns": 12949.0,
+          "compute_wait_inclusive_ns": 531.0
+        },
+        "AllGatherAsyncDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 16804.0,
+          "reader_wait_inclusive_ns": 16803.0,
+          "writer_wait_inclusive_ns": 13294.0,
+          "compute_unavailable_rows": 1
+        },
+        "ReshapeViewDeviceOperation": {
+          "calls": 130,
+          "kernel_ns": 959655.0,
+          "reader_wait_inclusive_ns": 956247.0,
+          "writer_wait_inclusive_ns": 901311.0,
+          "compute_unavailable_rows": 130
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "calls": 146,
+          "kernel_ns": 201970.0,
+          "reader_wait_inclusive_ns": 197914.0,
+          "writer_wait_inclusive_ns": 197997.0,
+          "compute_unavailable_rows": 146
+        },
+        "LayerNormDeviceOperation": {
+          "calls": 161,
+          "kernel_ns": 1090170.0,
+          "reader_wait_inclusive_ns": 954389.0,
+          "writer_wait_inclusive_ns": 514845.0,
+          "compute_wait_inclusive_ns": 985607.0
+        },
+        "ReshardDeviceOperation": {
+          "calls": 193,
+          "kernel_ns": 578667.0,
+          "reader_wait_inclusive_ns": 196296.0,
+          "writer_wait_inclusive_ns": 537294.0,
+          "compute_unavailable_rows": 193
+        },
+        "MatmulDeviceOperation": {
+          "calls": 260,
+          "kernel_ns": 18853102.0,
+          "reader_wait_inclusive_ns": 18849078.0,
+          "writer_wait_inclusive_ns": 16752907.0,
+          "compute_wait_inclusive_ns": 18598914.0
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "calls": 164,
+          "kernel_ns": 223905.0,
+          "reader_wait_inclusive_ns": 223637.0,
+          "writer_wait_inclusive_ns": 84278.0,
+          "compute_unavailable_rows": 164
+        },
+        "UnaryDeviceOperation": {
+          "calls": 97,
+          "kernel_ns": 355228.0,
+          "reader_wait_inclusive_ns": 354919.0,
+          "writer_wait_inclusive_ns": 218001.0,
+          "compute_wait_inclusive_ns": 308497.0
+        },
+        "TypecastDeviceOperation": {
+          "calls": 52,
+          "kernel_ns": 87978.0,
+          "reader_wait_inclusive_ns": 85437.0,
+          "writer_wait_inclusive_ns": 62967.0,
+          "compute_wait_inclusive_ns": 49164.0
+        },
+        "BinaryNgDeviceOperation": {
+          "calls": 316,
+          "kernel_ns": 1270816.0,
+          "reader_wait_inclusive_ns": 1230600.0,
+          "writer_wait_inclusive_ns": 750707.0,
+          "compute_wait_inclusive_ns": 1137930.0
+        },
+        "GenericOpDeviceOperation": {
+          "calls": 192,
+          "kernel_ns": 9184537.0,
+          "reader_wait_inclusive_ns": 9181513.0,
+          "writer_wait_inclusive_ns": 6997928.0,
+          "compute_wait_inclusive_ns": 8864768.0
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "calls": 128,
+          "kernel_ns": 3318969.0,
+          "reader_wait_inclusive_ns": 2012132.0,
+          "writer_wait_inclusive_ns": 3262641.0,
+          "compute_wait_inclusive_ns": 145268.0
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 73648.0,
+          "reader_wait_inclusive_ns": 73639.0,
+          "writer_wait_inclusive_ns": 72944.0,
+          "compute_unavailable_rows": 16
+        },
+        "TransposeDeviceOperation": {
+          "calls": 64,
+          "kernel_ns": 203627.0,
+          "reader_wait_inclusive_ns": 201300.0,
+          "writer_wait_inclusive_ns": 148619.0,
+          "compute_unavailable_rows": 64
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "calls": 32,
+          "kernel_ns": 136431.0,
+          "reader_wait_inclusive_ns": 131325.0,
+          "writer_wait_inclusive_ns": 115012.0,
+          "compute_wait_inclusive_ns": 122028.0
+        },
+        "ConcatDeviceOperation": {
+          "calls": 33,
+          "kernel_ns": 237365.0,
+          "reader_wait_inclusive_ns": 237287.0,
+          "writer_wait_inclusive_ns": 228157.0,
+          "compute_unavailable_rows": 33
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 70792.0,
+          "reader_wait_inclusive_ns": 70748.0,
+          "writer_wait_inclusive_ns": 45792.0,
+          "compute_wait_inclusive_ns": 52635.0
+        },
+        "FillPadDeviceOperation": {
+          "calls": 17,
+          "kernel_ns": 108271.0,
+          "reader_wait_inclusive_ns": 108216.0,
+          "writer_wait_inclusive_ns": 56107.0,
+          "compute_wait_inclusive_ns": 102066.0
+        },
+        "SdpaDecodeDeviceOperation": {
+          "calls": 16,
+          "kernel_ns": 12094926.0,
+          "reader_wait_inclusive_ns": 12089171.0,
+          "writer_wait_inclusive_ns": 11714180.0,
+          "compute_wait_inclusive_ns": 12081146.0
+        },
+        "PlusOneDeviceOperation": {
+          "calls": 4,
+          "kernel_ns": 3064.0,
+          "reader_unavailable_rows": 4,
+          "writer_wait_inclusive_ns": 3064.0,
+          "compute_unavailable_rows": 4
+        },
+        "TopkRoutePrepDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 24403.0,
+          "reader_wait_inclusive_ns": 24401.0,
+          "writer_wait_inclusive_ns": 21978.0,
+          "compute_wait_inclusive_ns": 22714.0
+        },
+        "TopkLargeIndicesDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 271579.0,
+          "reader_wait_inclusive_ns": 271579.0,
+          "writer_wait_inclusive_ns": 264737.0,
+          "compute_wait_inclusive_ns": 271162.0
+        },
+        "TopkRouteFinishDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 20370.0,
+          "reader_wait_inclusive_ns": 20370.0,
+          "writer_wait_inclusive_ns": 19930.0,
+          "compute_unavailable_rows": 1
+        },
+        "AllGatherDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 38382.0,
+          "reader_wait_inclusive_ns": 35294.0,
+          "writer_wait_inclusive_ns": 38380.0,
+          "compute_unavailable_rows": 2
+        },
+        "UntilizeDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 4261.0,
+          "reader_wait_inclusive_ns": 4165.0,
+          "writer_wait_inclusive_ns": 1721.0,
+          "compute_wait_inclusive_ns": 2077.0
+        },
+        "ReduceDeviceOperation": {
+          "calls": 2,
+          "kernel_ns": 4176.0,
+          "reader_wait_inclusive_ns": 3910.0,
+          "writer_wait_inclusive_ns": 1705.0,
+          "compute_wait_inclusive_ns": 3397.0
+        },
+        "ManualSeedDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 18620.0,
+          "reader_unavailable_rows": 1,
+          "writer_wait_inclusive_ns": 17233.0,
+          "compute_wait_inclusive_ns": 18620.0
+        },
+        "SamplingDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 21442.0,
+          "reader_wait_inclusive_ns": 21441.0,
+          "writer_wait_inclusive_ns": 15898.0,
+          "compute_wait_inclusive_ns": 20270.0
+        },
+        "IndexedFillDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 2870.0,
+          "reader_wait_inclusive_ns": 2870.0,
+          "writer_wait_inclusive_ns": 2638.0,
+          "compute_unavailable_rows": 1
+        },
+        "CopyDeviceOperation": {
+          "calls": 1,
+          "kernel_ns": 6260.0,
+          "reader_wait_inclusive_ns": 6259.0,
+          "writer_wait_inclusive_ns": 5972.0,
+          "compute_unavailable_rows": 1
+        }
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "replay": 0,
+      "host_step_ns": 52291082.218289375,
+      "longest_rank": 4,
+      "device_span_ns": 51991814.07407407,
+      "relative_unaccounted_time": 0.0057231201099646745,
+      "within_five_percent": true
+    },
+    {
+      "replay": 1,
+      "host_step_ns": 52305693.27250123,
+      "longest_rank": 4,
+      "device_span_ns": 52011967.4074074,
+      "relative_unaccounted_time": 0.005615562029998908,
+      "within_five_percent": true
+    },
+    {
+      "replay": 2,
+      "host_step_ns": 52333483.938127756,
+      "longest_rank": 12,
+      "device_span_ns": 52015017.777777776,
+      "relative_unaccounted_time": 0.0060853231312956845,
+      "within_five_percent": true
+    }
+  ],
+  "full_trace_reconciliation_passed": true,
+  "p0_gate_passed": false,
+  "accounting": "Each rank's firmware intervals form a disjoint timeline with explicit overlap and gaps. Firmware includes waits; this is not compute-active time. Longest rank span is compared to the same fenced two-trace host step. No cross-chip clock alignment or summed rank duration is used.",
+  "remaining": [
+    "Unprofiled overhead calibration",
+    "Natural-prompt timing comparison",
+    "TP8 collective costs"
+  ],
+  "csv_sha256": "a9f1cde108a9ab05065330f811373fb442da03621b2fb30eeb50023130f215e9"
+}

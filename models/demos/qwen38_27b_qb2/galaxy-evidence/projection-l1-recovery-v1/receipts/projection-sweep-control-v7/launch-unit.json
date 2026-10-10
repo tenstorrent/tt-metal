@@ -1,0 +1,8 @@
+{
+  "MainPID": "462639",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-projection-sweep-v7-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "fe9095edf11a4a5f8035ce8ef9c9602a"
+}

@@ -1,0 +1,8 @@
+{
+  "MainPID": "467348",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-resident-hardware-v3-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "7effa827159e4f9cb36e5023d6630b0b"
+}

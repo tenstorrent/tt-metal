@@ -1,0 +1,70 @@
+{
+  "captured_at": "2026-10-10T21:50:11.945581+00:00",
+  "files": {
+    "receipts/compact-long-horizon-control-v5/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v5/launch.json",
+      "uncompressed_bytes": 1931,
+      "uncompressed_sha256": "e735addb65e6ed7308b47f592f88d223c3c0d921662b0dc2cc727d0c6408cb3b"
+    },
+    "receipts/compact-long-horizon-v6/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v6/queue.json",
+      "uncompressed_bytes": 1228,
+      "uncompressed_sha256": "a5e5bbe753e3783f18df0b3609177fd0a6d07c1869aed42829f113772c127185"
+    },
+    "receipts/compact-long-horizon-control-v6/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/launch.json",
+      "uncompressed_bytes": 1931,
+      "uncompressed_sha256": "08f5db76622e4291e1db64a17b16f8e67c0e411bca324112eb88d5478dbbdfa6"
+    },
+    "receipts/compact-long-horizon-control-v6/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/launch-unit.json",
+      "uncompressed_bytes": 280,
+      "uncompressed_sha256": "f202dcc9c4396925e33bfd421131a0ada791b8f1a89f57cf8236a0963610fd38"
+    },
+    "receipts/compact-long-horizon-control-v6/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/predecessor-audit.json",
+      "uncompressed_bytes": 1077,
+      "uncompressed_sha256": "531879552877391c8c0d48180446bd399ac5b47792c443f29a328d42ecaa038b"
+    },
+    "receipts/gdn-resident-hardware-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v3/queue.json",
+      "uncompressed_bytes": 620,
+      "uncompressed_sha256": "675b5ea9b65df24806c5b72f2dd440576efa7da641d179ffd1ec8436af2b8e07"
+    },
+    "receipts/gdn-resident-hardware-control-v3/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/launch.json",
+      "uncompressed_bytes": 2206,
+      "uncompressed_sha256": "e91113a74a57fe438354087fe3395152c7d820a54d76e666df3c598e0d0cbeef"
+    },
+    "receipts/gdn-resident-hardware-control-v3/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/launch-unit.json",
+      "uncompressed_bytes": 281,
+      "uncompressed_sha256": "c64184d91a9e311ec4d94b56540f17a9d398e1918c43d442fb5215f6b3d3b54b"
+    },
+    "receipts/gdn-resident-hardware-control-v3/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/predecessor-audit.json",
+      "uncompressed_bytes": 1080,
+      "uncompressed_sha256": "c7de70ed918cf0f5bc60abb00dc78312ed76db6efece4b965b969edaa9875451"
+    },
+    "receipts/gdn-compact-gates-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v3/queue.json",
+      "uncompressed_bytes": 621,
+      "uncompressed_sha256": "8d2158b7ca0fbdc212980312461a249168f831e78cb5cf0bcc62979cf51c9f52"
+    },
+    "receipts/gdn-compact-gates-control-v3/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/launch.json",
+      "uncompressed_bytes": 2177,
+      "uncompressed_sha256": "3ccad5bd77e991727ee6c582f1e9e3cba4799525d484113c3c90088264433ffa"
+    },
+    "receipts/gdn-compact-gates-control-v3/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/launch-unit.json",
+      "uncompressed_bytes": 277,
+      "uncompressed_sha256": "c4731c95f2a5d577360a48d531871f9ed046b8b17a329f2ddccf1a9295844789"
+    },
+    "receipts/gdn-compact-gates-control-v3/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/predecessor-audit.json",
+      "uncompressed_bytes": 1081,
+      "uncompressed_sha256": "af9f0b44999d01cd5c1faab8b794757b37a6ea92149e5ef44adb54662ecbd18d"
+    }
+  }
+}
