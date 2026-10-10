@@ -73,9 +73,15 @@ void kernel_main() {
             noc_async_read(sc.get_noc_addr(j) + off, sc_l1 + (j * 32 + h * 16) * 4, 64);
         }
     }
+    // local mode: this chip's expert offset (one uint32 page of the mesh-sharded ep_off tensor), read with the rows
+    const uint32_t off_l1 = out_l1 + E * 4;
+    if constexpr (local_e > 0) {
+        noc_async_read(TensorAccessor(off_args, get_common_arg_val<uint32_t>(3)).get_noc_addr(0), off_l1, 4);
+    }
     noc_async_read_barrier();
     invalidate_l1_cache();
-    volatile tt_l1_ptr uint32_t* selv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sel_l1);
+    // plain (non-volatile) loads: the reads have landed and nothing else writes these buffers
+    const uint32_t* selv = reinterpret_cast<const uint32_t*>(sel_l1);
     volatile tt_l1_ptr float* scv = reinterpret_cast<volatile tt_l1_ptr float*>(sc_l1);
     volatile tt_l1_ptr float* outv = reinterpret_cast<volatile tt_l1_ptr float*>(out_l1);
 
@@ -101,9 +107,6 @@ void kernel_main() {
             ++count;
         }
     }
-    for (uint32_t e = 0; e < E; ++e) {
-        outv[e] = 0.0f;
-    }
     float sum = 0.0f;
     for (uint32_t k = 0; k < K; ++k) {
         sum += scv[picked[k]];
@@ -114,24 +117,26 @@ void kernel_main() {
     } scale;
     scale.u = scale_bits;
     const float mult = norm ? scale.f / sum : scale.f;
-    for (uint32_t k = 0; k < K; ++k) {
-        outv[picked[k]] = scv[picked[k]] * mult;
-    }
 
     if constexpr (local_e > 0) {
-        // this chip's expert offset (one uint32 page of the mesh-sharded ep_off tensor), then the bf16 row
-        const auto off_acc = TensorAccessor(off_args, get_common_arg_val<uint32_t>(3));
-        const uint32_t off_l1 = out_l1 + E * 4;
-        noc_async_read(off_acc.get_noc_addr(0), off_l1, 4);
-        noc_async_read_barrier();
-        invalidate_l1_cache();
+        // the bf16 row of this chip's local_e experts: zeros, then the picked experts that are local
         const uint32_t e0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1)[0];
         const uint32_t row_l1 = (off_l1 + 64 + 63) & ~63u;
+        volatile tt_l1_ptr uint32_t* row32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_l1);
+        for (uint32_t i = 0; i < (local_e * 2 + 3) / 4; ++i) {
+            row32[i] = 0;
+        }
         volatile tt_l1_ptr uint16_t* row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(row_l1);
-        volatile tt_l1_ptr uint32_t* outu = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_l1);
-        for (uint32_t e = 0; e < local_e; ++e) {
-            const uint32_t u = outu[e0 + e];
-            row[e] = static_cast<uint16_t>((u + 0x7FFFu + ((u >> 16) & 1u)) >> 16);
+        for (uint32_t k = 0; k < K; ++k) {
+            if (picked[k] < e0 || picked[k] >= e0 + local_e) {
+                continue;
+            }
+            union {
+                float f;
+                uint32_t u;
+            } w;
+            w.f = scv[picked[k]] * mult;
+            row[picked[k] - e0] = static_cast<uint16_t>((w.u + 0x7FFFu + ((w.u >> 16) & 1u)) >> 16);
         }
         if constexpr (rows == 0) {
             const auto row_acc = TensorAccessor(out_args, out_addr);
@@ -144,6 +149,12 @@ void kernel_main() {
             noc_async_write_barrier();
             return;
         }
+    }
+    for (uint32_t e = 0; e < E; ++e) {
+        outv[e] = 0.0f;
+    }
+    for (uint32_t k = 0; k < K; ++k) {
+        outv[picked[k]] = scv[picked[k]] * mult;
     }
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {
