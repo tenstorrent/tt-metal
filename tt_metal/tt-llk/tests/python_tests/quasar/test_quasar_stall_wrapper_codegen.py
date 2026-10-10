@@ -119,6 +119,7 @@ def emitted(tmp_path_factory):
             "-DCOMPILE_FOR_TRISC=0",
             "-DTENSIX_FIRMWARE",
             *_quasar_variant_include(),
+            f"-I{_QUASAR_LLK}",
             f"-I{_QUASAR_LLK / 'common/inc'}",
             f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",

@@ -35,3 +35,4 @@
 #define OVRLY_RW_SUB_PORT_CNT   0x00000006 // = 6 in decimal
 #define OVRLY_RD_PORT_CNT       0x00000002 // = 2 in decimal
 #define OVRLY_WR_PORT_CNT       0x00000002 // = 2 in decimal
+#define TENSIX_GATHER           0x00000001 // = 1 in decimal
