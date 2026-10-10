@@ -270,6 +270,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }
