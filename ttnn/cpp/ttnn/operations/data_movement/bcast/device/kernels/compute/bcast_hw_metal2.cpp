@@ -56,4 +56,11 @@ void kernel_main() {
             }
         }
     }
+
+#ifdef BCAST_SCALAR
+    // The scalar is a single tile, waited once before the loop and reused by every iteration, so it
+    // is popped here, after the last read, rather than per iteration. The per-iteration wait and pop
+    // above cover only the !BCAST_SCALAR case.
+    dfb_b.pop_front(onetile);
+#endif
 }
