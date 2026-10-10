@@ -525,3 +525,101 @@ unit_tests_dispatch:
   - filter: "*QuasarDispatchSInstantiatedAndRunning*"
     config: 2x3_DISPATCH
     back2back: true
+
+unit_tests_llk:
+  # LLKQuasarMeshDeviceSingleCardFixture:
+  # mailboxes, BFD datacopy, MX fp4/fp6/fp8/int typecast, DFB broadcast,
+  # transpose-dest, pack/unpack tilize, reconfig, matmul no-MOP and MxFp4x2,
+  # column reduce MxFp4x2, SFPU reduce, Quasar SFPU relu / unpack-to-dest.
+  - filter: "LLKQuasarMeshDeviceSingleCardFixture*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Unary SFPU on LLKMeshDeviceFixture, including approx, 32-bit dest, and
+  # the Int32 unary suite. On Quasar none of these ops take the arch skip.
+  - filter: "*SingleCoreSfpuCompute*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Binary and ternary SFPU. These skip on Wormhole and Blackhole and run
+  # on Quasar.
+  - filter: "*SingleCoreSfpuBinaryCompute*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "*SingleCoreSfpuTernaryCompute*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Typecast pairs that do not hit the in-test skip (UInt8, Int16, or a
+  # non-Float32 input packed to Int32).
+  - filter: "*Float16_b_to_Float32*:*Float16_b_to_MxFp8P*:*Float16_b_to_MxFp8R*:*Float32_to_Float16_b*:*Float32_to_Int32*:*Float32_to_MxFp8P*:*Float32_to_MxFp8R*:*Int32_to_Float16_b*:*Int32_to_Float32*:*Int32_to_MxFp8P*:*Int32_to_MxFp8R*:*MxFp8P_to_Float16_b*:*MxFp8P_to_Float32*:*MxFp8R_to_Float16_b*:*MxFp8R_to_Float32*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Tilize / untilize on LLKMeshDeviceFixture. Exact ids so the Quasar skips
+  # (UnpackTilizeA_B, PackUntilizeDstTinyTile) and the Blackhole format
+  # sweeps stay out. Quasar-only untilize cases are on LLKQuasarMeshDeviceSingleCardFixture.
+  - filter: "LLKMeshDeviceFixture.TensixComputeUnpackTilize:LLKMeshDeviceFixture.TensixComputeFastTilize:LLKMeshDeviceFixture.TensixComputePackUntilize:LLKMeshDeviceFixture.TensixComputePackUntilizeDst:LLKMeshDeviceFixture.TensixComputeFastUntilize"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Transpose WH on LLKMeshDeviceFixture. TransposeWHDest skips on Quasar;
+  # the dest variants are QuasarTransposeWHDest* on LLKQuasarMeshDeviceSingleCardFixture.
+  - filter: "LLKMeshDeviceFixture.TensixComputeTransposeWH:LLKMeshDeviceFixture.TensixComputeTransposeWHShortInit"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Reduce on LLKMeshDeviceSingleCardFixture. Runs on Blackhole and Quasar.
+  # ReduceWTinyTiles skips on Quasar. MxFp4 column reduce is on LLKQuasarMeshDeviceSingleCardFixture.
+  - filter: "LLKMeshDeviceSingleCardFixture.TensixComputeReduceH:LLKMeshDeviceSingleCardFixture.TensixComputeReduceW:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHW:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHMathOnly:LLKMeshDeviceSingleCardFixture.TensixComputeReduceWMathOnly:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHWMathOnly"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Eltwise binary on LLKMeshDeviceFixtureSlowDispatchOnly. Single-tile,
+  # multi-tile, dest-acc, and with-dest-reuse. Skipped on Quasar: dest-reuse
+  # directions, col broadcast, and tiny-tile row broadcast.
+  - filter: "*TensixBinaryComputeSingleCoreSingleTile*:*TensixBinaryComputeSingleCoreMultiTileAdd*:*TensixBinaryComputeSingleCoreMultiTileSub*:*TensixBinaryComputeSingleCoreMultiTileMul*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar.
+  # No-MOP and MxFp4x2 are on LLKQuasarMeshDeviceSingleCardFixture. Single-tile and single-block
+  # single-tile matmul skip on Quasar.
+  - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # copy_block / pack_block on LLKMeshDeviceFixture. Quasar returns after the
+  # first sync mode; the test still runs.
+  - filter: "LLKMeshDeviceFixture.TensixComputeCopyBlockMultiple:LLKMeshDeviceFixture.TensixComputeCopyBlockComputeBottleneck:LLKMeshDeviceFixture.TensixComputeCopyPackBlockMultiple:LLKMeshDeviceFixture.TensixComputeCopyPackBlockComputeBottleneck"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "LLKMeshDeviceFixture.TensixComputeCumsumColumnwise:LLKMeshDeviceFixture.TensixComputeCumsumRowwise"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1

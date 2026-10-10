@@ -876,7 +876,7 @@ INSTANTIATE_TEST_SUITE_P(
                           MathFidelity::HiFi4,
                           20}));  // Row 20
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
     for (std::uint8_t op = std::uint8_t(EltwiseOp::ADD); op <= std::uint8_t(EltwiseOp::MUL); op++) {
         for (std::uint8_t dim = std::uint8_t(BroadcastDim::ROW); dim <= std::uint8_t(BroadcastDim::SCALAR); dim++) {
             for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi);
@@ -925,7 +925,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 //   - the tiny-tile (16x32) cases come last and mostly repeat a full-tile shape, so a red tiny-tile
 //     case with its full-tile twin green isolates the shape-driven parts (face-row count, dest slot
 //     stride, per-face unpack, buffer-descriptor z_dim).
-TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {
