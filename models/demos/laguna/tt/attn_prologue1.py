@@ -8,6 +8,7 @@ the layout moves between them (~16 ops at batch 1, ~11 at 6 rows). For each toke
 core (b, 1) builds k and copies v: each gathers row b of the qkv output into a head-major [32 (heads), 128] block,
 then RMSNorm + RoPE run on the tile engine."""
 
+import os
 import struct
 from pathlib import Path
 
@@ -54,8 +55,15 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
     eps_bits = struct.unpack("<I", struct.pack("<f", float(eps)))[0]
     w_page, cs_page = _tile_bytes(q_norm.dtype), _tile_bytes(cos.dtype)
     kernels, cbs = [], []
+    # q heads over QP cores per row (core y = part, TT_LAGUNA_AP1_QPARTS; even head counts per part), k on y = QP
+    qp = max(1, int(os.environ.get("TT_LAGUNA_AP1_QPARTS", "3")))
+    hp = -(-nq // qp)
+    hp += hp % 2
+    qp = -(-nq // hp)
     for role, (w, nh, off, out) in enumerate(((q_norm, nq, 0, q), (k_norm, nkv, nq * 4, k))):
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, role), ttnn.CoreCoord(rows - 1, role))})
+        y0, y1 = (0, qp - 1) if role == 0 else (qp, qp)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(rows - 1, y1))})
+        per_part = hp if role == 0 else nh
         acc = []
         for t in (qkv, w, cos, sin, scaler):
             acc.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -63,7 +71,7 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
             kernel_source=str(_KDIR / "ap1_reader.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
-            compile_time_args=[role, nh, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page] + acc,
+            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq] + acc,
             common_runtime_args=[qkv.buffer_address(), cos.buffer_address(), sin.buffer_address(),
                                  scaler.buffer_address(), w.buffer_address()],
             config=ttnn.ReaderConfigDescriptor(),
@@ -72,7 +80,7 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
             kernel_source=str(_KDIR / "ap1_writer.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
-            compile_time_args=[role] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+            compile_time_args=[role, hp, nq, qp if role == 0 else 1] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
             + list(ttnn.TensorAccessorArgs(v).get_compile_time_args()),
             common_runtime_args=[out.buffer_address(), v.buffer_address()],
             config=ttnn.WriterConfigDescriptor(),
