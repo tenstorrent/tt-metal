@@ -11,7 +11,12 @@ from loguru import logger
 import ttnn
 from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.warmup import WarmupForwardMixin
-from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+from models.demos.qwen25_vl.tt.common import (
+    get_block_size,
+    get_max_prefill_chunk_size,
+    get_padded_prefill_len,
+    num_blocks_in_seq,
+)
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
@@ -227,12 +232,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prompt_lens=None,
         enable_trace=True,
         empty_slots=None,
+        start_pos=None,  # per-user cached prefix lengths (vLLM automatic prefix caching); None/zeros = full prefill
     ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
+        num_cached_per_user = self._normalize_start_pos(start_pos, batch)
+        any_cached = any(n > 0 for n in num_cached_per_user)
         max_batch_size_per_model = self.model_args.max_batch_size
 
         if empty_slots is None:
@@ -250,11 +258,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         users_per_group = max_batch_size_per_model if self.data_parallel > 1 else batch
         use_batched_prefill = (
             batch > 1
+            and not any_cached  # a resumed prefill runs per user from its own cached offset
             and batch_seq_len * min(users_per_group, max_batch) <= MAX_BATCHED_PREFILL_SEQ_LEN
             and not getattr(self.model_args, "disable_batched_prefill", False)
             and page_table is not None
             and first_kv_cache is not None
         )
+        if any_cached:
+            assert page_table is not None and first_kv_cache is not None, "a cached prefix needs paged attention"
+            num_cached_per_user = self._align_cached_prefix_offsets(num_cached_per_user, prompt_lens, first_kv_cache)
 
         if use_batched_prefill:
             total_tokens = batch_seq_len * batch
@@ -375,6 +387,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     rot_mats[0][idx : idx + 1],
                     rot_mats[1][idx : idx + 1],
                 )
+
+                num_cached = num_cached_per_user[idx]
+                if num_cached > 0:
+                    output_logits[idx] = self.__prefill_forward_resumed_user_text(
+                        tokens[idx : idx + 1],
+                        page_table[idx : idx + 1],
+                        num_cached,
+                        seq_len,
+                        rot_mats=user_rot_mats,
+                        kv_cache=model_kv_cache,
+                        model_id=model_id,
+                    )
+                    continue
 
                 if use_trace and self._prefill_trace_usable(batch_seq_len, model_id):
                     pt_user = page_table[idx : idx + 1, :num_blocks_padded]
@@ -599,6 +624,125 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             reload_page_table=reload_page_table,
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
+        )
+
+    @staticmethod
+    def _normalize_start_pos(start_pos, batch):
+        """Per-user cached prefix lengths as ints (vLLM passes a tensor of positions, demos pass nothing)."""
+        if start_pos is None:
+            return [0] * batch
+        if isinstance(start_pos, torch.Tensor):
+            start_pos = start_pos.reshape(-1).tolist()
+        start_pos = [int(x) for x in start_pos]
+        assert len(start_pos) == batch, f"start_pos has {len(start_pos)} entries for a batch of {batch}"
+        assert all(x >= 0 for x in start_pos), f"negative cached prefix length in start_pos={start_pos}"
+        return start_pos
+
+    def _align_cached_prefix_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
+        """Floor each cached prefix length to what the paged K/V writes and the chunked SDPA need.
+
+        vLLM caches whole KV blocks, so an offset is already a multiple of the block size; the
+        chunked SDPA additionally needs ``chunk_start_idx`` on the q-chunk its program is built
+        with for the padded suffix length. Flooring recomputes at most ``alignment - 1`` tokens,
+        whose K/V is rewritten identically into the same blocks. Mirrors the shared
+        tt_transformers generator's ``_align_resume_offsets``.
+        """
+        block_size = get_block_size(kv_cache)
+        aligned = []
+        for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
+            num_cached, seq_len = int(num_cached), int(seq_len)
+            if num_cached <= 0:
+                aligned.append(0)
+                continue
+            assert (
+                num_cached < seq_len
+            ), f"user {i}: cached prefix {num_cached} must be shorter than the prompt {seq_len}"
+            floored = (num_cached // block_size) * block_size
+            for _ in range(8):
+                padded_suffix = get_padded_prefill_len(seq_len - floored)
+                alignment = self._ttt_generator._resume_offset_alignment(padded_suffix, block_size)
+                settled = (num_cached // alignment) * alignment
+                if settled == floored:
+                    break
+                floored = settled
+            else:
+                raise RuntimeError(
+                    f"user {i}: cached prefix alignment did not settle (start_pos={num_cached}, seq_len={seq_len})"
+                )
+            if floored != num_cached:
+                logger.debug(f"Cached prefix alignment: user {i} start_pos {num_cached} -> {floored}")
+            aligned.append(floored)
+        return aligned
+
+    def __prefill_forward_resumed_user_text(
+        self, tokens, page_table, num_cached, seq_len, rot_mats, kv_cache, model_id=0
+    ):
+        """Prefill one user whose first ``num_cached`` tokens are already in the paged KV cache.
+
+        The uncached suffix is padded to a prefill bucket and run as chunk(s) starting at the
+        (aligned) cached offset: ``prepare_inputs_prefill(start_pos=...)`` selects the suffix's
+        rotary rows and ``chunk_start_idx`` makes the chunked SDPA attend over the cached prefix
+        through the user's page table. ``tokens`` are the user's embeddings padded to the full
+        prompt bucket; ``rot_mats`` cover the whole sequence. Not traced: the suffix bucket and
+        offset vary per request.
+        """
+        model_inst = self._ttt_generator.model[model_id]
+        model_args_inst = self._ttt_generator.model_args[model_id]
+        block_size = get_block_size(kv_cache)
+        assert num_cached % block_size == 0, f"cached prefix {num_cached} is not block aligned ({block_size})"
+        padded_suffix = get_padded_prefill_len(seq_len - num_cached)
+        end = num_cached + padded_suffix
+        if tokens.shape[1] < end:  # suffix bucket runs past the prompt bucket: extend with the pad rows
+            pad = tokens[:, -1:, :].expand(-1, end - tokens.shape[1], -1)
+            tokens = torch.cat([tokens, pad], dim=1)
+        num_blocks = num_blocks_in_seq(end, block_size)
+        page_table_user = page_table[0:1, :]
+        if page_table_user.shape[1] < num_blocks:
+            page_table_user = torch.cat(
+                [page_table_user, torch.zeros(1, num_blocks - page_table_user.shape[1], dtype=page_table_user.dtype)],
+                dim=-1,
+            )
+        chunk_size = (
+            padded_suffix
+            if padded_suffix <= model_args_inst.max_prefill_chunk_size
+            else get_max_prefill_chunk_size(padded_suffix, model_args_inst.max_prefill_chunk_size)
+        )
+        last_token_idx = seq_len - 1
+        logger.info(
+            f"Resumed prefill: {num_cached} cached + {seq_len - num_cached} new tokens"
+            f" (suffix bucket {padded_suffix}, chunk {chunk_size}, DP group {model_id})"
+        )
+        CHUNK_USER_ID = 0
+        for chunk_start in range(num_cached, end, chunk_size):
+            chunk_end = chunk_start + chunk_size
+            chunk_tokens = tokens[:, chunk_start:chunk_end]
+            chunk_page_table = page_table_user[:, chunk_start // block_size : num_blocks_in_seq(chunk_end, block_size)]
+            chunk_prefill_input, chunk_rot_mats, page_table_tt, chunk_page_table_tt = model_inst.prepare_inputs_prefill(
+                chunk_tokens,
+                rot_mats=rot_mats,
+                start_pos=chunk_start,
+                page_table=page_table_user,
+                chunk_page_table=chunk_page_table,
+            )
+            holds_last = chunk_start <= last_token_idx < chunk_end
+            last_in_chunk = (last_token_idx - chunk_start) if holds_last else 0
+            tt_logits = model_inst.ttnn_prefill_forward(
+                chunk_prefill_input,
+                rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats],
+                user_id=CHUNK_USER_ID,
+                page_table=page_table_tt,
+                chunk_page_table=chunk_page_table_tt,
+                chunk_start_idx=chunk_start,
+                get_last_token=(last_in_chunk // 32) * 32,
+                kv_cache=kv_cache,
+            )
+            if holds_last:
+                logits = model_inst.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_in_chunk % 32))
+                ttnn.deallocate(tt_logits)
+                return logits
+            del tt_logits
+        raise RuntimeError(
+            f"resumed prefill never reached the last token {last_token_idx} (cached {num_cached}, end {end})"
         )
 
     def __prefill_forward_single_user_text(
