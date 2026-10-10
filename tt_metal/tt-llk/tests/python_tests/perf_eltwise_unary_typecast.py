@@ -4,13 +4,11 @@
 """
 On-silicon perf benchmark for the SFPU typecast op (issue #46751).
 
-Measures cycles/tile for the typecast variants whose SFPLOADMACRO fast path was
-re-introduced for Blackhole. The macro fast path in the calculate_typecast_*
-primitives is gated `#ifndef DISABLE_SFPLOADMACRO`; compiling with
-TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback.
-Running this module twice -- once without the env (macro ON,
-optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
--- gives a clean A/B on the same tree.
+Measures cycles/tile for the typecast pairs. Most rows run SFPLOADMACRO bodies, whose
+fast path in the calculate_typecast_* primitives is gated `#ifndef DISABLE_SFPLOADMACRO`;
+compiling with TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback, so running
+this module with and without that env gives an A/B on the same tree. The last three rows
+are plain loops in both builds.
 
 Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
@@ -48,27 +46,36 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
-# The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
-# including the paths re-introduced by issue #46751.
+# The (IN, OUT, dest_acc) typecast cases: the SFPLOADMACRO bodies, then three plain-loop
+# bodies that have no DISABLE_SFPLOADMACRO variant.
 #
-# dest_acc is the production setting EXCEPT for the two rows marked below: their
-# macro fast path is gated !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes
-# for 32-bit outputs (typecast.cpp:38-41), so production takes the plain loop. Those
-# rows measure the macro in isolation and their speedup is not production-realized.
+# dest_acc is the production setting except in the two 16-bit Dest rows marked below
+# (ttnn.typecast forces dest_acc=Yes for 32-bit outputs); their 32-bit Dest rows follow.
 _TYPECAST_PERF_CASES = [
     # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
     # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
-    # uint16_to_fp32 -- NOT production-reachable (Float32 out -> dest_acc=Yes).
+    # uint16_to_fp32, 16-bit Dest: not reachable from ttnn (Float32 out forces dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
+    # uint16_to_fp32, 32-bit Dest: the production setting.
+    (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.Yes),
     # uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
     # Exact uint32 -> fp32 conversion with a three-cycle SFPLOADMACRO pipeline.
     (DataFormat.UInt32, DataFormat.Float32, DestAccumulation.Yes),
-    # uint16_to_uint32 -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
+    # uint16_to_uint32, 16-bit Dest: not reachable from ttnn (UInt32 out forces dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
+    # uint16_to_uint32, 32-bit Dest: the production setting.
+    (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.Yes),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
+    # fp32_to_uint16, 32-bit Dest: the production setting for a Float32 input.
+    (DataFormat.Float32, DataFormat.UInt16, DestAccumulation.Yes),
+    # fp32_to_fp16b: a plain loop in every Dest mode.
+    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    # fp32_to_int32 and fp32_to_uint32 from a bf16 input: the integer arithmetic bodies.
+    (DataFormat.Float16_b, DataFormat.Int32, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.UInt32, DestAccumulation.Yes),
 ]
 
 
@@ -85,7 +92,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         8,
-    ],  # SFPU iteration count; the typecast dispatch hardcodes 8 ITERATIONS internally
+    ],  # SFPU iteration count; on Blackhole the typecast dispatch issues one 32-row call, as typecast_tile does
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],

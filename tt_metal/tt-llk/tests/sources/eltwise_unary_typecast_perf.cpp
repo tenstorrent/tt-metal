@@ -23,7 +23,7 @@
 //   TYPECAST_IN_FORMAT   : DataFormat of the typecast input  (typecast IN_DTYPE)
 //   TYPECAST_OUT_FORMAT  : DataFormat of the typecast output (typecast OUT_DTYPE)
 //   APPROX_MODE          : SFPU approximation mode
-//   ITERATIONS           : SFPU iteration count (typecast dispatch uses 8)
+//   ITERATIONS           : SFPU iteration count of an 8-row call (Blackhole issues one 32-row call)
 //
 
 #include <algorithm>
