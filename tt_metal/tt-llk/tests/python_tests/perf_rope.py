@@ -18,25 +18,29 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (rows, width tiles, stride, fused cos and sin, cos and sin per row, stage, rows per tile)
+# (heads, width tiles, stride, fused cos and sin, cos and sin per row, stage, rows per tile, scale)
 VARIANTS = [
-    (1, 1, 64, True, False, 1, 1),
-    (4, 1, 64, True, False, 1, 1),
-    (2, 2, 32, True, False, 1, 1),
-    (4, 1, 64, False, False, 1, 1),
-    (1, 1, 64, True, True, 1, 1),
-    (4, 1, 64, True, False, 0, 1),
-    (1, 1, 64, True, False, 1, 8),
-    (1, 1, 64, True, True, 1, 8),
-    (1, 1, 64, True, False, 1, 16),
-    (1, 1, 32, True, False, 1, 16),
-    (1, 1, 64, True, False, 1, 32),
-    (1, 1, 64, True, True, 1, 32),
-    (1, 2, 64, True, False, 1, 32),
-    (2, 1, 64, True, False, 1, 32),
-    (2, 2, 64, True, False, 1, 32),
-    (2, 2, 64, True, True, 1, 32),
+    (1, 1, 64, True, False, 1, 1, False),
+    (4, 1, 64, True, False, 1, 1, False),
+    (2, 2, 32, True, False, 1, 1, False),
+    (4, 1, 64, False, False, 1, 1, False),
+    (1, 1, 64, True, True, 1, 1, False),
+    (4, 1, 64, True, False, 0, 1, False),
+    (1, 1, 64, True, False, 1, 8, False),
+    (1, 1, 64, True, True, 1, 8, False),
+    (1, 1, 64, True, False, 1, 16, False),
+    (1, 1, 32, True, False, 1, 16, False),
+    (1, 1, 64, True, False, 1, 32, False),
+    (1, 1, 64, True, True, 1, 32, False),
+    (1, 2, 64, True, False, 1, 32, False),
+    (2, 1, 64, True, False, 1, 32, False),
+    (2, 2, 64, True, False, 1, 32, False),
+    (2, 2, 64, True, True, 1, 32, False),
+    (2, 1, 64, True, True, 1, 32, True),
+    (7, 1, 64, True, True, 1, 32, False),
 ]
+# -2.0f, any value: the scale only multiplies cos and sin.
+SCALE_FP32 = 0xC0000000
 
 
 @pytest.mark.perf
@@ -44,8 +48,11 @@ VARIANTS = [
 def test_perf_rope(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
-    ht, wt, stride, fused, per_row, stage, tile_h = variant
+    ht, wt, stride, fused, per_row, stage, tile_h, scale = variant
     geometry = _geometry(ht, wt, stride)
+    if fused:
+        # One fused cos and sin tile per width tile, as in test_rope.py.
+        geometry["sin_base"] = geometry["cos_base"]
     tiles = _dest_tiles(geometry)
     configuration = PerfConfig(
         "sources/rope_perf.cpp",
@@ -56,8 +63,8 @@ def test_perf_rope(perf_report, variant):
                 fused_cos_sin=fused,
                 tile_h=tile_h,
                 cos_sin_per_row=per_row,
-                has_scale=False,
-                scale_fp32=0,
+                has_scale=scale,
+                scale_fp32=SCALE_FP32 if scale else 0,
                 **geometry,
             ),
             PERF_STAGE(stage),
