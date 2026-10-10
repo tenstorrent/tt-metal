@@ -71,9 +71,10 @@ void bind_rgb_to_yuv(nb::module_& mod) {
            RGBRange input_range,
            YUVRange output_range,
            const std::optional<prim::YUVCoefficients>& coefficients,
-           const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+           const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+           uint32_t input_patch_size) {
             return ttnn::experimental::rgb_to_yuv(
-                input, format, color_space, input_range, output_range, coefficients, memory_config);
+                input, format, color_space, input_range, output_range, coefficients, memory_config, input_patch_size);
         },
         "input"_a,
         nb::kw_only(),
@@ -83,6 +84,7 @@ void bind_rgb_to_yuv(nb::module_& mod) {
         "output_range"_a = YUVRange::Limited,
         "coefficients"_a = nb::none(),
         "memory_config"_a = nb::none(),
+        "input_patch_size"_a = 0,
         R"doc(
 Convert a CHWT bfloat16 tensor (C=3, RGB) to YUV 4:2:0 uint8.
 
@@ -103,6 +105,10 @@ Keyword Args:
         power users needing a custom matrix.
     memory_config: Output memory configuration.  Defaults to the input memory
         config.  Must be interleaved -- sharded output is not supported.
+    input_patch_size: 0 (default) for CHWT input.  An even p >= 2 takes a
+        patchified (1, T, H/p, W/p, 3*p*p) row-major tensor instead, channel
+        index c*p*p + r*p + q for pixel (row h*p + q, column w*p + r), and
+        unpatchifies it while reading.
 )doc");
 }
 

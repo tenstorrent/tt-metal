@@ -56,12 +56,16 @@ def _bt601_yuv_coefficients():
     return ttnn.experimental.yuv_bt601_coefficients()
 
 
-def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None):
-    """Pure device region, preserving RGB clip before every color/chroma operation."""
+def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None, input_patch_size: int = 0):
+    """Pure device region, preserving RGB clip before every color/chroma operation.
+
+    input_patch_size: 0 for CHWT input; p for a patchified (1, T, H/p, W/p, 3*p*p) tensor, which
+    rgb_to_yuv unpatchifies while reading.
+    """
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
     tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, input_patch_size=input_patch_size)
 
 
 def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):

@@ -853,6 +853,8 @@ class LTXVideoDecoder(Module):
         self._decode_tracer = None
         self._yuv_output_tracer = None
         self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
+        # rgb_to_yuv reads conv_out's patchified output directly instead of after a reshape + permute.
+        self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "0") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
         self.exact_shard = _exact_shard_enabled()
         self._decode_logical_hw = (0, 0)
@@ -1046,6 +1048,8 @@ class LTXVideoDecoder(Module):
         b, t, h, w, channels = tuple(sample_tt.shape)
         q = r = self.patch_size
         assert b == 1 and channels == 3 * q * r
+        if self.fuse_unpatch:
+            return rgb_chwt_to_yuv_device(sample_tt, input_patch_size=q)
         # Channels are (c,p,r,q) with p=1; the output order is C,H,q,W,r,T. The p axis is left out so T
         # is the permute's innermost dim: a trailing size-1 axis makes the RM permute move 1-element
         # rows and turns the final reshape into a copy instead of a view.
