@@ -655,7 +655,9 @@ class LagunaForCausalLM:
             if nxt is not None and nxt[1] == (cache._request_id, *cache.context_bounds()):
                 # this round's bonus and inputs are on device already (uploaded during the last verify)
                 sv = self._dflash_draft_variants[nxt[0]]
-                ttnn.execute_trace(self.mesh_device, sv["tid"], cq_id=0, blocking=False)
+                launched, self._dflash_draft_launched = getattr(self, "_dflash_draft_launched", None), None
+                if launched != nxt[1]:
+                    ttnn.execute_trace(self.mesh_device, sv["tid"], cq_id=0, blocking=False)
                 return [int(t) for t in self.gen._read_token(sv["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
             start, rows = cache.context_bounds()
             block = build_proposal_block(self._dflash_core.config, bonus_token_id=int(bonus_token_id),
@@ -768,7 +770,17 @@ class LagunaForCausalLM:
         cache.ring_commit(start, committed, written=rows)
         prepared, self._dflash_variants_for = getattr(self, "_dflash_variants_for", None), None
         if prepared == (start, rows) and 1 <= committed <= rows:
-            self._dflash_next_variant = (committed - 1, (cache._request_id, *cache.context_bounds()))
+            key = (cache._request_id, *cache.context_bounds())
+            self._dflash_next_variant = (committed - 1, key)
+            # launch the next round's draft now (its inputs and bonus are on device), so it runs while the host
+            # returns this round's committed tokens one decode call at a time -- unless the next round cannot be a
+            # full round (a one-row target fallback near a KV block edge, or the end of max_model_len)
+            nxt = start + committed
+            proposal_rows = int(self._dflash_core.config.block_size)
+            full = not (nxt % 64 > 48 and self._dflash_lookahead_tokens() < proposal_rows)
+            if full and nxt + proposal_rows <= int(self.max_model_len) and os.environ.get("TT_LAGUNA_DFLASH_EARLY_DRAFT", "1") == "1":
+                ttnn.execute_trace(self.mesh_device, self._dflash_draft_variants[committed - 1]["tid"], cq_id=0, blocking=False)
+                self._dflash_draft_launched = key
         return True
 
     def _dflash_after_verify(self, position, rows):
