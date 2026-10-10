@@ -929,6 +929,53 @@ class TestCustomOperationsWithDevice:
             err_msg="Python and C++ grouped_heads_creation kvs gradients differ",
         )
 
+    @pytest.mark.parametrize("selected_output", [0, 1, 2], ids=["q", "k", "v"])
+    def test_cpp_heads_creation_partial_output_backward(self, selected_output):
+        """Unused sibling outputs contribute zero to the shared C++ backward."""
+        ctx = ttml.autograd.AutoContext.get_instance()
+        ctx.reset_graph()
+        try:
+            qkv_data = np.zeros((1, 1, 32, 384), dtype=np.float32)
+            qkv = ttml.autograd.Tensor.from_numpy(qkv_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+            qkv.set_requires_grad(True)
+
+            outputs = ttml.ops.multi_head_utils.heads_creation(qkv, num_heads=4)
+            assert all(not output.is_grad_initialized() for output in outputs)
+
+            outputs[selected_output].backward(retain_graph=False)
+
+            expected = np.zeros_like(qkv_data)
+            expected[..., selected_output * 128 : (selected_output + 1) * 128] = 1.0
+            np.testing.assert_allclose(qkv.get_grad_tensor().to_numpy().astype(np.float32), expected, rtol=0, atol=1e-3)
+        finally:
+            ctx.reset_graph()
+
+    def test_cpp_grouped_heads_creation_q_only_backward(self):
+        """A Q-only loss must treat the missing grouped K/V gradients as zero."""
+        ctx = ttml.autograd.AutoContext.get_instance()
+        ctx.reset_graph()
+        try:
+            qs_data = np.zeros((1, 1, 32, 128), dtype=np.float32)
+            kvs_data = np.zeros((1, 1, 32, 128), dtype=np.float32)
+            qs = ttml.autograd.Tensor.from_numpy(qs_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+            kvs = ttml.autograd.Tensor.from_numpy(kvs_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+            qs.set_requires_grad(True)
+            kvs.set_requires_grad(True)
+
+            q, k, v = ttml.ops.multi_head_utils.grouped_heads_creation(qs, kvs, num_heads=4, num_groups=2)
+            assert all(not output.is_grad_initialized() for output in (q, k, v))
+
+            q.backward(retain_graph=False)
+
+            np.testing.assert_allclose(
+                qs.get_grad_tensor().to_numpy().astype(np.float32), np.ones_like(qs_data), rtol=0, atol=1e-3
+            )
+            np.testing.assert_allclose(
+                kvs.get_grad_tensor().to_numpy().astype(np.float32), np.zeros_like(kvs_data), rtol=0, atol=1e-3
+            )
+        finally:
+            ctx.reset_graph()
+
     def test_python_grouped_heads_creation_multi_output_nodes(self):
         """Test that multi-output operation properly handles nodes in autograd graph."""
         batch_size = 64
