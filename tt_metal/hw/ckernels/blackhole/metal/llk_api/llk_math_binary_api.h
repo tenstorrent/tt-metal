@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_binary_src_dvalid.h"
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
 #include "sanitizer/api.h"
@@ -77,7 +78,7 @@ inline void llk_math_eltwise_binary_impl(
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @tparam src_dvalid: Source bank hand-off, PerFace or PerTile; must match the unpack init of the op
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
- * @param operand_B: Unused.
+ * @param operand_B: Logical dataflow buffer id for input B, read for a row or column broadcast with SrcDvalid::PerTile.
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
  */
 template <
@@ -93,12 +94,8 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    if constexpr (
-        src_dvalid == SrcDvalid::PerTile &&
-        (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
-        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
-        const std::uint32_t operand_b_id = get_operand_id(operand_B);
-        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+    if constexpr (eltwise_binary_bcast_per_tile<src_b_bcast_type, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(get_operand_id(operand_B))) {
             llk_math_eltwise_binary_init_impl<
                 eltwise_binary_type,
                 src_b_bcast_type,
@@ -185,12 +182,8 @@ inline void llk_math_eltwise_binary(
         StateDiscard<std::uint32_t>(dst_index),
         StateDiscard<bool>(clear_fp32_dst_acc)));
 
-    if constexpr (
-        src_dvalid == SrcDvalid::PerTile &&
-        (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
-        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
-        const std::uint32_t operand_b_id = get_operand_id(operand_B);
-        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+    if constexpr (eltwise_binary_bcast_per_tile<src_b_bcast_type, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(get_operand_id(operand_B))) {
             llk_math_eltwise_binary_impl<
                 eltwise_binary_type,
                 src_b_bcast_type,

@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_binary_src_dvalid.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
@@ -68,9 +69,8 @@ inline void llk_unpack_AB_init(
         StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
-    if constexpr (src_dvalid == SrcDvalid::PerTile && (BType == BroadcastType::COL || BType == BroadcastType::ROW)) {
-        // Its SrcB layout reads B as 16-row faces: a row or column broadcast from a smaller B tile stays per face
-        if (get_operand_face_r_dim(operandB_id) != FACE_R_DIM || get_operand_num_faces(operandB_id) != 4) {
+    if constexpr (eltwise_binary_bcast_per_tile<BType, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(operandB_id)) {
             llk_unpack_AB_init_impl<BType, SrcDvalid::PerFace>(tensor_shape, transpose);
             return;
         }
