@@ -296,21 +296,24 @@ inline void _llk_unpack_tilize_(
  *************************************************************************/
 
 /**
- * @brief Program the unpacker MOP/replay buffer for tilize-A-with-unpack-B.
+ * @brief Program the unpacker MOP for tilize-A-with-unpack-B.
  *
- * Builds a replay buffer that unpacks one 1x16 row of SrcA at a time and advances the SrcA L1
- * base address (per config context) by the programmed column stride.
+ * Programs the MOP that unpacks the SrcA tilize rows and the SrcB face for one run;
+ * @ref _llk_unpack_tilizeA_B_ sets the SrcA L1 address before each run.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
  * @tparam zero_srcA: Clear SrcA to zero before unpacking.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param narrow_tile: The tile is one face wide; each MOP run then unpacks a single face. Not supported
+ *        with zero_srcA, whose MOP is sized from num_faces.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
-inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
+inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!(zero_srcA && narrow_tile), "tilizeA_B with zero_srcA does not support narrow tiles");
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(
@@ -338,7 +341,8 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
                                                                                                                 // product
 
     const std::uint32_t innerloop = zero_srcA ? (num_faces > 2 ? 2 : (num_faces - 1)) : 1;
-    const std::uint32_t outerloop = zero_srcA ? 1 : (num_faces > 2) ? num_faces / 2 : num_faces;
+    // The execute runs the MOP once per face-row for full-width tiles and once per face for narrow ones.
+    const std::uint32_t outerloop = (zero_srcA || narrow_tile) ? 1 : (num_faces > 2) ? num_faces / 2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces == 2) ? unpack_srcb_2_face : unpack_srcb));
     if constexpr (neginf_srcA)
     {
@@ -420,7 +424,7 @@ inline void _llk_unpack_tilizeA_B_init_(
         THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32,
         p_gpr_unpack::FACE_DIM_1x16); // GPR preloaded with  16 | (16 << 16)
 
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces, narrow_tile);
 }
 
 /**
@@ -465,7 +469,8 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t bot_face_offset_address = SCALE_DATUM_SIZE(unpA_src_format, face_r_dim * block_c_dim_16B); //*N rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
+    // One loop for a 1-face tile, two single-face loops for a narrow tile, num_faces / 2 face-row loops otherwise.
+    std::uint32_t num_loops = (num_faces == 1) ? 1 : (narrow_tile ? 2 : num_faces / 2);
 
     // Clear z/w start counters for SrcB
     TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
