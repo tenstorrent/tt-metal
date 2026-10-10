@@ -148,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Replace the MOP with the block-contiguous version.
     // This programs REPLAY buffer + MOP for sparse DEST -> dense L1.
     // num_tiles is intentionally NOT passed here — the execute function
-    // sets mop_cfg[0] = num_tiles at runtime, so mop_config only needs
+    // passes num_tiles in each MOP instruction, so mop_config only needs
     // the tile shape (face_r_dim, num_faces).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
 #endif

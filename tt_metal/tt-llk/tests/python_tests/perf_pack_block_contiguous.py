@@ -34,21 +34,14 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (tile dimensions, tiles per call, block form)
-VARIANTS = [
-    (dims, num_tiles, block)
-    for dims in ((32, 32), (16, 32), (1, 32))
-    for num_tiles in (1, 2, 4, 8)
-    for block in (True, False)
-]
-
 
 @pytest.mark.perf
-@parametrize(variant=VARIANTS)
-def test_perf_pack_block_contiguous(perf_report, variant):
-    if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
-        (variant,) = variant
-    tile_dims, num_tiles, block = variant
+@parametrize(
+    tile_dims=[(32, 32), (16, 32), (1, 32)],
+    num_tiles=[1, 2, 4, 8],
+    block=[True, False],
+)
+def test_perf_pack_block_contiguous(perf_report, tile_dims, num_tiles, block):
     formats = InputOutputFormat(BF16, BF16)
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
