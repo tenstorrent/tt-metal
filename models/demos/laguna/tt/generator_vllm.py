@@ -177,7 +177,8 @@ class LagunaForCausalLM:
     _DFLASH_SERVING_ENABLED = os.environ.get("TT_LAGUNA_DFLASH", "0") == "1"
     # TT_LAGUNA_DFLASH_TRACE=0 keeps the eager 16-row target verify (A/B and bisection).
     _DFLASH_VERIFY_TRACE = _DFLASH_SERVING_ENABLED and os.environ.get("TT_LAGUNA_DFLASH_TRACE", "1") == "1"
-    _DFLASH_VERIFY_ROWS = 16
+    # rows of the traced target verify: the known token + the first TT_LAGUNA_DFLASH_VERIFY_DRAFTS drafts (default 5)
+    _DFLASH_VERIFY_ROWS = 1 + int(os.environ.get("TT_LAGUNA_DFLASH_VERIFY_DRAFTS", "5"))
     # traced DFlash verify picks each row's greedy token on device (logits padded to one 32-row tile, the batch-32
     # sampler) and reads back 16 ids instead of 16 x vocab logits (~3.2 MB) + a host argmax
     _DFLASH_DEVICE_ARGMAX = os.environ.get("TT_LAGUNA_DFLASH_DEVICE_ARGMAX", "1") == "1"

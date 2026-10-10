@@ -221,7 +221,16 @@ def text_prompt(tokenizer, length):
 KV_BLOCK = 64
 
 
-def run_dflash(lens, tokens_out):
+def aime_prompt():
+    """The accuracy test's AIME24 chat prompt (235 tokens; tests/reference_outputs), the text the CPU DFlash
+    acceptance check (tests/dflash_acceptance.py) uses."""
+    from models.common.readiness_check.schema import load_reference
+
+    ref = REPO_ROOT / "models" / "demos" / "laguna" / "tests" / "reference_outputs" / "readiness_aime24_chat_s.refpt"
+    return torch.as_tensor(load_reference(ref).entries[0].prompt_tokens[0], dtype=torch.int64)
+
+
+def run_dflash(lens, tokens_out, prompt="text"):
     """Batch-1 DFlash through the serving model class, no vLLM. Returns {L: row}."""
     from transformers import AutoConfig
     from vllm_tt_plugin.model_input import TTSamplingParams
@@ -256,8 +265,14 @@ def run_dflash(lens, tokens_out):
             out = out[0] if isinstance(out, tuple) else out
             return int(torch.as_tensor(out).reshape(-1)[0])
 
-        for length in lens:
-            ids = text_prompt(model.tokenizer, length).reshape(1, length)
+        cases = []
+        if "aime" in prompt.split(","):
+            cases.append(("aime", aime_prompt()))
+        if "text" in prompt.split(","):
+            cases += [("text", text_prompt(model.tokenizer, length)) for length in lens]
+        for name, ids in cases:
+            length = int(ids.numel())
+            ids = ids.reshape(1, length)
             start = time.perf_counter()
             tok = first_token(model.prefill_forward(tokens=ids, page_table=pt, kv_cache=kv, enable_trace=True,
                                                     prompt_lens=[length], start_pos=[0], sampling_params=sp))  # fmt: skip
@@ -280,8 +295,8 @@ def run_dflash(lens, tokens_out):
                    "draft_ms_mean": statistics.mean(r.draft_ms for r in full) if full else 0.0,
                    "verify_ms_mean": statistics.mean(r.verify_ms for r in full) if full else 0.0,
                    "tokens": generated}  # fmt: skip
-            rows[length] = row
-            print(f"[perf direct] dflash input {length:>6,}: TTFT {ttft * 1e3:7.1f} ms | decode "
+            rows[f"{name} {length}"] = row
+            print(f"[perf direct] dflash {name} input {length:>6,}: TTFT {ttft * 1e3:7.1f} ms | decode "
                   f"{row['decode_tok_s']:6.1f} tok/s/user | {len(rounds)} rounds, {row['accepted_mean']:.2f} drafts "
                   f"accepted per round, draft {row['draft_ms_mean']:.1f} ms + verify {row['verify_ms_mean']:.1f} ms",
                   flush=True)  # fmt: skip
@@ -300,15 +315,18 @@ def main() -> int:
     parser.add_argument("--output", default=None, help="JSON results path")
     parser.add_argument("--modes", default="normal", help="normal (default) or dflash (batch 1, DFlash decoding)")
     parser.add_argument("--dflash-tokens", type=int, default=256, help="tokens decoded per input length with DFlash")
+    parser.add_argument("--dflash-prompt", default="text",
+                        help="text: summarize request over tech_reports (each length); aime: the accuracy test prompt; "
+                        "or both, comma-separated")
     args = parser.parse_args()
     if args.modes == "dflash":
         lens = [int(v) for v in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
-        rows = run_dflash(lens, args.dflash_tokens)
+        rows = run_dflash(lens, args.dflash_tokens, args.dflash_prompt)
         print("\nBatch 1, DFlash speculative decoding (no vLLM):\n")
         print("| Input tokens | Decode tok/s/user | TTFT | Drafts accepted per round | Draft ms + verify ms per round |")
         print("|---:|---:|---:|---:|---:|")
         for length, r in rows.items():
-            print(f"| {length:,} | {r['decode_tok_s']:.1f} | {r['ttft_s'] * 1e3:.0f} ms | {r['accepted_mean']:.2f} | "
+            print(f"| {length} | {r['decode_tok_s']:.1f} | {r['ttft_s'] * 1e3:.0f} ms | {r['accepted_mean']:.2f} | "
                   f"{r['draft_ms_mean']:.1f} + {r['verify_ms_mean']:.1f} |")  # fmt: skip
         if args.output:
             Path(args.output).write_text(json.dumps({"dflash": {str(k): v for k, v in rows.items()}}, indent=1))

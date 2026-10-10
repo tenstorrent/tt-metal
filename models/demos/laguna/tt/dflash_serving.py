@@ -93,6 +93,11 @@ class DFlashServedController:
         # prints the time spent finishing work queued before the round and the time of the context update.
         self._stats = os.environ.get("TT_LAGUNA_DFLASH_STATS") in ("1", "2")
         self._stats_sync = os.environ.get("TT_LAGUNA_DFLASH_STATS") == "2"
+        # Laguna checks only the first K of the draft's 15 proposals: the draft is rarely right past a few tokens,
+        # and the check's cost grows with its rows (each row reads its own 10 experts). K + 1 rows per verify.
+        max_drafts = int(core.config.max_speculative_tokens)
+        # 5 was the fastest of 3/4/5/7/15 (perf_direct.py --modes dflash, AIME24 + real-text prompts)
+        self.verify_drafts = min(max_drafts, max(1, int(os.environ.get("TT_LAGUNA_DFLASH_VERIFY_DRAFTS", 5))))
 
     def _log_round(self, served: DFlashServingRound) -> None:
         if self._stats:
@@ -327,6 +332,7 @@ class DFlashServedController:
         expected_drafts = int(self.core.config.max_speculative_tokens)
         if len(drafts) != expected_drafts:
             raise ValueError(f"DFlash drafter returned {len(drafts)} tokens, expected {expected_drafts}")
+        drafts = drafts[: self.verify_drafts]
         verify_tokens = [known_bonus, *drafts]
         if self._stats_sync:
             entries_after_draft = self.core.mesh_device.num_program_cache_entries()
