@@ -117,8 +117,20 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     return _sfpu_exp2_bf16_(x, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
+bool bf16_dest_exp2();
+template <int ITERATIONS>
+void calculate_exp2_bf16();
+// Whether BF16 DEST runs the generated exp2 kernel as one call over the whole tile.
+inline constexpr bool exp2_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
+    if constexpr (!is_fp32_dest_acc_en && APPROXIMATION_MODE == true && ITERATIONS == 32) {
+        if (bf16_dest_exp2()) {
+            calculate_exp2_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -132,8 +144,16 @@ inline void calculate_exp2() {
     }
 }
 
+void init_exp2_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void exp2_init() {
+    if constexpr (!is_fp32_dest_acc_en && APPROXIMATION_MODE == true) {
+        if (bf16_dest_exp2()) {
+            init_exp2_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         // Coefficients for minimax polynomial.
@@ -144,3 +164,5 @@ inline void exp2_init() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_exp2_bf16.h"
