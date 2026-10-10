@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <type_traits>
 #include "outbound_socket_service_sync_device_operation.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
@@ -113,6 +114,13 @@ ttnn::Tensor outbound_socket_service_sync_impl(
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
     const bool has_metadata = attrs.metadata_size_bytes > 0;
+    if constexpr (std::is_same_v<ServiceT, tt::tt_metal::D2HStreamService>) {
+        if (has_metadata) {
+            attrs.metadata_ring_slots = service.get_metadata_ring_slots();
+            attrs.metadata_slot_stride = service.get_metadata_slot_stride();
+            attrs.metadata_data_offset = service.get_metadata_data_offset();
+        }
+    }
     attrs.data_ready_addrs.reserve(num_rows * num_cols);
     attrs.service_core_x.reserve(num_rows * num_cols);
     attrs.service_core_y.reserve(num_rows * num_cols);

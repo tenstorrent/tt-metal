@@ -74,6 +74,7 @@ constexpr uint32_t kD2HNocBurstBytes = 16u * 1024;
 constexpr uint32_t kD2HTargetReadBursts = 8;  // default socket-page target ~= 8 bursts (128 KB)
 constexpr uint32_t kD2HSlotCap = 64;          // upper bound on data-CB slots
 constexpr uint32_t kD2HMinDataSlots = 2;      // double-buffering floor (reader/writer overlap)
+constexpr uint32_t kMetadataRingMinSlots = 4;  // floor on the service-core record ring
 
 // The data CB (program allocator, bottom-up) and the service-core scratch
 // (ServiceCoreManager, top-down) share the unreserved L1 with no cross-allocator
@@ -151,6 +152,9 @@ struct D2HMetadataArgs {
     bool enabled = false;
     uint32_t metadata_size_bytes = 0;
     uint32_t metadata_l1_addr = 0;
+    uint32_t ring_slots = 1;
+    uint32_t slot_stride = 0;
+    uint32_t data_offset = 0;
 };
 
 // The writer half owns the D2H socket and runs on RISCV_1's default NOC.
@@ -212,8 +216,11 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
 //   [1]  num_socket_pages
 //   [2]  data_cbuf_index
 //   [3]  metadata_enabled                (uint32 0/1)
-//   [4]  metadata_l1_addr
+//   [4]  metadata_l1_addr                (region base: header word, then the record ring)
 //   [5]  metadata_size_bytes             (uint32, actual meaningful bytes; 0 if disabled)
+//   [6]  metadata_ring_slots
+//   [7]  metadata_slot_stride            (bytes per ring slot)
+//   [8]  metadata_data_offset            (bytes from the region base to slot 0)
 // Writer RT-arg layout:
 //   [0]  socket_config_addr
 //   [1]  termination_semaphore_addr
@@ -283,6 +290,9 @@ Program build_persistent_d2h_program(
         static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
         metadata.metadata_l1_addr,
         metadata.metadata_size_bytes,
+        metadata.ring_slots,
+        metadata.slot_stride,
+        metadata.data_offset,
     };
 
     auto writer_kernel = CreateKernel(
@@ -523,14 +533,22 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
     if (cfg_.metadata_size_bytes > 0) {
         const uint32_t l1_align = hal::get_l1_alignment();
-        const DeviceAddr aligned_metadata_size =
-            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
+        // Record ring behind a header word (the writer's sent count): transfer k lands in slot
+        // k % ring_slots, sized so the ack op only waits once the socket FIFO and the ring are full.
+        const uint32_t fifo_pages = std::max<uint32_t>(1u, cfg_.fifo_size_bytes / socket_page_size_);
+        metadata_ring_slots_ = std::max<uint32_t>(kMetadataRingMinSlots, fifo_pages + slot_count_);
+        metadata_slot_stride_ = static_cast<uint32_t>(
+            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align)));
+        metadata_data_offset_ = l1_align;
+        const DeviceAddr region_bytes =
+            static_cast<DeviceAddr>(metadata_data_offset_) +
+            static_cast<DeviceAddr>(metadata_ring_slots_) * static_cast<DeviceAddr>(metadata_slot_stride_);
         for (const auto& coord : coords) {
             auto* d = mesh_device_->get_device(coord);
             const CoreCoord chosen = service_cores_.at(coord);
-            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_metadata_size);
+            const DeviceAddr addr = svc.allocate_l1(d, chosen, region_bytes);
             metadata_input_addrs_.emplace(coord, addr);
-            std::vector<uint8_t> zero_meta(aligned_metadata_size, 0);
+            std::vector<uint8_t> zero_meta(region_bytes, 0);
             tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), zero_meta, CoreType::WORKER);
         }
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
@@ -566,6 +584,9 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
             metadata.enabled = true;
             metadata.metadata_size_bytes = cfg_.metadata_size_bytes;
             metadata.metadata_l1_addr = static_cast<uint32_t>(metadata_input_addrs_.at(core.device_coord));
+            metadata.ring_slots = metadata_ring_slots_;
+            metadata.slot_stride = metadata_slot_stride_;
+            metadata.data_offset = metadata_data_offset_;
         }
 
         auto program = build_persistent_d2h_program(
@@ -983,6 +1004,24 @@ std::size_t D2HStreamService::payload_size_bytes() const {
 std::size_t D2HStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
 uint32_t D2HStreamService::get_slot_count() const { return slot_count_; }
+
+uint32_t D2HStreamService::get_metadata_ring_slots() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_ring_slots");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_ring_slots: metadata was not configured.");
+    return metadata_ring_slots_;
+}
+
+uint32_t D2HStreamService::get_metadata_slot_stride() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_slot_stride");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_slot_stride: metadata was not configured.");
+    return metadata_slot_stride_;
+}
+
+uint32_t D2HStreamService::get_metadata_data_offset() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_data_offset");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_data_offset: metadata was not configured.");
+    return metadata_data_offset_;
+}
 
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");

@@ -91,6 +91,11 @@ public:
 
     // Data-CB depth (full socket-page slots) the service derived from service-core L1.
     uint32_t get_slot_count() const;
+    // Service-core metadata ring (owner only): record slots, bytes per slot, and the offset of
+    // slot 0 past the header word the writer keeps its sent count in.
+    uint32_t get_metadata_ring_slots() const;
+    uint32_t get_metadata_slot_stride() const;
+    uint32_t get_metadata_data_offset() const;
 
     std::vector<distributed::D2HSocket*> get_sockets() const;
 
@@ -175,6 +180,9 @@ private:
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
     uint32_t slot_count_ = 0;  // data-CB depth derived from service-core L1 (owner only)
+    uint32_t metadata_ring_slots_ = 0;
+    uint32_t metadata_slot_stride_ = 0;
+    uint32_t metadata_data_offset_ = 0;
 
     std::vector<std::unique_ptr<HostReadWorkerState>> host_read_worker_states_;
     std::vector<std::thread> host_read_workers_;

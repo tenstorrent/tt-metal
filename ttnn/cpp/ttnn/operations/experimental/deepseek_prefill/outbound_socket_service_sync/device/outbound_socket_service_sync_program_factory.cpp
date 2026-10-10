@@ -76,6 +76,10 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         args.scratch_cb_index,
         args.metadata_size_bytes,
         static_cast<uint32_t>(args.metadata_only ? 1u : 0u),
+        args.metadata_ring_slots,
+        args.metadata_slot_stride,
+        args.metadata_data_offset,
+        num_workers,
     };
     TensorAccessorArgs(input_buffer).append_to(ct_args);
     if (has_metadata) {

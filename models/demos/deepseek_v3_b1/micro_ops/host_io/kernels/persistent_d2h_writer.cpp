@@ -24,6 +24,12 @@ constexpr uint32_t data_cbuf_index = get_compile_time_arg_val(2);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(3);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(5);
+// Metadata region layout: a header word holding the number of records pushed so far, then
+// metadata_ring_slots record slots of metadata_slot_stride bytes. Transfer k's record lives in
+// slot k % metadata_ring_slots; the ack op reads the header to avoid overrunning unsent slots.
+constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(6);
+constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(7);
+constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(8);
 
 void kernel_main() {
     Noc noc;
@@ -45,6 +51,9 @@ void kernel_main() {
     // (noc_write_init_state + noc_async_wide_write_any_len_with_state, used below to drain into the
     // host-pinned socket FIFO) has no Device 2.0 equivalent; Noc::inline_dw_write is single-DW only.
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+
+    uint32_t metadata_sent = 0;
+    volatile tt_l1_ptr uint32_t* metadata_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
 
     bool terminated = false;
     while (!terminated) {
@@ -116,9 +125,11 @@ void kernel_main() {
             // is the atomic unit for push/notify, but the PCIe write only needs to transfer the
             // actual metadata — the rest of the FIFO page is stale/zero and the host only copies
             // metadata_size_bytes out of it.
+            const uint32_t record_l1_addr =
+                metadata_l1_addr + metadata_data_offset + (metadata_sent % metadata_ring_slots) * metadata_slot_stride;
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
-                metadata_l1_addr,
+                record_l1_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
@@ -127,6 +138,9 @@ void kernel_main() {
 
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
+            // Published only after the slot's bytes left L1, so the ack op may reuse it.
+            ++metadata_sent;
+            *metadata_sent_ptr = metadata_sent;
         }
     }
 

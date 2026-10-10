@@ -69,12 +69,14 @@ void kernel_main() {
         // ack via the write_ack_counter after producing backing-tensor data. When worker_sync
         // is disabled (host-only path), the host increments write_ack_counter via
         // notify_backing_ready(). In both cases this gates one transfer per ack, preventing the
-        // reader from free-running and producing data the host hasn't requested yet.
+        // reader from free-running and producing data the host hasn't requested yet. Acks that
+        // landed while this core was blocked on CB space are credits, consumed one transfer per
+        // iteration.
         while (true) {
             invalidate_l1_cache();
             const uint32_t cur = *write_ack_ptr;
-            if ((cur - last_write_ack) == num_workers) {
-                last_write_ack = cur;
+            if ((cur - last_write_ack) >= num_workers) {
+                last_write_ack += num_workers;
                 break;
             }
             if (termination_semaphore[0] == 1) {

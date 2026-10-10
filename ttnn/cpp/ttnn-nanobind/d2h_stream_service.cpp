@@ -75,7 +75,10 @@ void py_module_types(nb::module_& mod) {
             "read_metadata",
             [](tt::tt_metal::D2HStreamService& self) {
                 std::vector<std::byte> metadata(self.metadata_size_bytes());
-                self.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
+                {
+                    nb::gil_scoped_release release;  // the read blocks until the device sends a record
+                    self.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
+                }
                 return nb::bytes(reinterpret_cast<const char*>(metadata.data()), metadata.size());
             },
             "Metadata-only read: returns the per-transfer record as bytes; asserts cross-chip equality. Metadata-only "
@@ -143,6 +146,10 @@ void py_module_types(nb::module_& mod) {
             "get_slot_count",
             &tt::tt_metal::D2HStreamService::get_slot_count,
             "Data-CB depth in socket-page slots (owner-only).")
+        .def(
+            "get_metadata_ring_slots",
+            &tt::tt_metal::D2HStreamService::get_metadata_ring_slots,
+            "Record slots in the service-core metadata ring (owner-only, metadata mode).")
         .def(
             "get_sockets",
             &tt::tt_metal::D2HStreamService::get_sockets,

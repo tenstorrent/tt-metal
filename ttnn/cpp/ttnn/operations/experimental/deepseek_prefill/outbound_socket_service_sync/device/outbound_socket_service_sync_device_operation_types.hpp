@@ -32,6 +32,10 @@ struct OutboundSocketServiceSyncParams {
     std::vector<uint32_t> service_core_x;    // LOGICAL service-core x per coord
     std::vector<uint32_t> service_core_y;    // LOGICAL service-core y per coord
     std::vector<uint32_t> metadata_addrs;    // per-coord service-core metadata L1 (metadata mode)
+    // Service-core record ring (D2H only; 1/0/0 keeps the single-slot write for D2D senders).
+    uint32_t metadata_ring_slots = 1;
+    uint32_t metadata_slot_stride = 0;
+    uint32_t metadata_data_offset = 0;
 };
 
 struct OutboundSocketServiceSyncInputs {

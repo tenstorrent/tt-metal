@@ -43,9 +43,25 @@ constexpr uint32_t page_size = get_compile_time_arg_val(0);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(2);  // 0 disables the metadata path
 constexpr uint32_t metadata_only = get_compile_time_arg_val(3);        // 1 no tensor copy
+// Service-core record ring: transfer k's record goes to slot k % metadata_ring_slots, and a header
+// word at the region base counts the records the service has sent. ring_slots <= 1 is the
+// single-slot layout (D2D senders), written with no handshake.
+constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(4);
+constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(5);
+constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(6);
+constexpr uint32_t num_workers = get_compile_time_arg_val(7);
 // Shared input/backing TensorAccessorArgs (same per-shard spec); metadata accessor,
 // when enabled, is packed immediately after.
-constexpr auto tensor_accessor_args = TensorAccessorArgs<4>();
+constexpr auto tensor_accessor_args = TensorAccessorArgs<8>();
+
+// One L1 word of the service core, read through the scratch page.
+inline uint32_t read_service_word(
+    uint32_t scratch_l1, uint32_t service_noc_x, uint32_t service_noc_y, uint32_t addr, uint8_t noc_id) {
+    noc_async_read(get_noc_addr(service_noc_x, service_noc_y, addr, noc_id), scratch_l1, sizeof(uint32_t), noc_id);
+    noc_async_read_barrier(noc_id);
+    invalidate_l1_cache();
+    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
+}
 
 // Metadata forward, factored into a template so the metadata-disabled case
 // (MetadataSize == 0) is never instantiated -- otherwise the trailing metadata
@@ -53,16 +69,38 @@ constexpr auto tensor_accessor_args = TensorAccessorArgs<4>();
 // whenever the host omits that accessor block (same pattern as the H2D kernel).
 template <uint32_t MetadataSize, uint32_t MetadataAccessorOffset>
 inline void forward_metadata(
-    const Noc& noc, CircularBuffer& scratch_cb, uint32_t start_page, uint32_t service_noc_x, uint32_t service_noc_y) {
+    const Noc& noc,
+    CircularBuffer& scratch_cb,
+    uint32_t start_page,
+    uint32_t service_noc_x,
+    uint32_t service_noc_y,
+    uint32_t data_ready_counter_addr) {
     if constexpr (MetadataSize > 0) {
         if (start_page == 0) {
             const uint32_t metadata_input_addr = get_arg_val<uint32_t>(7);
             const uint32_t sender_metadata_l1_addr = get_arg_val<uint32_t>(8);
+            uint32_t record_addr = sender_metadata_l1_addr;
+            if constexpr (metadata_ring_slots > 1) {
+                const uint32_t scratch_l1 = scratch_cb.get_write_ptr();
+                const uint8_t noc_id = noc.get_noc_id();
+                // The tally holds num_workers increments per completed transfer; this one is not in yet.
+                const uint32_t transfer_idx =
+                    read_service_word(scratch_l1, service_noc_x, service_noc_y, data_ready_counter_addr, noc_id) /
+                    num_workers;
+                // The slot still holds an unsent record only when the host is a full ring behind; wait
+                // for the service to send it rather than overwrite it, which would relabel that chunk.
+                while (transfer_idx - read_service_word(
+                                          scratch_l1, service_noc_x, service_noc_y, sender_metadata_l1_addr, noc_id) >=
+                       metadata_ring_slots) {
+                }
+                record_addr = sender_metadata_l1_addr + metadata_data_offset +
+                              (transfer_idx % metadata_ring_slots) * metadata_slot_stride;
+            }
             constexpr auto metadata_accessor_args = TensorAccessorArgs<MetadataAccessorOffset>();
             auto metadata_in = TensorAccessor(metadata_accessor_args, metadata_input_addr);
             UnicastEndpoint service;
             // Stage the single metadata page through the scratch CB, then push it to the
-            // service core's L1 metadata buffer (a raw unicast L1 dest, not a tensor).
+            // service core's L1 record slot (a raw unicast L1 dest, not a tensor).
             noc.async_read(metadata_in, scratch_cb, MetadataSize, {.page_id = 0}, {.offset_bytes = 0});
             noc.async_read_barrier();
             CoreLocalMem<uint32_t> md_src(scratch_cb.get_write_ptr());
@@ -71,7 +109,7 @@ inline void forward_metadata(
                 service,
                 MetadataSize,
                 {},
-                {.noc_x = service_noc_x, .noc_y = service_noc_y, .addr = sender_metadata_l1_addr});
+                {.noc_x = service_noc_x, .noc_y = service_noc_y, .addr = record_addr});
             noc.async_write_barrier();
         }
     }
@@ -110,7 +148,7 @@ void kernel_main() {
 
     // 2. (Optional) forward inline metadata to the sender service core.
     forward_metadata<metadata_size_bytes, tensor_accessor_args.next_compile_time_args_offset()>(
-        noc, scratch_cb, start_page, service_noc_x, service_noc_y);
+        noc, scratch_cb, start_page, service_noc_x, service_noc_y, data_ready_counter_addr);
 
     // 3. Ack into data_ready_counter -- the service forwards once it has num_workers of
     //    these AND the lease is granted. Return without waiting (the host drives the

@@ -202,3 +202,89 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pa
     )
 
     _run_io_loop(service, iter_mapper, global_spec, shape_list, "tensor", mesh_device)
+
+
+# ---- metadata-only acks against a host that is not reading -------------------------------------
+#
+# The layer-ack path: a device op forwards one record per transfer into the service core and
+# bumps its ack counter without waiting. The service core keeps a ring of records and the ack
+# op refuses to overwrite one the service has not sent yet, so a host that stops reading sees
+# every record, in order, and the service core never wedges on a counter it can no longer match.
+
+_ACK_RECORD_BYTES = 12  # {slot_id, pos_start, pos_end}
+
+
+def _metadata_only_service(mesh_device, fifo_pages: int) -> ttnn.D2HStreamService:
+    # The socket page is the PCIe-aligned record (<= 64 B); the ring is sized off the real page count.
+    return ttnn.D2HStreamService(
+        mesh_device,
+        global_spec=None,
+        fifo_size_bytes=fifo_pages * 64,
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=_ACK_RECORD_BYTES,
+    )
+
+
+def _ack_record(mesh_device, i: int) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.tensor([i, 1000 + i, 2000 + i], dtype=torch.int64).reshape(1, 1, 1, 3),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _read_records(service: ttnn.D2HStreamService, n: int, timeout_s: float) -> list:
+    import struct
+    import threading
+
+    out = []
+
+    def run():
+        for _ in range(n):
+            out.append(struct.unpack("<3I", service.read_metadata()))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    assert not t.is_alive(), f"host read stalled after {len(out)} of {n} records: the service core stopped acking"
+    return out
+
+
+def _fire_acks(service, mesh_device, n: int) -> list:
+    records = [_ack_record(mesh_device, i) for i in range(n)]
+    ttnn.synchronize_device(mesh_device)
+    for rec in records:
+        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(service, metadata=rec)
+    return records
+
+
+def test_metadata_acks_queue_on_the_service_core_while_the_host_is_not_reading(mesh_device):
+    service = _metadata_only_service(mesh_device, fifo_pages=4)
+    ring = service.get_metadata_ring_slots()
+    fifo_pages = ring - service.get_slot_count()
+    # More acks than the socket FIFO and the staging CB can hold, but still within the ring, so no
+    # ack op has to wait. Before the ring this wedged the service core on its exact-match ack check
+    # and sent later records under earlier acks.
+    n = ring + fifo_pages - 2
+    keep = _fire_acks(service, mesh_device, n)
+    ttnn.synchronize_device(mesh_device)
+    records = _read_records(service, n, timeout_s=60)
+    assert records == [(i, 1000 + i, 2000 + i) for i in range(n)]
+    del keep
+
+
+def test_metadata_ack_waits_for_the_service_once_the_ring_is_full(mesh_device):
+    service = _metadata_only_service(mesh_device, fifo_pages=4)
+    ring = service.get_metadata_ring_slots()
+    fifo_pages = ring - service.get_slot_count()
+    # The last few ack ops find every slot holding an unsent record and must wait for the host's
+    # reads to free them; an overwrite would show up as a wrong or missing record below.
+    n = ring + fifo_pages + 3
+    keep = _fire_acks(service, mesh_device, n)
+    records = _read_records(service, n, timeout_s=60)
+    ttnn.synchronize_device(mesh_device)
+    assert records == [(i, 1000 + i, 2000 + i) for i in range(n)]
+    del keep
