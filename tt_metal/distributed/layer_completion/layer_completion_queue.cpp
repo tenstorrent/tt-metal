@@ -4,6 +4,7 @@
 
 #include <internal/disaggregation/layer_completion_queue.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <new>
@@ -21,6 +22,8 @@ namespace tt::tt_metal::internal {
 using tt::tt_metal::distributed::NamedShm;
 
 namespace {
+constexpr std::chrono::milliseconds kConnectInitGrace{2000};
+
 bool shm_path_exists(const std::string& shm_name) {
     struct stat st{};
     return ::stat(("/dev/shm" + shm_name).c_str(), &st) == 0;
@@ -80,22 +83,27 @@ std::unique_ptr<LayerCompletionQueueT<MsgT>> LayerCompletionQueueT<MsgT>::connec
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // The owner sizes, maps and initialises the segment after creating it (magic is written last),
-    // so a connector inside that window sees a short file or a zero magic: retry until the deadline.
+    // The owner sizes, maps and initialises the segment after creating it (magic is written last), so a
+    // connector inside that window sees a short file or a zero magic. That window is microseconds; a segment
+    // still short or unmagicked after the grace is another kind of segment at this name (a protocol-1 counter
+    // channel is 128 bytes and reads as zero here), which must fail now, not after the whole budget.
+    const auto init_grace = std::min(deadline, std::chrono::steady_clock::now() + kConnectInitGrace);
     for (;;) {
         std::unique_ptr<NamedShm> shm;
         try {
             shm = std::make_unique<NamedShm>(NamedShm::open(shm_name, kLayerCompletionRingBytes<MsgT>));
         } catch (const std::exception& e) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                throw std::runtime_error(
-                    fmt::format("LayerCompletionQueue::connect: {} could not be mapped: {}", shm_name, e.what()));
+            if (std::chrono::steady_clock::now() >= init_grace) {
+                throw std::runtime_error(fmt::format(
+                    "LayerCompletionQueue::connect: {} is not a valid ring for this protocol version ({})",
+                    shm_name,
+                    e.what()));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
         auto* hdr = static_cast<LayerCompletionRingHeader*>(shm->ptr());
-        if (hdr->magic == 0 && std::chrono::steady_clock::now() < deadline) {
+        if (hdr->magic == 0 && std::chrono::steady_clock::now() < init_grace) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }

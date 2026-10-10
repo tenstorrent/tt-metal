@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -24,6 +25,7 @@
 #include <internal/disaggregation/layer_completion_message.hpp>
 #include <internal/disaggregation/layer_completion_queue.hpp>
 #include "tt_metal/distributed/layer_completion/layer_completion_ring_layout.hpp"
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
 
 namespace tt::tt_metal::internal {
 
@@ -316,6 +318,28 @@ TEST(LayerCompletionQueue, CrossVersionConnectFails) {
     auto owner2 = LayerCompletionQueueV2::create(name);  // v2 segment ('LCQ2')
     EXPECT_THROW(LayerCompletionQueue::connect(name, 5'000), std::runtime_error);
     owner2->shutdown();
+}
+
+}  // namespace tt::tt_metal::internal
+
+namespace tt::tt_metal::internal {
+
+// A segment at the name that stays short or unmagicked is not an owner mid-initialisation (that window is
+// microseconds) but another kind of segment: a protocol-1 counter channel is 128 bytes. connect must refuse it
+// well inside the budget instead of waiting the budget out.
+TEST(LayerCompletionConnect, RefusesAForeignSegmentInsideTheBudget) {
+    const std::string name = fmt::format("/lcq_foreign_{}", ::getpid());
+    unlink_if_exists(name);
+    auto counter_sized = tt::tt_metal::distributed::NamedShm::create(name, 128);
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        LayerCompletionQueueV2::connect(name, 60'000);
+        FAIL() << "connect accepted a 128-byte segment";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("not a valid ring"), std::string::npos) << e.what();
+    }
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(10));
+    unlink_if_exists(name);
 }
 
 }  // namespace tt::tt_metal::internal
