@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include <internal/disaggregation/layer_ack_derivation.hpp>
@@ -74,8 +75,11 @@ private:
     void join();
 
     D2HStreamService& d2h_service_;
-    std::unique_ptr<internal::LayerCompletionQueue> producer_;       // protocol 1
-    std::unique_ptr<internal::LayerCompletionQueueV2> producer_v2_;  // protocol 2
+    std::variant<
+        std::monostate,
+        std::unique_ptr<internal::LayerCompletionQueue>,
+        std::unique_ptr<internal::LayerCompletionQueueV2>>
+        producer_;  // connected in start(), per protocol_
 
     std::string ring_shm_name_;
     uint32_t source_rank_;

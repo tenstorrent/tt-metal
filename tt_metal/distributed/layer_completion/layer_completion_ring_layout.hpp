@@ -10,6 +10,10 @@
 // The same layout also backs the v2 scheduler-facing ring (master router
 // pushes; the scheduler process pops).
 //
+// A participant that dies between claiming a cell and committing it leaves the
+// ring wedged (producers see it full, or the consumer waits on that cell);
+// there is no recovery short of recreating the segment.
+//
 // Cross-process atomics: the segment lives in shared memory mapped into
 // every participant. std::atomic<uint64_t> is lock-free on the target
 // and usable across processes when the storage is shared — the same

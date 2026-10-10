@@ -41,23 +41,12 @@ namespace tt::tt_metal::internal {
 
 using tt::tt_metal::distributed::NamedShm;  // tt-metalium/experimental/sockets/named_shm.hpp
 
-struct LayerCompletionRingHeader;           // fwd — defined in layer_completion_ring_layout.hpp
+struct LayerCompletionRingHeader;
 template <typename MsgT>
-struct LayerCompletionCellT;                // fwd — defined in layer_completion_ring_layout.hpp
-
-// Protocol-agnostic base for the two typed rings below, so an owner that is
-// protocol-polymorphic (the router) holds EITHER message version through one
-// member. Only the protocol-neutral ops are virtual; typed use is recovered by
-// static_cast at sites where the protocol (hence the dynamic type) is known.
-class LayerCompletionQueueBase {
-public:
-    virtual ~LayerCompletionQueueBase() = default;
-    virtual void shutdown() = 0;
-    virtual const std::string& shm_name() const = 0;
-};
+struct LayerCompletionCellT;
 
 template <typename MsgT>
-class LayerCompletionQueueT : public LayerCompletionQueueBase {
+class LayerCompletionQueueT {
 public:
     // Owner: shm_open(O_CREAT|O_EXCL) the segment at /dev/shm/<shm_name>,
     // initialise the ring header + cell sequences, mmap. Throws
@@ -70,7 +59,7 @@ public:
     static std::unique_ptr<LayerCompletionQueueT> connect(
         const std::string& shm_name, uint32_t connect_timeout_ms = 30'000);
 
-    ~LayerCompletionQueueT() override;
+    ~LayerCompletionQueueT();
     LayerCompletionQueueT(const LayerCompletionQueueT&) = delete;
     LayerCompletionQueueT& operator=(const LayerCompletionQueueT&) = delete;
     LayerCompletionQueueT(LayerCompletionQueueT&&) = delete;
@@ -83,9 +72,9 @@ public:
     bool try_pop(MsgT& out);
 
     // Idempotent. Owner: munmap + shm_unlink. Connector: munmap only.
-    void shutdown() override;
+    void shutdown();
 
-    const std::string& shm_name() const noexcept override { return shm_name_; }
+    const std::string& shm_name() const noexcept { return shm_name_; }
     static constexpr uint32_t capacity() noexcept { return kLayerCompletionRingCapacity; }
 
 private:

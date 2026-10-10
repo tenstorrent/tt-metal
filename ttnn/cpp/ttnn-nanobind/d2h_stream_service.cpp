@@ -153,6 +153,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "get_sockets",
             &tt::tt_metal::D2HStreamService::get_sockets,
+            nb::rv_policy::reference_internal,
             "Underlying per-device D2H sockets (diagnostic).")
         .def(
             "get_worker_cores",

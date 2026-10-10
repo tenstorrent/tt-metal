@@ -7,7 +7,9 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
@@ -22,37 +24,9 @@
 
 namespace tt::tt_metal::internal {
 
-using tt::tt_metal::distributed::InterProcessCounterChannel;
-
 namespace {
 namespace mh = tt::tt_metal::distributed::multihost;
-// Fixed MPI tag for layer-completion traffic. Distinct from any other
-// host-to-host channel in the job. Shared by both protocol versions — a job
-// is homogeneous (protocol is chosen once at launch), so they never mix.
-constexpr mh::Tag kLayerCompletionTag{4242};
-
-// v1 master egress: the reordered contiguous count into the scheduler's counter channel.
-class CounterChannelEgress final : public SchedulerEgress {
-public:
-    explicit CounterChannelEgress(const std::string& shm_name) :
-        channel_(std::make_unique<InterProcessCounterChannel>(shm_name)) {}
-    void inject(uint32_t n) { channel_->inject(n); }
-    void shutdown() override { channel_->shutdown(); }
-
-private:
-    std::unique_ptr<InterProcessCounterChannel> channel_;
-};
-
-// v2 master egress: forward-as-arrived into the scheduler-facing structured ring.
-class RingEgress final : public SchedulerEgress {
-public:
-    explicit RingEgress(const std::string& shm_name) : ring_(LayerCompletionQueueV2::create(shm_name)) {}
-    bool try_push(const LayerCompletionMessageV2& m) { return ring_->try_push(m); }
-    void shutdown() override { ring_->shutdown(); }
-
-private:
-    std::unique_ptr<LayerCompletionQueueV2> ring_;
-};
+constexpr mh::Tag kLayerCompletionTag{4242};  // distinct from every other host-to-host channel
 }  // namespace
 
 LayerCompletionRouter::LayerCompletionRouter(LayerCompletionRouterConfig cfg) : cfg_(std::move(cfg)) {
@@ -60,58 +34,81 @@ LayerCompletionRouter::LayerCompletionRouter(LayerCompletionRouterConfig cfg) : 
         !is_master() || !cfg_.scheduler_shm_name.empty(),
         "LayerCompletionRouter: master requires scheduler_shm_name (protocol {})",
         static_cast<int>(cfg_.protocol));
-    // The protocol is chosen once per job and fixes every dynamic type below for the
-    // process's lifetime — the master/subordinate loops recover them via static_cast.
     switch (cfg_.protocol) {
-        case LayerCompletionProtocol::kCountOnlyV1:
-            queue_ = LayerCompletionQueue::create(cfg_.ring_shm_name);
+        case LayerCompletionProtocol::kCountOnlyV1: {
+            CountOnly state{LayerCompletionQueue::create(cfg_.ring_shm_name), nullptr};
             if (is_master()) {
-                sched_egress_ = std::make_unique<CounterChannelEgress>(cfg_.scheduler_shm_name);
+                state.scheduler = std::make_unique<InterProcessCounterChannel>(cfg_.scheduler_shm_name);
             }
+            state_ = std::move(state);
             break;
-        case LayerCompletionProtocol::kStructuredV2:
-            queue_ = LayerCompletionQueueV2::create(cfg_.ring_shm_name);
-            if (is_master()) {
-                sched_egress_ = std::make_unique<RingEgress>(cfg_.scheduler_shm_name);
-            }
-            break;
-    }
-    listener_ = std::thread([this] {
-        if (is_master()) {
-            run_master();
-        } else {
-            run_subordinate();
         }
-    });
+        case LayerCompletionProtocol::kStructuredV2: {
+            Structured state{LayerCompletionQueueV2::create(cfg_.ring_shm_name), nullptr};
+            if (is_master()) {
+                state.scheduler = LayerCompletionQueueV2::create(cfg_.scheduler_shm_name);
+            }
+            state_ = std::move(state);
+            break;
+        }
+    }
+    listener_ = std::thread([this] { listen(); });
 }
 
-LayerCompletionRouter::~LayerCompletionRouter() { stop(); }
+LayerCompletionRouter::~LayerCompletionRouter() { join(); }
 
-void LayerCompletionRouter::stop() {
+void LayerCompletionRouter::listen() {
+    try {
+        std::visit(
+            [this](auto& state) {
+                if (is_master()) {
+                    run_master(state);
+                } else {
+                    run_subordinate(*state.ring);
+                }
+            },
+            state_);
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        error_ = std::current_exception();
+    }
+}
+
+void LayerCompletionRouter::join() {
     if (stopped_.exchange(true)) {
         return;
     }
+    stopped_at_ = std::chrono::steady_clock::now();
     stop_.store(true, std::memory_order_release);
     if (listener_.joinable()) {
         listener_.join();
     }
-    if (queue_) {
-        queue_->shutdown();
+    std::visit(
+        [](auto& state) {
+            if (state.ring) {
+                state.ring->shutdown();
+            }
+            if (state.scheduler) {
+                state.scheduler->shutdown();
+            }
+        },
+        state_);
+}
+
+void LayerCompletionRouter::stop() {
+    join();
+    std::exception_ptr error;
+    {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        error = std::exchange(error_, nullptr);
     }
-    if (sched_egress_) {
-        sched_egress_->shutdown();
+    if (error) {
+        std::rethrow_exception(error);
     }
 }
 
-// Shared master skeleton: drain the host-local ring + fan in subordinate completions over MPI,
-// with sentinel-coordinated teardown. `forward` is the per-protocol output action (v1: reorder →
-// bare count; v2: backpressured forward-as-arrived) — everything else is protocol-identical.
 template <typename MsgT, typename Forward>
-void LayerCompletionRouter::run_master_impl(Forward&& forward) {
-    // Dynamic type fixed by cfg_.protocol at construction — safe downcast.
-    auto& queue = static_cast<LayerCompletionQueueT<MsgT>&>(*queue_);
-
-    // Arm one irecv per subordinate (only when there is real MPI traffic).
+void LayerCompletionRouter::fan_in(LayerCompletionQueueT<MsgT>& ring, Forward&& forward) {
     std::vector<int> subs;
     if (cfg_.world_size > 1) {
         for (int r = 0; r < cfg_.world_size; ++r) {
@@ -129,18 +126,13 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
             ctx->irecv(ttsl::Span<std::byte>(bufs[i].data(), bufs[i].size()), mh::Rank(subs[i]), kLayerCompletionTag);
     }
 
-    // Coordinated teardown: keep draining the local ring and receiving subordinate messages until
-    // this rank is done producing (stop_) AND its ring is empty AND every subordinate has sent its
-    // end-of-stream sentinel. Then no blocking subordinate send is ever left without a receiver, and
-    // no already-arrived completion is dropped by a cancel. teardown_timeout_ms bounds the wait in
-    // case a rank crashed without sending its sentinel.
     std::size_t sentinels_remaining = subs.size();
     std::optional<std::chrono::steady_clock::time_point> deadline;
     MsgT m{};
     while (true) {
         bool progressed = false;
 
-        while (queue.try_pop(m)) {
+        while (ring.try_pop(m)) {
             forward(m);
             progressed = true;
         }
@@ -151,7 +143,6 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
                 std::memcpy(&recv, bufs[i].data(), sizeof(recv));
                 progressed = true;
                 if (is_layer_completion_sentinel(recv)) {
-                    // End of stream from this subordinate — it sends nothing more; stop re-arming.
                     reqs[i].reset();
                     --sentinels_remaining;
                 } else {
@@ -163,8 +154,8 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
         }
 
         if (stop_.load(std::memory_order_acquire)) {
-            // The runner stops pushing before it sets stop_, so the ring drain above leaves it empty.
-            // Exit once every subordinate has also signalled end of stream — no cancel needed.
+            // The runner stops pushing before stop(), so the drain above empties the ring; exit once
+            // every subordinate has sent its sentinel.
             if (sentinels_remaining == 0) {
                 break;
             }
@@ -187,9 +178,6 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
             std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
         }
     }
-
-    // Only non-empty if we broke on the timeout above (a subordinate never sent its sentinel); in the
-    // clean path every irecv was consumed or reset. Cancel so MPI can release the buffers.
     for (auto& r : reqs) {
         if (r && r->active()) {
             r->cancel();
@@ -197,93 +185,58 @@ void LayerCompletionRouter::run_master_impl(Forward&& forward) {
     }
 }
 
-void LayerCompletionRouter::run_master() {
-    switch (cfg_.protocol) {
-        case LayerCompletionProtocol::kCountOnlyV1: {
-            // v1 output policy: reorder by seq, inject the newly-contiguous COUNT. Dynamic type
-            // fixed by cfg_.protocol at construction — safe downcast.
-            auto& egress = static_cast<CounterChannelEgress&>(*sched_egress_);
-            LayerCompletionReorderBuffer reorder;
-            std::vector<LayerCompletionMessage> drained;
-            run_master_impl<LayerCompletionMessage>([&](const LayerCompletionMessage& m) {
-                const uint32_t n = reorder.insert(m, drained);
-                if (n > 0) {
-                    egress.inject(n);
-                    processed_.fetch_add(n, std::memory_order_relaxed);
-                }
-            });
-            break;
+void LayerCompletionRouter::run_master(CountOnly& state) {
+    LayerCompletionReorderBuffer reorder;
+    std::vector<LayerCompletionMessage> drained;
+    fan_in(*state.ring, [&](const LayerCompletionMessage& m) {
+        const uint32_t n = reorder.insert(m, drained);
+        if (n > 0) {
+            state.scheduler->inject(n);
+            processed_.fetch_add(n, std::memory_order_relaxed);
         }
-        case LayerCompletionProtocol::kStructuredV2: {
-            // v2 output policy: forward as-arrived — every completion is self-describing (request,
-            // slot, position range, layer range), so the scheduler keys work on content, not arrival
-            // order; no reorder buffer, no per-request head-of-line blocking. A full scheduler ring
-            // means the scheduler is behind: spin (backpressure propagates to the producers via their
-            // own full rings) — but bounded once stop_ is set, so a dead scheduler can't wedge
-            // teardown; the drops are logged after the loop. After the first timed-out push the
-            // scheduler is known-gone: fail fast so the remaining backlog drops without paying one
-            // full timeout per message.
-            auto& egress = static_cast<RingEgress&>(*sched_egress_);
-            uint64_t dropped = 0;
-            bool scheduler_gone = false;
-            run_master_impl<LayerCompletionMessageV2>([&](const LayerCompletionMessageV2& m) {
-                if (scheduler_gone) {
-                    ++dropped;
-                    return;
-                }
-                std::optional<std::chrono::steady_clock::time_point> blocked_since;
-                while (!egress.try_push(m)) {
-                    const auto now = std::chrono::steady_clock::now();
-                    if (!blocked_since) {
-                        blocked_since = now;
-                    } else if (
-                        stop_.load(std::memory_order_acquire) &&
-                        now - *blocked_since >= std::chrono::milliseconds(cfg_.teardown_timeout_ms)) {
-                        scheduler_gone = true;
-                        ++dropped;
-                        return;
-                    }
-                    std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
-                }
-                processed_.fetch_add(1, std::memory_order_relaxed);
-            });
-            if (dropped > 0) {
-                log_warning(
-                    LogMetal,
-                    "LayerCompletionRouter master (v2): dropped {} completion(s) — scheduler ring still full "
-                    "{} ms after stop (scheduler wedged or gone)",
-                    dropped,
-                    cfg_.teardown_timeout_ms);
-            }
-            break;
-        }
-    }
+    });
 }
 
-void LayerCompletionRouter::run_subordinate() {
-    // Dynamic type fixed by cfg_.protocol at construction — safe downcasts.
-    switch (cfg_.protocol) {
-        case LayerCompletionProtocol::kCountOnlyV1:
-            run_subordinate_impl(static_cast<LayerCompletionQueue&>(*queue_));
-            break;
-        case LayerCompletionProtocol::kStructuredV2:
-            run_subordinate_impl(static_cast<LayerCompletionQueueV2&>(*queue_));
-            break;
+void LayerCompletionRouter::run_master(Structured& state) {
+    // A full scheduler ring is backpressure: wait. After stop() the wait is bounded by
+    // teardown_timeout_ms measured from stop(), then the backlog is dropped and counted.
+    uint64_t dropped = 0;
+    bool scheduler_gone = false;
+    fan_in(*state.ring, [&](const LayerCompletionMessageV2& m) {
+        if (scheduler_gone) {
+            ++dropped;
+            return;
+        }
+        while (!state.scheduler->try_push(m)) {
+            if (stop_.load(std::memory_order_acquire) &&
+                std::chrono::steady_clock::now() - stopped_at_ >= std::chrono::milliseconds(cfg_.teardown_timeout_ms)) {
+                scheduler_gone = true;
+                ++dropped;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
+        }
+        processed_.fetch_add(1, std::memory_order_relaxed);
+    });
+    if (dropped > 0) {
+        log_warning(
+            LogMetal,
+            "LayerCompletionRouter master (v2): dropped {} completion(s) — scheduler ring still full {} ms "
+            "after stop (scheduler wedged or gone)",
+            dropped,
+            cfg_.teardown_timeout_ms);
     }
 }
 
 template <typename MsgT>
-void LayerCompletionRouter::run_subordinate_impl(LayerCompletionQueueT<MsgT>& queue) {
-    const mh::ContextPtr& ctx = mh::DistributedContext::get_current_world();
+void LayerCompletionRouter::run_subordinate(LayerCompletionQueueT<MsgT>& ring) {
+    const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
     auto send_blocking = [&](const MsgT& msg) {
         std::array<std::byte, sizeof(msg)> buf{};
         std::memcpy(buf.data(), &msg, sizeof(msg));
         ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
     };
-    // Teardown sends are bounded (isend + deadline) so this thread can't wedge — and so hang stop() /
-    // the dtor join — if the master already hit its own teardown_timeout_ms, stopped receiving, and
-    // cancelled. Returns false when the send didn't complete in time (master gone). Symmetric with the
-    // master's bound; the clean path never trips it.
+    // Teardown sends are bounded so a master that already gave up cannot wedge this thread.
     auto send_bounded = [&](const MsgT& msg) -> bool {
         std::array<std::byte, sizeof(msg)> buf{};
         std::memcpy(buf.data(), &msg, sizeof(msg));
@@ -302,31 +255,27 @@ void LayerCompletionRouter::run_subordinate_impl(LayerCompletionQueueT<MsgT>& qu
 
     MsgT m{};
     while (!stop_.load(std::memory_order_acquire)) {
-        if (queue.try_pop(m)) {
-            send_blocking(m);  // steady state: the master is actively receiving
+        if (ring.try_pop(m)) {
+            send_blocking(m);
             processed_.fetch_add(1, std::memory_order_relaxed);
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
         }
     }
-    // Teardown: drain anything that arrived between the last pop and stop_, then send the end-of-stream
-    // sentinel — all via bounded sends. The master keeps a receive posted until it sees the sentinel
-    // (run_master), so in the clean path every send completes promptly; if a send times out the master
-    // has already given up, so abandon the rest (those completions are unrecoverable either way).
+    // Drain what arrived before stop_, then the end-of-stream sentinel.
     bool master_alive = true;
-    while (master_alive && queue.try_pop(m)) {
+    while (master_alive && ring.try_pop(m)) {
         master_alive = send_bounded(m);
         if (master_alive) {
             processed_.fetch_add(1, std::memory_order_relaxed);
         }
     }
     if (master_alive) {
-        const MsgT sentinel = layer_completion_sentinel<MsgT>(static_cast<uint32_t>(cfg_.rank));
-        master_alive = send_bounded(sentinel);
+        master_alive = send_bounded(layer_completion_sentinel<MsgT>(static_cast<uint32_t>(cfg_.rank)));
     }
     if (!master_alive) {
-        std::size_t lost = 1;  // the send that timed out (a completion or the sentinel)
-        while (queue.try_pop(m)) {
+        std::size_t lost = 1;
+        while (ring.try_pop(m)) {
             ++lost;
         }
         log_warning(

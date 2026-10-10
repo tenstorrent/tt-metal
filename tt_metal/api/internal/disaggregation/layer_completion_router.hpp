@@ -2,73 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// LayerCompletionRouter — one per host in a pipelined-prefill MPI job.
-// Owns the host-local completion ring (the prefill runner connects and
-// pushes into it) and runs a background listener thread. Two protocol
-// versions, selected once per job via the config (never mixed in a job):
+// LayerCompletionRouter — one per host in a pipelined-prefill MPI job. Owns the
+// host-local completion ring (the prefill runner connects and pushes) and runs a
+// listener thread. Subordinates MPI-send every message to the master; the master
+// also receives from every subordinate and emits to the scheduler-facing segment it
+// owns: v1 reorders by seq and injects a count into an InterProcessCounterChannel,
+// v2 forwards self-describing messages as they arrive into a LayerCompletionQueueV2
+// (see layer_completion_message.hpp). world_size == 1: no MPI.
 //
-//   V1 (kCountOnlyV1, frozen): the master feeds every completion through a
-//   LayerCompletionReorderBuffer and inject(1)s into the scheduler-facing
-//   InterProcessCounterChannel (which this router owns) for each completion
-//   that becomes contiguous-in-order. The scheduler receives a bare count
-//   and correlates it with its own in-order chunk FIFO — per-request
-//   in-order consumption (head-of-line blocking, issue #54632).
-//
-//   V2 (kStructuredV2): completions are self-describing
-//   (LayerCompletionMessageV2: request/slot/position range/layer range), so
-//   the master FORWARDS AS ARRIVED — no reorder buffer, no head-of-line
-//   blocking — into a scheduler-facing v2 ring (which this router owns and
-//   the scheduler connects to). Subordinates MPI-forward verbatim, as in v1.
-//
-// world_size == 1 ⇒ master path uses no MPI (local ring only).
-//
-// Coordinated teardown: at stop(), each subordinate drains its ring and then
-// sends one end-of-stream SENTINEL (see layer_completion_message.hpp). The
-// master does NOT cancel mid-stream — it keeps receiving until it has seen a
-// sentinel from every subordinate (and its own ring is drained), so no
-// blocking subordinate send is ever left without a receiver and no
-// already-arrived completion is dropped by a cancel. A teardown_timeout_ms
-// safety net bounds the wait if a rank crashed without sending its sentinel.
+// Teardown: at stop() each subordinate drains its ring and sends one end-of-stream
+// sentinel; the master keeps receiving until every sentinel has arrived and its own
+// ring is empty, bounded by teardown_timeout_ms for a rank that died first.
 
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <variant>
 
 namespace tt::tt_metal::distributed {
-class InterProcessCounterChannel;  // fwd — defined in api/internal/service/inter_process_counter_channel.hpp
+class InterProcessCounterChannel;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::internal {
 
-using tt::tt_metal::distributed::InterProcessCounterChannel;  // api/internal/service/
+using tt::tt_metal::distributed::InterProcessCounterChannel;
 
-struct LayerCompletionMessage;    // fwd — defined in layer_completion_message.hpp
-struct LayerCompletionMessageV2;  // fwd — defined in layer_completion_message.hpp
+struct LayerCompletionMessage;
+struct LayerCompletionMessageV2;
 template <typename MsgT>
-class LayerCompletionQueueT;     // fwd — defined in layer_completion_queue.hpp
-class LayerCompletionQueueBase;  // fwd — defined in layer_completion_queue.hpp
+class LayerCompletionQueueT;
 using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
 using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;
 
-// SchedulerEgress — the master rank's scheduler-facing output. The router owns
-// exactly one; cfg.protocol fixes the concrete type at construction (see the
-// .cpp): v1 wraps an InterProcessCounterChannel (inject the reordered count),
-// v2 wraps a LayerCompletionQueueV2 (forward self-describing messages
-// as-arrived). Only the protocol-neutral teardown is on the interface.
-class SchedulerEgress {
-public:
-    virtual ~SchedulerEgress() = default;
-    virtual void shutdown() = 0;
-};
-
 enum class LayerCompletionProtocol : uint8_t {
-    // Values match the user-facing PREFILL_LAYER_COMPLETION_PROTOCOL / binding arg.
-    kCountOnlyV1 = 1,  // reorder → bare count into InterProcessCounterChannel (frozen default)
-    kStructuredV2 = 2,  // forward-as-arrived self-describing messages into a scheduler-facing ring
+    kCountOnlyV1 = 1,  // the PREFILL_LAYER_COMPLETION_PROTOCOL / binding values
+    kStructuredV2 = 2,
 };
 
 struct LayerCompletionRouterConfig {
@@ -82,10 +57,8 @@ struct LayerCompletionRouterConfig {
     // validate what it attaches to.
     std::string scheduler_shm_name;
     int poll_idle_us = 100;
-    // Master-only safety net: max time to wait at teardown for outstanding subordinate sentinels
-    // before giving up and cancelling (so a crashed/stalled rank can't hang the listener join
-    // forever). The clean path returns as soon as all sentinels arrive, well under this. On the
-    // v2 master it also bounds a blocked scheduler-ring push once stop_ is set.
+    // Master-only: how long after stop() to keep waiting for subordinate sentinels (and, on v2, for
+    // the scheduler to drain its ring) before giving up.
     int teardown_timeout_ms = 5000;
 };
 
@@ -97,32 +70,43 @@ public:
     LayerCompletionRouter(const LayerCompletionRouter&) = delete;
     LayerCompletionRouter& operator=(const LayerCompletionRouter&) = delete;
 
-    void stop();  // idempotent; signals + joins the listener thread
+    // Idempotent: signal and join the listener thread, release the segments, then rethrow a
+    // listener failure once.
+    void stop();
+
     uint64_t processed() const noexcept { return processed_.load(std::memory_order_relaxed); }
     bool is_master() const noexcept { return cfg_.rank == cfg_.master_rank; }
 
 private:
-    void run_master();       // master fan-in loop; the per-protocol output policy is set up inside
-    void run_subordinate();  // dispatches on cfg_.protocol
+    struct CountOnly {
+        std::unique_ptr<LayerCompletionQueue> ring;
+        std::unique_ptr<InterProcessCounterChannel> scheduler;  // master only
+    };
+    struct Structured {
+        std::unique_ptr<LayerCompletionQueueV2> ring;
+        std::unique_ptr<LayerCompletionQueueV2> scheduler;  // master only
+    };
 
-    // Shared master skeleton: local-ring drain + subordinate MPI fan-in + sentinel-coordinated
-    // teardown. `forward` is the per-protocol output action (v1: reorder → count; v2: forward).
+    void listen();
+    void run_master(CountOnly& state);
+    void run_master(Structured& state);
+    // Master fan-in: drain the local ring and the subordinates, hand every message to `forward`,
+    // then the sentinel-coordinated teardown.
     template <typename MsgT, typename Forward>
-    void run_master_impl(Forward&& forward);
-
-    // Identical for both protocol versions except the message type.
+    void fan_in(LayerCompletionQueueT<MsgT>& ring, Forward&& forward);
     template <typename MsgT>
-    void run_subordinate_impl(LayerCompletionQueueT<MsgT>& queue);
+    void run_subordinate(LayerCompletionQueueT<MsgT>& ring);
+    void join();
 
     LayerCompletionRouterConfig cfg_;
-    // Both polymorphic over the protocol (fixed at construction, so the master/subordinate loops
-    // recover the concrete type with a static_cast — see the .cpp):
-    std::unique_ptr<LayerCompletionQueueBase> queue_;  // owner of the host-local ring
-    std::unique_ptr<SchedulerEgress> sched_egress_;    // master-only scheduler-facing output
+    std::variant<CountOnly, Structured> state_;
     std::thread listener_;
     std::atomic<bool> stop_{false};
+    std::chrono::steady_clock::time_point stopped_at_{};
     std::atomic<bool> stopped_{false};
     std::atomic<uint64_t> processed_{0};
+    std::mutex error_mutex_;
+    std::exception_ptr error_;
 };
 
 }  // namespace tt::tt_metal::internal

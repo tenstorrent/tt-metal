@@ -43,25 +43,13 @@ void bind_layer_completion_api(nb::module_& mod) {
     using tt::tt_metal::internal::LayerCompletionMessageV2;
     using tt::tt_metal::internal::LayerCompletionProtocol;
     using tt::tt_metal::internal::LayerCompletionQueue;
-    using tt::tt_metal::internal::LayerCompletionQueueBase;
     using tt::tt_metal::internal::LayerCompletionQueueV2;
     using tt::tt_metal::internal::LayerCompletionRouter;
     using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer.";
 
-    // Protocol-neutral surface, shared by both ring versions. Everything a constructed ring
-    // supports regardless of message version lives here; the versioned classes below add only
-    // their create/connect factories and their message-typed try_push/try_pop.
-    nb::class_<LayerCompletionQueueBase>(mod, "LayerCompletionQueueBase")
-        .def(
-            "shutdown",
-            &LayerCompletionQueueBase::shutdown,
-            "Idempotent teardown. Owner unlinks; connector unmaps.")
-        .def_prop_ro("shm_name", &LayerCompletionQueueBase::shm_name)
-        .def_prop_ro_static("capacity", [](nb::handle) { return LayerCompletionQueue::capacity(); });
-
-    nb::class_<LayerCompletionQueue, LayerCompletionQueueBase>(mod, "LayerCompletionQueue")
+    nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
         .def_static(
             "create",
             &LayerCompletionQueue::create,
@@ -96,9 +84,11 @@ void bind_layer_completion_api(nb::module_& mod) {
                 }
                 return std::make_tuple(m.seq, m.source_rank, m.layer_idx, m.request_id);
             },
-            "Consumer pop. Returns (seq, source_rank, layer_idx, request_id) or None when empty.");
+            "Consumer pop. Returns (seq, source_rank, layer_idx, request_id) or None when empty.")
+        .def("shutdown", &LayerCompletionQueue::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
+        .def_prop_ro("shm_name", &LayerCompletionQueue::shm_name);
 
-    nb::class_<LayerCompletionQueueV2, LayerCompletionQueueBase>(mod, "LayerCompletionQueueV2")
+    nb::class_<LayerCompletionQueueV2>(mod, "LayerCompletionQueueV2")
         .def_static(
             "create",
             &LayerCompletionQueueV2::create,
@@ -148,7 +138,9 @@ void bind_layer_completion_api(nb::module_& mod) {
                     m.layer_end);
             },
             "Consumer pop. Returns (seq, source_rank, request_id, slot_id, pos_start, pos_end, layer_start, "
-            "layer_end) or None when empty.");
+            "layer_end) or None when empty.")
+        .def("shutdown", &LayerCompletionQueueV2::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
+        .def_prop_ro("shm_name", &LayerCompletionQueueV2::shm_name);
 
     nb::class_<LayerCompletionRouter>(mod, "LayerCompletionRouter")
         .def(
@@ -186,13 +178,16 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("scheduler_shm_name") = std::string{},
             nb::arg("poll_idle_us") = 100,
             nb::arg("teardown_timeout_ms") = 5000,
-            // Appended (after every pre-existing arg) so positional callers are unaffected.
             nb::arg("protocol") = 1,
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
             "rank owns the scheduler-facing segment at scheduler_shm_name (one name for both protocols). "
             "protocol=1 (default): reorder to a bare count on a counter channel there. protocol=2: forward "
             "self-describing messages as-arrived into a structured ring there.")
-        .def("stop", &LayerCompletionRouter::stop, "Idempotent: stop + join the listener thread.")
+        .def(
+            "stop",
+            &LayerCompletionRouter::stop,
+            nb::call_guard<nb::gil_scoped_release>(),
+            "Idempotent: stop and join the listener thread, then raise a listener failure once.")
         .def_prop_ro("processed", &LayerCompletionRouter::processed)
         .def_prop_ro("is_master", &LayerCompletionRouter::is_master);
 

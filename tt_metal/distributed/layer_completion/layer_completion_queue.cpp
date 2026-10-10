@@ -26,23 +26,6 @@ bool shm_path_exists(const std::string& shm_name) {
     return ::stat(("/dev/shm" + shm_name).c_str(), &st) == 0;
 }
 
-// The cells region must land cache-line-aligned in every attached process.
-// mmap is page-aligned so this cannot fail today; the check converts
-// "impossible" into "loudly impossible" if the mapping behaviour or the
-// layout math ever changes (v2 cells are one cache line each).
-template <typename MsgT>
-void check_mapping_alignment(const void* base, const std::string& shm_name, const char* op) {
-    const auto addr = reinterpret_cast<std::uintptr_t>(base);
-    if (addr % alignof(LayerCompletionCellT<MsgT>) != 0 ||
-        (addr + layer_completion_cells_offset<MsgT>()) % alignof(LayerCompletionCellT<MsgT>) != 0) {
-        throw std::runtime_error(fmt::format(
-            "LayerCompletionQueue::{}: {} mapped at {:#x}, not aligned to {} as the ring layout requires",
-            op,
-            shm_name,
-            addr,
-            alignof(LayerCompletionCellT<MsgT>)));
-    }
-}
 }  // namespace
 
 template <typename MsgT>
@@ -68,7 +51,6 @@ LayerCompletionCellT<MsgT>* LayerCompletionQueueT<MsgT>::cells() const noexcept 
 template <typename MsgT>
 std::unique_ptr<LayerCompletionQueueT<MsgT>> LayerCompletionQueueT<MsgT>::create(const std::string& shm_name) {
     auto shm = std::make_unique<NamedShm>(NamedShm::create(shm_name, kLayerCompletionRingBytes<MsgT>));
-    check_mapping_alignment<MsgT>(shm->ptr(), shm_name, "create");
     auto* base = static_cast<std::byte*>(shm->ptr());
 
     // NamedShm zero-inits the region. Placement-construct the atomics so
@@ -98,19 +80,36 @@ std::unique_ptr<LayerCompletionQueueT<MsgT>> LayerCompletionQueueT<MsgT>::connec
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    auto shm = std::make_unique<NamedShm>(NamedShm::open(shm_name, kLayerCompletionRingBytes<MsgT>));
-    check_mapping_alignment<MsgT>(shm->ptr(), shm_name, "connect");
-    auto* hdr = static_cast<LayerCompletionRingHeader*>(shm->ptr());
-    if (hdr->magic != LayerCompletionRingTraits<MsgT>::magic || hdr->capacity != kLayerCompletionRingCapacity) {
-        throw std::runtime_error(fmt::format(
-            "LayerCompletionQueue::connect: {} is not a valid ring for this protocol version "
-            "(magic={:#x} capacity={})",
-            shm_name,
-            hdr->magic,
-            hdr->capacity));
+    // The owner sizes, maps and initialises the segment after creating it (magic is written last),
+    // so a connector inside that window sees a short file or a zero magic: retry until the deadline.
+    for (;;) {
+        std::unique_ptr<NamedShm> shm;
+        try {
+            shm = std::make_unique<NamedShm>(NamedShm::open(shm_name, kLayerCompletionRingBytes<MsgT>));
+        } catch (const std::exception& e) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error(
+                    fmt::format("LayerCompletionQueue::connect: {} could not be mapped: {}", shm_name, e.what()));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        auto* hdr = static_cast<LayerCompletionRingHeader*>(shm->ptr());
+        if (hdr->magic == 0 && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        if (hdr->magic != LayerCompletionRingTraits<MsgT>::magic || hdr->capacity != kLayerCompletionRingCapacity) {
+            throw std::runtime_error(fmt::format(
+                "LayerCompletionQueue::connect: {} is not a valid ring for this protocol version "
+                "(magic={:#x} capacity={})",
+                shm_name,
+                hdr->magic,
+                hdr->capacity));
+        }
+        return std::unique_ptr<LayerCompletionQueueT>(
+            new LayerCompletionQueueT(std::move(shm), shm_name, Role::Connector));
     }
-    return std::unique_ptr<LayerCompletionQueueT>(
-        new LayerCompletionQueueT(std::move(shm), shm_name, Role::Connector));
 }
 
 template <typename MsgT>

@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <fmt/format.h>
@@ -76,7 +77,7 @@ void LayerAckService::start() {
     }
     try {
         if (protocol_ == 2) {
-            producer_v2_ = internal::LayerCompletionQueueV2::connect(ring_shm_name_, connect_timeout_ms_);
+            producer_ = internal::LayerCompletionQueueV2::connect(ring_shm_name_, connect_timeout_ms_);
         } else {
             producer_ = internal::LayerCompletionQueue::connect(ring_shm_name_, connect_timeout_ms_);
         }
@@ -205,13 +206,13 @@ void LayerAckService::reader_loop() {
                 label.layer,
                 label.layer + 1,
                 /*flags=*/0};
-            if (!push_blocking(producer_v2_, msg)) {
+            if (!push_blocking(std::get<std::unique_ptr<internal::LayerCompletionQueueV2>>(producer_), msg)) {
                 return;
             }
         } else {
             const internal::LayerCompletionMessage msg{
                 label.seq, source_rank_, label.layer, /*request_id=*/label.chunk, /*reserved=*/0};
-            if (!push_blocking(producer_, msg)) {
+            if (!push_blocking(std::get<std::unique_ptr<internal::LayerCompletionQueue>>(producer_), msg)) {
                 return;
             }
         }
