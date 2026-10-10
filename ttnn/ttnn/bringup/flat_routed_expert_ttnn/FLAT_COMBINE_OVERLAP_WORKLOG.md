@@ -571,6 +571,24 @@ Measured (pin rule, entry walk; one config per model, vs the baseline on the sam
   Tensix mux that row dispatch requires sits in the fabric path), and Kimi's flat on 8 rows is badly starved
   (2026 vs 891 us on the full 12 x 9). The Galaxy evidence that stands is the host-side plan above.
 
+### 6.19 Final numbers, one build (`b702748119d`), test defaults, same fabric profile (2026-10-10)
+`FABRIC_2D_TORUS_Y` 8 x 1 ring (MGD), 2 links, max BH payload + 16 B, RELAXED_INIT. All accuracy passing (the PR's
+hybrid tests; ours bit-identical both calls, 10240/10240).
+
+| us, LoudBox 8 x 1 ring | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| 1. PR best: hybrid (unified) expert overlapped with combine | 1365.6 | 1904.1 | 936.7 | 1581.9 |
+| (same, measured on the PR's unmodified code, 2026-10-10 morning) | 1350.4 | 1898.7 | 947.9 | 1585.6 |
+| 2. ours serial: flat (default plan, 110 cores), then combine | 1343.7 | 1686.1 | 948.1 | 1593.7 |
+| 3. ours overlapped, default layout (np 2, rows 1-9) | **1140.7** | **1656.2** | **810.4** | **1454.2** |
+| vs 1 | -16.5% | -13.0% | -13.5% | -8.1% |
+| vs 2 | -15.1% | -1.8% | -14.5% | -8.8% |
+| alternative static layout: 64 gu + 19 down | 1263.7 | 1512.6 | 892.1 | 1287.3 |
+| vs 1 | -7.5% | -20.6% | -4.8% | -18.6% |
+
+Our combine changes (VC 0, pipelined reads, collector fix) also run under the PR's hybrid overlap: its combine
+alone is faster (Kimi bal 556 -> 490 us) but its overlap is unchanged within ~1%.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
