@@ -1,0 +1,53 @@
+From 4ca2d846be810ff8cd44827cd15f92a0dd1cf2d6 Mon Sep 17 00:00:00 2001
+From: Luca Barbato <lu_zero@gentoo.org>
+Date: Sat, 16 May 2026 15:02:52 +0200
+Subject: [PATCH] rtl-rvtt-replay: use data() for one-past-end pointer
+ arithmetic
+
+block[span.end] where span.end == block.size() is undefined behaviour
+and triggers _GLIBCXX_ASSERTIONS on GCC 16-built hosts.  Use
+block.data() + span.end instead, which produces a valid one-past-end
+pointer without going through operator[].
+
+Fixes ICE in rvtt_replay pass on all six lut/replay test cases when
+built with a hardened libstdc++.
+---
+ gcc/config/riscv/tt/rtl-rvtt-replay.cc | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/gcc/config/riscv/tt/rtl-rvtt-replay.cc b/gcc/config/riscv/tt/rtl-rvtt-replay.cc
+index 63794d4b8..4e1bdebbc 100644
+--- a/gcc/config/riscv/tt/rtl-rvtt-replay.cc
++++ b/gcc/config/riscv/tt/rtl-rvtt-replay.cc
+@@ -412,7 +412,7 @@ static void
+ dump_sequence (FILE *stream, replay_block const &block, replay_span span,
+ 	       unsigned base, bool ignore_empty = true)
+ {
+-  for (auto pos = &block[span.begin], end = &block[span.end];
++  for (auto pos = block.data () + span.begin, end = block.data () + span.end;
+        pos != end; pos++)
+     {
+       if (ignore_empty && pos->empty)
+@@ -517,8 +517,8 @@ replace_sequence (replay_sequence &seq, replay_block &block, unsigned replay_sta
+   emit_insn_before (capture, block[seq.clones.front ().begin].insn);
+ 
+   // Make sure we've not deleted anything in this instance already
+-  for (auto pos = &block[seq.clones.front ().begin],
+-	 end = &block[seq.clones.front ().end];
++  for (auto pos = block.data () + seq.clones.front ().begin,
++	 end = block.data () + seq.clones.front ().end;
+        pos != end; pos++)
+     gcc_assert (GET_CODE (pos->insn) == INSN);
+ 
+@@ -537,7 +537,7 @@ replace_sequence (replay_sequence &seq, replay_block &block, unsigned replay_sta
+       if (not_quasar_fix)
+ 	{
+ 	  unsigned ix = replay_start;
+-	  for (auto pos = &block[clone->begin], end = &block[clone->end];
++	  for (auto pos = block.data () + clone->begin, end = block.data () + clone->end;
+ 	       pos != end; pos++)
+ 	    {
+ 	      if (dump_file)
+-- 
+2.54.0
+
