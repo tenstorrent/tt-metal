@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the Blackhole compute_kernel_hw_cleanup (sources/hw_cleanup_perf.cpp): one identity datacopy per iteration,
-with the three-thread cleanup and the re-init it forces (PERF_STAGE 1) or without (PERF_STAGE 0); unit: one iteration.
+"""Perf of the Blackhole compute_kernel_hw_cleanup (sources/hw_cleanup_perf.cpp): per iteration each thread's init and
+one identity datacopy, with the three-thread cleanup (PERF_STAGE 1) or without (PERF_STAGE 0); unit: one iteration.
 """
 
 import pytest
@@ -22,6 +22,8 @@ from helpers.test_variant_parameters import (
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
+TILES = 1
+NUM_FACES_VALUE = 4
 
 
 @pytest.mark.perf
@@ -35,17 +37,16 @@ def test_perf_hw_cleanup(perf_report, stage):
         InputOutputFormat(BF16, BF16),
         run_types=[PerfRunType.L1_TO_L1],
         templates=[PERF_STAGE(stage)],
-        runtimes=[TILE_COUNT(1), NUM_FACES(4), LOOP_FACTOR(16)],
+        runtimes=[TILE_COUNT(TILES), NUM_FACES(NUM_FACES_VALUE), LOOP_FACTOR(16)],
         variant_stimuli=StimuliConfig(
             None,
             BF16,
             None,
             BF16,
             BF16,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
-            num_faces=4,
+            tile_count_A=TILES,
+            tile_count_B=TILES,
+            tile_count_res=TILES,
         ),
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,
