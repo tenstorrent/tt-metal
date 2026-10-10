@@ -1126,7 +1126,7 @@ class PerfConfig(TestConfig):
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
 
-        # Wormhole perf: INIT comes from the INIT measurement build (test_config.py init_elf), launched after the measured
+        # Wormhole perf: INIT comes from the INIT measurement build (test_config.py _init_elf_dir), launched after the measured
         # kernels so they keep their predecessors, after one unrecorded pass so each recorded INIT kernel follows another.
         if (
             self._wormhole_perf_barrier()
@@ -1147,10 +1147,12 @@ class PerfConfig(TestConfig):
                     self.wait_for_tensix_operations_finished()
                     init_data = Profiler.get_data(
                         self.test_name,
-                        f"{self.variant_id}_init",
+                        self.init_meta_id(),
                         TestConfig.TENSIX_LOCATION,
                     )
                     init_data.df["run_index"] = 0
+                    if os.environ.get("LLK_EXP_INIT_DUMP"):  # experiment hook (init-opt2): every thread's INIT
+                        _exp_init_dump(self, run_type, init_data)
                     init_stats = Profiler.STATS_FUNCTION[run_type](
                         ProfilerData.concat([init_data])
                     )
@@ -1416,3 +1418,29 @@ def merge_main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(merge_main())
+
+
+def _exp_init_dump(cfg, run_type, init_data):
+    """experiment hook (init-opt2), only with LLK_EXP_INIT_DUMP=<jsonl>: every thread's INIT zone of this INIT launch,
+    the node id and the INIT ELF dir"""
+    import json as _json
+
+    raw = init_data.zones().raw()
+    raw = raw[raw[MARKER] == "INIT"]
+    zones = {}
+    for thread in ("unpack", "math", "pack"):
+        t = raw[raw["thread"] == thread]
+        zones[thread] = [
+            [int(x) for x in t[t["type"] == "ZONE_START"]["timestamp"].to_numpy()],
+            [int(x) for x in t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()],
+        ]
+    rec = {
+        "node": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+        "run_type": run_type.name,
+        "test": str(cfg.test_name),
+        "variant": cfg.variant_id,
+        "init_dir": str(cfg._init_build_dir()),
+        "zones": zones,
+    }
+    with open(os.environ["LLK_EXP_INIT_DUMP"], "a") as f:
+        f.write(_json.dumps(rec) + "\n")
