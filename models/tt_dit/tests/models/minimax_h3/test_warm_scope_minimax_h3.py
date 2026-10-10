@@ -4,9 +4,11 @@
 
 """Device-free checks of the opt-in warm scope (`warm_rungs`, `warm_canvases`)."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from ....pipelines.minimax_h3 import pipeline_minimax_h3 as pm
 from ....pipelines.minimax_h3 import policy
@@ -117,3 +119,54 @@ def test_trace_guard_logs_when_untraced_and_is_off_by_default():
     ):
         _check(fake, 1, outside)
         assert fake.logs == []
+
+
+def _canvas_without_16x9_layouts(alignment):
+    landscape = policy.warm_keyframe_layout_keys({resolve_canvas_size(16, 9)}, alignment)
+    for canvas in policy.decodable_canvases():
+        if not policy.warm_keyframe_layout_keys({canvas}, alignment) & landscape:
+            return canvas
+    raise AssertionError("every canvas shares a layout with 16:9")
+
+
+def test_trace_guard_always_admits_the_16x9_warmup_canvas():
+    fake = _fake_pipeline(warm_canvases=set(), trace_denoise=True)
+    fake.warm_canvases = frozenset({_canvas_without_16x9_layouts(fake.sp_factor * 32)})
+    # `_warmup_on_init` warms 16:9 with one and two keyframes whatever `warm_canvases` holds.
+    _check(fake, 1, resolve_canvas_size(16, 9))
+    _check(fake, 2, resolve_canvas_size(16, 9))
+    assert fake.logs == []
+
+
+class _Stop(Exception):
+    pass
+
+
+def _call_until_encode(expect_error, fake, **kwargs):
+    fake.vae_config = SimpleNamespace(spatial_compression_ratio=16)
+    fake._force_bucket = None
+    fake._log = lambda message: None
+    fake._track_cache_misses = lambda *args: nullcontext()
+
+    def encode_prompt(prompt, keyframes):
+        raise _Stop("encode_prompt")
+
+    fake.encode_prompt = encode_prompt
+    fake._check_warm_keyframe_layout = lambda n, canvas: pm.MiniMaxH3Pipeline._check_warm_keyframe_layout(
+        fake, n, canvas
+    )
+    with expect_error(_Stop, "encode_prompt"):
+        pm.MiniMaxH3Pipeline.__call__(fake, "a prompt", num_frames=124, **kwargs)
+
+
+def test_call_runs_the_trace_guard_before_encoding(expect_error):
+    warm = {resolve_canvas_size(16, 9)}
+    fake = _fake_pipeline(warm_canvases=warm, trace_denoise=True)
+    outside = _outside_canvas(fake.sp_factor * 32, warm)
+    landscape = Image.new("RGB", resolve_canvas_size(16, 9)[::-1])
+    _call_until_encode(expect_error, fake, image=landscape, last_image=landscape)
+    _call_until_encode(expect_error, fake)  # t2va has no keyframe layout to check.
+
+    image = Image.new("RGB", outside[::-1])
+    with expect_error(ValueError, "outside warm_canvases"):
+        pm.MiniMaxH3Pipeline.__call__(fake, "a prompt", num_frames=124, image=image)
