@@ -575,11 +575,19 @@ class OptimizedDecoder(LightweightModule):
         # device (2026-08-05): served HumanEval-164 k64==k128 (83/164, 0 pass/fail flips) and throughput
         # identical (1099s vs 1102s) — Pareto win (more accurate config, zero HumanEval/throughput cost).
         self._verify_k = int(os.environ.get("TT_LAGUNA_VERIFY_K", "64"))
+        # verify SDPA cores per (row, kv head): the 6-row DFlash verify runs 12 such groups, which share the grid
+        # better with fewer cores each. Sliding layers (512-token window) use 4 (verify 18.7 -> 18.1 ms at 6 active
+        # rows); full-attention layers keep ttnn's default 16 for long contexts (4 / 8 / 16 were within noise to 8K).
+        # TT_LAGUNA_VERIFY_MAXCORES sets both layer types, _SLIDING / _FULL one each ("" = ttnn's default).
+        _sliding = getattr(cfg, "is_sliding", False)
+        _ver_mc = os.environ.get("TT_LAGUNA_VERIFY_MAXCORES", "4" if _sliding else "")
+        _ver_mc = os.environ.get("TT_LAGUNA_VERIFY_MAXCORES_" + ("SLIDING" if _sliding else "FULL"), _ver_mc)
         self._sdpa_pc_verify = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             q_chunk_size=32,
             k_chunk_size=self._verify_k,
             exp_approx_mode=False,
+            **({"max_cores_per_head_batch": int(_ver_mc)} if _ver_mc else {}),
         )
         # Chunked prefix-cache read (suffix prefill, start_pos>0): chunk_start_idx
         # must be a multiple of q_chunk_size AND k_chunk_size. start_pos is only
