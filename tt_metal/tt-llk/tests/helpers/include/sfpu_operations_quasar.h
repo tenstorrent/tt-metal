@@ -56,6 +56,7 @@
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_reshuffle_rows.h"
 #include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -607,6 +608,7 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        reads it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
+ * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -621,7 +623,8 @@ void call_unary_sfpu_operation_quasar(
     std::uint32_t dst_index,
     DataFormat sfpu_format                        = DataFormat::Float32,
     [[maybe_unused]] const bool first             = true,
-    [[maybe_unused]] const float fill_const_value = 5.0f)
+    [[maybe_unused]] const float fill_const_value = 5.0f,
+    [[maybe_unused]] const std::uint32_t idx_addr = 0)
 {
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -817,6 +820,14 @@ void call_unary_sfpu_operation_quasar(
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::reshuffle_rows)
+    {
+        // _sfpu_check_ only validates dst_index; the accumulator is dst_index + 1.
+        LLK_ASSERT(
+            (dst_index + 1 < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
+            "reshuffle_rows accumulator tile dst_index + 1 exceeds max dest tiles");
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reshuffle_rows, (APPROX), dst_index, VectorMode::RC_custom, idx_addr);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
@@ -1223,6 +1234,14 @@ void call_unary_sfpu_operation_quasar(
     }
 }
 
+// Fixed mask for BinaryOp::RESHUFFLE_ROWS, since the fuser cannot pass an L1 buffer.
+// Keep in sync with RESHUFFLE_ROWS_FUSER_MASK in helpers/golden_generators.py.
+alignas(4) inline constexpr std::uint8_t RESHUFFLE_ROWS_FUSER_MASK[ckernel::sfpu::RESHUFFLE_MASK_HEADER_BYTES + TILE_R_DIM] = {
+    0,  0,  0,  0,  0,   0,  0, 0,  0,  0,   0,  0,  0,  0,   0,  0, // header, skipped by the kernel
+    31, 30, 16, 15, 255, 32, 0, 0,  0,  47,  5,  5,  48, 254, 17, 3, //
+    1,  2,  31, 31, 100, 8,  9, 15, 16, 255, 20, 21, 22, 64,  7,  0,
+};
+
 constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
 {
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
@@ -1379,7 +1398,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**
@@ -1756,6 +1775,22 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::RESHUFFLE_ROWS)
+    {
+        // The kernel always accumulates into the tile after in0.
+        LLK_ASSERT(src1_tile == src0_tile + 1 && dst_tile == src1_tile, "RESHUFFLE_ROWS needs in1 = in0 + 1 and out = in1");
+        LLK_ASSERT(
+            (dst_tile < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
+            "RESHUFFLE_ROWS accumulator tile exceeds max dest tiles");
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_reshuffle_rows,
+            (APPROXIMATION_MODE),
+            src0_tile,
+            VectorMode::RC_custom,
+            static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(RESHUFFLE_ROWS_FUSER_MASK)) /*idx_addr*/);
     }
     else if constexpr (OP == BinaryOp::RSHFT || OP == BinaryOp::LSHFT || OP == BinaryOp::LOGICAL_RSHFT)
     {

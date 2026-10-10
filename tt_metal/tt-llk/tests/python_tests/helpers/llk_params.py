@@ -100,6 +100,7 @@ class MathOperation(Enum):
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
+    ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
@@ -264,6 +265,8 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
+    # Fuser-only binary form of reshuffle_rows with a fixed mask (in1 = in0 + 1, out = in1).
+    SfpuReshuffleRows = OpSpec("RESHUFFLE_ROWS", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
