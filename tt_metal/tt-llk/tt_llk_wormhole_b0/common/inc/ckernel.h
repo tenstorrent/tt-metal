@@ -21,6 +21,31 @@
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
+// Experiment hook (fidelity agent): known work at the top of each per-tile LLK call of the perf loops, compiled into
+// thread LLK_FID_T only (COMPILE_FOR_TRISC numbering); without LLK_FID_T it expands to nothing.
+//   LLK_FID_KIND 1: LLK_FID_K RISC instructions (nop); 2: LLK_FID_K Tensix NOPs (.ttinsn);
+//   3: STALLWAIT, the thread's next instruction of its own unit waits until that unit is idle.
+#define LLK_FID_STR2(x) #x
+#define LLK_FID_STR(x)  LLK_FID_STR2(x)
+#if defined(LLK_FID_T) && defined(COMPILE_FOR_TRISC) && (LLK_FID_T == COMPILE_FOR_TRISC || LLK_FID_T == 9)
+#if LLK_FID_KIND == 1
+#define LLK_FID_POINT() __asm__ __volatile__(".rept " LLK_FID_STR(LLK_FID_K) "\n\tnop\n\t.endr")
+#elif LLK_FID_KIND == 2
+#define LLK_FID_POINT() __asm__ __volatile__(".rept " LLK_FID_STR(LLK_FID_K) "\n\t.ttinsn %0\n\t.endr" : : "n"(TT_OP_NOP))
+#elif LLK_FID_KIND == 3
+#if COMPILE_FOR_TRISC == 0
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)
+#elif COMPILE_FOR_TRISC == 1
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)
+#else
+#define LLK_FID_POINT() TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK)
+#endif
+#endif
+#endif
+#ifndef LLK_FID_POINT
+#define LLK_FID_POINT()
+#endif
+
 #ifndef EN_DEST_DOUBLE_BUFFERING
 #define EN_DEST_DOUBLE_BUFFERING 1
 #endif
