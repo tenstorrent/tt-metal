@@ -14,18 +14,19 @@ from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environme
 from models.demos.qwen38_27b_qb2.tests.bounded_profile import CASES, SCOPE, VARIANTS, check_artifact_budget, collect
 
 
-def run_capture(command, *, cwd, env, root, timeout=7200):
+def run_capture(command, *, cwd, env, root, timeout=7200, artifact_budget=None):
     """Own one process group; never kill or reset an unrelated hardware job."""
-    check_artifact_budget(root)
+    budget = artifact_budget or {}
+    check_artifact_budget(root, **budget)
     process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
     started = time.monotonic()
     try:
         while process.poll() is None:
-            check_artifact_budget(root)
+            check_artifact_budget(root, **budget)
             if time.monotonic() - started > timeout:
                 raise TimeoutError("Bounded profile exceeded its capture/export deadline")
             time.sleep(2)
-        check_artifact_budget(root)
+        check_artifact_budget(root, **budget)
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, command)
     finally:

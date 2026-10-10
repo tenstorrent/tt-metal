@@ -17,7 +17,8 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 
-CASES = ((32768, 32), (8192, 1), (8192, 16))
+CASES = ((32768, 16), (16384, 16), (32768, 32), (8192, 1), (8192, 16))
+ARTIFACT_BUDGET = dict(maximum_file=8 * 1024**3, maximum_total=24 * 1024**3, minimum_free=32 * 1024**3)
 SCOPE = (
     "Full 64-layer model plus split device sampler, real weights and synthetic populated caches; "
     "three restored-state trace replays, not natural-prompt accuracy or unprofiled serving throughput"
@@ -148,6 +149,15 @@ def analyze(rows, receipt):
                 stage=stage,
                 op=row.get("OP CODE", ""),
                 kernel_ns=number(row, "DEVICE KERNEL DURATION [ns]"),
+                risc_ns={
+                    name: number(row, column)
+                    for name, column in (
+                        ("reader", "DEVICE BRISC KERNEL DURATION [ns]"),
+                        ("writer", "DEVICE NCRISC KERNEL DURATION [ns]"),
+                        ("compute", "DEVICE TRISC1 KERNEL DURATION [ns]"),
+                    )
+                    if row.get(column) not in (None, "", "-", "N/A")
+                },
             )
         )
     sessions = {}
@@ -189,6 +199,13 @@ def analyze(rows, receipt):
                 target = op_types[row["op"]]
                 target["calls"] += 1
                 target["kernel_ns"] += row["kernel_ns"]
+                for risc in ("reader", "writer", "compute"):
+                    if risc in row["risc_ns"]:
+                        key = risc + "_wait_inclusive_ns"
+                        target[key] = target.get(key, 0.0) + row["risc_ns"][risc]
+                    else:
+                        key = risc + "_unavailable_rows"
+                        target[key] = target.get(key, 0) + 1
             results.append(
                 dict(
                     device=device,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
-from models.demos.qwen38_27b_qb2.tests.full_trace_profile import CASES, SCOPE, collect
+from models.demos.qwen38_27b_qb2.tests.full_trace_profile import ARTIFACT_BUDGET, CASES, SCOPE, collect
 
 
 def run(args):
@@ -34,7 +34,10 @@ def run(args):
         env = environment(args.task, args.source, args.weights)
         for key in ("TT_METAL_SIMULATOR", "TT_METAL_KERNEL_PATH", "TT_METAL_DISABLE_SFPLOADMACRO"):
             env.pop(key, None)
-        env.update(QWEN_PRECISION_CONFIG=str(model / "config/precision_single_step_shared_qk.json"))
+        env.update(
+            QWEN_PRECISION_CONFIG=str(model / "config/precision_single_step_shared_qk_bfp8_all.json"),
+            TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="8192",
+        )
         subprocess.run(["/bin/bash", "-n", str(args.source / "scripts/run_safe_pytest.sh")], check=True, timeout=30)
         subprocess.run(
             [str(args.task / "python_env/bin/python"), "-m", "tracy", "--help"],
@@ -141,7 +144,9 @@ def run(args):
             status["runs"].append(row)
             status.update(state="profiling", active_case=[length, batch])
             save(status_path, status)
-            run_capture(command, cwd=args.source, env=case_env, root=directory, timeout=5580)
+            run_capture(
+                command, cwd=args.source, env=case_env, root=directory, timeout=5580, artifact_budget=ARTIFACT_BUDGET
+            )
             report = collect(directory)
             row.update(
                 state="completed",

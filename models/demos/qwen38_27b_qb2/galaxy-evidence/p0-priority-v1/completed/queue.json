@@ -1,0 +1,79 @@
+{
+  "state": "completed",
+  "physical_devices_accessed": false,
+  "started_at": 1791610669.3042965,
+  "files": {
+    "tracy_profile_log_host.tracy": {
+      "bytes": 318561738,
+      "sha256": "620ab5cc08ff3cd5b66d01cb36a99708400b0e42c9839d76d078aaa1d7a49848"
+    },
+    "cpp_device_perf_report.csv": {
+      "bytes": 24083898,
+      "sha256": "62a68acc33d9de52d8240b7340e552eb446e0e6d5760790fbb4379b0ff5b08a8"
+    },
+    "tracy_ops_times.csv": {
+      "bytes": 11827326
+    },
+    "tracy_ops_data.csv": {
+      "bytes": 10659892
+    }
+  },
+  "updated_at": "2026-10-10T05:39:31Z",
+  "full_trace_reconciliation_passed": true,
+  "comparisons": [
+    {
+      "replay": 0,
+      "host_step_ns": 72239661.12360358,
+      "longest_rank": 4,
+      "device_span_ns": 71948454.8148148,
+      "relative_unaccounted_time": 0.004031113992776299,
+      "within_five_percent": true
+    },
+    {
+      "replay": 1,
+      "host_step_ns": 72290435.89904904,
+      "longest_rank": 12,
+      "device_span_ns": 71957034.07407407,
+      "relative_unaccounted_time": 0.004611976962492694,
+      "within_five_percent": true
+    },
+    {
+      "replay": 2,
+      "host_step_ns": 72258616.33196473,
+      "longest_rank": 4,
+      "device_span_ns": 71945497.03703703,
+      "relative_unaccounted_time": 0.0043333142927785085,
+      "within_five_percent": true
+    }
+  ],
+  "profiled_unprofiled_outputs_match": true,
+  "baseline_replays": [
+    {
+      "index": 0,
+      "host_step_s": 0.06724002119153738
+    },
+    {
+      "index": 1,
+      "host_step_s": 0.06725273001939058
+    },
+    {
+      "index": 2,
+      "host_step_s": 0.06723964028060436
+    }
+  ],
+  "profiled_replays": [
+    {
+      "index": 0,
+      "host_step_s": 0.07223966112360358
+    },
+    {
+      "index": 1,
+      "host_step_s": 0.07229043589904904
+    },
+    {
+      "index": 2,
+      "host_step_s": 0.07225861633196473
+    }
+  ],
+  "finished_at": 1791610771.843043
+}

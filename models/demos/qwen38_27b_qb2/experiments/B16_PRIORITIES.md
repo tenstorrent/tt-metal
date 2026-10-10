@@ -117,6 +117,49 @@ It is not a promise of 39 ms recoverable time.
 
 Source: [control profile](../galaxy-evidence/gdn-fusion-progress-v3/gdn-fusion-full-v2/profile-s32768-b16-native/analysis/profile-summary.json).
 
+## P0 first and the 70% requirement
+
+User priority on October 10 at05:13UTC puts full-model reconciliation ahead
+of remaining optimization sweeps. The active host-owned service is
+`qwen38-p0-priority-v1-20261010.service`, invocation
+`377cf1d7b3554bc1b3d559e600c15323`, PID3582493 at launch. It suspends only the
+identified experiment parent, lets its current child sweep close normally,
+then runs B16/32K unprofiled and profiled full-model diagnostics. The same
+parent resumes in a finally handler and identity-checked ExecStopPost fallback;
+its existing GPQA and B16 followers retain their dependency identities.
+
+The profiled run raises the existing native profiler program capacity from
+1000 to8192 and permits an8-GiB file/24-GiB total capture. The previous full
+profile dropped device markers and exceeded a1-GiB export cap. Increasing the
+limits is a proposed remedy, not a passing capture. Profiled/unprofiled output
+hashes must match. Every rank, all64 layers, three replays and the device
+sampler are required; timing overlap and uncovered gaps remain explicit.
+Canonical token-history append is now included to match the sweep boundary.
+Reader/compute/writer totals include waits and cannot establish NoC saturation.
+
+Large artifacts go to `/dev/shm/qwen38-p0-priority-v1-20261010` because the
+dedicated host-disk volume has about32GiB free while host tmpfs has284GiB.
+Source, controller and launch receipts stay on host disk. The4-hour bounded
+unit survives session disconnect, not reboot, and changes no native install,
+firmware, precision or serving default. Preflight497tests plus40subtests passed.
+
+Taking70% useful-byte bandwidth as a requirement implies about27.8TSU or
+35.95ms per32K/B16 step. The following is a target allocation, not an achieved
+roofline or a feasibility guarantee:
+
+| Work | Current extrapolation | Target budget |
+|---|---:|---:|
+| Weight matmuls | 18.7ms | 16ms |
+| Attention | 12.6ms | 10.5ms |
+| GDN, layouts, convolution, norms and collectives | 33.1ms | 8.5ms |
+| Remaining gap to measured step | 2.8ms | 1ms |
+
+Reaching the budget needs about31ms savings, predominantly graph/data-flow
+fusion and compact L1 intermediates, plus better weight/KV streaming. The
+current6.8-ms fusion projection is part of those savings, not additive to
+them. P0 determines which costs can be eliminated or overlapped before
+assigning the next implementation. Profiling itself has zero direct speedup.
+
 ## Queued work and scope
 
 `qwen38-b16-priority-v2-20261010.service` waits for the exact invocation of

@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tests.bounded_profile import check_artifact_budget
-from models.demos.qwen38_27b_qb2.tests.full_trace_profile import CASES, SCOPE
+from models.demos.qwen38_27b_qb2.tests.full_trace_profile import ARTIFACT_BUDGET, CASES, SCOPE
 from models.demos.qwen38_27b_qb2.tests.test_bounded_layer_profile import digest
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
@@ -49,7 +49,7 @@ def test_full_trace_profile():
         },
     )
     save(path, report)
-    check_artifact_budget(path.parent)
+    check_artifact_budget(path.parent, **ARTIFACT_BUDGET)
     torch.set_num_threads(8)
     configure_fabric(topology=ttnn.Topology.Linear)
     parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
@@ -61,7 +61,7 @@ def test_full_trace_profile():
     def drain():
         ttnn.synchronize_device(mesh)
         ttnn.ReadDeviceProfiler(mesh)
-        check_artifact_budget(path.parent)
+        check_artifact_budget(path.parent, **ARTIFACT_BUDGET)
 
     try:
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
@@ -89,6 +89,9 @@ def test_full_trace_profile():
         assert all(
             layer.policy["kv_dtype"] == "bfloat8_b" for layer in gen.model.layers if layer.kind == "full_attention"
         )
+        assert set(gen.model.precision["weight_groups"].values()) == {"bfloat8_b"}
+        assert gen.model.precision["recurrent_dtype"] == "float32"
+        report["profiler_program_support_count"] = os.getenv("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT")
 
         def no_prefill(*args, **kwargs):
             report["prefill_calls"] += 1
@@ -101,6 +104,7 @@ def test_full_trace_profile():
         report["state"] = "seeding_cache"
         save(path, report)
         cache = gen._ensure_cache(batch, length + 128)
+        gen._ensure_history(128)
         drain()
         rng = torch.Generator().manual_seed(20261008 + length + batch)
         for index, state in enumerate(cache.layers):
@@ -139,6 +143,7 @@ def test_full_trace_profile():
                 (seeds, gen.sampler.seeds_tt_tensor, "seeds"),
             ):
                 gen._copy(host, target, counter)
+            gen._reset_history()
             drain()
 
         def readback(logits):
@@ -154,6 +159,7 @@ def test_full_trace_profile():
             restore()
             logits = gen._model_step()
             gen._sampling_step(logits)
+            gen._append_history()
             drain()
             readback(logits)
             ttnn.deallocate(logits)
@@ -187,6 +193,7 @@ def test_full_trace_profile():
         gen.sample_trace = ttnn.begin_trace_capture(mesh, cq_id=0)
         try:
             gen._sampling_step(gen.logits)
+            gen._append_history()
         finally:
             ttnn.end_trace_capture(mesh, gen.sample_trace, cq_id=0)
             tracy.signpost("FULLTRACE_SAMPLER_END")

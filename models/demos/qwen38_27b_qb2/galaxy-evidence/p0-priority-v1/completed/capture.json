@@ -1,0 +1,176 @@
+{
+  "captured_at": "2026-10-10T05:42:01.097620+00:00",
+  "remote": "/home/ttuser/qwen38-artifacts-20261007/p0-profile-result-v1",
+  "files": [
+    {
+      "path": "analysis.json",
+      "bytes": 146129,
+      "sha256": "0102e5949935e4d672d2934055a4ea61fb857012c6cfa939f0e627dbba92d24f",
+      "published": [
+        "analysis.json"
+      ]
+    },
+    {
+      "path": "hardware.xml",
+      "bytes": 541,
+      "sha256": "6b6b1cdd31210c96c30f887871348b4217a3dc3b715a4fb34202576829ee0f95",
+      "published": [
+        "hardware.xml.gz"
+      ]
+    },
+    {
+      "path": "profile.json",
+      "bytes": 33122,
+      "sha256": "7713b7682808401a6862b7d19e7da83cd6b725c4e373e87f98b9af3ef6f13e71",
+      "published": [
+        "profile.json"
+      ]
+    },
+    {
+      "path": "queue.json",
+      "bytes": 1915,
+      "sha256": "014add4f3f207211dec5d288f97ded93fed46640778d532516c04dd7eeba0d58",
+      "published": [
+        "queue.json"
+      ]
+    },
+    {
+      "path": "tracy/.logs/cpp_device_perf_report.csv",
+      "bytes": 24083898,
+      "sha256": "62a68acc33d9de52d8240b7340e552eb446e0e6d5760790fbb4379b0ff5b08a8",
+      "published": [
+        "tracy/.logs/cpp_device_perf_report.csv.part0000.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0001.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0002.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0003.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0004.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0005.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0006.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0007.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0008.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0009.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0010.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0011.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0012.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0013.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0014.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0015.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0016.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0017.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0018.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0019.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0020.gz",
+        "tracy/.logs/cpp_device_perf_report.csv.part0021.gz"
+      ]
+    },
+    {
+      "path": "tracy/.logs/new_zone_src_locations.log",
+      "bytes": 458791,
+      "sha256": "7c2f758a7e5e0df80c41be41042bc6bf2e9bd85b073fba80e86cc11157d76dd3",
+      "published": [
+        "tracy/.logs/new_zone_src_locations.log.gz"
+      ]
+    },
+    {
+      "path": "tracy/.logs/tracy_ops_data.csv",
+      "bytes": 10659892,
+      "sha256": "40389a3a9559b5cff36b83b65a6b31f96116b8a09c3df3712450b05504983fe9",
+      "published": [
+        "tracy/.logs/tracy_ops_data.csv.part0000.gz",
+        "tracy/.logs/tracy_ops_data.csv.part0001.gz",
+        "tracy/.logs/tracy_ops_data.csv.part0002.gz",
+        "tracy/.logs/tracy_ops_data.csv.part0003.gz"
+      ]
+    },
+    {
+      "path": "tracy/.logs/tracy_ops_times.csv",
+      "bytes": 11827326,
+      "sha256": "97bbb69e7d8460b2c88c16bdec15d87d9ce316c7a476f8c848cc643a9932eb22",
+      "published": [
+        "tracy/.logs/tracy_ops_times.csv.part0000.gz",
+        "tracy/.logs/tracy_ops_times.csv.part0001.gz",
+        "tracy/.logs/tracy_ops_times.csv.part0002.gz"
+      ]
+    },
+    {
+      "path": "tracy/.logs/zone_src_locations.log",
+      "bytes": 4852,
+      "sha256": "a59fffe88794628fc633b20fc8df99e90c06f2ade8cd84b4bd5e885ef609e635",
+      "published": [
+        "tracy/.logs/zone_src_locations.log.gz"
+      ]
+    },
+    {
+      "path": "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv",
+      "bytes": 183867537,
+      "sha256": "f65905e06854615ad2499bed809d749aa3abaac7dae3e0c0bc36805ab76056ec",
+      "published": [
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0000.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0001.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0002.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0003.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0004.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0005.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0006.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0007.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0008.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0009.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0010.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0011.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0012.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0013.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0014.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0015.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0016.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0017.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0018.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0019.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0020.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0021.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0022.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0023.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0024.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0025.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0026.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0027.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0028.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0029.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0030.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0031.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0032.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0033.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0034.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0035.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0036.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0037.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0038.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0039.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0040.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0041.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0042.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0043.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0044.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0045.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0046.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0047.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0048.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0049.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0050.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0051.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0052.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0053.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0054.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0055.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0056.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0057.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0058.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0059.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0060.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0061.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0062.gz",
+        "tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv.part0063.gz"
+      ]
+    }
+  ],
+  "part_order": "Concatenate decompressed published parts in listed order to reproduce the exact original bytes."
+}

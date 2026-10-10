@@ -1876,3 +1876,68 @@ No session connection is needed for that queue to continue.
   conversion19.49ms, other13.60ms. Explained these as extrapolation, not a
   completed full-trace P0 reconciliation. Useful-byte stage estimates74%/71%
   of peak explain why whole-step37.4% does not mean every reader is that slow.
+
+## Oct 10, 05:13-05:14 UTC: persistent P0 preempts queued optimizations
+
+- User made this profiling P0 and asked for disconnect persistence. Staged
+  immutable p0-priority-source-v1 and passed497CPU tests plus40subtests and
+  physical-test collection. New ownership tests reject changed PID/invocation.
+- Launched qwen38-p0-priority-v1-20261010, PID3582493, invocation
+  377cf1d7b3554bc1b3d559e600c15323. Verified active status, parent3530696
+  suspended (only orchestration), current child still running, and registered
+  identity-checked ExecStopPost resumption. Existing downstream jobs unchanged.
+- Queue: current control sweep closes, then B16/32K unprofiled full64-layer
+  decode and profiled replay with sampler/history, then resume exact existing
+  controller. No running hardware process was killed for this reorder.
+- Addressed prior full-capture marker overflow using8192program capacity and
+  larger bounded export budgets. This needs hardware verification. Preserve
+  raw capture, exact source and output hashes; do not infer NoC utilization
+  from wait-inclusive RISC durations or accept incomplete trace coverage.
+- Staging first stopped before any mutation because the disk-free assertion
+  required64GiB but the dedicated host volume had32GiB. Put large captures in
+  removable host tmpfs (284GiB available); control/source remain on host disk.
+- At05:14UTC the current control moved to its final16K/B16 cell. Expected
+  P0 result35-55minutes if enlarged capture limits resolve the previous failure.
+  This is an estimate, not a completed result or reboot-resume guarantee.
+- User set70% effective bandwidth as a planning requirement:35.95ms/27.8TSU
+  at32K/B16. Added a stage budget requiring roughly31ms savings, mostly graph
+  fusion/compact intermediates. Current6.8ms candidate saving is included.
+- Rechecked precision history: matched BFP4/HiFi2 native gains9.3%/8.6% over
+  BFP8 at16K/32K. No corrected-harness BFP4 GPQA rerun proves qualification or
+  proves BFP8 necessary. Keep qualified BFP8 while P0 investigates larger costs.
+
+## Oct 10, 05:35 UTC: P0 hardware passes; offline export recovery
+
+- Full B16/32K unprofiled diagnostic passed, three restored-state replays at
+  67.240/67.253/67.240ms, matching the natural-prompt sweep's67.245ms boundary.
+  The profiled hardware diagnostic also passed in623.76s, three replays at
+  72.240/72.290/72.259ms. Profiling overhead is about7.5%; not a model regression.
+- Export exceeded the8-GiB single-file bound before full trace reconciliation.
+  Preserved304MiB Tracy capture,23MiB compact device report and8.3GiB partial
+  host-zone export. The parent resumed automatically; no hardware hang occurred.
+- Inspected native export: it emits every CPU zone then filters TT_DNN/TT_METAL
+  in pandas. Added CPU-only recovery that exports TT_ zones directly, retains
+  all messages/signposts and the original compact device timings, and omits
+  optional host child-function timing. Original capture remains unchanged.
+- Launched persistent45-minute CPU-only recovery service
+  qwen38-p0-export-recovery-v1-20261010, PID3619025, invocation
+  3fa70019ba604d299e9d225a8887a717. It requires all-rank/all-layer coverage and
+  exact profiled/unprofiled output hashes before accepting the analysis.
+  Hardware qualification is not full trace reconciliation; result is pending.
+
+## Oct 10, 05:39:31 UTC: full-model timing reconciliation succeeds
+
+- CPU-only export recovery completed without another hardware run. Direct TT_
+  zone filtering reduced host timing CSV from over8GiB to11.8MB, preserving
+  every model/sampler op plus all metadata/signposts and device timing rows.
+- Coverage: all64layers,4TP ranks,3replays,5001device-op records/rank/replay.
+  Longest device spans71.948/71.957/71.945ms account for host step times within
+  0.403/0.461/0.433%. Exact profiled/unprofiled logits and sampled tokens match.
+- Profiled operation-family medians: layouts/padding/slicing/conversion22.58ms,
+  matmuls18.89ms, SDPA12.63ms, other14.82ms. Inter-operation uncovered gap
+  0.336ms, device sampler0.481ms. Instrumented vs unprofiled overhead7.46%;
+  do not apply that correction uniformly to each op or infer DRAM counters.
+- Preserved full capture/results on host disk underp0-profile-result-v1,
+  collected raw CSVs locally and published lossless compressed chunks with
+  original hashes/reconstruction order. Broader P0 gate remains incomplete,
+  but this requested full-model timing reconciliation is complete.
