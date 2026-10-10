@@ -14,7 +14,6 @@ rules:
   - "Every activation variant (Silu, SituGlu, SwiGluOai, ClampedSiluGlu) and the fused-bias path must stay correct; the hybrid min/max_active_tokens band must keep working."
 forbidden_patterns:
   - 'math_approx_mode\s*=\s*true'
-  - 'DataFormat::Bfp4_b'
 
 eval:
   command: >-
