@@ -39,3 +39,13 @@
 2. Keep if VAE row drops >= 15 ms and md5 same: land fe19a6634ee + bf45db27371 on t48 via a -land branch + ttp push --detach.
    Headline = dw table verbatim.
 3. Clean /var/tmp/fasth3/t373 on blx01 at the end (git -C /var/tmp/fasth3/t48 worktree remove --force /var/tmp/fasth3/t373/b).
+
+## Run 1453 (2026-10-10 16:55 PDT)
+- drv373c done: jobs 564 (dm, timing) and 581 (dw, plain) completed at bf45db27371, blx01 900 MHz clamp (relative only).
+  No drops (all four gens ran; leftover pid in drv373c.log is t376's job, not ours). mp4 md5 1340be4d... for dm and dw:
+  bit-identical to arms m/w.
+- dm decode TOTAL 489.0 ms vs 509.9 (job 535): assembly (30.3 ms) left the VAE span; upload 28.0 (jitter, was 14.8),
+  device 421.0, unpatch 6.6, readback 26.7. Assembly now runs on the export worker (45.3 ms, overlaps audio decode).
+- Standard table gen#1: VAE decode 0.50 -> 0.46 s, Total 7.23 -> 7.20 s; E2E_WALL_S gen#1 7.377 -> 7.355 (w/dw),
+  7.407 -> 7.354 (m/dm). Keep (VAE row -40 ms >= 15 ms bar, bit-identical).
+- Landing e823d13b945 + fe19a6634ee + bf45db27371 on t48 via ttp/t373-...-land + ttp push --detach.

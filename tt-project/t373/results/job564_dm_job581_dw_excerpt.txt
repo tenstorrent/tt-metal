@@ -1,0 +1,71 @@
+2026-10-10 23:13:25.353 | DEBUG    | models.tt_dit.utils.tracing:_capture:279 - capturing trace...
+2026-10-10 23:13:37.549 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 1/3: σ 0.9094 → 0.7250 ENQUEUE_MS=12196.6
+2026-10-10 23:13:37.551 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 2/3: σ 0.7250 → 0.4219 ENQUEUE_MS=1.3
+2026-10-10 23:13:37.553 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:_denoise_no_guidance:1557 -   Step 3/3: σ 0.4219 → 0.0000 ENQUEUE_MS=1.1
+2026-10-10 23:13:40.570 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2226 - Stage 2 denoise: 15.2s
+[stage 23:13:40] > decode TOTAL
+[stage 23:13:40]   > latent upload
+[stage 23:13:40]   < latent upload  28.0 ms
+[stage 23:13:40]   > decode (device)
+[stage 23:13:41]   < decode (device)  421.0 ms
+[stage 23:13:41]   > unpatch + rgb->yuv (device)
+[stage 23:13:41]   < unpatch + rgb->yuv (device)  6.6 ms
+[stage 23:13:41]   > yuv readback (3 planes)
+[stage 23:13:41]   < yuv readback (3 planes)  26.7 ms
+[stage 23:13:41] < decode TOTAL  489.0 ms
+2026-10-10 23:13:41.060 | INFO     | models.tt_dit.utils.progress:__exit__:62 - vae decode: done in 0s
+2026-10-10 23:13:41.060 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2319 - VAE decode (forward): 0.5s — (145, 1632, 1920)
+2026-10-10 23:13:41.639 | INFO     | models.tt_dit.utils.progress:__exit__:62 - audio decode (mel-VAE + vocoder): done in 1s
+2026-10-10 23:13:41.639 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx:decode_audio:2102 - Audio decoded on device: (2, 288480) (6.01s @ 48000Hz)
+2026-10-10 23:13:41.639 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2358 - Audio decode: 0.5s
+2026-10-10 23:13:41.774 | INFO     | models.tt_dit.utils.video:finish:275 - Saved: /var/tmp/fasth3/t373/out_dm/ltx_av_fast_1920x1088_0.mp4 (145f @ 24.0fps, yuv420p fast path)
+2026-10-10 23:13:41.775 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2377 - Video export: 0.1s
+2026-10-10 23:13:41.775 | INFO     | models.tt_dit.pipelines.ltx.pipeline_ltx_distilled:generate:2378 - Total (compute): 32.0s | Output: /var/tmp/fasth3/t373/out_dm/ltx_av_fast_1920x1088_0.mp4
+...
+2026-10-10 23:46:54.761 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:240 - E2E_WALL_S gen#1: 7.355
+2026-10-10 23:46:54.762 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:run:241 - Saved video to: /var/tmp/fasth3/t373/out_dw/ltx_av_fast_1920x1088_1.mp4
+2026-10-10 23:46:54.762 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:check_output_with_clip:386 - RUN_CLIP=0, skipping CLIP score check
+2026-10-10 23:46:54.762 | INFO     | models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled:check_output_with_vbench:323 - RUN_VBENCH=0, skipping VBench quality gate
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[2mtest_pipeline_ltx_distilled.py[0m  [1mtest_pipeline_distilled[0m  [2m(blackhole, bh_4x8sp1tp0_ring, True)[0m
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t373/out_dw/ltx_av_fast_1920x1088_0.mp4     │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├────────────────────────────────────────────────────────────────┬─────────┤
+│ Stage                                                          │    Time │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Encoder                                                        │  0.26 s │
+│ Stage 1 denoise                                                │ 15.39 s │
+│ Latent upsample                                                │  0.18 s │
+│ Stage 2 denoise                                                │ 15.30 s │
+│ VAE decode                                                     │  0.47 s │
+│ Audio decode                                                   │  0.51 s │
+├────────────────────────────────────────────────────────────────┼─────────┤
+│ Total                                                          │ 32.10 s │
+└────────────────────────────────────────────────────────────────┴─────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       LTX DISTILLED — PERFORMANCE                        │
+│ Resolution   1088x1920 · 145 frames                                      │
+│ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+│ Output       /var/tmp/fasth3/t373/out_dw/ltx_av_fast_1920x1088_1.mp4     │
+│ Prompt       A confident rapper in a black leather jacket and gold cha...│
+├─────────────────────────────────────────────────────────────────┬────────┤
+│ Stage                                                           │   Time │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Encoder                                                         │ 0.26 s │
+│ Stage 1 denoise                                                 │ 2.79 s │
+│ Latent upsample                                                 │ 0.18 s │
+│ Stage 2 denoise                                                 │ 3.03 s │
+│ VAE decode                                                      │ 0.46 s │
+│ Audio decode                                                    │ 0.48 s │
+├─────────────────────────────────────────────────────────────────┼────────┤
+│ Total                                                           │ 7.20 s │
+└─────────────────────────────────────────────────────────────────┴────────┘
