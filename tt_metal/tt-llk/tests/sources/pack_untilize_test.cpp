@@ -129,16 +129,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool UNTILIZE                    = true;
     const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * params.num_faces;
-    const std::uint32_t row_stride_16B     = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
-    const std::uint32_t block_stride_16B =
+    std::uint32_t row_stride_16B           = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    std::uint32_t block_stride_16B =
         (BLOCK_CT_DIM * ((params.num_faces > 2) ? params.num_faces / 2 : params.num_faces) * FACE_C_DIM * format_size_in_bytes(formats.pack_dst)) /
         L1_ACCESS_ADDRESS_GRANULARITY;
+    if constexpr (NARROW_ROW)
+    {
+        // A narrow row keeps ROW_NUM_DATUMS datums of every tile row
+        const std::uint32_t rows_per_tile = FACE_R_DIM * ((params.num_faces > 2) ? 2 : 1);
+        row_stride_16B   = (FULL_CT_DIM * rows_per_tile * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+        block_stride_16B = (BLOCK_CT_DIM * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    }
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
         formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, NARROW_ROW, ROW_NUM_DATUMS>(
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
     for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++) // Loop over all tiles vertically
@@ -148,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
+            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, NARROW_ROW, ROW_NUM_DATUMS, TILE_DST_CT_OFFSET>(
                 pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }

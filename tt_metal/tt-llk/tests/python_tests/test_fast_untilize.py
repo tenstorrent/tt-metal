@@ -7,7 +7,7 @@
 Pipeline: fast_untilize unpack -> dedicated fast_untilize math -> fast_untilize
 pack. Output: row-major strip.
 
-Hardcoded: unit_dim={4,2,3} for regular streams; compressed BFP inputs unpack
+Hardcoded: unit_dim={4,2,3} (up to 8 with a 16-bit DEST) for regular streams; compressed BFP inputs unpack
 one tile at a time. num_faces=4.
 Focused goal: silicon-validate the fast-untilize LLK path against golden.
 """
@@ -212,6 +212,23 @@ def _run_fast_untilize_correctness(
 def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(
         formats, dest_acc, dimensions, dest_sync, stimulus_kind
+    )
+
+
+# With a 16-bit DEST, rows over four tiles use chunks of up to eight: tails of 2 to 8 tiles after a chunk of eight,
+# and the 4 + 5 split of a 17-tile row's last nine.
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp4_b, DataFormat.Float16_b),
+    ],
+    dimensions=[(rt, ct) for rt in [1, 2] for ct in [10, 11, 13, 14, 15, 17, 24]],
+    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
+)
+def test_fast_untilize_eight_tile_chunks(formats, dimensions, dest_sync):
+    _run_fast_untilize_correctness(
+        formats, DestAccumulation.No, dimensions, dest_sync, "row_id"
     )
 
 

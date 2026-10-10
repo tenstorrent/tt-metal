@@ -21,10 +21,10 @@ inline void llk_math_fast_untilize_init_skip_remap() {
     ckernel::_llk_math_fast_untilize_init_<false>();
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>
 inline void llk_math_fast_untilize_block(const std::uint32_t dst_index, const std::uint32_t block_ct_dim) {
     SAN_HOOK(unsupported());
-    ckernel::_llk_math_fast_untilize_block_<is_fp32_dest_acc_en>(dst_index, block_ct_dim);
+    ckernel::_llk_math_fast_untilize_block_<is_fp32_dest_acc_en, max_unit_dim>(dst_index, block_ct_dim);
 }
 
 inline void llk_math_fast_untilize_uninit() {

@@ -49,6 +49,12 @@ enum class RemapMode : uint8_t {
     AssumeConfigured  // Caller already configured remap for this kernel
 };
 
+// Blackhole fast untilize chunk width; init, untilize and uninit must agree on it.
+enum class FastChunk : uint8_t {
+    Auto,      // Default: up to eight tiles with a 16-bit DEST
+    FourTiles  // Up to four tiles
+};
+
 }  // namespace untilize_config
 
 // Standalone init/uninit wrappers for manual lifecycle control.
@@ -63,11 +69,40 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_dfb,
     uint32_t output_dfb,
-    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize_init();
 
-template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize_uninit();
+
+// An Fp8_e4m3 stream reaches L1 in 64-byte units, so a one-tile block of a wider row pads zeros onto the next block;
+// such a row is packed in blocks of up to max_block_ct_dim tiles and one or two narrower blocks of two or more tiles.
+template <uint32_t full_ct_dim, uint32_t max_block_ct_dim = (DEST_AUTO_LIMIT < 8 ? DEST_AUTO_LIMIT : 8)>
+struct Fp8UntilizeRowSplit {
+    static constexpr uint32_t max_block = max_block_ct_dim;
+    static constexpr uint32_t remainder = full_ct_dim % max_block_ct_dim;
+    // A one-tile remainder joins the last full block, and the two are split as evenly as possible.
+    static constexpr uint32_t num_full_blocks = full_ct_dim / max_block_ct_dim - (remainder == 1 ? 1 : 0);
+    static constexpr uint32_t tail_0 = remainder == 1 ? (max_block_ct_dim + 2) / 2 : remainder;
+    static constexpr uint32_t tail_1 = remainder == 1 ? (max_block_ct_dim + 1) / 2 : 0;
+    // The pack untilize init the row starts and ends with.
+    static constexpr uint32_t first_block_ct_dim = num_full_blocks > 0 ? max_block_ct_dim : tail_0;
+};
+
+// True when untilizing rows of full_ct_dim tiles in blocks of block_ct_dim to an Fp8_e4m3 output_dfb would leave
+// one-tile blocks of a wider row; such rows go through untilize_fp8_split_row.
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, uint32_t output_dfb>
+constexpr bool untilize_fp8_row_split();
+
+// Expects the pack init of Fp8UntilizeRowSplit<full_ct_dim>::first_block_ct_dim and full_ct_dim, re-inits the pack
+// side for the narrower blocks and restores that init at the end of the row; reads the input a tile at a time.
+template <uint32_t full_ct_dim, bool wait_for_input = true, typename InputBuffer>
+ALWI void untilize_fp8_split_row(InputBuffer& in, uint32_t input_dfb, uint32_t output_dfb);
 
 /**
  * Untilize: convert tiled data back to row-major format (reverse of tilize).
@@ -150,7 +185,8 @@ template <
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

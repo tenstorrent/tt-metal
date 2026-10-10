@@ -24,6 +24,10 @@ void kernel_main() {
     // kernel per input shard grid, and each binds only its own input buffer.
     compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
+    // Eight-tile fast untilize chunks only for rows of two chunks or more: a one-chunk row is faster in four.
+    constexpr auto fast_chunk = Wt > 8 ? compute_kernel_lib::untilize_config::FastChunk::Auto
+                                       : compute_kernel_lib::untilize_config::FastChunk::FourTiles;
+
     // Untilize input (single block, init only - no uninit needed)
     compute_kernel_lib::untilize<
         Wt,
@@ -31,11 +35,21 @@ void kernel_main() {
         dfb::untilized_in,
         compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        compute_kernel_lib::untilize_config::RemapMode::Configure,
+        fast_chunk>(1);
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache with reconfiguration from previous iteration
-        compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
+        compute_kernel_lib::untilize<
+            Wt,
+            dfb::cache,
+            dfb::untilized_cache,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+            compute_kernel_lib::untilize_config::RemapMode::Configure,
+            fast_chunk>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
 #ifdef ARCH_QUASAR

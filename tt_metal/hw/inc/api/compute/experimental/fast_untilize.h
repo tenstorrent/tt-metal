@@ -30,7 +30,7 @@ namespace ckernel {
 // BH fast-untilize is the row-major counterpart to fast-tilize. Regular
 // pack_untilize first loads/copies tiles into DEST tile-by-tile, then the
 // packer reads two interfaces per PACR for a 4-face tile row. This path groups
-// the row into 2/3/4-tile chunks, has math place the chunk in the exact order
+// the row into 2/3/4-tile chunks (up to 8 tiles with a 16-bit DEST), has math place the chunk in the exact order
 // pack needs, and packs with ALL_INTF_ACTIVE + STRIDED_MODE so full-width PACRs
 // emit wider row-major strips. That reduces pack-side PACR count and improves
 // output bandwidth. The real unpack payload is unchanged, but the common 16-bit
@@ -39,7 +39,12 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-template <std::uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; init and block must agree on it.
+template <
+    std::uint32_t full_ct_dim,
+    bool configure_remap,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool four_tile_chunks = false>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -55,7 +60,9 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
-    constexpr std::uint32_t first_unit_dim = fast_untilize_next_unit_dim(full_ct_dim);
+    constexpr std::uint32_t max_unit_dim =
+        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr std::uint32_t first_unit_dim = fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
 
     // Fast-untilize can run immediately after other LLKs (for example matmul
     // bias pack_tile into the same CB). Re-enter a known math/pack sync
@@ -70,7 +77,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
         MATH((llk_math_fast_untilize_init_skip_remap()));
     }
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_fast_untilize_init<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
+    PACK((llk_pack_fast_untilize_init<max_unit_dim, full_ct_dim>(ocb)));
     PACK((_llk_init_packer_dest_offset_registers_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
 #else
     if constexpr (configure_remap) {
@@ -83,17 +90,17 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
 // Default fast-untilize init configures BH DEST remap. Use the skip-remap variant
 // only when the caller has already configured remap and no intervening op changes it.
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en, four_tile_chunks>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
@@ -104,38 +111,41 @@ ALWI void fast_untilize_block(
         return;
     }
 
+    constexpr std::uint32_t max_unit_dim =
+        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+
     // Keep the common 2/3/4-tile case as a direct path. Routing it through the
     // generic decomposition loop materializes unit_dims state in the hot kernel
     // and costs enough instructions to erase the small-width fast-path gain.
-    if constexpr (full_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) {
+    if constexpr (full_ct_dim <= max_unit_dim) {
         constexpr std::uint32_t unit_dim = full_ct_dim;
 
         MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
         UNPACK((llk_unpack_fast_untilize_block(icb, input_tile_index, unit_dim)));
-        MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim)));
+        MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, max_unit_dim>(0, unit_dim)));
         MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
         PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_fast_untilize_block<FAST_UNTILIZE_MAX_UNIT_DIM>(ocb, output_tile_index, unit_dim)));
+        PACK((llk_pack_fast_untilize_block<max_unit_dim>(ocb, output_tile_index, unit_dim)));
         PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     } else {
         std::uint32_t tiles_done = 0;
-        constexpr std::uint32_t first_unpack_unit_dim = fast_untilize_next_unit_dim(full_ct_dim);
+        constexpr std::uint32_t first_unpack_unit_dim = fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
         [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unpack_unit_dim;
         [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
 
         while (tiles_done < full_ct_dim) {
             const std::uint32_t remaining_tiles = full_ct_dim - tiles_done;
-            const std::uint32_t unit_dim = fast_untilize_next_unit_dim(remaining_tiles);
+            const std::uint32_t unit_dim = fast_untilize_next_unit_dim<max_unit_dim>(remaining_tiles);
 
             MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
             UNPACK((llk_unpack_fast_untilize_block<is_fp32_dest_acc_en>(
                 icb, input_tile_index + tiles_done, unit_dim, prev_unpack_unit_dim)));
-            MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim)));
+            MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, max_unit_dim>(0, unit_dim)));
             MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
             PACK((llk_packer_wait_for_math_done()));
-            PACK((llk_pack_fast_untilize_block_strided<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(
+            PACK((llk_pack_fast_untilize_block_strided<max_unit_dim, full_ct_dim>(
                 ocb, output_tile_index, tiles_done, unit_dim, prev_pack_unit_dim)));
             PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
@@ -151,7 +161,7 @@ ALWI void fast_untilize_block(
 #endif
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_uninit(uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
