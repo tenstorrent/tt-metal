@@ -14,6 +14,9 @@ namespace ckernel::sfpu {
 
 inline void elu_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
+// Whether BF16 DEST runs the generated elu kernel as one call over the whole tile.
+inline constexpr bool elu_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
     sfpi::vFloat alpha = Converter::as_float(slope);
