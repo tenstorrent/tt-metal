@@ -27,6 +27,8 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
+    echo "  --build-tracy-wasm-viewer        Build the Tracy profiler WASM viewer. Default is ON where emsdk supports the build host (x86_64, aarch64), OFF otherwise."
+    echo "  --no-build-tracy-wasm-viewer     Do not build the Tracy profiler WASM viewer."
     echo "  --build-perf-debug <categories>  Tracy debug-verbosity categories to compile in: off (default), all, or a comma-separated list of ${valid_perf_categories}."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -77,6 +79,7 @@ enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"
+tracy_wasm_viewer=""
 perf_debug_categories=""
 build_dir=""
 build_tests="OFF"
@@ -96,7 +99,13 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 use_system_sfpi="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+# Pick a default toolchain file for the host architecture.
+case "$ARCH" in
+    x86_64)  toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+    aarch64) toolchain_path="cmake/aarch64-linux-clang-20-libstdcpp-toolchain.cmake";;
+    riscv64) toolchain_path="cmake/riscv64-linux-gcc-toolchain.cmake";;
+    *)       toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+esac
 host_march="x86-64-v3"
 
 
@@ -118,6 +127,8 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
+build-tracy-wasm-viewer
+no-build-tracy-wasm-viewer
 build-perf-debug:
 install-prefix:
 build-dir:
@@ -183,6 +194,10 @@ while true; do
             build_type="$2";shift;;
         --disable-profiler)
             disable_profiler="ON";;
+        --build-tracy-wasm-viewer)
+            tracy_wasm_viewer="ON";;
+        --no-build-tracy-wasm-viewer)
+            tracy_wasm_viewer="OFF";;
         --build-perf-debug)
             perf_debug_categories="$2";shift;;
         --install-prefix)
@@ -336,7 +351,10 @@ else
 fi
 echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
-echo "INFO: Host march: $host_march"
+echo "INFO: Host arch: $ARCH"
+if [ "$ARCH" = "x86_64" ]; then
+    echo "INFO: Host march: $host_march"
+fi
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
@@ -370,6 +388,10 @@ fi
 
 if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
+fi
+
+if [ "$tracy_wasm_viewer" != "" ]; then
+    cmake_args+=("-DTT_BUILD_TRACY_WASM_VIEWER=$tracy_wasm_viewer")
 fi
 
 if [ -n "$perf_debug_categories" ]; then

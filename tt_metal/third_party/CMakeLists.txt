@@ -191,59 +191,70 @@ add_custom_target(
         tracy-capture
 )
 
-# Tracy profiler WASM viewer (Emscripten).
-CPMAddPackage(
-    NAME emsdk
-    GITHUB_REPOSITORY emscripten-core/emsdk
-    GIT_TAG
-        0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
-    DOWNLOAD_ONLY YES
-)
-
-set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
-set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
-
-if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
+# Tracy profiler WASM viewer (Emscripten). TT_BUILD_TRACY_WASM_VIEWER is declared in
+# cmake/project_options.cmake, where it defaults off on build hosts emsdk has no toolchain for.
+if(NOT TT_BUILD_TRACY_WASM_VIEWER)
     message(
         STATUS
-        "Installing Emscripten via emsdk into ${EMSDK_DIR} (first configure only; downloads ~hundreds of MB)..."
+        "Skipping Tracy WASM viewer (TT_BUILD_TRACY_WASM_VIEWER=OFF, build host ${CMAKE_HOST_SYSTEM_PROCESSOR})"
     )
-    execute_process(
-        COMMAND
-            ./emsdk install latest
-        WORKING_DIRECTORY "${EMSDK_DIR}"
-        RESULT_VARIABLE _emsdk_install_rc
+else()
+    CPMAddPackage(
+        NAME emsdk
+        GITHUB_REPOSITORY emscripten-core/emsdk
+        GIT_TAG
+            0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
+        DOWNLOAD_ONLY YES
     )
-    if(NOT _emsdk_install_rc EQUAL 0)
-        message(FATAL_ERROR "emsdk install failed (exit ${_emsdk_install_rc})")
-    endif()
-    execute_process(
-        COMMAND
-            ./emsdk activate latest
-        WORKING_DIRECTORY "${EMSDK_DIR}"
-        RESULT_VARIABLE _emsdk_activate_rc
-    )
-    if(NOT _emsdk_activate_rc EQUAL 0)
-        message(FATAL_ERROR "emsdk activate failed (exit ${_emsdk_activate_rc})")
-    endif()
-endif()
 
-if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
-    message(FATAL_ERROR "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate.")
-endif()
+    set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
+    set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
 
-# Keep output path aligned with Python tooling and CI packaging/tests.
-# No EXCLUDE_FROM_ALL: Ninja's install target depends on all, so cmake --build --target install
-# builds this automatically when Tracy is enabled.
-ExternalProject_Add(
-    tracy_profiler_wasm
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
-    BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
-    CMAKE_ARGS
-        -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
-    INSTALL_COMMAND
-        "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
-)
+    if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
+        message(
+            STATUS
+            "Installing Emscripten via emsdk into ${EMSDK_DIR} (first configure only; downloads ~hundreds of MB)..."
+        )
+        execute_process(
+            COMMAND
+                ./emsdk install latest
+            WORKING_DIRECTORY "${EMSDK_DIR}"
+            RESULT_VARIABLE _emsdk_install_rc
+        )
+        if(NOT _emsdk_install_rc EQUAL 0)
+            message(FATAL_ERROR "emsdk install failed (exit ${_emsdk_install_rc})")
+        endif()
+        execute_process(
+            COMMAND
+                ./emsdk activate latest
+            WORKING_DIRECTORY "${EMSDK_DIR}"
+            RESULT_VARIABLE _emsdk_activate_rc
+        )
+        if(NOT _emsdk_activate_rc EQUAL 0)
+            message(FATAL_ERROR "emsdk activate failed (exit ${_emsdk_activate_rc})")
+        endif()
+    endif()
+
+    if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
+        message(
+            FATAL_ERROR
+            "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate."
+        )
+    endif()
+
+    # Keep output path aligned with Python tooling and CI packaging/tests.
+    # No EXCLUDE_FROM_ALL: Ninja's install target depends on all, so cmake --build --target install
+    # builds this automatically when Tracy is enabled.
+    ExternalProject_Add(
+        tracy_profiler_wasm
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
+        BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
+        CMAKE_ARGS
+            -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
+        INSTALL_COMMAND
+            "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
+    )
+endif() # TT_BUILD_TRACY_WASM_VIEWER
 
 set(_tt_tracy_categories_file "${CMAKE_CURRENT_SOURCE_DIR}/../tools/profiler/tracy_debug_categories.txt")
 set_property(
