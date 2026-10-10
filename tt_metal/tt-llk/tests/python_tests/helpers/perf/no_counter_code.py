@@ -50,8 +50,14 @@ REGISTERS = {
 }
 # perf.h PERF_COUNTERS_BASE_ADDR up to the profiler region: config, zone results, Quasar's launch word.
 COUNTER_L1 = range(0x169000, 0x16AFF0)
-# Not counter code: the debug feature scrub and the zone object (its rendezvous) both builds run.
-ALLOWED_SYMBOLS = ("clear_debug_feature", "perf_counter_scoped")
+# Not counter code: the debug feature scrub, the zone object (its rendezvous) both builds run, and the INIT
+# measurement build's trampoline and timestamps (counters.h LLK_PERF_INIT_ONLY).
+ALLOWED_SYMBOLS = (
+    "clear_debug_feature",
+    "perf_counter_scoped",
+    "init_zone",
+    "init_end_ts",
+)
 
 _INSN = re.compile(r"^\s*([0-9a-f]+):\s+(\S+)\s*([^#<]*)")
 _MEM = re.compile(r"^(-?\d+)\((\w+)\)$")
