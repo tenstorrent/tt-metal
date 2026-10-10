@@ -524,9 +524,11 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
             Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB or with
-            PrefetcherPipes, which require it. The weight MUST be queued with the
-            ``(weight, block_count, rotation)`` request form. mcast_in0 consumes natural FIFO
-            order and requires this flag to remain false. Defaults to false.
+            PrefetcherPipes. The weight MUST be queued with the ``(weight, block_count, rotation)``
+            request form. Without it, gather_in0 over PrefetcherPipes takes its K-blocks in K order,
+            into a pipe ring that holds the whole layer.
+            mcast_in0 consumes natural FIFO order and requires this flag to remain false. Defaults
+            to false.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
@@ -762,7 +764,7 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``, or with ``gather_in0=True`` and ``stream_in1=True``, in which case the producer delivers each worker its K-blocks in ring order, starting with the K-block of its own in0 shard. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -892,7 +894,7 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``, or with ``gather_in0=True`` and ``stream_in1=True``, in which case the producer delivers each worker its K-blocks in ring order, starting with the K-block of its own in0 shard. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
