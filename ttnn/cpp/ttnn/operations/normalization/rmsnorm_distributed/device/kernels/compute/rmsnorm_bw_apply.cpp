@@ -1,0 +1,160 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/addcmul.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/dataflow/circular_buffer.h"
+
+void kernel_main() {
+    using namespace ckernel;
+
+    constexpr uint32_t cb_dy = 0, cb_x = 1, cb_gamma = 2, cb_inv = 3, cb_d = 4, cb_out = 16, cb_acc = 17, cb_part = 18;
+    constexpr uint32_t cb_zero_done = 19, cb_go = 20;
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t neg_one_bits = get_compile_time_arg_val(1);
+    constexpr uint32_t with_dgamma = get_compile_time_arg_val(2);
+    const uint32_t row_count = get_arg_val<uint32_t>(0);
+
+    CircularBuffer dy_cb(cb_dy), x_cb(cb_x), inv_cb(cb_inv), d_cb(cb_d), out_cb(cb_out);
+    CircularBuffer acc_cb(cb_acc), part_cb(cb_part), zero_done_cb(cb_zero_done), go_cb(cb_go);
+
+    if constexpr (with_dgamma) {
+        compute_kernel_hw_startup(cb_dy, cb_gamma, cb_out);
+    } else {
+        compute_kernel_hw_startup(cb_dy, cb_inv, cb_out);
+    }
+
+    auto zero_fill_acc = [&]() {
+        fill_tile_init();
+        pack_reconfig_data_format(cb_acc);
+        pack_reconfig_l1_acc(0);
+        for (uint32_t c = 0; c < Wt; ++c) {
+            tile_regs_acquire();
+            fill_tile(0, 0.0f);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, cb_acc, c);
+            tile_regs_release();
+        }
+    };
+
+    if constexpr (with_dgamma) {
+        acc_cb.reserve_back(Wt);
+        zero_fill_acc();
+    }
+
+    for (uint32_t r = 0; r < row_count; ++r) {
+        dy_cb.wait_front(Wt);
+        x_cb.wait_front(Wt);
+        inv_cb.wait_front(1);
+        d_cb.wait_front(1);
+        out_cb.reserve_back(Wt);
+
+        for (uint32_t c = 0; c < Wt; ++c) {
+            tile_regs_acquire();
+            copy_init(cb_dy);
+            copy_tile(cb_dy, c, 0);
+            // Only one SFPU init is live at a time, so each run of SFPU ops re-arms it.
+            mul_binary_tile_init();
+            if constexpr (with_dgamma) {
+                unary_bcast_init<BroadcastType::ROW>(cb_gamma);
+                unary_bcast<BroadcastType::ROW>(cb_gamma, c, 1);
+                mul_binary_tile(0, 1, 0);
+            }
+            unary_bcast_init<BroadcastType::COL>(cb_inv);
+            unary_bcast<BroadcastType::COL>(cb_inv, 0, 1);
+            mul_binary_tile(0, 1, 0);
+            copy_init(cb_x);
+            copy_tile(cb_x, c, 2);
+            unary_bcast_init<BroadcastType::COL>(cb_d);
+            unary_bcast<BroadcastType::COL>(cb_d, 0, 1);
+            addcmul_tile_init();
+            addcmul_tile<DataFormat::Float32>(0, 2, 1, 0, neg_one_bits);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_out);
+            pack_tile(0, cb_out);
+            tile_regs_release();
+
+            if constexpr (with_dgamma) {
+                tile_regs_acquire();
+                copy_init(cb_dy);
+                copy_tile(cb_dy, c, 0);
+                copy_tile(cb_x, c, 1);
+                mul_binary_tile_init();
+                mul_binary_tile(0, 1, 0);
+                unary_bcast_init<BroadcastType::COL>(cb_inv);
+                unary_bcast<BroadcastType::COL>(cb_inv, 0, 1);
+                mul_binary_tile(0, 1, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_acc);
+                pack_reconfig_l1_acc(1);
+                pack_tile<true>(0, cb_acc, c);
+                pack_reconfig_l1_acc(0);
+                tile_regs_release();
+            }
+        }
+
+        out_cb.push_back(Wt);
+        dy_cb.pop_front(Wt);
+        x_cb.pop_front(Wt);
+        inv_cb.pop_front(1);
+        d_cb.pop_front(1);
+    }
+
+    if constexpr (with_dgamma) {
+        // Position in the two-stage dgamma reduction tree, and the number of gather stages it runs:
+        // 0 = member (x != 0; scatters its partial to its row leader), 1 = row leader (x == 0; also
+        // gathers its grid row, then scatters to the root), 2 = root (0,0; also gathers the row
+        // leaders and emits dgamma).
+        const uint32_t role = get_arg_val<uint32_t>(1);
+
+        auto collapse_acc_to_part = [&]() {
+            acc_cb.wait_front(Wt);
+            part_cb.reserve_back(Wt);
+            reconfig_data_format_srca(cb_acc);
+            pack_reconfig_data_format(cb_part);
+            copy_init(cb_acc);
+            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+            for (uint32_t c = 0; c < Wt; ++c) {
+                tile_regs_acquire();
+                copy_tile(cb_acc, c, 0);
+                sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0, 1, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_part);
+                tile_regs_release();
+            }
+            part_cb.push_back(Wt);
+            acc_cb.pop_front(Wt);
+        };
+        auto open_gather = [&]() {
+            acc_cb.reserve_back(Wt);
+            zero_fill_acc();
+            acc_cb.push_back(Wt);
+            zero_done_cb.reserve_back(1);
+            zero_done_cb.push_back(1);
+        };
+        auto wait_go = [&]() {
+            go_cb.wait_front(1);
+            go_cb.pop_front(1);
+        };
+
+        acc_cb.push_back(Wt);
+        collapse_acc_to_part();
+        for (uint32_t stage = 0; stage < role; ++stage) {
+            open_gather();
+            wait_go();
+            collapse_acc_to_part();
+        }
+    }
+}
