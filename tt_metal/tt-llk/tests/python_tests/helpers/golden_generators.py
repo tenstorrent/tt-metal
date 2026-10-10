@@ -2500,6 +2500,7 @@ class UnarySFPUGolden:
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
         relu_max_threshold: float = RELU_MAX_THRESHOLD,
+        max_min_scalar=None,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         self.data_format = data_format
@@ -2512,6 +2513,13 @@ class UnarySFPUGolden:
         self._relu_min_int_threshold = relu_min_int_threshold
         # Mirrors the SFPU_RELU_MAX_THRESHOLD template parameter; only relu_max reads it.
         self._relu_max_threshold = relu_max_threshold
+        # Mirrors SFPU_UNARY_MAX_MIN_SCALAR; None restores the dispatcher defaults.
+        self._UNARY_MAX_MIN_VALUE = (
+            UNARY_MAX_MIN_VALUE if max_min_scalar is None else float(max_min_scalar)
+        )
+        self._int_maxmin_scalar = (
+            INT_MAXMIN_SCALAR if max_min_scalar is None else int(max_min_scalar)
+        )
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")

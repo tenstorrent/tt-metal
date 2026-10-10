@@ -398,6 +398,29 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
+    """Unary max/min scalar bits (fp32, or two's-complement int32). A macro because the
+    dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default."""
+
+    max_min_scalar_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {self.max_min_scalar_bits & 0xFFFFFFFF}u"
+
+
+@dataclass
+class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
+    """Int32 unary max/min on a sign-magnitude Dest (macro, like SFPU_UNARY_MAX_MIN_SCALAR)."""
+
+    max_min_sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.max_min_sign_magnitude:
+            return ""
+        return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
