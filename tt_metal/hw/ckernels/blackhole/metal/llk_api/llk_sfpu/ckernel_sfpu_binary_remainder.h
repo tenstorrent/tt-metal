@@ -324,8 +324,7 @@ sfpi_inline void remainder_int32_lm_tail(const uint out) {
     TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
     TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
-    TT_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, out);
-    sfpi::dst_reg++;
+    TT_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_6, out);
 }
 #endif
 
@@ -418,16 +417,13 @@ sfpi_inline void remainder_uint32_lm_tail(const uint out) {
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 2);
     TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-    TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
-    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
     TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
     TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
-    TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, out);
-    sfpi::dst_reg++;
+    TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, out);
 }
 #endif
 

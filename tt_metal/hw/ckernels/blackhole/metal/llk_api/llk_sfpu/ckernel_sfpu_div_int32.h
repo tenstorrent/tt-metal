@@ -37,8 +37,7 @@ sfpi_inline void div_int32_lm_row(const uint in0, const uint in1, const uint out
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LREG0, 1);
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0);
     TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
-    TT_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, out);
-    sfpi::dst_reg++;
+    TT_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_6, out);
 }
 #endif
 
@@ -79,7 +78,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
     // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC and SFPPOPC sit in MAD latency slots and float(in1)
     // stays in L7.
     constexpr uint dst_tile_size = 64;
-    constexpr uint row_len = 26;  // div_int32_lm_row's 25 instructions and its dst_reg increment
+    constexpr uint row_len = 25;  // the instructions of div_int32_lm_row
     const uint in0 = dst_index_in0 * dst_tile_size, in1 = dst_index_in1 * dst_tile_size,
                out = dst_index_out * dst_tile_size;
     load_replay_buf<Exec>(0, row_len, [in0, in1, out] { div_int32_lm_row(in0, in1, out); });
