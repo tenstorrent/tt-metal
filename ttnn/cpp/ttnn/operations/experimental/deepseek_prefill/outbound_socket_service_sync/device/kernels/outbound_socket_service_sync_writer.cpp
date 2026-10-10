@@ -43,9 +43,8 @@ constexpr uint32_t page_size = get_compile_time_arg_val(0);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(2);  // 0 disables the metadata path
 constexpr uint32_t metadata_only = get_compile_time_arg_val(3);        // 1 no tensor copy
-// Service-core record ring: transfer k's record goes to slot k % metadata_ring_slots, and a header
-// word at the region base counts the records the service has sent. ring_slots <= 1 is the
-// single-slot layout (D2D senders), written with no handshake.
+// Service-core record ring (layout in persistent_d2h_writer.cpp); ring_slots <= 1 is the single-slot
+// layout of D2D senders, written with no handshake.
 constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(5);
 constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(6);
@@ -83,12 +82,12 @@ inline void forward_metadata(
             if constexpr (metadata_ring_slots > 1) {
                 const uint32_t scratch_l1 = scratch_cb.get_write_ptr();
                 const uint8_t noc_id = noc.get_noc_id();
-                // The tally holds num_workers increments per completed transfer; this one is not in yet.
+                // data_ready_counter holds num_workers increments per completed transfer; this one is not in yet.
                 const uint32_t transfer_idx =
                     read_service_word(scratch_l1, service_noc_x, service_noc_y, data_ready_counter_addr, noc_id) /
                     num_workers;
-                // The slot still holds an unsent record only when the host is a full ring behind; wait
-                // for the service to send it rather than overwrite it, which would relabel that chunk.
+                // Wait while the slot still holds an unsent record (the host is a full ring behind). No
+                // termination path: a dead host stalls the forward here.
                 while (transfer_idx - read_service_word(
                                           scratch_l1, service_noc_x, service_noc_y, sender_metadata_l1_addr, noc_id) >=
                        metadata_ring_slots) {

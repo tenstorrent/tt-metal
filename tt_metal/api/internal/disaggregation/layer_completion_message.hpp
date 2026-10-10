@@ -7,9 +7,9 @@
 // across MPI to the master rank. The transport is agnostic to the fields'
 // meaning.
 //
-// Two protocol versions coexist; the version is selected once per job
-// (PREFILL_LAYER_COMPLETION_PROTOCOL) and keyed by the ring magic, so a
-// mismatched peer fails at connect() rather than corrupting:
+// Two protocol versions coexist; one is selected per job
+// (PREFILL_LAYER_COMPLETION_PROTOCOL). Each has its own ring magic and its own
+// scheduler-facing segment name (LAYER_COMPLETION_OPENS.md §6):
 //
 //   V1 (LayerCompletionMessage, 24B, magic 'LCQ1'): the master reorders by
 //   the globally-dense `seq` and injects a bare COUNT into the
@@ -74,10 +74,7 @@ static_assert(
     "LayerCompletionMessage grew tail padding");
 
 struct LayerCompletionMessageV2 {
-    // Producer-supplied ordering key, request_id*num_layers + layer_start.
-    // DIAGNOSTIC ONLY in v2: the master forwards as-arrived and never
-    // reorders on it; consumers must not assume density (a multi-layer
-    // completion skips the seqs of the layers it covers).
+    // Per-rank emission order; diagnostic only (never reordered on).
     uint64_t seq = 0;
     // World rank of the host whose runner produced this completion.
     uint32_t source_rank = 0;
@@ -129,7 +126,6 @@ inline bool is_layer_completion_sentinel(const LayerCompletionMessageV2& m) noex
     return m.flags == kLayerCompletionSentinel;
 }
 
-// Build the end-of-stream sentinel for the message version in use.
 template <typename MsgT>
 MsgT layer_completion_sentinel(uint32_t source_rank);
 

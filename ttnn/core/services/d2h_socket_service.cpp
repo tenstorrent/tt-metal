@@ -5,6 +5,7 @@
 #include "ttnn/services/d2h_socket_service.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -74,7 +75,8 @@ constexpr uint32_t kD2HNocBurstBytes = 16u * 1024;
 constexpr uint32_t kD2HTargetReadBursts = 8;  // default socket-page target ~= 8 bursts (128 KB)
 constexpr uint32_t kD2HSlotCap = 64;          // upper bound on data-CB slots
 constexpr uint32_t kD2HMinDataSlots = 2;      // double-buffering floor (reader/writer overlap)
-constexpr uint32_t kMetadataRingMinSlots = 4;  // floor on the service-core record ring
+constexpr uint32_t kMetadataRingMinSlots = 4;
+constexpr uint32_t kTeardownBarrierMs = 5000;
 
 // The data CB (program allocator, bottom-up) and the service-core scratch
 // (ServiceCoreManager, top-down) share the unreserved L1 with no cross-allocator
@@ -533,8 +535,8 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
     if (cfg_.metadata_size_bytes > 0) {
         const uint32_t l1_align = hal::get_l1_alignment();
-        // Record ring behind a header word (the writer's sent count): transfer k lands in slot
-        // k % ring_slots, sized so the ack op only waits once the socket FIFO and the ring are full.
+        // Record ring (layout in persistent_d2h_writer.cpp), sized so the ack op waits only once the
+        // socket FIFO and the ring are both full.
         const uint32_t fifo_pages = std::max<uint32_t>(1u, cfg_.fifo_size_bytes / socket_page_size_);
         metadata_ring_slots_ = std::max<uint32_t>(kMetadataRingMinSlots, fifo_pages + slot_count_);
         metadata_slot_stride_ = static_cast<uint32_t>(
@@ -655,7 +657,7 @@ D2HStreamService::~D2HStreamService() {
         }
 
         if (device_live) {
-            barrier();
+            barrier(kTeardownBarrierMs);  // an unread record must not hang the destructor
             signal_termination();
             distributed::Finish(mesh_device_->mesh_command_queue());
         }
@@ -896,9 +898,9 @@ void D2HStreamService::notify_backing_ready() {
     }
 }
 
-void D2HStreamService::barrier() {
+void D2HStreamService::barrier(std::optional<uint32_t> timeout_ms) {
     for (auto& s : sockets_) {
-        s->barrier();
+        s->barrier(timeout_ms);
     }
 }
 

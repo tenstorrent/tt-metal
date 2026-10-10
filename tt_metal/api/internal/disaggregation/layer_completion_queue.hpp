@@ -16,13 +16,8 @@
 // scheduler-facing ring inverts the roles: the master router owns and
 // pushes, the scheduler connects and pops.
 //
-// Templated on the message version (see layer_completion_message.hpp):
-//   LayerCompletionQueue   — v1 (24B messages, magic 'LCQ1'), the frozen
-//                            count-protocol format.
-//   LayerCompletionQueueV2 — v2 (40B self-describing messages, magic
-//                            'LCQ2'), the structured protocol.
-// Only these two instantiations exist (extern template below); the magic
-// check in connect() rejects a cross-version attach.
+// Templated on the message version (layer_completion_message.hpp); only the two
+// instantiations below exist, and connect() rejects a cross-version attach.
 
 #pragma once
 

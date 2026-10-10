@@ -153,13 +153,6 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-# ---------------------------------------------------------------------------
-# Layer-completion routing
-# ---------------------------------------------------------------------------
-
-# The sink implementations (polymorphic LayerCompletionSink: v1 count protocol and v2 structured
-# protocol) and the shared full-ring backpressure policy live in layer_completion_sink.py.
-
 # Completion protocol (1: counted, 2: structured; see layer_completion_message.hpp), one per job.
 LAYER_COMPLETION_PROTOCOL = current_protocol()
 
@@ -770,16 +763,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service.start()
         source_desc = "D2H device records"
     else:
-        # Host-callback transport. DELIBERATELY RETAINED alongside D2H, not a fallback:
-        #   * it is the only path MiniMax-M3 and GPT-OSS have (both raise NotImplementedError on
-        #     a d2h_service -- their ack seam is a plain callback in the Python forward loop, with
-        #     no device-side ack op to carry a record);
-        #   * it is the reference semantics for `layer_idx` and for the v2 span, since it is handed
-        #     the true global layer rather than reconstructing one from a counter;
-        #   * it needs no trace coupling (D2H must be registered via set_d2h_ack_service() before
-        #     capture_trace(), and its warm-up records drained afterwards).
-        # Its cost is a ttnn.synchronize_device per KV-writing layer when untraced (kv_ack.py) --
-        # which is what D2H buys back. Keep both until every prefill runtime has a device ack op.
+        # Host-callback transport: the only one MiniMax-M3 and GPT-OSS have (LAYER_COMPLETION_OPENS.md §3).
         if getattr(runtime, "set_layer_completion_sink", None) is None:
             raise RuntimeError(
                 f"runtime {type(runtime).__name__} does not implement set_layer_completion_sink(sink), "

@@ -113,13 +113,28 @@ Mitigated meanwhile: a chunk boundary that does not land on ack index 0 means
 records were dropped, and `LayerAckService` now logs that instead of silently
 relabelling everything after it.
 
-## 5. Verification debt
+## 5. Verification status (2026-10-10)
 
-Nothing in this area has been built or run on hardware. The C++ is
-`-fsyntax-only` clean against real headers; the Python unit tests
-(`test_layer_completion_sink.py`, `test_layer_completion_drainer.py`) pass and
-are ttnn-free. Unexercised: `LayerAckService::reader_loop`, the drop detector,
-D2H + protocol 2 end to end, and both gtests.
+Run on Blackhole galaxies (bh-glx-110-a10u02/08/14/20): protocol 2 end to end with the tt-d-gen
+prefill reader on GLM-5.3 (4 ranks, D2H), Kimi K2.7 (4 ranks, D2H) and MiniMax-M3 (1 rank, host
+callback); protocol 1 on the same; the D2H record ring and the `LayerAckService` device tests
+(`tests/ttnn/unit_tests/base_functionality/test_layer_ack_service.py`); the host-only gtests
+(`distributed_unit_tests --gtest_filter='LayerCompletion*:LayerAck*'`, on a galaxy host: the test
+binary opens the devices at startup) and the Python unit tests. The review and cleanup record is
+`LAYER_COMPLETION_REVIEW_PLAN.md`.
 
-`build_Release` is stale (undefined `resolve_bindings`; `compile_commands.json`
-has 282 entries). Sync submodules before drawing any conclusion from a build.
+## 6. Scheduler segment names
+
+`InterProcessCounterChannel::connect` validates nothing about the segment it attaches to, so the
+two protocols cannot share a name: a protocol-1 consumer on a protocol-2 ring reads `enqueue_pos`
+as its count and writes its cursor into `dequeue_pos`. v1 stays at `/tt_prefill_layer_acks_<svc>`
+(existing consumers); v2 publishes `/tt_prefill_layer_completions_<svc>`; `scheduler_shm_name()`
+in `layer_completion_drainer.py` is the one place that knows both. tt-d-gen's `ack_shm_name`
+configs follow the same rule.
+
+## 7. Hybrid stacks under protocol 2
+
+The v2 span is the raw global layer `[l, l+1)` (open #2). The tt-d-gen reader retires a chunk when
+`[0, layers_per_chunk)` is covered and fatals on a layer past that bound, so a 24-layer Kimi-K3 rank
+with six acks never retires under protocol 2. Hybrid models stay on protocol 1 until open #2 (or
+#1) is decided; the dense models run both.

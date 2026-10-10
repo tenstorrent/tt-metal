@@ -180,9 +180,9 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("teardown_timeout_ms") = 5000,
             nb::arg("protocol") = 1,
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
-            "rank owns the scheduler-facing segment at scheduler_shm_name (one name for both protocols). "
-            "protocol=1 (default): reorder to a bare count on a counter channel there. protocol=2: forward "
-            "self-describing messages as-arrived into a structured ring there.")
+            "rank owns the scheduler-facing segment at scheduler_shm_name (protocol-specific name). "
+            "protocol=1 (default): reorder to a bare count on a counter channel. protocol=2: forward "
+            "self-describing messages as-arrived into a structured ring.")
         .def(
             "stop",
             &LayerCompletionRouter::stop,

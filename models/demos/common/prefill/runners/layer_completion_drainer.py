@@ -220,10 +220,7 @@ class LayerCompletionDrainer:
         return self.finish()
 
 
-# ---------------------------------------------------------------------------
-# Channel connect/drain — protocol dispatch under the hood, so consumers hold one
-# `completion_channel` and never branch on PREFILL_LAYER_COMPLETION_PROTOCOL.
-# ---------------------------------------------------------------------------
+# Channel connect/drain: consumers hold one `completion_channel` and never branch on the protocol.
 
 
 def scheduler_shm_name(service_id: str, protocol: int) -> str:

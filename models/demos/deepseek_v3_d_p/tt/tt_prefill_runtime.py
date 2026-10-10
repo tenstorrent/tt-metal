@@ -13,13 +13,13 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_sink import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
     d2d_activation_rows,
     d2d_activation_width,
     mtp_union_rows,
     num_mtp_tokens,
 )
-from models.demos.common.prefill.runners.layer_completion_sink import NullLayerCompletionSink
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
@@ -978,9 +978,6 @@ class TtPrefillRuntime:
             # That means the per-chunk fields cannot be re-bound per call the way the eager path does
             # below — publish them instead; the captured callback built by set_layer_completion_sink()
             # reads them at replay time.
-            # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
-            # path does below — publish this chunk's id instead; the captured callback built by
-            # set_layer_completion_sink() reads it at replay time.
             assert mtp_tokens is None and not self.config.mtp_levels, (
                 "use_trace does not support MTP: the union is built per chunk (fresh addresses) and the "
                 "levels run after the captured segment, neither of which survives a capture; run with "
@@ -1520,9 +1517,9 @@ class TtPrefillRuntime:
 
         use_trace: the callback must be known at CAPTURE time (a host push cannot live inside a
         trace), so it is registered on the controller and the eager capture is re-recorded to split at
-        each ack point. The per-call request_id closure the eager path uses is not available there, so
-        the captured callback reads _trace_request_id, which prefill_chunk() publishes before each
-        replay.
+        each ack point. The per-call closure the eager path uses is not available there, so the captured
+        callback reads the per-chunk fields (_trace_request_id, _trace_slot_id, _trace_pos_*) that
+        prefill_chunk() publishes before each replay.
         """
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink

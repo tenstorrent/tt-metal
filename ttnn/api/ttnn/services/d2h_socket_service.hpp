@@ -82,7 +82,8 @@ public:
     void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
     void read_from_tensor(ttnn::Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
     void notify_backing_ready();
-    void barrier();
+    // Wait until the host has acked everything the device sent; with a timeout, give up and return.
+    void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
     const ttnn::Tensor& get_backing_tensor() const;
     const TensorSpec& get_per_shard_spec() const;
@@ -91,8 +92,7 @@ public:
 
     // Data-CB depth (full socket-page slots) the service derived from service-core L1.
     uint32_t get_slot_count() const;
-    // Service-core metadata ring (owner only): record slots, bytes per slot, and the offset of
-    // slot 0 past the header word the writer keeps its sent count in.
+    // Service-core metadata ring geometry (owner only); layout in persistent_d2h_writer.cpp.
     uint32_t get_metadata_ring_slots() const;
     uint32_t get_metadata_slot_stride() const;
     uint32_t get_metadata_data_offset() const;

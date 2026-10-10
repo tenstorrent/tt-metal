@@ -19,13 +19,9 @@
 // and usable across processes when the storage is shared — the same
 // guarantee inter_process_counter_layout.hpp relies on.
 //
-// The ring is templated on the message type; LayerCompletionRingTraits
-// binds each message version to a magic (the on-disk version key that
-// connect() validates) and a cell alignment. V1 cells stay naturally
-// packed (32B, two per cache line — frozen wire format). V2 cells are
-// padded to a full cache line: a packed 48B cell would straddle lines,
-// so every v2 push/pop would touch two lines for half the cells and
-// adjacent-cell false sharing would stop being a boundary-only case.
+// LayerCompletionRingTraits binds each message version to its magic (validated
+// by connect()) and cell alignment: v1 cells stay packed at 32 B (frozen), v2
+// cells are one cache line each.
 
 #pragma once
 
@@ -39,27 +35,20 @@ namespace tt::tt_metal::internal {
 
 inline constexpr std::size_t kLayerCompletionCacheLine = 64;
 
-// Per-message-version wire traits. No primary definition: an unregistered
-// message type is a compile error, not a silent format.
 template <typename MsgT>
-struct LayerCompletionRingTraits;
+struct LayerCompletionRingTraits;  // no primary definition: unregistered message types do not compile
 
 template <>
 struct LayerCompletionRingTraits<LayerCompletionMessage> {
     static constexpr uint32_t magic = 0x4C435131u;  // 'LCQ1'
-    // Natural alignment — cells stay packed 32B (frozen v1 wire format).
     static constexpr std::size_t cell_alignment = alignof(LayerCompletionMessage);
 };
 
 template <>
 struct LayerCompletionRingTraits<LayerCompletionMessageV2> {
     static constexpr uint32_t magic = 0x4C435132u;  // 'LCQ2'
-    // One cache line per cell (see header comment).
     static constexpr std::size_t cell_alignment = kLayerCompletionCacheLine;
 };
-
-// v1 spelling, kept for existing references.
-inline constexpr uint32_t kLayerCompletionRingMagic = LayerCompletionRingTraits<LayerCompletionMessage>::magic;
 
 // One ring slot. `sequence` gates ownership (Vyukov): producers wait for
 // sequence==pos, consumers wait for sequence==pos+1.
@@ -97,17 +86,7 @@ inline constexpr std::size_t kLayerCompletionRingBytes =
     layer_completion_cells_offset<MsgT>() +
     static_cast<std::size_t>(kLayerCompletionRingCapacity) * sizeof(LayerCompletionCellT<MsgT>);
 
-// ---------------------------------------------------------------------------
-// Wire-geometry contract. These values ARE the protocol: connect() validates
-// magic+capacity, and every other byte offset follows from the layouts below.
-// A drift here means silent cross-process corruption, so it is a compile
-// error. The v1 values additionally guard the byte-compat promise — v1
-// geometry must not move while v2 is added alongside it.
-// ---------------------------------------------------------------------------
-
-// Header (shared). The alignas(64) members force alignof == 64, so sizeof
-// rounds up to a full two cache lines; capacity/magic live in the second
-// line's tail.
+// Wire geometry: these offsets are the cross-process contract, so a drift is a compile error.
 static_assert(offsetof(LayerCompletionRingHeader, enqueue_pos) == 0);
 static_assert(offsetof(LayerCompletionRingHeader, dequeue_pos) == kLayerCompletionCacheLine);
 static_assert(offsetof(LayerCompletionRingHeader, capacity) == kLayerCompletionCacheLine + 8);
