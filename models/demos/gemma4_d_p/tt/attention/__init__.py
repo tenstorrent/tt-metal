@@ -30,6 +30,9 @@ from .ring_prefill import (
 # One buffer pair for each of the five sliding layers between global layers.
 NUM_SWA_HALO_BUFFER_PAIRS = 5
 
+# A same-width batched step runs its sliding layers as one lanes ring SDPA (tests switch it off to compare).
+USE_LANES_SLIDING_SDPA = True
+
 
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
@@ -246,7 +249,8 @@ class Gemma4Attention:
         )
 
     def _attend(self, tt_q, prefill_metadata, kv_actual_global, num_local_kv_heads, lane=0):
-        """This layer's ring SDPA of tt_q over one request's cached prefix; lane picks the receive buffers."""
+        """This layer's ring SDPA of tt_q over one request's cached prefix; lane picks the receive buffers. A
+        prefill_metadata of several lanes (sliding layers) serves every request of a same-width step in one call."""
         common = dict(
             mesh_config=self.mesh_config,
             prefill_metadata=prefill_metadata,
@@ -268,12 +272,13 @@ class Gemma4Attention:
         )
         if not self.config.is_sliding:
             return global_ring_prefill_attention(tt_q, self.ring_kv_cache.kv, lane=lane, **common)
+        halo_key = self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS
         return sliding_ring_prefill_attention(
             tt_q,
             self.ring_kv_cache.k,
             self.ring_kv_cache.v,
             head_dim=self.config.head_dim,
-            gather_buffer_key=lane_buffer_key(self.layer_idx % NUM_SWA_HALO_BUFFER_PAIRS, lane),
+            gather_buffer_key=lane_buffer_key(halo_key, lane),
             sliding_window_size=self.config.sliding_window_size,
             **common,
         )
@@ -377,6 +382,13 @@ class Gemma4Attention:
                 )
             stacked_k.deallocate(True)
             stacked_v.deallocate(True)
+
+        lane_vector = getattr(lanes, "vector", None)
+        if USE_LANES_SLIDING_SDPA and not is_global and lane_vector is not None and len(set(rows)) == 1:
+            # One sliding SDPA for every request: stacked Q in, stacked output out, no per-request slices or concat.
+            tt_sdpa = self._attend(tt_q, lane_vector, 0, num_local_kv_heads)
+            tt_q.deallocate(True)
+            return tt_sdpa
 
         outputs = []
         for lane, (span, metadata) in enumerate(zip(spans, lanes)):

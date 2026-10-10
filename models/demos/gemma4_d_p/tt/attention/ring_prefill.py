@@ -359,6 +359,10 @@ def write_chunk_to_sliding_ring_cache(
         )
 
 
+# Set by tests to pin a single-request sliding call's K split (e.g. 1, matching a lanes call's arithmetic).
+SLIDING_K_SPLITS_OVERRIDE = None
+
+
 def sliding_ring_prefill_attention(
     tt_q,
     cache_k,
@@ -382,6 +386,10 @@ def sliding_ring_prefill_attention(
 ):
     """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
+    With a prefill_metadata of num_lanes > 1, tt_q holds that many requests' rows stacked request-major and one call
+    serves them all (request b reads slot_idx[b] with prefix kv_actual_global[b]); the output stacks the same way.
+    K split 1, one halo batch per request.
+
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
     the valid prefix on each replay; ``kv_actual_global`` is the prefix before
     this chunk when metadata is updated here.
@@ -390,11 +398,20 @@ def sliding_ring_prefill_attention(
     the output stays CP-sharded exactly like the input.
     """
     mesh_device = mesh_config.device
+    num_lanes = getattr(prefill_metadata, "num_lanes", 1)
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], num_cores=(sdpa_grid.x - 1) * sdpa_grid.y
+            tt_q.shape[-2] // num_lanes,
+            sliding=True,
+            num_heads=tt_q.shape[1],
+            num_cores=(sdpa_grid.x - 1) * sdpa_grid.y,
         )
+        # A lanes call runs one unit per (request, head, Q chunk) and does not split K.
+        if num_lanes > 1:
+            k_splits = 1
+        elif SLIDING_K_SPLITS_OVERRIDE is not None:
+            k_splits = SLIDING_K_SPLITS_OVERRIDE
         program_config = ring_prefill_program_config(
             mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
         )
@@ -405,10 +422,22 @@ def sliding_ring_prefill_attention(
     halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
     gather_seq = max(halo_tokens, TILE_HEIGHT)
     buffer_k = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+        (gather_buffer_key, "ring_k"),
+        num_local_kv_heads,
+        gather_seq,
+        head_dim,
+        cache_k.dtype,
+        cache_k.memory_config(),
+        batch=num_lanes,
     )
     buffer_v = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+        (gather_buffer_key, "ring_v"),
+        num_local_kv_heads,
+        gather_seq,
+        head_dim,
+        cache_v.dtype,
+        cache_v.memory_config(),
+        batch=num_lanes,
     )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

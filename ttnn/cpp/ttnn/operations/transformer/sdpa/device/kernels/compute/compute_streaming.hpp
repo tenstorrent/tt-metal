@@ -2358,6 +2358,16 @@ void sdpa_standard_v2(
     }
 }
 
+// Lanes: per-lane logical_nt and KV-pad Q mapping, filled once by the compute kernel from cb_kv_pad_derived. With
+// num_lanes > 1, sdpa_ring_v2 loads each unit's lane (flat unit / units_per_lane) before its sliding plan and masks.
+namespace lanes {
+struct LaneTable {
+    uint32_t units_per_lane;
+    uint32_t logical_nt[8];
+    uint32_t q_mapping[8][4];
+};
+inline LaneTable table;
+}  // namespace lanes
 /**
  * Streaming Ring SDPA (v2): Ring-aware variant of sdpa_standard_v2 with deferred normalization.
  * Accumulates raw (un-normalized) softmax state across ring iterations; normalizes once on the
@@ -2464,6 +2474,8 @@ template <
     bool rotated_q_split_enabled = false,
     // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
     bool causal_k_skip = false,
+    // Lanes: requests stacked in one call (see lanes::LaneTable); 1 is the single-request op.
+    uint32_t num_lanes = 1,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2473,7 +2485,7 @@ void sdpa_ring_v2(
     const uint32_t ring_iter,
     const uint32_t ring_id,
     const uint32_t num_local_k_chunks,
-    const uint32_t logical_nt,
+    const uint32_t logical_nt_arg,
     const bool ring_iter_needs_global_n_mask,
     const bool ring_iter_needs_joint_n_mask,
     const bool local_n_needs_masking,
@@ -2486,7 +2498,7 @@ void sdpa_ring_v2(
     const MaskCtx& lw_mask = {},
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
-    const ChunkedContext& chunked = {},
+    const ChunkedContext& chunked_arg = {},
     const bool is_first_active_iter = true,
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
@@ -2501,6 +2513,9 @@ void sdpa_ring_v2(
     const uint32_t sliding_split_idx = 0,
     const uint32_t sliding_split_count = 1) {
     init_sdpa_streaming_semaphores();
+    // Lanes reload these per unit (see lanes::LaneTable); the lambdas below capture them by reference.
+    uint32_t logical_nt = logical_nt_arg;
+    ChunkedContext chunked = chunked_arg;
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
@@ -2666,6 +2681,15 @@ void sdpa_ring_v2(
             q_flat = rotated_slots.at(q);
         }
         uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        if constexpr (num_lanes > 1) {
+            const uint32_t lane =
+                remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) / lanes::table.units_per_lane;
+            logical_nt = lanes::table.logical_nt[lane];
+            chunked.kv_pad_rotation.q_pre_wrap_start_tile = lanes::table.q_mapping[lane][0];
+            chunked.kv_pad_rotation.q_pre_wrap_tile_count = lanes::table.q_mapping[lane][1];
+            chunked.kv_pad_rotation.q_post_wrap_start_tile = lanes::table.q_mapping[lane][2];
+            chunked.kv_pad_rotation.q_valid_tile_count = lanes::table.q_mapping[lane][3];
+        }
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;

@@ -230,6 +230,7 @@ class Gemma4Model:
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
         self._lane_prefill_metadata = [self.prefill_metadata]
+        self._lane_vectors = {}
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
@@ -324,6 +325,15 @@ class Gemma4Model:
     def set_prefill_trace_controller(self, controller):
         """Attach the segmented trace controller used for per-layer migration acks."""
         self._prefill_trace_controller = controller
+
+    def lane_vector_metadata(self, num_lanes):
+        """The B-element slot / prefix tensors of a num_lanes step, for the lanes ring SDPA.
+
+        Allocates device tensors on first use, so call it before capturing a trace that uses them.
+        """
+        if num_lanes not in self._lane_vectors:
+            self._lane_vectors[num_lanes] = PrefillMetadata(self.mesh_config, num_lanes)
+        return self._lane_vectors[num_lanes]
 
     def lane_prefill_metadata(self, num_lanes):
         """Per-request metadata for a batched step of num_lanes requests; lane 0 is prefill_metadata.

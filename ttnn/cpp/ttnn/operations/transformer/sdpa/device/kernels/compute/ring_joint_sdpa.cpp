@@ -33,6 +33,7 @@ constexpr void assert_kv_pad_rotation_streaming_only() {
 }
 
 void kernel_main() {
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
@@ -262,6 +263,19 @@ void kernel_main() {
         }
         active_ring_iter_mask =
             ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedActiveRingIterMask);
+        // Lanes: per-lane logical_nt and Q mapping for sdpa_ring_v2.
+        if constexpr (num_lanes > 1) {
+            static_assert(num_lanes <= ring_joint::kMaxLanes);
+            lanes::table.units_per_lane = NH * num_q_chunks;
+            for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+                const uint32_t base = ring_joint::kDerivedLaneBase + lane * ring_joint::kDerivedLaneStride;
+                lanes::table.logical_nt[lane] = ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, base);
+                for (uint32_t field = 0; field < 4; ++field) {
+                    lanes::table.q_mapping[lane][field] =
+                        ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, base + 1 + field);
+                }
+            }
+        }
         if constexpr (has_logical_n_tensor) {
             global_n_partial_col_live =
                 ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedGlobalNPartialCol);
@@ -595,7 +609,8 @@ void kernel_main() {
                 has_gathered_joint_k,
                 Lt_local,
                 rotated_q_split_enabled,
-                dense_causal_skip>(
+                dense_causal_skip,
+                num_lanes>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,

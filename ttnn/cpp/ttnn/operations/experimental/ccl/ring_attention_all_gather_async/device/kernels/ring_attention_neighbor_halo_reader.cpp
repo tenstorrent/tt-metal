@@ -109,50 +109,55 @@ void kernel_main() {
         }
     }
 
-    // Derive source tails and link ranges from the replay's metadata.
+    // Lanes: num_lanes requests' tails, lane b from cache slot slot_id[b] with
+    // prefix kv_actual_isl[b]. Without metadata there is one lane and the host-baked ranges stand.
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
+    static_assert(num_lanes == 1 || has_halo_metadata, "Lanes need the metadata path");
+
+    // Metadata scalars, then one input_Wt per input, then the accessors.
+    uint32_t slot_id_addr = 0, kv_cache_num_layers = 1, kv_cache_layer_idx = 0, kv_actual_isl_addr = 0;
+    uint32_t q_local_tile_rows = 0, halo_tile_rows = 0, cache_local_tile_rows = 0, halo_slot_count = 1;
+    uint32_t source_device = 0, num_links = 1, hop = 1;
+    std::array<uint32_t, num_inputs> meta_input_Wt{};
     if constexpr (has_halo_metadata) {
-        const uint32_t slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t kv_cache_num_layers = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t kv_cache_layer_idx = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
+        slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
+        kv_cache_num_layers = get_arg_val<uint32_t>(arg_idx++);
+        kv_cache_layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
+        source_device = get_arg_val<uint32_t>(arg_idx++);
+        num_links = get_arg_val<uint32_t>(arg_idx++);
+        hop = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t input = 0; input < num_inputs; ++input) {
+            meta_input_Wt[input] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
+    // Every lane's slot and prefix, read once.
+    std::array<uint32_t, num_lanes> lane_slots{}, lane_prefixes{};
+    if constexpr (has_halo_metadata) {
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
-        const uint32_t slot_id =
-            trace_metadata::read_metadata_scalar_u32(meta_noc, slot_meta_args, slot_id_addr, cb_meta.get_write_ptr());
-        for (uint32_t input = 0; input < num_inputs; ++input) {
-            const uint32_t kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
-                slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input]);
-            input_batch_base[input] = kv_cache_batch_idx * input_batch_head_count[input] * input_stride_pages[input];
-        }
-        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
-        const auto sources = ring_attention_all_gather::compute_halo_sources(
-            kv_actual_isl,
-            q_local_tile_rows,
-            ring_size,
-            halo_tile_rows,
-            source_device,
-            cache_local_tile_rows,
-            halo_slot_count,
-            hop);
-        for (uint32_t input = 0; input < num_inputs; ++input) {
-            const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
-            first_origin[input] = sources.first_start_tile * input_Wt;
-            second_origin[input] = sources.second_start_tile * input_Wt;
-            const auto range = ring_attention_all_gather::compute_link_page_range(
-                sources.count * halo_pages[input], num_links, worker_link);
-            input_tile_start[input] = range.start;
-            input_tile_end[input] = range.end;
-        }
-        if constexpr (multicast) {
-            ring_attention_all_gather::compute_multicast_origin_rows(
+        trace_metadata::read_metadata_vector_u32(
+            meta_noc, slot_meta_args, slot_id_addr, cb_meta.get_write_ptr(), lane_slots);
+        trace_metadata::read_metadata_vector_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr(), lane_prefixes);
+    }
+    // Derive one lane's source tails and link ranges from the replay's metadata.
+    [[maybe_unused]] auto derive_lane = [&](uint32_t lane) {
+        if constexpr (has_halo_metadata) {
+            const uint32_t slot_id = lane_slots[lane];
+            for (uint32_t input = 0; input < num_inputs; ++input) {
+                const uint32_t kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
+                    slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input]);
+                input_batch_base[input] =
+                    kv_cache_batch_idx * input_batch_head_count[input] * input_stride_pages[input];
+            }
+            const uint32_t kv_actual_isl = lane_prefixes[lane];
+            const auto sources = ring_attention_all_gather::compute_halo_sources(
                 kv_actual_isl,
                 q_local_tile_rows,
                 ring_size,
@@ -160,12 +165,31 @@ void kernel_main() {
                 source_device,
                 cache_local_tile_rows,
                 halo_slot_count,
-                hop,
-                sources.first_start_tile,
-                mc_hop_count,
-                mc_origin_rows.data());
+                hop);
+            for (uint32_t input = 0; input < num_inputs; ++input) {
+                first_origin[input] = sources.first_start_tile * meta_input_Wt[input];
+                second_origin[input] = sources.second_start_tile * meta_input_Wt[input];
+                const auto range = ring_attention_all_gather::compute_link_page_range(
+                    sources.count * halo_pages[input], num_links, worker_link);
+                input_tile_start[input] = range.start;
+                input_tile_end[input] = range.end;
+            }
+            if constexpr (multicast) {
+                ring_attention_all_gather::compute_multicast_origin_rows(
+                    kv_actual_isl,
+                    q_local_tile_rows,
+                    ring_size,
+                    halo_tile_rows,
+                    source_device,
+                    cache_local_tile_rows,
+                    halo_slot_count,
+                    hop,
+                    sources.first_start_tile,
+                    mc_hop_count,
+                    mc_origin_rows.data());
+            }
         }
-    }
+    };
 
     auto input_accessors_tuple = make_tensor_accessor_tuple(input_accessor_args, arg_idx);
     arg_idx += num_inputs;
@@ -177,32 +201,35 @@ void kernel_main() {
     CircularBuffer cb_output(cb_output_id);
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
     const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
-    for (uint32_t run_start = 0; run_start < mc_hop_count;) {
-        uint32_t run_end = run_start + 1;
-        if constexpr (multicast) {
-            run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
-            for (uint32_t input = 0; input < num_inputs; ++input) {
-                first_origin[input] = mc_origin_rows[run_start] * mc_input_Wt[input];
+    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+        derive_lane(lane);
+        for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+            uint32_t run_end = run_start + 1;
+            if constexpr (multicast) {
+                run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+                for (uint32_t input = 0; input < num_inputs; ++input) {
+                    first_origin[input] = mc_origin_rows[run_start] * mc_input_Wt[input];
+                }
             }
-        }
-        run_start = run_end;
-        for (uint32_t input = 0; input < num_inputs; ++input) {
-            for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
-                uint32_t tiles_read = input_tile_start[input];
-                prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
-                    noc,
-                    cb_output,
-                    tiles_read,
-                    input_tile_end[input],
-                    cb_fifo_limit,
-                    cb_fifo_size,
-                    input_accessors[input],
-                    [&](uint32_t tile) {
-                        const uint32_t source_tile = tile < halo_pages[input]
-                                                         ? first_origin[input] + tile
-                                                         : second_origin[input] + tile - halo_pages[input];
-                        return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
-                    });
+            run_start = run_end;
+            for (uint32_t input = 0; input < num_inputs; ++input) {
+                for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
+                    uint32_t tiles_read = input_tile_start[input];
+                    prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
+                        noc,
+                        cb_output,
+                        tiles_read,
+                        input_tile_end[input],
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_accessors[input],
+                        [&](uint32_t tile) {
+                            const uint32_t source_tile = tile < halo_pages[input]
+                                                             ? first_origin[input] + tile
+                                                             : second_origin[input] + tile - halo_pages[input];
+                            return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
+                        });
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ device metadata. One trace per layout (each request's chunk width, in lane order
     test_batched_kv_matches_unbatched  KV of every slot, batched vs each request alone (plus a repeat control and
                                        slot 0 against the GPU golden); G4B_DEEP=1 for prefixes up to 32k
     test_kv_window_write               update_padded_kv_cache with an input row window vs slice-then-write
+    test_lanes_sdpa_matches_per_request  one lanes sliding SDPA vs one call per request: bit-identical (K split 1)
     test_same_request_lanes            several chunks of one request in one step vs the request alone
     test_partial_steps                 fewer requests than lanes: a smaller trace vs padding with a spare lane
     test_lane_widths                   per-request chunk widths in one step (e.g. 4k + 2k + 2k, a lone 8k)
@@ -17,7 +18,8 @@ device metadata. One trace per layout (each request's chunk width, in lane order
 
 Env: G4B_OUT (result JSON dir), G4B_STEPS (batched steps in the correctness test), G4B_REPS (timed replays),
 G4B_LANES (lane counts in the perf test), G4B_WIDTH_SCENARIOS / G4B_NO_PERF (widths test filters),
-G4B_PROJECTION_FIDELITY=hifi2 (perf test: pin the projections at HiFi2).
+G4B_PROJECTION_FIDELITY=hifi2 (perf test: pin the projections at HiFi2), G4B_LANES_SDPA=0 (perf test: sliding
+layers one call per request instead of one lanes call).
 """
 
 import json
@@ -30,11 +32,13 @@ import pytest
 import torch
 from loguru import logger
 
+import models.demos.gemma4_d_p.tt.attention as attention
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.demo.text_demo_prefill import _cp_or_replicate_mapper, _hf_model_id, _text_token_stream
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.attention import operations as attention_operations
+from models.demos.gemma4_d_p.tt.attention import ring_prefill
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes
@@ -109,6 +113,8 @@ class StepRunner:
             zeros = [torch.zeros(total, dtype=torch.int32)]
             self.inputs[total] = tuple(ttnn.to_device(self._host(zeros), device=self.mesh_device) for _ in range(2))
         self.model.lane_prefill_metadata(len(layout))
+        if len(layout) > 1:
+            self.model.lane_vector_metadata(len(layout))
 
     def stage(self, lanes):
         """Host refresh of everything a replay reads."""
@@ -118,6 +124,10 @@ class StepRunner:
         ttnn.copy_host_to_device_tensor(self._host(starts), positions)
         for metadata, (slot, start, _) in zip(self.model.lane_prefill_metadata(len(lanes)), lanes):
             metadata.update(slot_idx=slot, kv_actual_global=start)
+        if len(lanes) > 1:
+            self.model.lane_vector_metadata(len(lanes)).update(
+                slot_idx=[slot for slot, _, _ in lanes], kv_actual_global=[start for _, start, _ in lanes]
+            )
 
     def _forward(self, layout):
         tokens, positions = self.inputs[sum(layout)]
@@ -128,8 +138,10 @@ class StepRunner:
         if layout == (self.chunk,) and not self.always_lanes:
             metadata = metadata[0]
         else:
-            # Each request's rows; one request wider than the model's chunk (or always_lanes) takes this path too.
-            metadata = PrefillLanes(metadata, rows)
+            # Each request's rows (one request wider than the model's chunk, or always_lanes, too), and for several
+            # requests the B-element slot / prefix tensors the lanes ring SDPA reads.
+            vector = self.model.lane_vector_metadata(len(layout)) if len(layout) > 1 else None
+            metadata = PrefillLanes(metadata, rows, vector=vector)
         return self.model(hidden_states=embeds, prefill_metadata=metadata)
 
     def capture_all(self, lane_sets):
@@ -463,6 +475,72 @@ def test_kv_window_write(mesh_device, reset_seeds):
         assert all(torch.equal(x, y) for x, y in zip(a, b)), f"windowed write differs from slice + write ({name})"
         nonzero = sum(int(x.abs().sum() > 0) for x in a)
         logger.info(f"[batching] KV window write {name}: bit-identical on {len(a)} devices ({nonzero} with data)")
+
+
+# ── Lanes sliding ring SDPA vs one call per request ────────────────────────────
+
+
+# name -> (chunks each slot holds before the step, the step's lanes as (slot, chunk index)).
+_LANES_SDPA_SCENARIOS = {
+    "lane0_deepest": ((3, 0, 1, 2), [(0, 3), (1, 0), (2, 1), (3, 2)]),
+    "lane0_empty": ((0, 3, 1, 2), [(0, 0), (1, 3), (2, 1), (3, 2)]),
+    # One request's consecutive chunks in one step: lane k attends lanes 0..k-1 through the cache.
+    "same_one_request": ((3, 0, 0, 0), [(0, 3), (0, 4), (0, 5), (0, 6)]),
+    "same_two_by_two": ((2, 0, 0, 0), [(1, 0), (1, 1), (0, 2), (0, 3)]),
+}
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("scenario", list(_LANES_SDPA_SCENARIOS))
+def test_lanes_sdpa_matches_per_request(mesh_device, scenario, reset_seeds, monkeypatch):
+    """One eager 2k x 4 step (prefixes in 2k chunks per slot) with the sliding layers' attention as one lanes call vs
+    one call per lane; both with sliding K split 1 so the per-unit arithmetic is the same. The step's final hidden
+    states and every slot's KV must be bit-identical. lane0_empty puts the shortest prefix on lane 0, whose prefix
+    alone drives the call's ring-iteration masks; the same_* scenarios give one request several lanes."""
+    prefix_chunks, step_chunks = _LANES_SDPA_SCENARIOS[scenario]
+    chunk, num_lanes, capacity = 2048, 4, 32768
+    mesh_config, model_args, model = _build(mesh_device, chunk, num_lanes, capacity)
+    prompts = _prompts(num_lanes, capacity, model_args.vocab_size)
+    monkeypatch.setattr(ring_prefill, "SLIDING_K_SPLITS_OVERRIDE", 1)
+
+    def lane(slot, idx):
+        return (slot, idx * chunk, prompts[slot][idx * chunk : (idx + 1) * chunk])
+
+    runner = StepRunner(mesh_device, mesh_config, model, chunk)
+    for layout in ((chunk,), (chunk,) * num_lanes):
+        runner._ensure(layout)
+
+    def eager(lanes):
+        runner.stage(lanes)
+        out = runner._forward(runner.layout(lanes))
+        ttnn.synchronize_device(mesh_device)
+        host = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out.cpu())]
+        out.deallocate(True)
+        return host
+
+    for slot, n in enumerate(prefix_chunks):
+        for idx in range(n):
+            eager([lane(slot, idx)])
+    step = [lane(slot, idx) for slot, idx in step_chunks]
+    filled = [max([n] + [idx + 1 for s, idx in step_chunks if s == slot]) for slot, n in enumerate(prefix_chunks)]
+    results = {}
+    for mode in (False, True):
+        monkeypatch.setattr(attention, "USE_LANES_SLIDING_SDPA", mode)
+        hidden = eager(step)
+        kv = [_read_slot(model, slot, n * chunk, chunk, mesh_config) if n else None for slot, n in enumerate(filled)]
+        results[mode] = (hidden, kv)
+        logger.info(f"[batching] lanes SDPA={mode} step done")
+    (h0, kv0), (h1, kv1) = results[False], results[True]
+    hidden_equal = all(torch.equal(a, b) for a, b in zip(h0, h1))
+    max_diff = max(float((a.float() - b.float()).abs().max()) for a, b in zip(h0, h1))
+    logger.info(f"[batching] LANES hidden bit-identical={hidden_equal} max|diff|={max_diff:.3e}")
+    for slot in (slot for slot, n in enumerate(filled) if n):  # untouched slots hold nothing to compare
+        result = _compare(kv0[slot], kv1[slot])
+        logger.info(f"[batching] LANES slot {slot} KV lanes vs per-request: {_fmt(result)}")
+        assert result["first_differing_layer"] is None, f"slot {slot} KV differs: {_fmt(result)}"
+    assert hidden_equal, f"final hidden states differ, max |diff| {max_diff}"
 
 
 # ── Several chunks of one request in a step ────────────────────────────────────
@@ -803,6 +881,7 @@ def test_batched_step_perf(mesh_device, chunk_size, reset_seeds, monkeypatch):
     """Traced step time of B requests x chunk vs B unbatched steps at the same prefixes."""
     if os.environ.get("G4B_PROJECTION_FIDELITY", "").lower() == "hifi2":
         monkeypatch.setattr(attention_operations, "PROJECTION_FIDELITY_OVERRIDE", ttnn.MathFidelity.HiFi2)
+    monkeypatch.setattr(attention, "USE_LANES_SLIDING_SDPA", os.environ.get("G4B_LANES_SDPA", "1") == "1")
     lane_counts, capacity = _PERF_SHAPES[chunk_size]
     lane_counts = tuple(int(b) for b in os.environ.get("G4B_LANES", ",".join(map(str, lane_counts))).split(","))
     num_slots = max(lane_counts)

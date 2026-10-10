@@ -92,41 +92,40 @@ void kernel_main() {
         }
     }
 
+    // Lanes: num_lanes requests' tails, lane b into batch b of the halo buffer
+    // (b * batch-head count * stride pages on), all on this exchange's one connection; the ready-increment rides
+    // the last lane's last packet, so the receiver still counts one arrival per exchange.
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
+    static_assert(num_lanes == 1 || has_halo_metadata, "Lanes need the metadata path");
+    uint32_t kv_actual_isl_addr = 0, q_local_tile_rows = 0, halo_tile_rows = 0, cache_local_tile_rows = 0;
+    uint32_t halo_slot_count = 1, source_device = 0, ring_size_rt = 1, num_links = 1, hop = 1;
+    std::array<uint32_t, num_inputs> meta_input_Wt{};
     if constexpr (has_halo_metadata) {
-        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
+        kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
+        source_device = get_arg_val<uint32_t>(arg_idx++);
+        ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
+        num_links = get_arg_val<uint32_t>(arg_idx++);
+        hop = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            meta_input_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+    // Every lane's prefix, read once.
+    std::array<uint32_t, num_lanes> lane_prefixes{};
+    if constexpr (has_halo_metadata) {
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
-        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
-        const auto sources = ring_attention_all_gather::compute_halo_sources(
-            kv_actual_isl,
-            q_local_tile_rows,
-            ring_size_rt,
-            halo_tile_rows,
-            source_device,
-            cache_local_tile_rows,
-            halo_slot_count,
-            hop);
-        const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
-            halo_tile_rows, q_local_tile_rows, hop);
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t pages = sources.count * tail_tile_rows * input_Wt;
-            ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
-            const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
-            input_tile_id_start[input_idx] = range.start;
-            input_tile_id_end[input_idx] = range.end;
-        }
-        if constexpr (multicast) {
-            ring_attention_all_gather::compute_multicast_origin_rows(
+        trace_metadata::read_metadata_vector_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr(), lane_prefixes);
+    }
+    [[maybe_unused]] auto derive_lane = [&](uint32_t lane) {
+        if constexpr (has_halo_metadata) {
+            const uint32_t kv_actual_isl = lane_prefixes[lane];
+            const auto sources = ring_attention_all_gather::compute_halo_sources(
                 kv_actual_isl,
                 q_local_tile_rows,
                 ring_size_rt,
@@ -134,12 +133,33 @@ void kernel_main() {
                 source_device,
                 cache_local_tile_rows,
                 halo_slot_count,
-                hop,
-                sources.first_start_tile,
-                mc_hop_count,
-                mc_origin_rows.data());
+                hop);
+            const uint32_t tail_tile_rows =
+                ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
+                    halo_tile_rows, q_local_tile_rows, hop);
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                const uint32_t pages = sources.count * tail_tile_rows * meta_input_Wt[input_idx];
+                ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
+                const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
+                input_tile_id_start[input_idx] = range.start;
+                input_tile_id_end[input_idx] = range.end;
+            }
+            if constexpr (multicast) {
+                ring_attention_all_gather::compute_multicast_origin_rows(
+                    kv_actual_isl,
+                    q_local_tile_rows,
+                    ring_size_rt,
+                    halo_tile_rows,
+                    source_device,
+                    cache_local_tile_rows,
+                    halo_slot_count,
+                    hop,
+                    sources.first_start_tile,
+                    mc_hop_count,
+                    mc_origin_rows.data());
+            }
         }
-    }
+    };
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
@@ -246,40 +266,45 @@ void kernel_main() {
         noc_async_writes_flushed();
     };
 
-    for (uint32_t run_start = 0; run_start < mc_hop_count;) {
-        uint32_t run_end = run_start + 1;
-        if constexpr (multicast) {
-            run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
-            ccl_routing_utils::line_multicast_route_info_t route{};
-            route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
-                unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
-            route.range_hops = static_cast<uint16_t>(run_end - run_start);
-            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
-        }
-        run_start = run_end;
-        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                uint32_t tiles_read = input_tile_id_start[input_idx];
-                const uint32_t tiles_to_read = input_tile_id_end[input_idx];
-                output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
-                while (tiles_read < tiles_to_read) {
-                    const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_output.wait_front(packet_size_in_pages);
-                    const size_t l1_read_addr = cb_output.get_read_ptr();
-                    const bool is_last_source_packet = input_idx + 1 == num_inputs &&
-                                                       bh_idx + 1 == input_batch_head_count[input_idx] &&
-                                                       tiles_read + num_pages_to_read >= tiles_to_read;
-                    const uint32_t signal_pages = is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
-                    const uint32_t plain_pages = num_pages_to_read - signal_pages;
-                    send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
-                    send_pages(
-                        input_idx,
-                        tiles_read + plain_pages,
-                        signal_pages,
-                        l1_read_addr + plain_pages * output_page_size,
-                        true);
-                    tiles_read += num_pages_to_read;
-                    cb_output.pop_front(packet_size_in_pages);
+    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+        derive_lane(lane);
+        for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+            uint32_t run_end = run_start + 1;
+            if constexpr (multicast) {
+                run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+                ccl_routing_utils::line_multicast_route_info_t route{};
+                route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
+                    unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
+                route.range_hops = static_cast<uint16_t>(run_end - run_start);
+                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
+            }
+            run_start = run_end;
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                    uint32_t tiles_read = input_tile_id_start[input_idx];
+                    const uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                    output_batch_head_base =
+                        (lane * input_batch_head_count[input_idx] + bh_idx) * output_batch_head_stride_pages[input_idx];
+                    while (tiles_read < tiles_to_read) {
+                        const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                        cb_output.wait_front(packet_size_in_pages);
+                        const size_t l1_read_addr = cb_output.get_read_ptr();
+                        const bool is_last_source_packet = lane + 1 == num_lanes && input_idx + 1 == num_inputs &&
+                                                           bh_idx + 1 == input_batch_head_count[input_idx] &&
+                                                           tiles_read + num_pages_to_read >= tiles_to_read;
+                        const uint32_t signal_pages =
+                            is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
+                        const uint32_t plain_pages = num_pages_to_read - signal_pages;
+                        send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
+                        send_pages(
+                            input_idx,
+                            tiles_read + plain_pages,
+                            signal_pages,
+                            l1_read_addr + plain_pages * output_page_size,
+                            true);
+                        tiles_read += num_pages_to_read;
+                        cb_output.pop_front(packet_size_in_pages);
+                    }
                 }
             }
         }

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -119,7 +120,8 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
     // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
     bool allow_single_slot_output,
-    std::optional<uint32_t> compact_gather_dim_minimum) {
+    std::optional<uint32_t> compact_gather_dim_minimum,
+    uint32_t num_lanes = 1) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -197,11 +199,13 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                         output_shape[d],
                         minimum);
                 } else if (allow_single_slot_output && d == 0) {
-                    // Single-slot gather targets gathered slot 0: batch-1 expected, full-batch also ok.
+                    // Single-slot gather targets gathered slot 0: batch-1 expected (one batch per lane for
+                    // lanes), full-batch also ok.
                     TT_FATAL(
-                        output_shape[d] == 1 || output_shape[d] == expected_output_shape[d],
-                        "Output tensor {} batch dim must be 1 (single-slot gather) or {}: got {}",
+                        output_shape[d] == num_lanes || output_shape[d] == expected_output_shape[d],
+                        "Output tensor {} batch dim must be {} (one per lane) or {}: got {}",
                         i,
+                        num_lanes,
                         expected_output_shape[d],
                         output_shape[d]);
                 } else {
@@ -233,7 +237,17 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
         TT_FATAL(tensor.device() == tensor_args.input_q.device(), "{} must be on the same device as Q", name);
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
-        TT_FATAL(tensor.logical_volume() == 1, "{} must contain exactly one element", name);
+        // One element per lane; one element is the single-request op.
+        TT_FATAL(
+            tensor.logical_volume() >= 1 && tensor.logical_volume() <= ring_joint::kMaxLanes,
+            "{} must contain 1..{} elements (one per lane), got {}",
+            name,
+            ring_joint::kMaxLanes,
+            tensor.logical_volume());
+        TT_FATAL(
+            tensor.logical_volume() == tensor_args.slot_id->logical_volume(),
+            "{} must have one element per lane like slot_id",
+            name);
         TT_FATAL(tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
     };
 
@@ -283,7 +297,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 
     if (args.has_kv_pad_rotation()) {
-        const auto N_local_q = tensor_args.input_q.logical_shape()[2];
+        const auto N_local_q = tensor_args.q_lane_rows();
         const auto N_local_kv = tensor_args.local_kv_seq_len();
         const auto kv_actual_isl = args.kv_actual_isl.value();
         TT_FATAL(
@@ -334,7 +348,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.has_sliding_window() && tensor_args.is_chunked() &&
         (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
-        const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
+        const auto q_group_size = tensor_args.q_lane_rows() * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
         // Below one group build_sliding_q_work_plan is empty, so the reader would not push
@@ -357,7 +371,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
         }
     }
     if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
-        const uint32_t local = tensor_args.input_q.logical_shape()[2];
+        const uint32_t local = tensor_args.q_lane_rows();
         // Live metadata is checked against the halo capacity by every device consumer.
         const bool needs_two =
             args.has_kv_pad_rotation() &&
@@ -377,6 +391,35 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+
+    if (const uint32_t num_lanes = tensor_args.num_lanes(); num_lanes > 1) {
+        // Lanes: num_lanes requests' CP-local Q rows stacked request-major, each
+        // with its own cache slot and prefix (slot_id[b], kv_actual_isl[b]), one unit per (lane, head, Q chunk).
+        TT_FATAL(
+            args.has_sliding_window() && tensor_args.kv_pad_from_metadata(),
+            "Lanes ({} slot_id elements) are supported for chunked sliding attention on the metadata path only",
+            num_lanes);
+        TT_FATAL(input_tensor_q.logical_shape()[0] == 1, "Lanes stack requests along Q's rows; Q batch must be 1");
+        TT_FATAL(
+            input_tensor_q.padded_shape()[2] % (num_lanes * tt::constants::TILE_HEIGHT) == 0 &&
+                input_tensor_q.logical_shape()[2] == input_tensor_q.padded_shape()[2],
+            "Lanes need Q rows ({}) to split into {} tile-aligned lanes",
+            input_tensor_q.logical_shape()[2],
+            num_lanes);
+        TT_FATAL(
+            !tensor_args.joint_q.has_value() && !tensor_args.attention_sink.has_value() && !args.circular_kv_cache,
+            "Lanes do not support joint tensors, an attention sink, or a circular cache");
+        TT_FATAL(
+            args.program_config.has_value() && args.program_config->max_k_splits <= 1 &&
+                !args.program_config->segmented_accumulation,
+            "Lanes run one unit per (lane, head, Q chunk): max_k_splits must be 1 and segmented accumulation off");
+        TT_FATAL(
+            gathered_input_tensor_k.logical_shape()[0] == num_lanes &&
+                (!tensor_args.gathered_v.has_value() || tensor_args.gathered_v->logical_shape()[0] == num_lanes),
+            "Lanes need a halo buffer with one batch per lane ({}), got {}",
+            num_lanes,
+            gathered_input_tensor_k.logical_shape()[0]);
+    }
 
     // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
     TT_FATAL(
@@ -543,7 +586,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
         indexed_kv_cache_active(args, tensor_args),
-        compact_gather_dim_minimum);
+        compact_gather_dim_minimum,
+        tensor_args.num_lanes());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -607,7 +651,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
-    const auto N_local_q = q_shape[2];
+    // Lanes: Q holds num_lanes requests' CP-local rows; every per-device Q check is per lane.
+    const auto N_local_q = tensor_args.q_lane_rows();
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
     const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
@@ -850,12 +895,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
         // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            k_shape[0] == 1 || k_shape[0] == K_cache_batch,
+            k_shape[0] == 1 || k_shape[0] == K_cache_batch || k_shape[0] == tensor_args.num_lanes(),
             "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
             K_cache_batch,
             k_shape[0]);
         TT_FATAL(
-            v_shape[0] == 1 || v_shape[0] == V_cache_batch,
+            v_shape[0] == 1 || v_shape[0] == V_cache_batch || v_shape[0] == tensor_args.num_lanes(),
             "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
             V_cache_batch,
             v_shape[0]);
@@ -1130,6 +1175,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
+        tensor_args.num_lanes(),
         args.joint_strategy,
         args.scale,
         args.is_causal,
@@ -1206,9 +1252,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
     tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
-    const uint32_t B = q_shape[0];
+    const uint32_t B = q_shape[0] * tensor_args.num_lanes();
     const uint32_t NQH = q_shape[1];
-    const uint32_t N_local = q_shape[2];
+    const uint32_t N_local = tensor_args.q_lane_rows();
     const uint32_t N_global = gathered_k_shape[2];
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();

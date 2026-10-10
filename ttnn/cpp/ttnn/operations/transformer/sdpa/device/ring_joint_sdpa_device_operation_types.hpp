@@ -190,14 +190,20 @@ struct RingJointSDPAInputs {
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
-    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+    // Lanes: a slot_id / kv_actual_isl pair with B elements selects B requests
+    // ("lanes") whose CP-local Q rows are stacked request-major along Q's row dim; lane b reads cache slot
+    // slot_id[b] with prefix kv_actual_isl[b]. One element (the default) is the single-request op.
+    uint32_t num_lanes() const { return slot_id.has_value() ? static_cast<uint32_t>(slot_id->logical_volume()) : 1u; }
+    uint32_t q_lane_rows() const { return static_cast<uint32_t>(input_q.logical_shape()[2]) / num_lanes(); }
+    uint32_t q_lane_padded_rows() const { return static_cast<uint32_t>(input_q.padded_shape()[2]) / num_lanes(); }
+    bool is_chunked() const { return q_lane_rows() < local_kv_seq_len(); }
 
     // The metadata path derives KV-pad rotation on-device only for chunked prefill.
     bool kv_pad_from_metadata() const { return has_metadata() && is_chunked(); }
 
     // Circular sliding KV: Q-sized chunk slabs per device in the K/V cache (validation requires
     // whole slabs, and at least two of them, before this is read).
-    uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
+    uint32_t kv_slab_count() const { return local_kv_seq_len() / q_lane_rows(); }
 
     // Latent V: V is omitted and read from K's rows (a prefix of K, or its last vDHt columns when packed).
     bool has_latent_v() const { return !input_v.has_value(); }
