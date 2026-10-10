@@ -139,18 +139,126 @@ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
 // per_core_M for chunk index `c`: per_core_M_max for the full chunks; for the
 // tail chunk, exactly the rows/core needed to cover the tail tiles, so no MAC,
 // DRAM read or multicast byte is spent on a row the tail does not hold.
-inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk) {
-    const uint32_t per_core_M_max = max_chunk / kGridY;
+//
+// `grid_m` is the number of grid rows that share ONE expert's M (an expert-parallel row
+// group). kGridY when the whole grid works on one expert at a time.
+inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk, uint32_t grid_m = kGridY) {
+    const uint32_t per_core_M_max = max_chunk / grid_m;
     const uint32_t num_full = count_tiles / max_chunk;
     if (c < num_full) {
         return per_core_M_max;
     }
     const uint32_t tail = count_tiles - num_full * max_chunk;  // > 0 for the tail chunk
-    uint32_t need = (tail + kGridY - 1) / kGridY;              // min rows/core to cover the tail
+    uint32_t need = (tail + grid_m - 1) / grid_m;              // min rows/core to cover the tail
     if (need < 1) {
         need = 1;
     }
     return (need < per_core_M_max) ? need : per_core_M_max;
 }
+
+// Expert schedule of one grid row (reader, compute and writer walk it identically).
+//
+// Full rounds: local experts expert_first, expert_first + expert_stride, ... below
+// full_end, each owned by this row's group alone. Then at most ONE pair-tail expert
+// (tail_expert; == experts_per_chip when this row has none): the experts left over after
+// the full rounds (at most kGridY / 2 of them) each run on TWO grid rows, which split
+// every core's N slice in half (column part = row parity), so the partial last round
+// does not leave half the grid idle.
+inline uint32_t sched_first(uint32_t expert_first, uint32_t full_end, uint32_t tail_expert) {
+    return expert_first < full_end ? expert_first : tail_expert;
+}
+inline uint32_t sched_next(
+    uint32_t e, uint32_t expert_stride, uint32_t full_end, uint32_t tail_expert, uint32_t experts_per_chip) {
+    if (e >= full_end) {
+        return experts_per_chip;  // the pair-tail expert is always the last one
+    }
+    const uint32_t n = e + expert_stride;
+    return n < full_end ? n : tail_expert;
+}
+
+// Count-sorted placement: schedule slot -> local expert. The schedule above walks SLOTS
+// (slot s of a full round runs on row group s % expert_stride; pair-tail slots on row pairs);
+// this table decides which expert fills each slot. Experts are ranked by ascending banded token
+// count (ties by index). Full-round slots take ranks zig-zag (round 0 ascending, round 1
+// descending, ...) so the heaviest expert of round 0 runs on the LAST grid row(s), which
+// measure fastest at equal work, and later rounds even out the per-row sums; pair-tail slots
+// take the remaining ranks ascending. Reader, writer and compute build it from the same L1
+// counts, so they agree. E above kMaxSorted keeps the identity order (stack bound).
+// The sort is applied only to single-round schedules (every expert in one full round, no
+// pair tail: e.g. 8 experts on 8 row groups, 4 experts on 4 pairs). Multi-round schedules
+// (full rounds + pair tail) keep the identity order: there the rows are already balanced and
+// the zig-zag order measured a small loss (k3, r04-b02-a02/a03).
+// It is also limited to G=1 layouts (one expert per grid row, expert_stride == kGridY): the
+// PAIR_SPLIT 4-expert shapes keep the identity order, where the sort showed no gain (r05-b01-a02).
+constexpr uint32_t kMaxSorted = 64;
+template <uint32_t E, typename CountsPtr, typename IdxPtr>
+inline void slot_order(
+    uint8_t (&order)[E],
+    CountsPtr counts_ptr,
+    IdxPtr idx_ptr,
+    uint32_t min_tokens,
+    uint32_t max_tokens,
+    uint32_t expert_stride,
+    uint32_t full_end) {
+    bool identity = (E > kMaxSorted) || (full_end != E) || (E > expert_stride) || (expert_stride != kGridY);
+    if (identity) {
+        for (uint32_t s = 0; s < E; ++s) {
+            order[s] = static_cast<uint8_t>(s);
+        }
+    } else if constexpr (E <= kMaxSorted) {
+        uint32_t key[E];
+        uint8_t by_rank[E];
+        for (uint32_t e = 0; e < E; ++e) {
+            key[e] = count_in_band(counts_ptr[idx_ptr[e]], min_tokens, max_tokens);
+            // Insertion sort, stable: equal keys keep index order.
+            uint32_t r = e;
+            while (r > 0 && key[by_rank[r - 1]] > key[e]) {
+                by_rank[r] = by_rank[r - 1];
+                --r;
+            }
+            by_rank[r] = static_cast<uint8_t>(e);
+        }
+        for (uint32_t s = 0; s < E; ++s) {
+            uint32_t rank = s;
+            if (s < full_end) {
+                const uint32_t q = s / expert_stride;
+                const uint32_t p = s - q * expert_stride;
+                if ((q & 1u) && (q + 1) * expert_stride <= full_end) {
+                    rank = q * expert_stride + (expert_stride - 1 - p);
+                }
+            }
+            order[s] = by_rank[rank];
+        }
+    }
+}
+
+// The next slot after `s` in this row's schedule whose expert (order[slot], see slot_order)
+// actually runs (in-band, non-zero count, so at least one chunk), or experts_per_chip. Reader
+// and writer use it to prefetch the next gate/up pass during the current down phase; both
+// must agree exactly.
+template <typename OrderT, typename CountPtr, typename IdxPtr>
+inline uint32_t next_active_slot(
+    uint32_t s,
+    uint32_t expert_stride,
+    uint32_t full_end,
+    uint32_t tail_expert,
+    uint32_t experts_per_chip,
+    const OrderT& order,
+    CountPtr counts,
+    IdxPtr idx,
+    uint32_t min_tokens,
+    uint32_t max_tokens) {
+    for (uint32_t n = sched_next(s, expert_stride, full_end, tail_expert, experts_per_chip); n < experts_per_chip;
+         n = sched_next(n, expert_stride, full_end, tail_expert, experts_per_chip)) {
+        if (count_in_band(counts[idx[order[n]]], min_tokens, max_tokens) > 0) {
+            return n;
+        }
+    }
+    return experts_per_chip;
+}
+
+// Column part [lo, hi) of an n-wide slice owned by part p of f (f = 1: the whole slice).
+inline uint32_t part_lo(uint32_t n, uint32_t f, uint32_t p) { return (p * n) / f; }
+inline uint32_t part_hi(uint32_t n, uint32_t f, uint32_t p) { return ((p + 1) * n) / f; }
 
 }  // namespace adaptive_chunk

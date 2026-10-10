@@ -26,6 +26,13 @@
 // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
 namespace unified_routed_expert_ffn {
 
+// PAIR_SPLIT: the two rows of a 2-row group each read half of every weight K-block and send it
+// to the other. Part 0 owns K-rows [0, ceil(W/2)), part 1 owns [ceil(W/2), W).
+FORCE_INLINE uint32_t pair_rows_lo(uint32_t part, uint32_t W) { return part == 0 ? 0 : (W + 1) / 2; }
+FORCE_INLINE uint32_t pair_rows_hi(uint32_t part, uint32_t W) { return part == 0 ? (W + 1) / 2 : W; }
+// Split of a part's [lo, hi) between the reader [lo, mid) and the writer [mid, hi).
+FORCE_INLINE uint32_t pair_rows_mid(uint32_t lo, uint32_t hi) { return lo + (hi - lo + 1) / 2; }
+
 template <uint32_t SHARD_W = 0>
 struct WeightRuns {
     // Length of the maximal contiguous run starting at tile column j, clipped to end.

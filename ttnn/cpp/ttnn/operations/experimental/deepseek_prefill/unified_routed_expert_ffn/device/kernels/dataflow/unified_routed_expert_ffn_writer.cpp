@@ -144,6 +144,23 @@ void kernel_main() {
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 
+    // PAIR_SPLIT (2-row groups): this core reads only its part's K-rows of every up block
+    // ([pk_up_lo, pk_up_hi)) and the writer half of its part's down K-rows ([pk_d_mid, pk_d_hi)); the reader
+    // reads the rest of its part and sends the whole part to the partner row.
+#ifdef PAIR_SPLIT
+    const uint32_t pk_up_lo = unified_routed_expert_ffn::pair_rows_lo(my_mt, in0_block_w_gu);
+    const uint32_t pk_up_hi = unified_routed_expert_ffn::pair_rows_hi(my_mt, in0_block_w_gu);
+    const uint32_t pk_d_mid = unified_routed_expert_ffn::pair_rows_mid(
+        unified_routed_expert_ffn::pair_rows_lo(my_mt, in0_block_w_d),
+        unified_routed_expert_ffn::pair_rows_hi(my_mt, in0_block_w_d));
+    const uint32_t pk_d_hi = unified_routed_expert_ffn::pair_rows_hi(my_mt, in0_block_w_d);
+#else
+    constexpr uint32_t pk_up_lo = 0;
+    constexpr uint32_t pk_up_hi = in0_block_w_gu;
+    constexpr uint32_t pk_d_mid = down_split_k;
+    constexpr uint32_t pk_d_hi = in0_block_w_d;
+#endif
+
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.
     const uint32_t up_col0 = my_nt_gu * per_core_N_gu;
@@ -233,13 +250,52 @@ void kernel_main() {
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
     uint32_t mc_seq = 0;
+    // Next-pass up prefetch, mirroring the reader's gate prefetch (G=1 rows only): right after
+    // down block 0 of a pass, read the next pass's up K-blocks 0..1 into the (drained) up ring;
+    // that pass's up loop then starts at up_pf_blocks.
+    uint32_t up_pf_blocks = 0;
+#ifdef PAIR_SPLIT
+    constexpr bool pair_split = true;
+#else
+    constexpr bool pair_split = false;
+#endif
 
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    // Expert-parallel row groups: same expert subset and M split as the reader/compute.
+    const uint32_t expert_first = get_arg_val<uint32_t>(IN1_WM_RT + 9);
+    const uint32_t expert_stride = get_arg_val<uint32_t>(IN1_WM_RT + 10);
+    const uint32_t grid_m = get_arg_val<uint32_t>(IN1_WM_RT + 11);
+    // Pair tail (see adaptive_chunk::sched_first): full-round bound, tail expert, column part.
+    const uint32_t full_end = get_arg_val<uint32_t>(IN1_WM_RT + 12);
+    const uint32_t tail_expert = get_arg_val<uint32_t>(IN1_WM_RT + 13);
+    const uint32_t tail_part = get_arg_val<uint32_t>(IN1_WM_RT + 14);
+    const bool gu_prefetch = writer_split_up && grid_m == 1 && is_up_sender && !pair_split && !writer_mcasts_in1;
+    // Count-sorted placement (adaptive_chunk::slot_order): the schedule walks slots, and this
+    // table picks the expert of each slot. Compute and reader build the same table.
+    uint8_t expert_of_slot[experts_per_chip];
+    adaptive_chunk::slot_order(
+        expert_of_slot, counts_ptr, idx_ptr, min_active_tokens, max_active_tokens, expert_stride, full_end);
+    for (uint32_t sched_slot = adaptive_chunk::sched_first(expert_first, full_end, tail_expert);
+         sched_slot < experts_per_chip;
+         sched_slot = adaptive_chunk::sched_next(sched_slot, expert_stride, full_end, tail_expert, experts_per_chip)) {
+        const uint32_t local_expert_id = expert_of_slot[sched_slot];
+        // Pair-tail expert: this core owns column part tail_part of 2 of its up / down slices,
+        // reads only those weight columns and writes only those output columns.
+        const bool pair_item = sched_slot >= full_end;
+        const uint32_t pf = pair_item ? 2u : 1u;
+        const uint32_t pp = pair_item ? tail_part : 0u;
+        const uint32_t gu_lo = adaptive_chunk::part_lo(per_core_N_gu, pf, pp);
+        const uint32_t gu_hi = adaptive_chunk::part_hi(per_core_N_gu, pf, pp);
+        const uint32_t d_lo = adaptive_chunk::part_lo(per_core_N_d, pf, pp);
+        const uint32_t d_hi = adaptive_chunk::part_hi(per_core_N_d, pf, pp);
+        const uint32_t up_j0 = up_col0 + gu_lo;
+        const uint32_t up_jend = (up_col0 + gu_hi < up_col_end) ? up_col0 + gu_hi : up_col_end;
+        const uint32_t down_j0 = down_col0 + d_lo;
+        const uint32_t down_jend = (down_col0 + d_hi < down_col_end) ? down_col0 + d_hi : down_col_end;
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
@@ -279,23 +335,23 @@ void kernel_main() {
                     CircularBuffer cb_in1_up_buf(cb_in1_up);
                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
-                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+                    for (uint32_t kb = up_pf_blocks; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
                         const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
-                        uint32_t l1_w_up = l1_w_up_block_start;
+                        uint32_t l1_w_up = l1_w_up_block_start + pk_up_lo * per_core_N_gu * up_tile_bytes;
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
                         // a down K position the down matmul never reduces (the compute bounds
                         // its K-loop by real_k_tiles), so stale L1 is dropped.
-                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                        for (uint32_t k = pk_up_lo; k < pk_up_hi; ++k) {
                             GuRuns::read(
                                 noc_up,
                                 up_acc,
                                 kb * in0_block_w_gu + k,
                                 N_gate_tiles_full,
-                                up_col0,
-                                up_col_end,
-                                l1_w_up,
+                                up_j0,
+                                up_jend,
+                                l1_w_up + gu_lo * up_tile_bytes,
                                 up_tile_bytes);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
@@ -359,6 +415,60 @@ void kernel_main() {
                     }
                 }
             }
+            up_pf_blocks = 0;
+
+            // Next-pass up prefetch (see up_pf_blocks): same next-pass rule as the reader, which
+            // reserved the up ring and raised up_go for both blocks at its down block 0.
+            uint32_t pf_slot = experts_per_chip;
+            if (gu_prefetch) {
+                pf_slot = (chunk + 1 < effective_chunks) ? sched_slot
+                                                           : adaptive_chunk::next_active_slot(
+                                                                 sched_slot,
+                                                                 expert_stride,
+                                                                 full_end,
+                                                                 tail_expert,
+                                                                 experts_per_chip,
+                                                                 expert_of_slot,
+                                                                 counts_ptr,
+                                                                 idx_ptr,
+                                                                 min_active_tokens,
+                                                                 max_active_tokens);
+            }
+            auto prefetch_next_up = [&](uint32_t ps) {
+                constexpr uint32_t pf_n = (num_blocks_gu < 2) ? num_blocks_gu : 2;
+                constexpr uint32_t kUpNumSlots = 2;
+                CircularBuffer cb_in1_up_buf(cb_in1_up);
+                const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
+                const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+                const bool pe_pair = ps >= full_end;
+                const uint32_t pe = expert_of_slot[ps];
+                const uint32_t pe_lo = adaptive_chunk::part_lo(per_core_N_gu, pe_pair ? 2u : 1u, pe_pair ? tail_part : 0u);
+                const uint32_t pe_hi = adaptive_chunk::part_hi(per_core_N_gu, pe_pair ? 2u : 1u, pe_pair ? tail_part : 0u);
+                const uint32_t pj0 = up_col0 + pe_lo;
+                const uint32_t pjend = (up_col0 + pe_hi < up_col_end) ? up_col0 + pe_hi : up_col_end;
+                const auto pe_up_acc =
+                    TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + pe), up_tile_bytes);
+                for (uint32_t j = 0; j < pf_n; ++j) {
+                    ++up_seq;
+                    up_go_sem.wait_min(up_seq);
+                    uint32_t l1_w = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                        GuRuns::read(
+                            noc_up,
+                            pe_up_acc,
+                            j * in0_block_w_gu + k,
+                            N_gate_tiles_full,
+                            pj0,
+                            pjend,
+                            l1_w + pe_lo * up_tile_bytes,
+                            up_tile_bytes);
+                        l1_w += per_core_N_gu * up_tile_bytes;
+                    }
+                }
+                noc_up.async_read_barrier();
+                up_done_sem.set(up_seq);
+                up_pf_blocks = pf_n;
+            };
 
             // ---- DOWN_SPLIT: read the UPPER K-rows of each down block on NoC 1 ----
             // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's reserve/push
@@ -387,12 +497,12 @@ void kernel_main() {
                         ++down_seq;
                         down_go_sem.wait_min(down_seq);
                         uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
-                                        down_split_k * per_core_N_d * down_tile_bytes;
+                                        pk_d_mid * per_core_N_d * down_tile_bytes;
                         ++down_blk;
                         // Both OOB directions left UNWRITTEN, matching the reader: the compute
                         // bounds its down K-loop by real_k_tiles and the writer's col guard drops
                         // phantom output columns.
-                        for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
+                        for (uint32_t k = pk_d_mid; k < pk_d_hi; ++k) {
                             const uint32_t row = kb * in0_block_w_d + k;
                             if (row < K_down_tiles) {
                                 DRuns::read(
@@ -400,16 +510,23 @@ void kernel_main() {
                                     down_acc,
                                     row,
                                     N_down_tiles_full,
-                                    down_col0,
-                                    down_col_end,
-                                    l1_w,
+                                    down_j0,
+                                    down_jend,
+                                    l1_w + d_lo * down_tile_bytes,
                                     down_tile_bytes);
                             }
                             l1_w += per_core_N_d * down_tile_bytes;
                         }
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);
+                        if (kb == 0 && pf_slot < experts_per_chip) {
+                            prefetch_next_up(pf_slot);
+                        }
                     }
+                }
+            } else {
+                if (pf_slot < experts_per_chip) {
+                    prefetch_next_up(pf_slot);
                 }
             }
 
@@ -417,7 +534,7 @@ void kernel_main() {
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
             // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
             // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
-            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max, grid_m);
             const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
             const uint32_t col0 = my_nt_d * per_core_N_d;
             // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
@@ -437,7 +554,8 @@ void kernel_main() {
                         for (uint32_t j = 0; j < this_w; ++j) {
                             const uint32_t local_row = sb_m * d_out_subblock_h + i;
                             const uint32_t row = row0 + local_row;
-                            const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
+                            const uint32_t local_col = sb_n * d_out_subblock_w + j;
+                            const uint32_t col = col0 + local_col;
                             // `row` indexes the FFN *input* (x) tile-rows; the
                             // destination tile-row adds the per-expert region
                             // offset.
@@ -459,8 +577,10 @@ void kernel_main() {
                             //     spans d_out_subblock_h rows, so comparing the subblock
                             //     index would pass the whole subblock holding the first
                             //     out-of-range row.
+                            //   * local_col in [d_lo, d_hi): a pair-tail core computed only its
+                            //     column part; the partner row writes the rest.
                             if (local_row < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
-                                row < count_tiles) {
+                                row < count_tiles && local_col >= d_lo && local_col < d_hi) {
                                 // The destination tile-row must stay inside the
                                 // (possibly shared) output buffer. ttnn::insert
                                 // asserted the whole-slice fit
