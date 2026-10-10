@@ -30,8 +30,11 @@ Everything editable is under `ttnn/cpp/ttnn/operations/experimental/deepseek_pre
 Kernels are JIT-compiled at run time; host files need a rebuild.
 
 The Blackhole LLK compute APIs (`tt_metal/hw/ckernels/blackhole/`: matmul, tilize, pack/unpack, SFPU) are
-also editable. They are shared by every op, so keep changes behind defines or new functions that only this
-op's kernels use, and keep the existing APIs' behavior unchanged.
+also editable. They are fair game when the op's own code has run out of room: in particular the SFPU
+activations the GLU variants use (silu, sigmoid, tanh, exp, clamp and friends) may be rewritten in place
+to be faster, or fused into a specialized routine for one activation. They are shared with other ops,
+so an in-place change must keep the function's interface and stay about as accurate (non-approx mode
+remains non-approx); a specialized path may also live in a new function only this op calls.
 
 ## What is measured
 `tests/ttnn/nightly/unit_tests/operations/fused/test_routed_expert_prefill.py`: 9 cases, one per production
