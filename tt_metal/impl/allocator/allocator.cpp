@@ -581,7 +581,6 @@ void AllocatorImpl::dump_memory_blocks(const BufferType& buffer_type, std::ostre
 
 std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
     // In HYBRID mode, also check this bank's per-core allocator (AllocatorID{bank_id + 1}), since it may
@@ -591,6 +590,12 @@ std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t
         if (per_core.has_value()) {
             lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
         }
+    }
+    // L1_SMALL is a fixed top-of-L1 carve-out. Treat its lower boundary as occupied even when the
+    // carve-out is empty so program-local allocations cannot claim space reserved for future buffers.
+    if (config_->l1_small_size > 0) {
+        const DeviceAddr l1_small_base = config_->worker_l1_size - config_->l1_small_size;
+        lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, l1_small_base)) : l1_small_base;
     }
     return lowest;
 }
