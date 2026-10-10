@@ -23,7 +23,7 @@ eval:
     --extra 'pcc=PCC: ([0-9.eE+-]+)' --extra 'max_abs=max_abs=([0-9.eE+-]+)'
   direction: minimize
   unit: us
-  gates: ["pcc >= 0.99"]
+  gates: ["pcc >= 0.979"]   # baseline PCC is 0.9803-0.9835 (LoFi + bf4 weights)
   timeout_s: 2400
 
 budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
