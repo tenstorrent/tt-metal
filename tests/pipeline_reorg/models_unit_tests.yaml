@@ -1211,11 +1211,11 @@
     export MINIMAX_H3_REQUIRE_WEIGHTS=1
     export MINIMAX_H3_DRAM_PROBE=1
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
-    pytest --timeout 10800 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+    pytest --timeout 5100 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
   skus:
     wh_llmbox:
-      timeout: 240
+      timeout: 90
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
