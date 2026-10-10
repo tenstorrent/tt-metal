@@ -89,7 +89,14 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+#if defined(ARCH_WORMHOLE) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+    // The init runs with icache prefetch; the first CB or dest wait (llk_io, llk_api) turns it off for the loops.
+    ckernel::icache_prefetch_init_begin();
+#endif
     run_kernel();
+#if defined(ARCH_WORMHOLE) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+    ckernel::icache_prefetch_init_end();  // a kernel that never waited
+#endif
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
