@@ -50,7 +50,8 @@ from .dflash_reference import (
 )
 from .model_spec import MODEL_ENV, MODEL_ID, dflash_spec
 from .multichip_decoder import MultichipDecoder, _cache_layer_identity
-from .optimized_decoder import TILE, PrecisionPolicy, _cached_device_tensor, weight_cache_key
+from .ring_write import ring_write
+from .optimized_decoder import TILE, PrecisionPolicy, _cached_device_tensor, _dram_weight_memcfg, weight_cache_key
 
 DFLASH_CACHE_NAMESPACE = "dflash"
 
@@ -429,6 +430,9 @@ class DFlashTTProposalCache:
     # row, so its inputs are known before the verify ends; a row written past the commit lands in a slot whose old
     # position is outside the window, and the next round rewrites it)
     RING = 544
+    # write a round's rows into the rings with one multi-core program (ring_write; ~6 us for the 12 rings) instead of
+    # ring = ring * keep + place @ new (four ops per ring, ~236 us)
+    RING_WRITE = os.environ.get("TT_LAGUNA_DFLASH_RING_WRITE", "1") == "1"
 
     @property
     def kv_ring(self) -> bool:
@@ -504,6 +508,24 @@ class DFlashTTProposalCache:
             phase.sin().to(torch.bfloat16).reshape(1, 1, 32, hd),
         )
 
+    def ring_slots(self, start_pos: int, count: int):
+        """Host uint32 [1, 32]: the ring slot of each of ``count`` rows at positions start_pos.. (ring_write's slots)."""
+
+        slots = torch.zeros((1, 32), dtype=torch.int32)
+        for i in range(int(count)):
+            slots[0, i] = (int(start_pos) + i - self._ring_base) % self.RING
+        return slots
+
+    def ring_write_rows(self, kvs, slots, count: int) -> None:
+        """Write rows 0..count-1 of each layer's new (k, v) [1, nkv, 32, hd] into its rings at ``slots`` (a uint32
+        [1, 32] row-major device tensor)."""
+
+        rings, srcs = [], []
+        for index, (k, v) in kvs.items():
+            rings += list(self._ring[index])
+            srcs += [k, v]
+        ring_write(rings, srcs, slots, count)
+
     def ring_update(self, index: int, k, v, place, keep) -> None:
         """ring = ring * keep + place @ (k | v) for draft layer ``index`` (k, v: [1, nkv, 32, hd] new rows)."""
 
@@ -542,12 +564,27 @@ class DFlashTTProposalCache:
                             mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device))
             for t in host
         )  # fmt: skip
+        slots = None
+        if self.RING_WRITE:
+            slots = ttnn.from_torch(self.ring_slots(capture.start_position, count), dtype=ttnn.uint32,
+                                    layout=ttnn.ROW_MAJOR_LAYOUT, device=self.core.mesh_device,
+                                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device))  # fmt: skip
+        kvs = {}
         for index, layer in self.core.layers.items():
             k, v = layer.dflash_kv_rows(padded, (cos, sin))
+            if slots is not None:
+                kvs[index] = (k, v)
+                continue
             self.ring_update(index, k, v, place, keep)
             _deallocate_owned(k)
             _deallocate_owned(v)
-        for tensor in {id(t): t for t in (new_rows, padded, place, keep, cos, sin)}.values():
+        if slots is not None:
+            self.ring_write_rows(kvs, slots, count)
+            for k, v in kvs.values():
+                _deallocate_owned(k)
+                _deallocate_owned(v)
+        for tensor in {id(t): t for t in (new_rows, padded, place, keep, cos, sin, slots)}.values():
             _deallocate_owned(tensor)
         self.ring_commit(capture.start_position, count)
 
@@ -1124,7 +1161,18 @@ class DFlashTTCore:
             part = ttnn.slice(flat, [0, 0, 0, index * h], [1, 1, tokens, (index + 1) * h])
             normalized.append(norm(part, weight))
         combined = ttnn.concat(normalized, dim=-1)
-        combined = ttnn.linear(combined, self.shared.fc, compute_kernel_config=precision_ck)
+        if tokens <= TILE and os.environ.get("TT_LAGUNA_DFLASH_FC_DS", "1") == "1":
+            # a round's few rows: DRAM-sharded matmul over a width-sharded copy of fc (made at the first -- eager --
+            # call; ~116 vs ~249 us for [6, 18432] @ [18432, 768] per chip, same error)
+            fc = self.shared.fc
+            k, n = int(fc.shape[-2]), int(fc.shape[-1])
+            if getattr(self, "_fc_ds", None) is None:
+                self._fc_ds = ttnn.to_memory_config(fc, _dram_weight_memcfg(k, n, self.mesh_device.dram_grid_size().x))
+            combined = ttnn.sharded_to_interleaved(
+                layer0._dram_mm(combined, fc, self._fc_ds, k, n, precision_ck), ttnn.L1_MEMORY_CONFIG
+            )
+        else:
+            combined = ttnn.linear(combined, self.shared.fc, compute_kernel_config=precision_ck)
         if combined.shape[-1] != h:  # column-sharded fc: gather the D column blocks
             combined = ttnn.all_gather(
                 combined, dim=3, cluster_axis=layer0.tp_axis, topology=layer0.ccl_topology, num_links=layer0.num_links
@@ -1139,11 +1187,16 @@ class DFlashTTCore:
             raise ValueError(
                 f"DFlash final norm expects hidden width {self.config.hidden_size}, " f"got {hidden_states.shape[-1]}"
             )
+        layer0 = next(iter(self.layers.values()))
+        if hidden_states.shape[-2] <= TILE and float(layer0.cfg.eps) == float(self.config.rms_norm_eps):
+            # query rows: width-sharded over 32 cores (the draft layers' _rms; the interleaved norm runs on one core,
+            # ~65 us)
+            return layer0._rms(hidden_states, self.shared.final_norm)
         return ttnn.rms_norm(
             hidden_states,
             weight=self.shared.final_norm,
             epsilon=self.config.rms_norm_eps,
-            compute_kernel_config=next(iter(self.layers.values()))._ck_hifi4,
+            compute_kernel_config=layer0._ck_hifi4,
         )
 
     def allocate_proposal_cache(

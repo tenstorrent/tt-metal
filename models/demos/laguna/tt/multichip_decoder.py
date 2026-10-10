@@ -58,7 +58,7 @@ from .optimized_decoder import (
     _width_sharded_l1,
     weight_cache_key,
 )
-from . import colpage, moe_decode1
+from . import colpage, moe_decode1, tile_regroup
 from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
@@ -305,6 +305,12 @@ class MultichipDecoder(OptimizedDecoder):
         self._ap1_rows = _parse_binary_env("TT_LAGUNA_AP1_ROWS", True)
         # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
         self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
+        # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
+        # nlp_concat_heads (one core each: ~37 / ~30 -> ~3 us)
+        self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
+        # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
+        # separate N = 18 g_proj matmul (one core, ~23 us per draft layer)
+        self._dflash_fold_g = _parse_binary_env("TT_LAGUNA_DFLASH_FOLD_G", True)
         if self._ap1 and self.D >= 1:
             from .attn_prologue1 import reduce_scaler
 
@@ -1822,6 +1828,10 @@ class MultichipDecoder(OptimizedDecoder):
                 self.w["dflash_wkv"] = ttnn.slice(w, lead + [q_w], ends)
             kv = self._prefill_linear(ln, self.w["dflash_wkv"], self._ck_qkv)  # [1, R, 2 * kv_w]
             kv_w = self.meta["kv_w"]
+            if R == TILE and self._dflash_regroup and kv.dtype == ttnn.bfloat16:
+                shape = (1, cfg.num_kv_heads, TILE, cfg.head_dim)
+                k, v = tile_regroup.regroup(kv, [(shape, 0), (shape, kv_w // TILE)], ttnn.DRAM_MEMORY_CONFIG)
+                return self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope), v
             k, v = (
                 ttnn.permute(
                     ttnn.reshape(ttnn.slice(kv, [0, 0, i * kv_w], [1, R, (i + 1) * kv_w]),
@@ -1843,20 +1853,40 @@ class MultichipDecoder(OptimizedDecoder):
         [1, nkv, C, hd] (dflash_kv_rows of the context rows); rope_q (cos, sin) [1, 1, 32, hd]; mask [1, 1, 32, C + 32]
         over the context slots then the 32 query rows. Every op runs on the 32 query rows; attention reads C + 32 keys."""
         cfg = self.cfg
+        pad = self.meta.get("qkvg_pad")
+        if self._dflash_fold_g and self._dflash_regroup and self.use_dram_sharded and pad and "wqkvg_ds" in self.w:
+            ln_q = self._rms(x_q, self.w["input_ln"], out_cores=_decode_shard_cores(cfg.hidden, pad))
+            qkvg = self._dram_mm(ln_q, None, self.w["wqkvg_ds"], cfg.hidden, pad, self._ck_qkv)
+            qkvg = ttnn.sharded_to_interleaved(qkvg, ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, pad]
+            if qkvg.dtype == ttnn.bfloat16:
+                qkv_w = self.meta["qkv_w"]
+                g = ttnn.reshape(ttnn.slice(qkvg, [0, 0, 0, qkv_w], [1, 1, TILE, qkv_w + cfg.num_heads]),
+                                 (1, TILE, cfg.num_heads))  # fmt: skip
+                q, k, v = tile_regroup.split_heads(qkvg, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim,
+                                                   ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+                q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+                k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+                k = ttnn.concat([k_ctx, k], dim=2)
+                v = ttnn.concat([v_ctx, v], dim=2)
+                return self._dflash_query_tail(x_q, None, q, k, v, mask, g=g)
         ln_q = self._rms(x_q, self.w["input_ln"])
         qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(qkv, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
-            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # fmt: skip
+        if self._dflash_regroup and qkv.dtype == ttnn.bfloat16:
+            q, k, v = tile_regroup.split_heads(qkv, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # fmt: skip
         q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
         k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
         k = ttnn.concat([k_ctx, k], dim=2)
         v = ttnn.concat([v_ctx, v], dim=2)
         return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
 
-    def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask):
-        """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP."""
+    def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask, g=None):
+        """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP. g: the
+        gate logits [1, 32, num_heads] when already computed (else g_proj(ln_q))."""
         cfg = self.cfg
         S = k.shape[-2]
         kc = next(c for c in (128, 64, 32) if S % c == 0)
@@ -1871,16 +1901,21 @@ class MultichipDecoder(OptimizedDecoder):
             q, k, v, is_causal=False, attn_mask=mask, scale=cfg.scaling, program_config=self._dflash_q_pc[kc],
             compute_kernel_config=sdpa_ck,
         )  # fmt: skip
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self._dflash_regroup and attn.dtype == ttnn.bfloat16:
+            attn = tile_regroup.join_heads(attn, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, TILE, cfg.num_heads * cfg.head_dim))
         if self._gate_expand is not None:
             # the prefill gate (softplus(g) expanded to every head column by a 0/1 matmul, one multiply) instead of
             # the 32-row path's reshapes into heads and back (~75 -> ~35 us per draft layer)
-            g = ttnn.softplus(ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate))
+            if g is None:
+                g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+            g = ttnn.softplus(g)
             attn = ttnn.mul(attn, ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4,
                                               dtype=ttnn.bfloat16))
         else:
-            attn = self._gate(attn, ln_q)
+            attn = self._gate(attn, ln_q, g=g)
         h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
         ln2 = self._rms(h, self.w["post_ln"])
         return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))

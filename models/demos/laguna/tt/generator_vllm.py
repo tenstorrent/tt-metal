@@ -651,6 +651,12 @@ class LagunaForCausalLM:
             return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
                                    memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
 
+        if cache.RING_WRITE:
+            slots = ttnn.from_torch(torch.zeros((1, 32), dtype=torch.int32), dtype=ttnn.uint32,
+                                    layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device,
+                                    memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+            return {"slots": slots, "cos": dev(torch.zeros((1, 1, 32, hd))), "sin": dev(torch.zeros((1, 1, 32, hd))),
+                    "tid": None}  # fmt: skip
         return {
             "place": dev(torch.zeros((1, cfg.num_kv_heads, cache.RING, 32))),
             "keep": dev(torch.ones((1, 1, cache.RING, 1))),
@@ -666,6 +672,10 @@ class LagunaForCausalLM:
         rows = int(aux.shape[-2])
         new_rows = core.combine_aux_hidden_states(aux)
         padded = ttnn.pad(new_rows, [(0, 0), (0, 32 - rows), (0, 0)], value=0.0) if rows < 32 else new_rows
+        if "slots" in st:
+            kvs = {index: layer.dflash_kv_rows(padded, (st["cos"], st["sin"])) for index, layer in core.layers.items()}
+            cache.ring_write_rows(kvs, st["slots"], rows)
+            return
         for index, layer in core.layers.items():
             k, v = layer.dflash_kv_rows(padded, (st["cos"], st["sin"]))
             cache.ring_update(index, k, v, st["place"], st["keep"])
@@ -697,7 +707,14 @@ class LagunaForCausalLM:
         if st is None or st.get("tid") is None or stv is None:
             return
         rows = int(stv["rows"])
-        for key, t in zip(("place", "keep", "cos", "sin"), self._dflash_cache.ring_append_inputs(position, rows)):
+        cache = self._dflash_cache
+        place, keep, cos, sin = cache.ring_append_inputs(position, rows)
+        if "slots" in st:
+            ttnn.copy_host_to_device_tensor(self.gen._host(cache.ring_slots(position, rows), ttnn.uint32), st["slots"])
+            inputs = (("cos", cos), ("sin", sin))
+        else:
+            inputs = (("place", place), ("keep", keep), ("cos", cos), ("sin", sin))
+        for key, t in inputs:
             host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
             ttnn.copy_host_to_device_tensor(host, st[key])
         st["staged"] = (int(position), rows)
