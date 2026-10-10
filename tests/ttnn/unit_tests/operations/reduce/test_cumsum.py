@@ -418,3 +418,69 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "inf",  # +inf at step 1: every later element stays +inf
+        "neg_inf",  # -inf at step 1: every later element stays -inf
+        "overflow",  # 3e38 + 3e38 overflows to +inf at step 1
+        "neg_overflow",  # -3e38 + -3e38 overflows to -inf at step 1
+        "inf_then_large_neg",  # +inf, then -1e32: the total stays +inf
+        "neg_inf_then_large_pos",  # -inf, then +1e32: the total stays -inf
+        "inf_then_neg_inf",  # +inf then -inf: NaN from step 2 on, as in torch
+        "nan",  # NaN input: NaN from step 1 on
+        "inf_last",  # +inf at the last step only
+    ],
+)
+def test_cumsum_fp32_non_finite(pattern, scan_length, dim, disable_compensated_sum, device):
+    """Once the running total is +-inf or NaN, every later element must match torch.cumsum.
+
+    The compensated path keeps the rounding error of each add as c = (t - acc) - y. Once the running
+    total t is +-inf, c is inf - inf = NaN (or +-inf after an overflow), and the next step turned every
+    later element of the scan into NaN, while torch.cumsum and the plain path keep returning +-inf.
+    The first six patterns cover that, including a large finite input after the inf; the last three
+    already gave NaN or a lone inf and must keep doing so.
+    """
+    torch.manual_seed(0)
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    torch_input = torch.randn(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)  # a view: steps[i] is step i of the scan
+    if pattern == "inf":
+        steps[1, ..., :5] = float("inf")
+    elif pattern == "neg_inf":
+        steps[1, ..., 7:12] = float("-inf")
+    elif pattern == "overflow":
+        steps[0, ..., 20:25] = 3e38
+        steps[1, ..., 20:25] = 3e38
+    elif pattern == "neg_overflow":
+        steps[0, ..., 50:55] = -3e38
+        steps[1, ..., 50:55] = -3e38
+    elif pattern == "inf_then_large_neg":
+        steps[1, ..., 13:18] = float("inf")
+        steps[2, ..., 13:18] = -1e32
+    elif pattern == "neg_inf_then_large_pos":
+        steps[1, ..., 25:30] = float("-inf")
+        steps[2, ..., 25:30] = 1e32
+    elif pattern == "inf_then_neg_inf":
+        steps[1, ..., 30:33] = float("inf")
+        steps[2, ..., 30:33] = float("-inf")
+    elif pattern == "nan":
+        steps[1, ..., 40:43] = float("nan")
+    else:
+        steps[-1, ..., 60:64] = float("inf")
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum))
+    expected = torch.cumsum(torch_input, dim=dim)
+
+    for name, kind in (("NaN", torch.isnan), ("+inf", torch.isposinf), ("-inf", torch.isneginf)):
+        assert torch.equal(
+            kind(output), kind(expected)
+        ), f"{name} in {kind(output).sum().item()} elements, torch.cumsum has {kind(expected).sum().item()}"
+    finite = torch.isfinite(expected)
+    assert_allclose(expected[finite], output[finite], rtol=1e-2, atol=1e-4)
