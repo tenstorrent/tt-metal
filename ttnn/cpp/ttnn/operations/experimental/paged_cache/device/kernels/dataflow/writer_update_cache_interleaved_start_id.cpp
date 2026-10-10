@@ -47,6 +47,12 @@ void kernel_main() {
     constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(17);
 
     constexpr auto s0_args = TensorAccessorArgs<18>();
+    // group mode (see the reader): leader / follower roles in cb_meta; core coordinates of every row in the runtime
+    // args after the chain ones (x, y pairs from arg 7); done_sem_id releases a follower once the leader read its row
+    constexpr uint32_t group_base = s0_args.next_compile_time_args_offset();
+    constexpr bool group_mode = get_compile_time_arg_val(group_base) == 1;
+    constexpr uint32_t cb_meta_id = get_compile_time_arg_val(group_base + 1);
+    constexpr uint32_t done_sem_id = get_compile_time_arg_val(group_base + 2);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -113,6 +119,33 @@ void kernel_main() {
     uint32_t input_l1_read_addr = cb_untilized_input.get_read_ptr();
     UnicastEndpoint local_src;
 
+    uint32_t n_followers = 0;
+    volatile tt_l1_ptr uint32_t* meta = nullptr;
+    volatile tt_l1_ptr uint32_t* index_all = nullptr;
+    if constexpr (group_mode) {
+        cb_wait_front(cb_meta_id, 1);
+        meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_meta_id));
+        index_all = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_index.get_read_ptr());
+        if (meta[0] == 0) {
+            // follower: tell the leader this row is untilized, wait until it was copied, done
+            const uint32_t leader = meta[2];
+            if (leader != (uint32_t)-1) {
+                Semaphore<>(receiver_sem_id)
+                    .up(noc, get_arg_val<uint32_t>(7 + 2 * leader), get_arg_val<uint32_t>(8 + 2 * leader), 1);
+                noc.async_atomic_barrier();
+                Semaphore<> done(done_sem_id);
+                done.wait(1);
+                done.set(0);
+            }
+            cb_untilized_input.pop_front(Wt);
+            return;
+        }
+        n_followers = meta[1];
+        Semaphore<> ready(receiver_sem_id);
+        ready.wait(n_followers);
+        ready.set(0);
+    }
+
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Wait on compute to untilize a block. Update that block in L1.
         cb_untilized_cache.wait_front(Wt);
@@ -125,6 +158,22 @@ void kernel_main() {
             Wbytes,
             {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
             {});
+        if constexpr (group_mode) {
+            // the followers' rows: same CB address on their cores (identical CB layout), their own tile row
+            for (uint32_t f = 0; f < n_followers; ++f) {
+                const uint32_t b = meta[3 + f];
+                const uint32_t raw = index_all[b];
+                const uint32_t idx = cache_position_modulo > 0 ? raw % cache_position_modulo : raw;
+                noc.async_read(
+                    local_src,
+                    CoreLocalMem<uint32_t>(cb_untilized_cache.get_read_ptr() + (idx % TILE_HEIGHT) * Wbytes),
+                    Wbytes,
+                    {.noc_x = get_arg_val<uint32_t>(7 + 2 * b),
+                     .noc_y = get_arg_val<uint32_t>(8 + 2 * b),
+                     .addr = input_l1_read_addr},
+                    {});
+            }
+        }
         noc.async_read_barrier();
         cb_untilized_cache2.push_back(Wt);
         cb_untilized_cache.pop_front(Wt);  // NEW
@@ -154,6 +203,14 @@ void kernel_main() {
     }
 
     cb_untilized_input.pop_front(Wt);
+
+    if constexpr (group_mode) {
+        for (uint32_t f = 0; f < n_followers; ++f) {
+            const uint32_t b = meta[3 + f];
+            Semaphore<>(done_sem_id).up(noc, get_arg_val<uint32_t>(7 + 2 * b), get_arg_val<uint32_t>(8 + 2 * b), 1);
+        }
+        noc.async_atomic_barrier();
+    }
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input CB

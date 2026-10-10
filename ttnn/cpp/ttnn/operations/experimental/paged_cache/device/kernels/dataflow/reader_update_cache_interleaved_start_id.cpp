@@ -48,6 +48,15 @@ void kernel_main() {
     constexpr auto s0_args = TensorAccessorArgs<19>();
     constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
+    // group mode (share_cache + index tensor + paged cache): the rows landing in the same cache tile are merged by
+    // one core (the group's lowest row, "leader"), which reads and writes the tile once; the others ("followers")
+    // only untilize their row. The reader works out every row's tile and writes this core's role to cb_meta:
+    // [is_leader, follower count, leader row, follower rows...].
+    constexpr uint32_t group_base = page_table_args.next_compile_time_args_offset();
+    constexpr bool group_mode = get_compile_time_arg_val(group_base) == 1;
+    constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(group_base + 1);
+    constexpr uint32_t cb_meta_id = get_compile_time_arg_val(group_base + 2);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(group_base + 3);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -120,6 +129,62 @@ void kernel_main() {
                 cache_id = cache_start_id;
             }
         }
+    }
+
+    bool is_follower = false;
+    if constexpr (group_mode) {
+        // every row's head-0 cache tile id: its page-table entry is read as the 64-byte chunk holding it
+        const auto pt_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
+        const uint32_t scratch = get_write_ptr(cb_scratch_id);
+        volatile tt_l1_ptr uint32_t* index_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_index_id));
+        uint32_t tile_of[num_rows];
+        for (uint32_t b = 0; b < num_rows; ++b) {
+            const uint32_t raw = index_ptr[b];
+            if (raw == (uint32_t)-1) {
+                continue;
+            }
+            const uint32_t idx = cache_position_modulo > 0 ? raw % cache_position_modulo : raw;
+            const uint32_t off = (idx / block_size) * 4;
+            noc_async_read(pt_gen.get_noc_addr(b) + (off & ~63u), scratch + b * 64, 64);
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        for (uint32_t b = 0; b < num_rows; ++b) {
+            const uint32_t raw = index_ptr[b];
+            if (raw == (uint32_t)-1) {
+                tile_of[b] = (uint32_t)-1;
+                continue;
+            }
+            const uint32_t idx = cache_position_modulo > 0 ? raw % cache_position_modulo : raw;
+            const uint32_t off = (idx / block_size) * 4;
+            const uint32_t phys = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + b * 64 + (off & 63u))[0];
+            tile_of[b] = phys * num_heads * block_size_t * Wt + ((idx % block_size) / TILE_HEIGHT) * Wt;
+        }
+        cb_reserve_back(cb_meta_id, 1);
+        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta_id));
+        const uint32_t mine = tile_of[my_batch_idx];
+        uint32_t leader = (uint32_t)-1;
+        uint32_t followers = 0;
+        if (mine != (uint32_t)-1) {
+            for (uint32_t b = 0; b < num_rows; ++b) {
+                if (tile_of[b] == mine) {
+                    if (leader == (uint32_t)-1) {
+                        leader = b;
+                    } else if (leader == my_batch_idx) {
+                        meta[3 + followers++] = b;
+                    }
+                }
+            }
+        }
+        meta[0] = (leader == my_batch_idx) ? 1 : 0;
+        meta[1] = followers;
+        meta[2] = leader;
+        cb_push_back(cb_meta_id, 1);
+        is_follower = leader != my_batch_idx;
+    }
+    if (is_follower) {
+        return;  // a follower (or a skipped row) reads no cache tile
     }
 
     if (wait_to_start_signal) {
