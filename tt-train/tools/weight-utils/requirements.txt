@@ -2,5 +2,5 @@ ipdb
 msgpack
 msgpack-numpy
 numpy
-tokenizers==0.21.1
-transformers==4.51.3
+tokenizers==0.23.1
+transformers==4.57.6
