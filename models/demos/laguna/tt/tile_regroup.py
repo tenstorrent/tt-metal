@@ -12,7 +12,7 @@ from pathlib import Path
 import ttnn
 
 _KDIR = Path(__file__).resolve().parent / "kernels"
-_PER = 2  # tiles per core
+_PER = 2  # tiles per core (more when the pieces would need more cores than the grid has)
 
 
 def regroup(src, pieces, memory_config=None):
@@ -22,15 +22,16 @@ def regroup(src, pieces, memory_config=None):
     assert src.dtype == ttnn.bfloat16 and src.layout == ttnn.TILE_LAYOUT and src.padded_shape[-2] == 32, src.shape
     assert 1 <= len(pieces) <= 3, len(pieces)
     mem = memory_config or src.memory_config()
+    gs = device.compute_with_storage_grid_size()
+    counts = [math.prod(list(shape)) // 1024 for shape, _ in pieces]
+    per = max(_PER, -(-sum(counts) // (gs.x * gs.y - len(pieces))))
     outs, args, core = [], [src.buffer_address()], 0
-    for shape, off in pieces:
+    for (shape, off), n in zip(pieces, counts):
         assert shape[-2] == 32 and shape[-1] % 32 == 0, shape
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
-        n = math.prod(list(out.padded_shape)) // 1024
-        args += [out.buffer_address(), int(off), n, core, _PER]
-        core += -(-n // _PER)
+        args += [out.buffer_address(), int(off), n, core, per]
+        core += -(-n // per)
         outs.append(out)
-    gs = device.compute_with_storage_grid_size()
     assert core <= gs.x * gs.y, core
     grid = ttnn.num_cores_to_corerangeset(core, gs, True)
     k = ttnn.KernelDescriptor(
@@ -44,7 +45,7 @@ def regroup(src, pieces, memory_config=None):
         config=ttnn.ReaderConfigDescriptor(),
     )
     cb = ttnn.CBDescriptor(
-        total_size=2048 * _PER,
+        total_size=2048 * per,
         core_ranges=grid,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=2048)],
     )

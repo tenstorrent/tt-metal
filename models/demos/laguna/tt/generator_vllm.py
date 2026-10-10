@@ -48,6 +48,7 @@ import ttnn
 try:
     from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
     from .generator import LagunaGenerator, _replicate
+    from . import tile_regroup
     from .host_sampling import penalties_active, sample_penalized
     from .model_spec import DFLASH_SPEC, MODEL_ID, MODEL_MAX_CONTEXT, check_hf_config
     from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
@@ -64,6 +65,7 @@ except ImportError:  # loaded as a standalone module by some tooling
         DFlashTargetAuxCapture,
     )
     from models.demos.laguna.tt.generator import LagunaGenerator, _replicate
+    from models.demos.laguna.tt import tile_regroup
     from models.demos.laguna.tt.host_sampling import penalties_active, sample_penalized
     from models.demos.laguna.tt.model_spec import (
         DFLASH_SPEC,
@@ -198,6 +200,10 @@ class LagunaForCausalLM:
     # device, and its RoPE / mask inputs are uploaded during the verify for every c; the context-ring update is queued
     # right behind the verify. After the verify the host only launches trace c (no uploads, no update launch).
     _DFLASH_DRAFT_VARIANTS = _DFLASH_KV_RING and os.environ.get("TT_LAGUNA_DFLASH_DRAFT_VARIANTS", "1") == "1"
+    # adaptive verify depth: the draft trace also outputs each proposal row's top-1 probability; a round checks only the
+    # leading drafts whose running product of probabilities stays >= TAU (at least one), and the verify's MoE routes
+    # only those rows (fewer expert weights read). 0 checks every verify row.
+    _DFLASH_DEPTH_TAU = float(os.environ.get("TT_LAGUNA_DFLASH_DEPTH_TAU", "0.2")) if _DFLASH_KV_RING else 0.0
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -468,7 +474,7 @@ class LagunaForCausalLM:
             "tid": None,
         }
 
-    def _dflash_draft_alloc_ring(self, tok32=None, variant=None):
+    def _dflash_draft_alloc_ring(self, tok32=None, variant=None, conf=None):
         """Persistent inputs of the traced ring-mode proposal (one trace for every context size). variant c: the bonus
         token is the verify's greedy id c (no "tok" input); tok32: share another state's output buffer."""
         core, cache = self._dflash_core, self._dflash_cache
@@ -487,6 +493,10 @@ class LagunaForCausalLM:
             "tok32": tok32 if tok32 is not None else dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32,
                                                          ttnn.ROW_MAJOR_LAYOUT),
             "variant": variant,
+            # per proposal row and chip: (max logit, sum of exp(logit - max)) over the chip's vocabulary shard at
+            # columns 32 c, 32 c + 1 (adaptive verify depth; _dflash_draft_conf)
+            "conf": conf if conf is not None or not self._DFLASH_DEPTH_TAU else dev(
+                torch.zeros((1, 1, 32, 32 * self.mesh_device.get_num_devices())), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "tid": None,
         }
 
@@ -510,6 +520,30 @@ class LagunaForCausalLM:
         shards = self.model.lm_head_shards_dflash(sampled, enable_experimental=True)
         padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
         self.gen._greedy_sample(padded, 32, st["tok32"])
+        if st.get("conf") is not None:
+            V = int(shards.shape[-1])
+            lg = ttnn.reshape(shards, (1, 1, n, V))
+            # a row reduction over one 32-row tile row runs on one core (~0.5 ms over the 784 vocabulary tiles): split
+            # the columns into C chunks (with one tile row the same tiles in the same order: a tile copy), reduce each
+            # chunk on its own core, then the C partials
+            C = next((c for c in (56, 49, 28, 16, 8) if V % (c * 32) == 0), 1)
+            if C > 1 and lg.dtype == ttnn.bfloat16:
+                lg = tile_regroup.regroup(lg, [((1, C, 32, V // C), 0)], ttnn.DRAM_MEMORY_CONFIG)[0]
+            m = ttnn.max(ttnn.max(lg, dim=-1, keepdim=True), dim=1, keepdim=True)
+            z = ttnn.sum(ttnn.sum(ttnn.exp(ttnn.subtract(lg, m)), dim=-1, keepdim=True), dim=1, keepdim=True)
+            ms = ttnn.concat([m, z], dim=-1)
+            ms = ttnn.pad(ms, [(0, 0), (0, 0), (0, 32 - int(ms.shape[-2])), (0, 30)], 0.0)
+            layer0 = core.layers[0]
+            g = ttnn.all_gather(ms, dim=3, cluster_axis=layer0.tp_axis, topology=layer0.ccl_topology,
+                                num_links=layer0.num_links)  # fmt: skip
+            ttnn.copy(ttnn.typecast(g, ttnn.bfloat16) if g.dtype != ttnn.bfloat16 else g, st["conf"])
+
+    def _dflash_draft_conf(self, st, n):
+        """Top-1 probability of each of the n proposal rows, from the draft trace's per-chip (max, sum exp) pairs."""
+        c = ttnn.to_torch(ttnn.get_device_tensors(st["conf"])[0]).float().reshape(32, -1)[:n]
+        m, z = c[:, 0::32], c[:, 1::32]
+        top = m.max(dim=-1, keepdim=True).values
+        return (1.0 / (z * torch.exp(m - top)).sum(dim=-1)).tolist()
 
     def _dflash_draft_refresh_ring(self, st, block, q):
         core, cache = self._dflash_core, self._dflash_cache
@@ -596,7 +630,8 @@ class LagunaForCausalLM:
                         layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=_replicate(self.mesh_device),
                     )  # fmt: skip
-                    variants = {c: self._dflash_draft_alloc_ring(st["tok32"], c) for c in range(self._dflash_verify_rows)}
+                    variants = {c: self._dflash_draft_alloc_ring(st["tok32"], c, st.get("conf"))
+                                for c in range(self._dflash_verify_rows)}  # fmt: skip
                 states = [st, *variants.values()]
                 for sv in states:
                     self._dflash_draft_refresh_ring(sv, block, q)
@@ -658,14 +693,14 @@ class LagunaForCausalLM:
                 launched, self._dflash_draft_launched = getattr(self, "_dflash_draft_launched", None), None
                 if launched != nxt[1]:
                     ttnn.execute_trace(self.mesh_device, sv["tid"], cq_id=0, blocking=False)
-                return [int(t) for t in self.gen._read_token(sv["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
+                return self._dflash_read_drafts(sv)
             start, rows = cache.context_bounds()
             block = build_proposal_block(self._dflash_core.config, bonus_token_id=int(bonus_token_id),
                                          last_valid_position=int(start) + int(rows) - 1,
                                          num_speculative_tokens=int(self._dflash_core.config.max_speculative_tokens))  # fmt: skip
             self._dflash_draft_refresh_ring(st, block, int(block.input_ids.numel()))
             ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
-            return [int(t) for t in self.gen._read_token(st["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
+            return self._dflash_read_drafts(st)
         block, start, rows, q, padded = self._dflash_draft_shape(cache, bonus_token_id)
         st = states.get(padded)
         if st is None or st.get("tid") is None:
@@ -673,6 +708,27 @@ class LagunaForCausalLM:
         self._dflash_draft_refresh(st, block, start, rows, q)
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         return [int(t) for t in self.gen._read_token(st["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
+
+    def _dflash_read_drafts(self, st):
+        """The traced proposal's draft tokens; with adaptive depth also sets this round's verify depth."""
+        n = int(self._dflash_core.config.max_speculative_tokens)
+        drafts = [int(t) for t in self.gen._read_token(st["tok32"], n)]
+        self._dflash_depth = None
+        stv = getattr(self, "_verify_dec", {}).get("dflash")
+        if self._DFLASH_DEPTH_TAU > 0 and st.get("conf") is not None and stv is not None and "active" in stv:
+            k_max = int(stv["rows"]) - 1
+            depth, run = 0, 1.0
+            for p in self._dflash_draft_conf(st, k_max):
+                run *= p
+                if run < self._DFLASH_DEPTH_TAU:
+                    break
+                depth += 1
+            self._dflash_depth = max(1, depth)
+        return drafts
+
+    def _dflash_verify_depth(self):
+        """Controller hook: drafts this round's verify checks (None: all)."""
+        return getattr(self, "_dflash_depth", None)
 
     def _dflash_update_alloc(self):
         """Persistent inputs of the traced ring update (see DFlashTTProposalCache.ring_append_inputs)."""
@@ -3160,8 +3216,21 @@ class LagunaForCausalLM:
         )
         if self._DFLASH_DEVICE_ARGMAX:
             st["tok32"] = g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
+        # rows the MoE routes (the first value; later rows get no experts): an adaptive-depth round checks fewer drafts
+        # and reads fewer expert weights
+        st["active"] = g._rep(torch.full([1, 32], R, dtype=torch.int32), ttnn.uint32)
+        st["active_last"] = R
 
         def step():
+            for layer in self.model.layers:
+                layer._rows_active = st["active"]
+            try:
+                _step_body()
+            finally:
+                for layer in self.model.layers:
+                    layer._rows_active = None
+
+        def _step_body():
             hidden = self.model.embed_decode(ttnn.reshape(tok, (1, R)))
             hidden, capture = self.model.decode_layers_with_dflash_aux(
                 hidden,
@@ -3322,6 +3391,13 @@ class LagunaForCausalLM:
         elif st["last_pt_host"] is None or not torch.equal(pt_host, st["last_pt_host"]):
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
+        if "active" in st:
+            depth = getattr(self, "_dflash_depth", None)
+            active = B if depth is None else min(B, depth + 1)
+            if active != st["active_last"]:
+                ttnn.copy_host_to_device_tensor(self.gen._host(torch.full([1, 32], active, dtype=torch.int32), ttnn.uint32),
+                                                st["active"])  # fmt: skip
+                st["active_last"] = active
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         # the context ring update's inputs (they write every verify row), uploaded while the verify runs; with draft
         # variants the update is queued now and every variant's inputs are uploaded too
@@ -4216,6 +4292,7 @@ class LagunaForCausalLM:
                         self._dflash_verify_tok32, self._dflash_verify_rows = staged["tok32"], int(staged["rows"])
                     self._dflash_draft_prepare()
                     self._dflash_controller.draft_tokens = self._dflash_draft_tokens
+                    self._dflash_controller.verify_depth = self._dflash_verify_depth
                 self._dflash_verify_capture(staged)
                 if self._DFLASH_DRAFT_TRACE and self._dflash_cache.kv_ring:
                     self._dflash_update_capture()

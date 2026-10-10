@@ -1475,7 +1475,8 @@ class MultichipDecoder(OptimizedDecoder):
             bias = cache[T]
         sel = ttnn.add(scores, bias)
         rows = route_local_rows(
-            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
+            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts,
+            active=getattr(self, "_rows_active", None),  # an adaptive-depth DFlash verify (generator_vllm)
         )
         x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
         if self._sh1_fused and "sh_gate_up_cp" in self.w:

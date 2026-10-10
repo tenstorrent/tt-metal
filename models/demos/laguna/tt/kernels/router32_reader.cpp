@@ -31,6 +31,10 @@ void kernel_main() {
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto off_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    // has_active (T-row local mode): rows t >= the uint32 at common arg 4's page 0 are written as zero rows (no
+    // experts), so the MoE kernels skip their experts (an adaptive-depth DFlash verify checks fewer rows)
+    constexpr uint32_t has_active = get_compile_time_arg_val(off_args.next_compile_time_args_offset());
+    constexpr auto act_args = TensorAccessorArgs<off_args.next_compile_time_args_offset() + 1>();
     constexpr uint32_t Et = E / 32;
 
     const uint32_t sel_addr = get_common_arg_val<uint32_t>(0);
@@ -46,6 +50,22 @@ void kernel_main() {
     // local buffers: sel row [E], score row [E], output row [E] (fp32 each), sort keys [E] (uint32)
     const uint32_t buf = get_write_ptr(cb_buf);
     const uint32_t sel_l1 = buf, sc_l1 = buf + E * 4, out_l1 = buf + 2 * E * 4;
+    if constexpr (has_active && rows > 0 && local_e > 0) {
+        const auto act = TensorAccessor(act_args, get_common_arg_val<uint32_t>(4));
+        noc_async_read(act.get_noc_addr(0), out_l1, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        if (t >= reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_l1)[0]) {
+            volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_l1);
+            for (uint32_t i = 0; i < (local_e * 2 + 3) / 4; ++i) {
+                z[i] = 0;
+            }
+            const auto row_acc = TensorAccessor(out_args, get_common_arg_val<uint32_t>(2), local_e * 2);
+            noc_async_write(out_l1, row_acc.get_noc_addr(t), local_e * 2);
+            noc_async_write_barrier();
+            return;
+        }
+    }
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {
             const uint32_t off = (face0 + h) * 1024 + row_off;

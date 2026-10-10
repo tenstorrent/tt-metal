@@ -337,6 +337,9 @@ class DFlashServedController:
         if len(drafts) != expected_drafts:
             raise ValueError(f"DFlash drafter returned {len(drafts)} tokens, expected {expected_drafts}")
         drafts = drafts[: self.verify_drafts]
+        # adaptive depth (the serving adapter's verify_depth hook): only the first `depth` drafts are checked
+        depth_hook = getattr(self, "verify_depth", None)
+        depth = depth_hook() if depth_hook is not None else None
         verify_tokens = [known_bonus, *drafts]
         if self._stats_sync:
             entries_after_draft = self.core.mesh_device.num_program_cache_entries()
@@ -350,6 +353,9 @@ class DFlashServedController:
         draft_ms = (verify_start - draft_start) * 1000.0
 
         accepted, committed = self._accept_greedy(drafts, target_greedy)
+        if depth is not None and accepted > int(depth):
+            accepted = int(depth)
+            committed = list(drafts[:accepted]) + [int(target_greedy[accepted])]
         # Commit auxiliary states only for rows that are now authoritative:
         # known bonus + accepted drafts.  The trailing target bonus has not been
         # executed yet and becomes the known bonus of the next round.
