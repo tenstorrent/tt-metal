@@ -13,6 +13,7 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
     DestSync,
@@ -24,10 +25,10 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
-    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -42,9 +43,11 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -144,7 +147,7 @@ def generate_unpack_unary_operand_combinations(
                                     dest_acc, dest_sync, tile_shape
                                 )
                                 if is_perf
-                                else generate_unary_input_dimensions(
+                                else generate_reduced_input_dimensions(
                                     dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                                 )
                             )
@@ -156,7 +159,7 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
+                                        runtime(dimensions),
                                         runtime(tile_dims),
                                     )
                                 )
@@ -164,22 +167,18 @@ def generate_unpack_unary_operand_combinations(
     return combinations
 
 
-# MxFp8R/P decode on UnpA/UnpB: one MxFp8* -> Float16_b pair each, kept off the
-# cross product. Encode of those two formats lives on test_pack_quasar.
-UNPACK_FORMATS = (
-    input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ]
-    )
-    + quasar_mx_smoke(DataFormat.MxFp8R, DataFormat.Float16_b)
-    + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
+UNPACK_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS
@@ -226,6 +225,15 @@ def test_unpack_unary_operand_quasar(
     )
 
     num_faces = tile_shape.total_num_faces()
+
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
 
     golden_src = (
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
@@ -297,6 +305,8 @@ def test_unpack_unary_operand_quasar(
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),

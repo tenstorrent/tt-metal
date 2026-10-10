@@ -67,6 +67,7 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
+#include "slow_dispatch.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -309,12 +310,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
-std::string ensure_kernel_binaries(
+// With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
+std::optional<std::string> ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
     IDevice* device,
     JitBuildOptions& build_options,
     const DeviceBuildEnv& build_env,
-    size_t kernel_hash) {
+    size_t kernel_hash,
+    bool no_wait = false) {
     if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
         if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
             log_debug(
@@ -332,14 +335,21 @@ std::string ensure_kernel_binaries(
         }
     }
 
-    jit_build_once(kernel_hash, [&] {
+    auto build = [&] {
         try {
             jit_build_genfiles_descriptors(build_env.build_env, build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
-    });
+    };
+    if (no_wait) {
+        if (!jit_build_once_no_wait(kernel_hash, build)) {
+            return std::nullopt;
+        }
+    } else {
+        jit_build_once(kernel_hash, build);
+    }
     return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
@@ -357,7 +367,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     cached_device_hash_(std::nullopt),
     context_id_(context_id),
     programmable_core_count_(MetalContext::instance(context_id).hal().get_programmable_core_type_count()),
-    max_cbs_(MetalContext::instance(context_id).hal().get_arch_num_circular_buffers()),
+    max_dfbs_(MetalContext::instance(context_id).hal().get_num_dataflow_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -367,10 +377,10 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     }
 
     TT_ASSERT(
-        cb_mask_width_ >= max_cbs_,
-        "CB mask width ({}) is insufficient for architecture's {} CBs",
+        cb_mask_width_ >= max_dfbs_,
+        "CB mask width ({}) is insufficient for architecture's {} DFBs",
         cb_mask_width_,
-        max_cbs_);
+        max_dfbs_);
 
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
@@ -1071,7 +1081,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
-            uint32_t min_remote_cb_start_index = max_cbs_;
+            uint32_t min_remote_cb_start_index = max_dfbs_;
             uint64_t local_cb_mask = 0;
             uint32_t num_dfbs = 0;
 
@@ -1130,7 +1140,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                                 .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
-                                        for (uint32_t i = 0; i < max_cbs_; i++) {
+                                        for (uint32_t i = 0; i < max_dfbs_; i++) {
                                             if (non_contiguous_cbs & (1ULL << i)) {
                                                 if (!cb_ids.empty()) {
                                                     cb_ids += ",";
@@ -1244,6 +1254,19 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
         "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
 
+    // The deserialization constructor sets these sets independently, so local and remote are not
+    // guaranteed to be subsets of buffer_indices; all three index the per-core bitsets below.
+    const CircularBufferConfig& config = circular_buffer->config();
+    for (const auto* indices :
+         {&config.buffer_indices(), &config.local_buffer_indices(), &config.remote_buffer_indices()}) {
+        for (uint32_t buffer_index : *indices) {
+            if (buffer_index >= max_dfbs_) {
+                TT_THROW(
+                    "Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+            }
+        }
+    }
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -1263,17 +1286,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                uint32_t max_cbs = max_cbs_;
-                auto add_buffer_indices = [&cb_indices, max_cbs](
+                auto add_buffer_indices = [&cb_indices](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
-                        // TT_ASSERT since we validate when constructing the config that it's within range
-                        TT_ASSERT(
-                            buffer_index < max_cbs,
-                            "Invalid circular buffer index: {} should be between 0 and {}",
-                            buffer_index,
-                            max_cbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
@@ -1714,19 +1730,21 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         "PrefetcherPipe slot {} has no receiver cores in this program; a relay lives on the receivers",
         prefetcher_pipe_id);
     TT_FATAL(
-        slot.ring_size % relay_dfb->config.entry_size == 0,
-        "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
+        slot.entry_size % relay_dfb->config.entry_size == 0,
+        "PrefetcherPipe relay entry size {} must divide the slot entry_size {}: a relay pages each pipe entry as a "
+        "whole number of its own entries",
         relay_dfb->config.entry_size,
-        slot.ring_size);
+        slot.entry_size);
+    // The relay covers the ring the pipe uses: its whole entries, short of any trailing gap.
+    const uint32_t usable_ring_size = slot.ring_size - slot.ring_size % slot.entry_size;
     TT_FATAL(
-        relay_dfb->config.num_entries == slot.ring_size / relay_dfb->config.entry_size,
-        "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
+        relay_dfb->config.num_entries == usable_ring_size / relay_dfb->config.entry_size,
+        "PrefetcherPipe relay depth {} must equal the {} relay entries that cover the pipe's whole entries ({} B of "
+        "ring_size {} at entry_size {})",
         relay_dfb->config.num_entries,
-        slot.ring_size / relay_dfb->config.entry_size);
-    TT_FATAL(
-        relay_dfb->config.entry_size == slot.entry_size,
-        "PrefetcherPipe relay entry size {} must match the slot entry_size {}",
-        relay_dfb->config.entry_size,
+        usable_ring_size / relay_dfb->config.entry_size,
+        usable_ring_size,
+        slot.ring_size,
         slot.entry_size);
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
@@ -1840,7 +1858,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", bind.name);
         PrefetcherPipeParameterBinding& binding = it->second;
 
-        if (binding.bound_pipe == &prefetcher_pipe) {
+        if (binding.bound_pipe != nullptr && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
@@ -1887,6 +1905,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 *checked.pipe);
         }
         checked.binding->bound_pipe = checked.pipe;
+        checked.binding->bound_pipe_identity = checked.pipe->identity();
     }
 }
 
@@ -2200,7 +2219,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
                 if (!kernel->common_runtime_args().empty()) {
                     RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                    crta[handle.addr_crta_word] = handle.allocated_address;
                 }
             }
         }
@@ -2533,8 +2552,8 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
-                auto chip_claimed = svc.claimed_cores(dev->id());
+            for (auto device_id : mesh->get_device_ids()) {
+                auto chip_claimed = svc.claimed_cores(device_id);
                 claimed.insert(chip_claimed.begin(), chip_claimed.end());
             }
         } else {
@@ -2612,7 +2631,8 @@ void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     validate_semaphore_id(crs, semaphore_id, core_type);
-    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
+    const uint32_t l1_alignment = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1);
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, l1_alignment, core_type));
 }
 
 uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
@@ -3082,7 +3102,8 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    TTZoneScopedD(PROGRAM);
+    // Always-on zone: tools/tracy reports "CompileProgram" as a default child call of ops.
+    TTZoneScopedDN(PROGRAM, "CompileProgram");
 
     const ContextId device_context_id = extract_context_id(device);
     // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
@@ -3179,6 +3200,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return std::pair{std::move(build_options), kernel_hash};
     };
 
+    auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
+                                    const JitBuildOptions& build_options,
+                                    const std::string& binary_root) {
+        kernel->read_binaries(device, binary_root);
+        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+    };
+
+    // Validate every kernel before starting any build: a throw after a local task launches would unwind
+    // locals it still references, and a throw after a remote submit would leave its dedup entry pending.
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+        }
+    }
+
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
@@ -3206,7 +3243,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -3234,28 +3270,37 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            load_kernel_binaries(kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
+        std::mutex deferred_mutex;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        const std::string binary_root =
-                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
-                        kernel->read_binaries(device, binary_root);
-                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        // A duplicate that waited here would hold a compile worker, so it joins the
+                        // build after the sync below.
+                        const auto binary_root = ensure_kernel_binaries(
+                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
+                        if (!binary_root) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
+                            return;
+                        }
+                        load_kernel_binaries(kernel, build_options, *binary_root);
                     },
                     events);
             }
         }
         sync_build_steps(events);
+        // Join in-progress builds only now, once this Program's tasks have released their compile workers.
+        for (auto& [kernel, build_options, kernel_hash] : deferred) {
+            load_kernel_binaries(
+                kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
+        }
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
@@ -3270,13 +3315,29 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // The compile and allocation steps below are individually guarded and would early-return:
     // nothing has changed since this program was compiled and laid out for this device. Skip them
     // outright, since this is called on every enqueue and the guards alone cost microseconds per
-    // program. The validation steps still have to run: they read live device state - L1 allocations
-    // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
-    // this program's regions is only caught by re-checking them here.
+    // program. Validation still reads live device state. In the lockstep case,
+    // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
+            device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
+            device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
+            if (this->simple_l1_validation_region_end_ == 0) {
+                return;
+            }
+            const auto lowest_address =
+                device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
+            if (!lowest_address.has_value() || *lowest_address >= this->simple_l1_validation_region_end_) {
+                return;
+            }
+            // Preserve the detailed collision error from the full validator.
+        }
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
+        this->simple_l1_validation_cached_ =
+            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+        this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
         return;
     }
     this->compile(device, force_slow_dispatch);
@@ -3293,6 +3354,24 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
+
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    this->simple_l1_validation_cached_ =
+        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+    this->simple_l1_validation_region_end_ = 0;
+    for (const auto& cb_allocator : this->cb_allocators_) {
+        if (!cb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, cb_allocator.l1_regions.back().second);
+        }
+    }
+    for (const auto& dfb_allocator : this->dfb_allocators_) {
+        if (!dfb_allocator.l1_regions.empty()) {
+            this->simple_l1_validation_region_end_ =
+                std::max(this->simple_l1_validation_region_end_, dfb_allocator.l1_regions.back().second);
+        }
+    }
 
     this->compile_and_allocate_needed_ = false;
     this->compile_and_allocate_device_ = device;
@@ -3342,14 +3421,6 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
     uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
-}
-
-// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
-bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
-    const auto& hal = MetalContext::instance(context_id_).hal();
-    return (
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
@@ -3456,7 +3527,9 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
-    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    // The dispatch-to-eth go-signal unicast path was removed; this slot (formerly
+    // runs_on_noc_unicast_only_cores()) is retained to keep the worker config-buffer layout stable.
+    program_config_sizes_[programmable_core_count_ + 1] = 0;
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
     if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
@@ -3677,7 +3750,7 @@ void detail::ProgramCompileGroup::finalize_offsets() {
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
-        detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
+        slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, force_slow_dispatch);
     }
 }
 

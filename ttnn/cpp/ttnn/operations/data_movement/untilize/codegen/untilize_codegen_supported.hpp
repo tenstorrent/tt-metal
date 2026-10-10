@@ -11,9 +11,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn::operations::data_movement::untilize_codegen {
 
@@ -26,7 +26,7 @@ namespace ttnn::operations::data_movement::untilize_codegen {
 // supported_by_codegen below). How much of this budget is actually free is the business of
 // codegen_cb_plan_fits_live_l1 (routing) and the codegen op's hash/program factory (CB tier),
 // via get_max_l1_space().
-uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device);
+uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device);
 
 // Correctness-only: true iff the codegen build_untilize_tile path can produce a bit-exact
 // result for this (input, output_mem_config) case. Consulted by the free function's forced
@@ -64,7 +64,7 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
 // False means the case must go to native, or be rejected outright by untilize_force_codegen.
 // Separate from supported_by_codegen() because these are free-function attributes:
 // the codegen prim carries no such fields, so its validate has nothing to check.
-bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids);
+bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Perf-only: true for the enumerated set of in-scope cases where codegen is correct but does
 // not beat native on device. Consulted ONLY by ttnn::untilize's routing, alongside

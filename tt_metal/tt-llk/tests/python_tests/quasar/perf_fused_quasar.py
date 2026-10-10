@@ -5,10 +5,12 @@
 import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from fuser.config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from fuser.sweep import collect_fuser_cases
+from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
 yaml_files += sorted((FUSER_CONFIG_DIR / "quasar").glob("*.yaml"))
-test_names = [str(f.relative_to(FUSER_CONFIG_DIR).with_suffix("")) for f in yaml_files]
+case_configs = collect_fuser_cases(yaml_files)
 
 
 @skip_for_blackhole
@@ -16,12 +18,16 @@ test_names = [str(f.relative_to(FUSER_CONFIG_DIR).with_suffix("")) for f in yaml
 @skip_for_coverage
 @pytest.mark.perf
 @pytest.mark.quasar
-@pytest.mark.parametrize("test_name", test_names, ids=test_names)
+@pytest.mark.parametrize(
+    "run_type", PERF_RUN_TYPES_QUASAR[0], ids=lambda mode: mode.name
+)
+@pytest.mark.parametrize("case_name", case_configs)
 def test_fuser(
-    test_name,
+    case_name,
+    run_type,
     regenerate_cpp,
-    worker_id,
+    testrun_uid,
 ):
-    config = FuserConfigSchema.load(test_name)
+    config = FuserConfigSchema.load(case_name, case_configs[case_name])
     config.global_config.regenerate_cpp = regenerate_cpp
-    config.run_perf_test(worker_id=worker_id)
+    config.run_perf_test(run_type, session_id=testrun_uid)

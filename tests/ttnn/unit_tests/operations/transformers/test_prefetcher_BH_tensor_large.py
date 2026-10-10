@@ -66,7 +66,6 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     require_tensor_prefetcher,
 )
 
-
 # DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
 #   - P150/P300 (unharvested): 8 banks → ring=8*recv_per_bank.
 #   - P100 (1 column harvested): 7 banks → ring=7*recv_per_bank.
@@ -92,6 +91,29 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int)
         row = ring_pos // ring_cols
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
+
+
+def _bank_to_receivers(contiguous: bool, num_dram_banks: int, recv_per_bank: int, ring_cols: int):
+    """Pair each DRAM bank with the receivers its shards go to: contiguous ring positions for
+    CONTIGUOUS_1D and K-row-major weights, strided ones for ROUND_ROBIN_1D."""
+    if contiguous:
+        return [(b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)]
+    return [
+        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+
+
+def _hifi4_compute_kernel_config(device):
+    """The HiFi4, fp32-accumulating compute config every matmul in this file runs with."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,14 +262,7 @@ def test_tensor_prefetcher_BH_param(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
     ttnn.experimental.start_tensor_prefetcher(device)
@@ -393,14 +408,7 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
     ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
@@ -910,14 +918,7 @@ class _TraceCase:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-            dst_full_sync_en=True,
-        )
+        self.compute_kernel_config = _hifi4_compute_kernel_config(device)
 
         self.expected = [pt_act.float() @ w.float() for w in pt_weights]
 
@@ -1245,16 +1246,7 @@ def test_tensor_prefetcher_streaming_matmul(
     blocks = window_blocks if window_blocks is not None else ring_size
     gcb_size = blocks * in1_block_size_bytes
 
-    if is_contiguous:
-        bank_to_receivers = [
-            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
-            for b in range(num_dram_banks)
-        ]
-    else:
-        bank_to_receivers = [
-            (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
-            for b in range(num_dram_banks)
-        ]
+    bank_to_receivers = _bank_to_receivers(is_contiguous, num_dram_banks, num_receivers_per_bank, ring_cols)
     # The recv-contig matmul factory validates the (program_config, weight, bank_to_receivers) triple
     # and, because program_config.stream_in1 is set, relaxes its size floor from a full layer down to a
     # double-buffer window -- so the shallow streaming GCB is accepted here instead of only via the raw
@@ -1270,14 +1262,7 @@ def test_tensor_prefetcher_streaming_matmul(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
 
     # program_config.stream_in1 selects streaming, so prefetch_and_linear queues the
     # matching identity-rotation request (natural ring order) and runs the consuming
@@ -1347,9 +1332,6 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
     distribution_strategy = _MCAST_IN0_LAYOUTS[weight_layout]
     if distribution_strategy is None:
         tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks=num_dram_banks, dtype=dtype)
-        bank_to_receivers = [
-            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
-        ]
     else:
         tt_weight = _make_recv_contig_weight(
             device,
@@ -1359,15 +1341,9 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
             dtype=dtype,
             distribution_strategy=distribution_strategy,
         )
-        if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
-            bank_to_receivers = [
-                (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
-            ]
-        else:
-            bank_to_receivers = [
-                (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
-                for b in range(num_dram_banks)
-            ]
+    bank_to_receivers = _bank_to_receivers(
+        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_dram_banks, recv_per_bank, ring_cols
+    )
 
     pt_act = torch.randn(1, 1, M, K)
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -1413,14 +1389,7 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
 
     expected = pt_act.float() @ pt_weight.float()
 
@@ -1455,3 +1424,321 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
     assert (
         device.num_program_cache_entries() == cache_entries_after_first
     ), "second mcast_in0 invocation did not hit the program cache"
+
+
+# PrefetcherPipe delivery is receiver-contiguous only: a pipe sender pushes each receiver its own
+# shard and cannot slice one bank's shard across receivers the way the K-row-major layout needs.
+_MCAST_IN0_PIPE_LAYOUTS = {name: strategy for name, strategy in _MCAST_IN0_LAYOUTS.items() if strategy is not None}
+
+
+def _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N):
+    """The mcast-in0 1D config the pipe tests run, parameterized by in1 K-block shape.
+
+    ``in0_block_w * per_core_N`` tiles is one delivered pipe entry, so these two are what a
+    block-size change varies.
+    """
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        out_block_h=1,
+        out_block_w=per_core_N,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=ring_rows,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+
+def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, in0_block_w=1):
+    """Weight, activation, program config and bank pairing for the mcast-in0 pipe tests.
+
+    Same shape as test_tensor_prefetcher_mcast_in0, so the two transports are compared on one
+    problem: block_count is K_tiles / in0_block_w. ``per_core_N`` and ``in0_block_w`` together set
+    how many tiles a delivered entry holds, which is one page of the in1 CB.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = recv_per_bank
+    receiver_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = ttnn.TILE_SIZE
+    k_tiles = 2 * receiver_count
+    K = k_tiles * ttnn.TILE_SIZE
+    N = receiver_count * per_core_N * ttnn.TILE_SIZE
+    block_count = k_tiles // in0_block_w
+
+    torch.manual_seed(zlib.crc32(f"mcast_in0_pipes_{weight_layout}_{per_core_N}".encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    distribution_strategy = _MCAST_IN0_PIPE_LAYOUTS[weight_layout]
+    tt_weight = _make_recv_contig_weight(
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=receiver_count,
+        dtype=dtype,
+        distribution_strategy=distribution_strategy,
+    )
+    bank_to_receivers = _bank_to_receivers(
+        distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D, num_dram_banks, recv_per_bank, ring_cols
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
+
+    program_config = _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // receiver_count),
+        core_grid=receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    entry_size = in0_block_w * program_config.per_core_N * _bytes_per_tile(dtype)
+    return {
+        "k_tiles": k_tiles,
+        "receiver_count": receiver_count,
+        "pt_act": pt_act,
+        "pt_weight": pt_weight,
+        "tt_act": tt_act,
+        "tt_weight": tt_weight,
+        "bank_to_receivers": bank_to_receivers,
+        "program_config": program_config,
+        "output_mem_config": output_mem_config,
+        "entry_size": entry_size,
+        "block_count": block_count,
+        "num_dram_banks": num_dram_banks,
+        "recv_per_bank": recv_per_bank,
+        "ring_cols": ring_cols,
+    }
+
+
+def _make_mcast_in0_pipes(device, bank_to_receivers, ring_size):
+    """A PrefetcherPipeSpace over the matmul's workers and the Tensor-prefetcher pipes carved from it.
+
+    Every ring is ``ring_size`` bytes. Returns (space, pipes): the space must outlive the pipes, so
+    callers keep both.
+    """
+    receiver_domain = ttnn.CoreRangeSet(
+        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    )
+    space = ttnn.experimental.create_prefetcher_pipe_space(
+        device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=ring_size,
+        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
+        num_dram_senders=2 * len(bank_to_receivers),
+    )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
+    return space, pipes
+
+
+def _linear_over_pipes(setup, pipes, weight=None):
+    """The setup's mcast-in0 ``ttnn.linear`` reading in1 from ``pipes``, over ``weight`` if given."""
+    return ttnn.linear(
+        setup["tt_act"],
+        setup["tt_weight"] if weight is None else weight,
+        program_config=setup["program_config"],
+        memory_config=setup["output_mem_config"],
+        prefetcher_pipes=pipes,
+    )
+
+
+@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+@pytest.mark.parametrize(
+    "ring_half_blocks,per_core_N",
+    [(4, 2), (6, 1), (8, 2), (5, 1), (5, 2)],
+    ids=["depth2_2tile", "depth3_1tile", "depth4_2tile", "depth2p5_1tile", "depth2p5_2tile"],
+)
+def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, ring_half_blocks, per_core_N):
+    """Mcast-in0 consuming in1 K-blocks from DRAM-sender PrefetcherPipes instead of a GCB.
+
+    The in1 buffer is a relay over each pipe's ring, one K-block per entry, so compute reads the
+    delivered K-blocks in place and addresses the tiles inside one. ``per_core_N`` > 1 puts several
+    tiles side by side in an entry, which is what the unpacker's tile stride has to follow.
+    ``ring_half_blocks`` is the ring depth in half K-blocks: a run streams 2 * receiver_count blocks
+    through it, and depth 3 does not divide that, so the second run resumes mid-ring. Depth 2.5 is not
+    a whole number of K-blocks (nor, at one tile per block, of tiles): the pipe uses two K-blocks of it
+    and skips the trailing half block at every wrap.
+    """
+    dtype = ttnn.bfloat16
+    setup = _mcast_in0_pipe_setup(device, weight_layout, per_core_N=per_core_N, dtype=dtype)
+    # block_count comes from K / in0_block_w, not from the ring, so it must not coincide with the
+    # receiver count or the two would be indistinguishable in the assertion below.
+    assert setup["block_count"] != setup["receiver_count"]
+
+    # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
+    # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
+    _space, pipes = _make_mcast_in0_pipes(
+        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+    )
+
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
+    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
+
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        assert (
+            ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+                setup["program_config"], setup["tt_weight"], prefetcher_pipes=pipes
+            )
+            == setup["block_count"]
+        )
+        for run in range(2):
+            tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                setup["tt_act"],
+                setup["tt_weight"],
+                prefetcher_pipes=pipes,
+                program_config=setup["program_config"],
+                memory_config=setup["output_mem_config"],
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype,
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+            out_torch = ttnn.to_torch(tt_out)
+            passing, output_str = comp_pcc(expected, out_torch, 0.999)
+            logger.info(
+                f"[mcast_in0_pipes {weight_layout} half_blocks={ring_half_blocks} per_core_N={per_core_N} run={run}] "
+                f"{output_str}"
+            )
+            assert passing, f"mcast_in0_pipes {weight_layout} run={run} PCC failed: {output_str}"
+
+    # The second run must reuse the cached program: the pipes are the same objects, so the program
+    # built against them still applies.
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second mcast_in0 pipes invocation did not hit the program cache"
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_krow_major_weight(device, expect_error):
+    """A pipe sender pushes each receiver its own shard, so the K-row-major weight is rejected."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
+    krow_weight = _make_krow_major_weight(
+        device,
+        setup["pt_weight"],
+        num_dram_banks=setup["num_dram_banks"],
+        dtype=ttnn.bfloat16,
+    )
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "receiver-contiguous"):
+        _linear_over_pipes(setup, pipes, weight=krow_weight)
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_ring_without_lookahead(device, expect_error):
+    """The reader publishes one block while the previous one drains, so one block of ring deadlocks."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"])
+    with expect_error(RuntimeError, "at least 2 in1 K-blocks"):
+        _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distribution(device, expect_error):
+    """Pipes paired for CONTIGUOUS_1D cover the same workers a ROUND_ROBIN_1D weight needs, but send
+    each worker another worker's shard, which would permute the output columns."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_strided")
+    contiguous_pairing = _bank_to_receivers(True, setup["num_dram_banks"], setup["recv_per_bank"], setup["ring_cols"])
+    _space, pipes = _make_mcast_in0_pipes(device, contiguous_pairing, 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "Pair each bank with the workers whose shards it holds"):
+        _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device, expect_error):
+    """Only the 1D mcast factory reads in1 from the pipes; any other config would leave them undrained."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    # A 2D grid over the same workers that covers N; the output is interleaved because the output
+    # tensor is allocated from the program config before validation runs.
+    program_config_2d = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(setup["ring_cols"], setup["recv_per_bank"]),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=setup["receiver_count"] // setup["ring_cols"],
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    with expect_error(RuntimeError, "prefetcher_pipes delivery is supported only for"):
+        ttnn.linear(
+            setup["tt_act"],
+            setup["tt_weight"],
+            program_config=program_config_2d,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            prefetcher_pipes=pipes,
+        )
+
+
+@pytest.mark.parametrize("ring_narrow_blocks", [6, 5], ids=["ring_divides_both", "ring_gap_for_wide"])
+def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device, ring_narrow_blocks):
+    """Two matmuls with different in1 K-block sizes, back to back on one pipe set.
+
+    The ring is fixed when the pipes are created; each matmul Attaches at its own K-block size, so
+    the receivers resize onto that grid and the DRAM sender snaps its derived write cursor to match
+    before delivering. The ring does not divide the weight, so the second matmul starts from a
+    mid-ring cursor rather than from the ring base. A ring of five narrow blocks is two and a half
+    wide ones, so the wide matmul also skips a trailing gap at every wrap.
+
+    The pair runs twice so each config's second invocation has to hit the program cache.
+    """
+    dtype = ttnn.bfloat16
+    narrow = _mcast_in0_pipe_setup(device, "recv_contig_contiguous", dtype=dtype, in0_block_w=1)
+    wide_block_bytes = 2 * narrow["entry_size"]
+    wide_program_config = _mcast_in0_pipe_program_config(
+        narrow["ring_cols"], narrow["recv_per_bank"], in0_block_w=2, per_core_N=1
+    )
+
+    # At least two of the wider block, and not a divisor of the per-receiver weight -- so a matmul
+    # leaves the cursor mid-ring for the next one.
+    ring_size = ring_narrow_blocks * narrow["entry_size"]
+    assert ring_size >= 2 * wide_block_bytes
+    _space, pipes = _make_mcast_in0_pipes(device, narrow["bank_to_receivers"], ring_size)
+    weight_bytes_per_receiver = narrow["k_tiles"] * _bytes_per_tile(dtype)
+    assert weight_bytes_per_receiver % ring_size != 0
+
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
+    expected = narrow["pt_act"].float() @ narrow["pt_weight"].float()
+
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            for label, program_config in (("narrow", narrow["program_config"]), ("wide", wide_program_config)):
+                tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                    narrow["tt_act"],
+                    narrow["tt_weight"],
+                    prefetcher_pipes=pipes,
+                    program_config=program_config,
+                    memory_config=narrow["output_mem_config"],
+                    compute_kernel_config=compute_kernel_config,
+                    dtype=dtype,
+                )
+                out_torch = ttnn.to_torch(tt_out)
+                passing, output_str = comp_pcc(expected, out_torch, 0.999)
+                logger.info(f"[mcast_in0_pipes block_size_change {label} run={run}] {output_str}")
+                assert passing, f"mcast_in0_pipes block_size_change {label} run={run} PCC failed: {output_str}"
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second pass over the two block sizes did not hit the program cache"

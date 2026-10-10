@@ -29,7 +29,9 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+from ....pipelines.minimax_h3.policy import get_num_frames
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 
 # Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
@@ -459,23 +461,23 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
-# Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
+# This is our default testing prompt.
 CALIBRATED_FOX_PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air."
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "  # <- NOTE THE SPACE HERE! DON'T DELETE IT, else it changes the token count!
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
+CALIBRATED_FOX_PROMPT_NUM_TOKENS = 39
 
 
 def weights_dir(*required_subdirs: str) -> Path:
-    """The snapshot dir from MINIMAX_H3_MODEL_PATH; skips when it or a required partition is missing."""
-    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
-    if not root or not Path(root).is_dir():
-        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
-    directory = Path(root)
-    missing = [name for name in required_subdirs if not (directory / name).is_dir()]
-    if missing:
-        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
-    return directory
+    """The snapshot dir, from MINIMAX_H3_MODEL_PATH / the HF cache / a download; skips when unresolved.
+
+    A download needs TT_DIT_ALLOW_HF_DOWNLOAD=1; without it an absent snapshot still skips as before.
+    """
+    try:
+        return resolve_weights_dir(*required_subdirs)
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
 
 
 def artifact_dir(name: str) -> Path:
@@ -487,13 +489,13 @@ def artifact_dir(name: str) -> Path:
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    # warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
+    warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
     # # the rung the measured call will run at -- take the reference from there.
-    # with pipeline.quiet():
-    #     pipeline(prompt, seed=seed, **warmup_kwargs)
+    with pipeline.quiet():
+        pipeline(prompt, seed=seed, **warmup_kwargs)
     # warm_padded_len = pipeline.last_seq_len.padded
 
     # ttnn.synchronize_device(pipeline.mesh_device)
@@ -508,17 +510,8 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    # measured = pipeline.last_seq_len.padded
-    # assert measured == warm_padded_len, (
-    #     f"the compile pass ran at padded_len {warm_padded_len} but the measured call ran at "
-    #     f"{measured}; this number is not warm"
-    # )
-    # The real warmth check under bucketing: the rung the measured call ran at must hold a live
-    # capture, so it replayed rather than paying an untraced generation plus recapture.
-    # if pipeline.trace_denoise:
-    #     assert pipeline._rung_captured(measured), (
-    #         f"the measured call ran at padded_len {measured}, which has no captured trace; " f"this number is not warm"
-    #     )
+    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
+    assert not missed, f"the measured call compiled programs after warmup, so this number is not warm: {missed}"
     return output
 
 
@@ -788,28 +781,53 @@ def _read_optional_image_path(label: str) -> str | None:
         print(f"no such file: {raw}", file=sys.stderr)
 
 
+def _read_prompt() -> str | None:
+    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts."""
+    while True:
+        try:
+            text = _prompt_line("User prompt (prompt or file path; q to quit): ").strip()
+        except EOFError:
+            return None
+        if text.lower() == "q":
+            return None
+        if not text:
+            continue
+        return Path(text).read_text().strip() if os.path.isfile(text) else text
+
+
 def _read_user_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
-) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
-    """Host stdin: prompt (`q` quits), aspect, duration, steps, seed and optional fl2va keyframes."""
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
-    while True:
-        try:
-            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
-            aspect = _parse_aspect(raw, default_aspect_ratio)
-            break
-        except EOFError:
-            return None
-        except ValueError:
-            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
+    """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
+    try:
+        first_image = _read_optional_image_path("First image path (blank for none): ")
+        last_image = _read_optional_image_path("Last image path (blank for none): ")
+    except EOFError:
+        return None
+    width = height = None
+    aspect = default_aspect_ratio
+    if first_image is None and last_image is None:
+        while True:
+            try:
+                raw = _prompt_line("Width:Height (blank for none): ")
+                width, height = _parse_aspect(raw, (None, None))
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 1280:720)", file=sys.stderr)
+        while True:
+            try:
+                raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+                aspect = _parse_aspect(raw, default_aspect_ratio)
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 16:9)", file=sys.stderr)
     while True:
         try:
             raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
@@ -837,35 +855,32 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected an integer", file=sys.stderr)
-    try:
-        first_image = _read_optional_image_path("First image path (blank for none): ")
-        last_image = _read_optional_image_path("Last image path (blank for none): ")
-    except EOFError:
-        return None
-    return prompt, aspect, duration_s, num_steps, seed, first_image, last_image
+    return prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None,
-) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
+    spec: tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None,
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s, num_steps, seed, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed = spec
         _append_journal(
             seq,
             json.dumps(
                 {
                     "prompt": prompt,
+                    "first_image": first_image,
+                    "last_image": last_image,
+                    "width": width,
+                    "height": height,
                     "aspect": [int(aspect[0]), int(aspect[1])],
                     "duration_s": float(duration_s),
                     "num_steps": int(num_steps),
                     "seed": int(seed),
-                    "first_image": first_image,
-                    "last_image": last_image,
                 }
             ),
         )
@@ -876,12 +891,14 @@ def _broadcast_user_spec(
         payload = json.loads(_wait_journal(seq))
         spec = (
             payload["prompt"],
+            payload["first_image"],
+            payload["last_image"],
+            payload["width"],
+            payload["height"],
             (int(payload["aspect"][0]), int(payload["aspect"][1])),
             float(payload["duration_s"]),
             int(payload["num_steps"]),
             int(payload["seed"]),
-            payload["first_image"],
-            payload["last_image"],
         )
     ttnn.distributed_context_barrier()
     return spec
@@ -904,15 +921,9 @@ def _read_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
     """Host stdin: prompt, aspect, duration, steps, a counts triple, then paths; None on `q` or EOF."""
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
 
     while True:
         try:
@@ -1025,7 +1036,7 @@ def run_user_generations(
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
 ) -> None:
-    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
+    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1039,13 +1050,12 @@ def run_user_generations(
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s, num_steps, seed, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect_ratio, duration_s, num_steps, seed = spec
         image = Image.open(first_image).convert("RGB") if first_image else None
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
-            height, width = resolve_canvas_size(*aspect_ratio) if image is None else (None, None)
-            num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            num_frames = get_num_frames(duration_s)
             with profiler("run", iteration=0):
                 output = pipeline(
                     prompt,
@@ -1068,24 +1078,26 @@ def run_user_generations(
         ttnn.synchronize_device(pipeline.mesh_device)
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
-        log_pipeline_perf(
-            profiler,
-            label=label,
-            pipeline=pipeline,
-            num_forwards=num_steps - 1,
-            width=width,
-            height=height,
-            num_frames=output.num_frames,
-            fps=MINIMAX_H3_FPS,
-            aspect_ratio=aspect_ratio,
-            num_inference_steps=num_steps,
-        )
         if is_host():
-            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
-            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
-            write_artifacts(
-                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            frames = frames_for_export(output)
+            canvas_height, canvas_width = (
+                (frames.shape[1] * 2 // 3, frames.shape[2]) if frames.ndim == 3 else (frames.shape[1], frames.shape[2])
             )
+            log_pipeline_perf(
+                profiler,
+                label=label,
+                pipeline=pipeline,
+                num_forwards=num_steps - 1,
+                width=canvas_width,
+                height=canvas_height,
+                num_frames=output.num_frames,
+                fps=MINIMAX_H3_FPS,
+                aspect_ratio=aspect_ratio,
+                num_inference_steps=num_steps,
+            )
+            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{canvas_width}x{canvas_height}_{duration_tag}s_{index}"
+            write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
         index += 1
 
 
@@ -1111,7 +1123,7 @@ def run_user_ref_generations(
             return
         prompt, references, aspect_ratio, duration_s, num_steps = request
         height, width = resolve_canvas_size(*aspect_ratio)
-        num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+        num_frames = get_num_frames(duration_s)
         profiler = BenchmarkProfiler()
         try:
             with profiler("run", iteration=0):

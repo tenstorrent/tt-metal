@@ -4,13 +4,20 @@
 
 #pragma once
 
-#include <tt-metalium/device_types.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <memory>
 #include <span>
-#include <utility>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <vector>
 
 namespace tt::umd {
 class IoWindow;
@@ -90,6 +97,12 @@ public:
      * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
      * Creates a configuration buffer on the device that the kernel uses to access
      * socket metadata and downstream (host) buffer addresses.
+     *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
+     * Only the rank owning sender_core maps host memory and may read or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
@@ -440,6 +453,8 @@ private:
     ProcessScope process_scope_ = ProcessScope::CrossProcess;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
+    // Resolved once at construction so I/O never reads the mesh view; see validate_host_socket_access.
+    bool rank_owns_endpoint_ = true;
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;

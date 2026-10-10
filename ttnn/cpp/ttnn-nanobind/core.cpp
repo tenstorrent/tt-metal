@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tile.hpp>
+#include <enchantum/enchantum.hpp>
 #include "tt_stl/caseless_comparison.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn/config.hpp"

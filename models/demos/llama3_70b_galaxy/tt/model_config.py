@@ -572,6 +572,11 @@ class TtModelArgs:
         self.mesh_device = mesh_device
         self.is_blackhole = ttnn.get_arch_name().lower() == "blackhole"
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        # Tensor caches are architecture specific: a DRAM-sharded weight stores its shard grid (12 DRAM banks
+        # on Wormhole, 8 on Blackhole) in the cached file and ttnn.load_tensor re-applies that stored grid, so a
+        # file written on one architecture silently loads with the wrong sharding on the other (#58871). Keep
+        # Blackhole Galaxy in its own cache directory (same name tt_transformers uses) instead of sharing TG.
+        self.cache_device_name = "BHGLX" if self.is_blackhole and self.num_devices == 32 else self.device_name
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -633,9 +638,9 @@ class TtModelArgs:
         self.TOKENIZER_PATH = HF_MODEL
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
         if not self.CACHE_PATH:
-            self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
-        else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
-            self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+            self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.cache_device_name)
+        else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG/BHGLX) to the cache path
+            self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.cache_device_name)
         self.model_name = HF_MODEL  # May be overridden by config
         self.from_hf_url = True
 
@@ -832,9 +837,12 @@ class TtModelArgs:
 
             # Chunk values based on what works best empirically,
             # while sticking to sdpa limitations
+            # exp_approx_mode=True keeps the replay-buffer exponential the model was tuned on. Since #57180 the
+            # fp32-dest SDPA kernel honours False with the accurate SFPU exponential, ~20x the SFPU cost per QK
+            # tile, which doubled prefill latency at 128k tokens (see the prefix-caching benchmark).
             self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=256
                 if seqlen >= 2048 and chunk_start_idx == 0
                 else 64
@@ -856,7 +864,7 @@ class TtModelArgs:
             # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
             self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                exp_approx_mode=False,
+                exp_approx_mode=True,
                 q_chunk_size=SDPA_CHUNK_ALIGN,
                 k_chunk_size=SDPA_CHUNK_ALIGN,
             )

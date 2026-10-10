@@ -5,6 +5,7 @@
 import inspect
 import sys
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -16,10 +17,11 @@ from models.common.sampling._utils import (
     topk_would_route_to_large_indices,
     upper_power_of_2,
 )
-from models.common.sampling.tt_log_probs import LogProbsCalculator
+from models.common.sampling.tt_log_probs import LogProbsCalculator, LogProbsResult
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
+    get_vocab_num_shards,
     get_vocab_shard_dims,
 )
 
@@ -42,6 +44,70 @@ TIEBREAK_INDEX_SENTINEL = 2**24
 
 # Widest input ttnn.topk accepts in one call; vocabs beyond it must be cut into chunks.
 TOPK_MAX_WIDTH = 64 * 1024
+
+
+def format_grammar_bitmask(
+    grammar_bitmask: torch.Tensor,
+    *,
+    vocab_size: int,
+    padded_vocab_size: int,
+    max_batch_size: int,
+) -> torch.Tensor:
+    """Validate and pad a packed vLLM grammar mask for the device sampler.
+
+    Examples:
+        >>> v, p, m = 10, 64, 3
+        >>> # 521 == (1 << 0) | (1 << 3) | (1 << 9)
+        >>> g = torch.tensor([[521]], dtype=torch.int32)
+        >>> format_grammar_bitmask(g, vocab_size=v, padded_vocab_size=p, max_batch_size=m)
+        tensor([[521,   0],
+                [ -1,  -1],
+                [ -1,  -1]], dtype=torch.int32)
+    """
+    # region Input validation
+    if not isinstance(grammar_bitmask, torch.Tensor):
+        raise TypeError(f"`grammar_bitmask` must be a torch.Tensor, got {type(grammar_bitmask).__name__}")
+
+    if grammar_bitmask.dtype != torch.int32:
+        raise TypeError(f"`grammar_bitmask` must have dtype torch.int32, got {grammar_bitmask.dtype}")
+
+    if grammar_bitmask.ndim != 2:
+        raise ValueError(
+            "`grammar_bitmask` must have shape [batch, ceil(vocab_size / 32)], " f"got {tuple(grammar_bitmask.shape)}"
+        )
+
+    if padded_vocab_size < vocab_size or padded_vocab_size % 32 != 0:
+        raise ValueError(
+            "`padded_vocab_size` must be a multiple of 32 and at least `vocab_size`, "
+            f"got `vocab_size={vocab_size}`, `padded_vocab_size={padded_vocab_size}`"
+        )
+
+    packed_vocab_size = (vocab_size + 31) // 32
+    if grammar_bitmask.shape[1] != packed_vocab_size:
+        raise ValueError(
+            "`grammar_bitmask` packed width does not match `vocab_size`: "
+            f"got {grammar_bitmask.shape[1]}, expected {packed_vocab_size} for `vocab_size={vocab_size}`"
+        )
+
+    if grammar_bitmask.shape[0] > max_batch_size:
+        raise ValueError(f"`grammar_bitmask` batch {grammar_bitmask.shape[0]} exceeds sampler batch {max_batch_size}")
+    # endregion
+
+    # numpy stays single-threaded here; torch's intra-op pool contends with ttnn's host threads.
+    batch_size = grammar_bitmask.shape[0]
+    formatted = np.full((max_batch_size, padded_vocab_size // 32), -1, dtype=np.int32)
+    formatted[:batch_size] = 0
+    active = formatted[:batch_size, :packed_vocab_size]
+    active[:] = grammar_bitmask.numpy()
+    valid_tail_bits = vocab_size % 32
+    if valid_tail_bits:
+        active[:, -1] &= np.int32((1 << valid_tail_bits) - 1)
+
+    empty_rows = np.flatnonzero(~active.any(axis=1))
+    if empty_rows.size:
+        raise ValueError(f"`grammar_bitmask` contains rows with no allowed token: " f"`rows={empty_rows.tolist()!r}`")
+
+    return torch.from_numpy(formatted)
 
 
 class TTSampling(LightweightModule):
@@ -138,8 +204,11 @@ class TTSampling(LightweightModule):
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
         """
+        calculator = getattr(self, "log_probs_calculator", None)
+        needs_topk_logprobs = calculator is not None and calculator.enable_log_probs and calculator._use_topk_logprobs
         return (
             self._allow_force_argmax_sampling
+            and not needs_topk_logprobs
             and is_default_value(k, 1)
             and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
@@ -393,6 +462,157 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Stores changing packed grammar bits.
+        self.grammar_bitmask_tensor = None
+        # Constant [0...31] shift vector used to unpack every int32 word in parallel.
+        self.grammar_bitmask_arange = None
+
+    def enable_device_grammar(self) -> None:
+        """Allocate persistent packed-mask inputs before any trace is captured."""
+        if self._sampling_dp != 1:
+            raise ValueError(
+                f"device grammar sampling does not support row-sharded sampling: " f"`sampling_dp={self._sampling_dp}`"
+            )
+
+        num_vocab_shards = get_vocab_num_shards(self.cluster_shape, self.sampling_all_gather_axis)
+        if self.padded_vocab_size % (32 * num_vocab_shards) != 0:
+            raise ValueError(
+                "device grammar sampling requires every vocab shard to hold whole 32-token mask words: "
+                f"`padded_vocab_size={self.padded_vocab_size}`, `num_vocab_shards={num_vocab_shards}`"
+            )
+
+        if self.grammar_bitmask_tensor is not None:
+            return
+
+        initial_mask = self.validate_grammar_bitmask(
+            torch.full(
+                (self.max_batch_size, (self.vocab_size + 31) // 32),
+                -1,
+                dtype=torch.int32,
+            ),
+        )
+        vocab_shard_dims = self._grammar_bitmask_shard_dims()
+        mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=vocab_shard_dims,
+            mesh_shape=self.cluster_shape,
+        )
+        self.grammar_bitmask_tensor = ttnn.from_torch(
+            initial_mask,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.grammar_bitmask_arange = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def update_grammar_bitmask(self, grammar_bitmask: torch.Tensor) -> None:
+        """Replace the full persistent mask; inactive rows become all-allowed."""
+        if self.grammar_bitmask_tensor is None:
+            raise RuntimeError("device grammar buffers were not enabled before trace capture")
+
+        formatted = self.validate_grammar_bitmask(grammar_bitmask)
+        vocab_shard_dims = self._grammar_bitmask_shard_dims()
+        host_tensor = ttnn.from_torch(
+            formatted,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=vocab_shard_dims,
+                mesh_shape=self.cluster_shape,
+            ),
+        )
+        ttnn.copy_host_to_device_tensor(host_tensor, self.grammar_bitmask_tensor)
+
+    def validate_grammar_bitmask(self, grammar_bitmask: torch.Tensor) -> torch.Tensor:
+        """Return the fixed-shape mask or raise before sampler state changes."""
+        return format_grammar_bitmask(
+            grammar_bitmask,
+            vocab_size=self.vocab_size,
+            padded_vocab_size=self.padded_vocab_size,
+            max_batch_size=self.max_batch_size,
+        )
+
+    def _grammar_bitmask_shard_dims(self):
+        """Map the logits' 4D vocab axis onto a 2D packed-mask tensor."""
+        return tuple(
+            1 if dim == 3 else dim
+            for dim in get_vocab_shard_dims(
+                self.cluster_shape,
+                self.sampling_all_gather_axis,
+            )
+        )
+
+    def _apply_grammar_bitmask(self, logits):
+        if self.grammar_bitmask_tensor is None or self.grammar_bitmask_arange is None:
+            raise RuntimeError("device grammar buffers were not enabled before sampling")
+
+        # Mesh tensor shapes are per device, i.e., local to this vocab shard.
+        local_packed_width = self.grammar_bitmask_tensor.shape[-1]
+        local_vocab_width = local_packed_width * 32
+
+        packed = ttnn.reshape(
+            self.grammar_bitmask_tensor,
+            (self.max_batch_size, local_packed_width, 1),
+            sub_core_grids=self.sub_core_grids,
+        )
+        shifted = ttnn.bitwise_right_shift(
+            packed,
+            self.grammar_bitmask_arange,
+            sub_core_grids=self.sub_core_grids,
+        )
+        allowed_bits = ttnn.bitwise_and(
+            shifted,
+            1,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(shifted)
+
+        unpacked = ttnn.reshape(
+            allowed_bits,
+            (1, 1, self.max_batch_size, local_vocab_width),
+            sub_core_grids=self.sub_core_grids,
+        )
+        allowed_tiled = ttnn.to_layout(
+            unpacked,
+            ttnn.TILE_LAYOUT,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(allowed_bits)
+
+        allowed = ttnn.typecast(
+            allowed_tiled,
+            ttnn.bfloat16,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(allowed_tiled)
+
+        additive_mask = ttnn.where(
+            allowed,
+            0.0,
+            float("-inf"),
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.add_(
+            logits,
+            additive_mask,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(additive_mask)
+        ttnn.deallocate(allowed)
+
+        return logits
+
     def _get_num_sampling_shards(self):
         if self.multi_step_reduction:
             return self._num_vocab_splits
@@ -634,6 +854,11 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
+        # Top-k reporting needs the candidate pipeline, even for greedy tokens.
+        # Resolve reporting before choosing the path so its parameters update too.
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -684,10 +909,6 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
-
-        self.log_probs_calculator.set_log_probs_mode(
-            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
-        )
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
@@ -824,7 +1045,8 @@ class TTSampling(LightweightModule):
         self,
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
-    ):
+        apply_grammar: bool = False,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """
         Perform on-device sampling on logits tensor.
         The logits are sharded over the devices in the cluster.
@@ -835,12 +1057,29 @@ class TTSampling(LightweightModule):
         Args:
             x: Input logits tensor
             tt_out_tok: Optional output tensor to write results to
+            apply_grammar: Apply the packed mask previously staged with
+                ``update_grammar_bitmask`` before token selection.
 
         Returns:
-            Sampled token indices tensor
+            Sampled token indices and optional logprob output.
         """
+        if apply_grammar:
+            x = (
+                x
+                if x.dtype == ttnn.bfloat16
+                else ttnn.typecast(
+                    x,
+                    dtype=ttnn.bfloat16,
+                    sub_core_grids=self.sub_core_grids,
+                )
+            )
+            x = self._apply_grammar_bitmask(x)
+
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            # Logprobs consume the original vocabulary shards, before argmax's
+            # gather/slice. Keep token selection identical when reporting toggles.
+            logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
             # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
@@ -912,10 +1151,17 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 sub_core_grids=self._force_argmax_sub_core_grids,
             )
-            # Argmax fast-path does not compute logprobs (it never runs a softmax over
-            # the vocab). On single-chip, on-device logprobs are unsupported anyway
-            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
-            self.tt_log_probs = None
+            if self.log_probs_calculator.enable_log_probs:
+                # argmax drops the final axis; the calculator takes the ordinary
+                # sampler's [1,1,1,B] ROW_MAJOR index layout.
+                logprob_indices = (
+                    ttnn.reshape(tt_out_tok, (1, 1, 1, tt_out_tok.shape[-1]))
+                    if len(tt_out_tok.shape) == 3
+                    else tt_out_tok
+                )
+                self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, logprob_indices)
+            else:
+                self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
         # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is

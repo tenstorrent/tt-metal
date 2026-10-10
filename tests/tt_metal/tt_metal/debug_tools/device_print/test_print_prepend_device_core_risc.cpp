@@ -70,22 +70,32 @@ Program MakeTensixPrependProgram(distributed::MeshDevice& mesh_device, const Cor
                  .source = source,
                  .num_threads = 1,
                  .hw_config =
-                     experimental::DataMovementGen1Config{
-                         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+                     experimental::DataMovementHardwareConfig{
+                         .config_1xx =
+                             experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                 .processor = DataMovementProcessor::RISCV_0,
+                                 .noc = NOC::NOC_0,
+                             },
+                     },
              },
              experimental::KernelSpec{
                  .unique_id = kNcrisc,
                  .source = source,
                  .num_threads = 1,
                  .hw_config =
-                     experimental::DataMovementGen1Config{
-                         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
+                     experimental::DataMovementHardwareConfig{
+                         .config_1xx =
+                             experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                 .processor = DataMovementProcessor::RISCV_1,
+                                 .noc = NOC::NOC_1,
+                             },
+                     },
              },
              experimental::KernelSpec{
                  .unique_id = kCompute,
                  .source = source,
                  .num_threads = 1,
-                 .hw_config = experimental::ComputeGen1Config{},
+                 .hw_config = experimental::ComputeHardwareConfig{},
              }},
         .work_units = {experimental::WorkUnitSpec{
             .name = "main", .kernels = {kBrisc, kNcrisc, kCompute}, .target_nodes = experimental::NodeRange{cores}}},
@@ -177,6 +187,9 @@ TEST_F(DevicePrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
 }
 
 TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {

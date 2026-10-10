@@ -16,7 +16,7 @@ Run:
   cd /data/vmelnykov/tt-metal
   export TT_METAL_HOME=/data/vmelnykov/tt-metal PYTHONPATH=/data/vmelnykov/tt-metal
   source python_env/bin/activate
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref   # real bf16 weights + tilized cache
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3   # real bf16 weights + tilized cache
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   export EXPERT_DTYPE=bf4
   python3 models/demos/minimax_m3/tests/galaxy_generate_m3.py
@@ -28,6 +28,7 @@ import sys
 import torch
 
 import ttnn
+from models.demos.minimax_m3.tt.moe import shared_overlap
 
 NUM_GEN = int(os.getenv("NUM_GEN", "6"))
 TARGET_LEN = 5120  # 8 * 640 — divisible by SP=8 and by 32 (tile)
@@ -193,6 +194,7 @@ def main():
         print(f"[sp-gen] text={tok.decode(gen)!r}", flush=True)
         print("[sp-gen] DONE", flush=True)
     finally:
+        shared_overlap.release_all()
         ttnn.close_mesh_device(mesh)
 
 

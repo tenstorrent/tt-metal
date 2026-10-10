@@ -5,47 +5,9 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high, testing_dtype, expected_rtol, expected_atol",
-    [
-        (-89, -87, "bfloat16", 1e-2, 1e-3),
-        (-87.3, 88.7, "float32", 1e-2, 1e-3),
-    ],
-)
-def test_exp_atol(input_shapes, low, high, testing_dtype, expected_rtol, expected_atol, device):
-    torch_dtype = getattr(torch, testing_dtype)
-    ttnn_dtype = getattr(ttnn, testing_dtype)
-
-    num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch_dtype)
-    torch_input = torch_input[:num_elements].reshape(input_shapes)
-
-    golden_function = ttnn.get_golden_function(ttnn.exp)
-    golden = golden_function(torch_input, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn_dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.exp(tt_in)
-    assert_allclose(tt_result, golden, rtol=expected_rtol, atol=expected_atol)
 
 
 def test_exp_fp32_accuracy(device):

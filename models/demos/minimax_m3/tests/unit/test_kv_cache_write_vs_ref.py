@@ -84,12 +84,15 @@ def _ref_index_k(x, w, cos, sin):
 # both (2560 fails Tt % KC == 0). Dense is block-count-agnostic but runs at the same S here.
 @pytest.mark.parametrize("seq_len", [5120], ids=["s5120"])
 @pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
-def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, reset_seeds):
+@pytest.mark.parametrize("index_k_tp_shard", [False, True], ids=["ik_tp_replicated", "ik_tp_dedup"])
+def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, index_k_tp_shard, reset_seeds):
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4), "TP=4 x SP=8 layout expected"
     sp, tp, sp_axis = rows, cols, 0
     s_local = seq_len // sp
     is_sparse = layer_kind == "sparse"
+    if index_k_tp_shard and not is_sparse:
+        pytest.skip("dense layers write no index_k")
 
     torch.manual_seed(0)
     x = torch.randn(1, seq_len, HIDDEN) * 0.1
@@ -226,7 +229,14 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
     rope_sp = [reshard_rope(rope_setup.cos_matrix_prefill), reshard_rope(rope_setup.sin_matrix_prefill)]
 
     # Externally-owned packed cache (one layer, one user) sized to the prompt -> block-cyclic == identity.
-    kv_cache = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=seq_len, sp_axis=sp_axis, num_users=1)
+    kv_cache = allocate_kv_caches(
+        mesh_device,
+        num_layers=1,
+        max_seq_len=seq_len,
+        sp_axis=sp_axis,
+        num_users=1,
+        index_k_tp_shard=index_k_tp_shard,
+    )
 
     attn(x_tt, rope_mats=rope_sp, position_idx=None, kv_cache=kv_cache, user_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -250,9 +260,16 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
     assert ok_v, f"V cache mismatch: {pcc_v}"
 
     if is_sparse:
-        # index_k is the single shared head, replicated across TP cols -> read col 0, concat SP rows.
         dts = ttnn.get_device_tensors(kv_cache.index_k)
-        host_ik = torch.cat([ttnn.to_torch(dts[r * cols + 0]).float() for r in range(rows)], dim=2)  # [1,1,S,HD]
+        if index_k_tp_shard:
+            # TP-deduped: chip (r, c) holds stripe c of row r's s_local rows -> concat cols within a row, then rows.
+            assert tuple(dts[0].shape)[2] == s_local // cols, f"deduped index_k per-chip rows {dts[0].shape}"
+            host_ik = torch.cat(
+                [ttnn.to_torch(dts[r * cols + c]).float() for r in range(rows) for c in range(cols)], dim=2
+            )
+        else:
+            # index_k is the single shared head, replicated across TP cols -> read col 0, concat SP rows.
+            host_ik = torch.cat([ttnn.to_torch(dts[r * cols + 0]).float() for r in range(rows)], dim=2)  # [1,1,S,HD]
         ok_ik, pcc_ik = comp_pcc(ref_index_k, host_ik, 0.99)
         logger.info(f"[sparse] index_k write: pcc={pcc_ik}")
         assert ok_ik, f"index_k cache mismatch: {pcc_ik}"

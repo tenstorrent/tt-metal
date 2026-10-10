@@ -198,7 +198,56 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
+
+// Bits 16-24 of TT_METAL_PROFILE_PERF_COUNTERS select the Quasar l1_client event counter, subport*8 + event; 0 is
+// off because event 0 is never valid. perf_counters.hpp decodes the same field from PROFILE_PERF_COUNTERS.
+constexpr uint32_t PERF_COUNTER_L1_CLIENT_SHIFT = 16;
+constexpr uint32_t PERF_COUNTER_GROUP_MASK = (1u << PERF_COUNTER_L1_CLIENT_SHIFT) - 1;
+
+// Quasar has no L1 counter unit: valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy frontend sends
+// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it. The l1_client checks mirror
+// llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h (37 subports, 8 events).
+static uint32_t quasar_perf_counter_mode(uint32_t mode) {
+    constexpr uint32_t quasar_groups = 0x27;
+    constexpr uint32_t tt1xx_all_groups = 0x2F;
+    uint32_t groups = mode & PERF_COUNTER_GROUP_MASK;
+    const uint32_t sel = mode >> PERF_COUNTER_L1_CLIENT_SHIFT;
+    if (groups == tt1xx_all_groups) {
+        groups = quasar_groups;
+    }
+    TT_FATAL(
+        (groups & ~quasar_groups) == 0,
+        "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
+        "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+        mode);
+    if (sel != 0) {
+        constexpr uint32_t num_events = 8;
+        constexpr uint32_t num_selections = 37 * num_events;
+        TT_FATAL(
+            sel < num_selections,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} (bits 16-24) is out of range; it encodes "
+            "subport*8 + event with 37 subports and 8 events",
+            mode,
+            sel);
+        TT_FATAL(
+            sel % num_events != 0,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is event 0, which is unused in the L1 RTL",
+            mode,
+            sel);
+        TT_FATAL(
+            !(sel / num_events == 4 && sel % num_events <= 3),
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is a THCON event 1-3, the TRISC port's SBank 0 "
+            "counters already exposed by selections 1-3",
+            mode,
+            sel);
+    }
+    return groups | (sel << PERF_COUNTER_L1_CLIENT_SHIFT);
+}
 
 void JitBuildEnv::init(
     uint64_t build_key,
@@ -208,10 +257,10 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -326,17 +375,20 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
         // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
-        if (rtoptions.get_profiler_sync_events_enabled()) {
-            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
             // Note: only enabled with streaming profiler.
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
         }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
@@ -352,7 +404,17 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
-        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+        uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
+        } else {
+            TT_FATAL(
+                (perf_counter_mode >> PERF_COUNTER_L1_CLIENT_SHIFT) == 0,
+                "TT_METAL_PROFILE_PERF_COUNTERS={}: bits 16-24 select the Quasar l1_client event counter, which this "
+                "architecture does not have",
+                perf_counter_mode);
+        }
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
@@ -459,7 +521,6 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",
@@ -559,6 +620,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -1249,6 +1313,15 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     if (!JitBuildCache::inst().build_once(hash, build_fn)) {
         BuildCacheTelemetry::inst().record_jit_once_dedup();
     }
+}
+
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    const auto status = JitBuildCache::inst().build_once_no_wait(hash, build_fn);
+    // An in-progress caller records its dedup later, when it joins through jit_build_once().
+    if (status == JitBuildCache::BuildOnceStatus::AlreadyBuilt) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
+    return status != JitBuildCache::BuildOnceStatus::InProgress;
 }
 
 void jit_build_cache_clear() {

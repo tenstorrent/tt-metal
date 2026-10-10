@@ -250,7 +250,24 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
+                // typecast can pick a different output dtype (e.g. bf16→uint8); use output dtype for RM page alignment.
+                const auto output_element_size_bytes = [&]() -> uint32_t {
+                    switch (args.output_dtype) {
+                        case DataType::BFLOAT16: return sizeof(bfloat16);
+                        case DataType::FLOAT32: return sizeof(float);
+                        case DataType::INT32: return sizeof(int32_t);
+                        case DataType::UINT32: return sizeof(uint32_t);
+                        case DataType::UINT16: return sizeof(uint16_t);
+                        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
+                        case DataType::UINT8: return sizeof(uint8_t);
+                        case DataType::INT8: return sizeof(int8_t);
+                        case DataType::BFLOAT8_B:
+                        case DataType::BFLOAT4_B: return sizeof(std::byte);
+                        default: TT_THROW("Unary: unsupported output dtype");
+                    }
+                }();
+                shard_spec_opt = generate_output_shard_spec(
+                    tensor_args.input, padded_out_shape, memory_layout, output_element_size_bytes);
             }
         }
 
@@ -313,22 +330,21 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // Sharded distribution needs its own term. Since shape and shard squeeze together, one shard spec resolves
     // per shape ({64,64} over two cores: [64,64] -> [4], [64,128] -> [2,2]) and GRID_2D trims the bank list
     // from the unsqueezed shape ([64,128] and [64,192] over two and three banks). The accessor passes both as
-    // compile-time args. Use the Buffer's stored sharding_args since they describe the actual buffer layout
-    // used by the factory. A reshaped view keeps its parent tensor's sharding_args. A null buffer means the
-    // output has not been allocated yet and its buffer will come from output_spec.
-    //
-    // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
-    // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
-    // spec.compute_buffer_sharding_args().
+    // compile-time args. The cache key uses the TensorSpec resolution. Reject a tensor when its buffer distribution
+    // differs from that resolution. A reshaped view keeps its parent buffer's sharding_args under a new spec
+    // causing this mismatch. Since the resolution is already computed for the cache key, the check adds no work
+    // on cache hits. The factory repeats the check on cache misses when the hash is not computed.
     const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
-                                     const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+                                     const Tensor* tensor,
+                                     const char* slot) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
         if (!spec.memory_config().is_sharded()) {
             return std::nullopt;
         }
-        const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
-        const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
-        const auto& distribution =
-            buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
+        const auto sharding_args = spec.compute_buffer_sharding_args();
+        const auto& distribution = sharding_args.buffer_distribution_spec();
+        if (tensor != nullptr) {
+            require_buffer_distribution_matches_spec(*tensor, distribution, slot);
+        }
         if (!distribution.has_value()) {
             return std::nullopt;
         }
@@ -343,8 +359,11 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
         input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
-        distribution_key(input_tensor.tensor_spec(), &input_tensor),
-        distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
+        distribution_key(input_tensor.tensor_spec(), &input_tensor, "input"),
+        // A preallocated output is checked against its own spec. A new output has no buffer yet; it is allocated from
+        // output_spec.
+        distribution_key(
+            output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
         dst_shard_vol);
 }

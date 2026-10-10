@@ -15,6 +15,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -40,6 +41,24 @@ NarrowT dfb_narrow_field(WideT value, uint32_t dfb_id, const char* field_name) {
         max_v,
         std::numeric_limits<NarrowT>::digits);
     return static_cast<NarrowT>(value);
+}
+
+void validate_borrowed_memory_address(const DataflowBufferImpl& dfb, uint32_t alloc_addr) {
+    if (!dfb.borrows_memory()) {
+        return;
+    }
+    if (alloc_addr == 0) {
+        // Address 0 is never a legal L1 address for user allocation, so a borrowed-memory DFB at address 0 is illegal.
+        // But mock devices are exempt from the rule:
+        // nothing they serialize reaches hardware, and constraint queries there bind weightless input tensors at
+        // address 0 (issue #57022).
+        const bool is_mock = MetalContext::instance(dfb.get_context_id()).get_cluster().get_target_device_type() ==
+                             tt::TargetDevice::Mock;
+        TT_FATAL(
+            is_mock,
+            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+            dfb.id);
+    }
 }
 
 uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) {
@@ -474,10 +493,7 @@ size_t serialize_dfb_config_for_core(
             auto it = dfb->core_lookup_.find(core);
             TT_FATAL(it != dfb->core_lookup_.end(), "DFB {} has no config for core ({}, {})", dfb->id, core.x, core.y);
             const uint32_t alloc_addr = it->second.second;
-            TT_FATAL(
-                !dfb->borrows_memory() || alloc_addr != 0,
-                "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-                dfb->id);
+            validate_borrowed_memory_address(*dfb, alloc_addr);
 
             const size_t byte_offset = static_cast<size_t>(dfb->device_slot) * config_bytes_per_slot;
             TT_FATAL(
@@ -1609,10 +1625,7 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
     const auto& [group_idx, alloc_addr] = it->second;
-    TT_FATAL(
-        !this->borrows_memory() || alloc_addr != 0,
-        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-        this->id);
+    validate_borrowed_memory_address(*this, alloc_addr);
 
     const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
 
@@ -1811,7 +1824,7 @@ using namespace tt::tt_metal::experimental::dfb::detail;
 // DFB count rather than growing with the number of DFBs elsewhere in the program.
 uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) const {
     const auto& hal = MetalContext::instance(context_id_).hal();
-    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_arch_num_circular_buffers();
+    const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_num_dataflow_buffers();
 
     uint64_t used_slots = 0;
     for (const auto& other : this->dataflow_buffers_) {
@@ -2866,9 +2879,7 @@ void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, J
             if (data_format == DataFormat::Invalid) {
                 continue;
             }
-            const auto& tile_opt = dfb->config.tile;
-            const auto& unpack_geom = dfb->config.unpack_face_geometry;
-            build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
+            build_options.set_cb_data_fmt_and_tile(cb_index, data_format, dfb->config.tile);
         }
     }
 }

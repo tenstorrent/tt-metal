@@ -40,7 +40,7 @@ MINIMAX_H3_MAX_PIXELS = 768 * 1344
 MINIMAX_H3_CANVAS_MULTIPLE = 32
 MINIMAX_H3_MIN_ASPECT_RATIO = 1 / 4
 MINIMAX_H3_MAX_ASPECT_RATIO = 4
-MINIMAX_H3_MIN_DURATION = 5.0
+MINIMAX_H3_MIN_DURATION = 4.0
 MINIMAX_H3_MAX_DURATION = 15.0
 
 # The video VAE encodes 17 pixel frames per chunk and drops the 3 trailing
@@ -50,6 +50,26 @@ MINIMAX_H3_LATENTS_PER_CHUNK = 5
 
 MINIMAX_H3_AUDIO_LATENTS_PER_SECOND = 40
 MINIMAX_H3_AUDIO_CHANNELS = 2
+# Tile height. Kept as a plain int so this module stays free of `ttnn`; it equals `ttnn.TILE_SIZE`.
+MINIMAX_H3_TILE = 32
+
+
+def packed_sequence_length(
+    num_text_tokens: int, num_audio_latents: int, num_video_rows: int, num_condition_rows: int = 0
+) -> int:
+    """Rows in the packed sequence. Audio contributes ``latents * MINIMAX_H3_AUDIO_CHANNELS`` rows, not
+    ``latents`` -- the one place this arithmetic lives, so a harness cannot model half the audio the
+    pipeline packs (which is how every M-keyed tuning table came to key on lengths the pipeline never
+    runs)."""
+    return num_text_tokens + num_condition_rows + num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS + num_video_rows
+
+
+def padded_sequence_length(sequence_length: int, sp_factor: int, tile: int = MINIMAX_H3_TILE) -> int:
+    """``sequence_length`` rounded up to a multiple of ``sp_factor * tile``, so it fractures evenly over SP
+    into tile-aligned rows per device. Rows/device is ``padded_sequence_length(...) // sp_factor``."""
+    alignment = sp_factor * tile
+    return ((sequence_length + alignment - 1) // alignment) * alignment
+
 
 MINIMAX_H3_KEYFRAME_NOISE_AUG = 0.999
 MINIMAX_H3_KEYFRAME_ENCODE_SEED = 42
@@ -107,15 +127,6 @@ def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int,
 
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
     return max(multiple, round(height / multiple) * multiple), max(multiple, round(width / multiple) * multiple)
-
-
-def align_num_frames(num_frames: int) -> int:
-    """Snap a frame count up to the next ``17n + 5`` the video VAE can encode."""
-    if num_frames < 1:
-        raise ValueError(f"num_frames must be positive, got {num_frames}")
-    while num_frames % MINIMAX_H3_FRAMES_PER_CHUNK != MINIMAX_H3_LATENTS_PER_CHUNK:
-        num_frames += 1
-    return num_frames
 
 
 def video_latent_num_frames(num_frames: int) -> int:
@@ -260,7 +271,7 @@ def build_packed_sequence(
     num_condition_rows = len(keyframe_anchors) * rows_per_frame
     num_audio_rows = num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS
     num_video_rows = num_latent_frames * rows_per_frame
-    sequence_length = num_text_tokens + num_condition_rows + num_audio_rows + num_video_rows
+    sequence_length = packed_sequence_length(num_text_tokens, num_audio_latents, num_video_rows, num_condition_rows)
 
     condition_start = num_text_tokens
     audio_start = condition_start + num_condition_rows

@@ -35,7 +35,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -113,21 +113,40 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t num_chunks;
     uint32_t last_chunk_tiles;
     uint32_t buffering;
+    // One pass has to push exactly this many tiles.
+    uint32_t dfb_num_entries;
 
     if (use_chunked_processing) {
-        // Keep tiles_per_chunk near the cap and let the last chunk be partial.
-        // Reader/compute kernels handle the partial trailing chunk explicitly
-        // via last_chunk_tiles.
-        tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
-        num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
-        last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
-        buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
+        const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
+        const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
+        if (row_bytes <= max_l1_budget_bytes) {
+            // One buffer holds the row, so the short last chunk lands on the end.
+            tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
+            num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+            last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
+            buffering = 1;
+            dfb_num_entries = num_tiles_per_block;
+        } else {
+            // Chunk size divides the row, so every push matches the buffer.
+            tiles_per_chunk = chunk_cap;
+            for (uint32_t divisor = chunk_cap; divisor > 0; --divisor) {
+                if (num_tiles_per_block % divisor == 0) {
+                    tiles_per_chunk = divisor;
+                    break;
+                }
+            }
+            num_chunks = num_tiles_per_block / tiles_per_chunk;
+            last_chunk_tiles = tiles_per_chunk;
+            buffering = 2 * tiles_per_chunk * weights_single_tile_size <= max_l1_budget_bytes ? 2 : 1;
+            dfb_num_entries = buffering * tiles_per_chunk;
+        }
     } else {
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
         num_chunks = 1;
         last_chunk_tiles = num_tiles_per_block;
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+        dfb_num_entries = buffering * tiles_per_chunk;
     }
 
     // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
@@ -168,7 +187,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = WEIGHTS_STAGING,
         .entry_size = weights_single_tile_size,
-        .num_entries = buffering * tiles_per_chunk,
+        .num_entries = dfb_num_entries,
         .data_format_metadata = weights_data_format,
     });
 
@@ -190,7 +209,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (output_sharded) {
         output_dfb_total_size = output.buffer()->aligned_size_per_bank();
     } else {
-        output_dfb_total_size = buffering * tiles_per_chunk * output_single_tile_size;
+        output_dfb_total_size = dfb_num_entries * output_single_tile_size;
     }
     // The output buffer's total size has to divide evenly by its tile-sized entry. When the output is
     // sharded the total is the shard's own aligned size per bank, which the op's validation makes a
@@ -339,7 +358,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 {"last_chunk_tiles", last_chunk_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
@@ -357,11 +376,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
                                : "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp";
 
-    // Legacy compute config left every field at its default; ComputeGen1Config's defaults reproduce
-    // them exactly (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries).
-    // arch_compute_config keeps that Gen1 config on WH/BH and maps it to the equivalent Gen2 config on
-    // Quasar (which rejects a bare ComputeGen1Config on a compute KernelSpec).
-    ComputeHardwareConfig compute_hw = ttnn::arch_compute_config(device->arch(), ComputeGen1Config{});
+    // Legacy compute config left every field at its default. ComputeHardwareConfig's common defaults
+    // reproduce them (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries)
+    // on every generation. A TT-1.x.x-only extra is unused on TT-2.x.x.
+    ComputeHardwareConfig compute_hw{};
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
         Group<DFBBinding> compute_dfb_bindings;
@@ -439,7 +457,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                     TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
     }
 

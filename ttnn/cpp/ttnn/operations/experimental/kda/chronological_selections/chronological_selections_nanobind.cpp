@@ -15,9 +15,8 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("OUTGOING_HISTORY") = outgoing_history;
     layout.attr("PREDECESSOR_HISTORY") = predecessor_history;
     layout.attr("FINAL_HISTORY") = final_history;
-    layout.attr("LOCAL_ENTRY_STATE") = local_entry_state;
     layout.attr("FINAL_STATE") = final_state;
-    layout.def("affine_transform", &affine_transform);
+    layout.attr("LOCAL_FINAL_HISTORY") = local_final_history;
 
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
@@ -35,18 +34,29 @@ void bind_chronological_selections(nb::module_& mod) {
             key_dim (int): Positive state key dimension.
             value_dim (int): Positive state value dimension.
 
-        The scalar is read on every execution without host readback. Keep its
-        address stable and update its contents before replaying a captured trace.
-        Each device's rank comes from its mesh coordinate. The interval occupies
-        the full physical capacity; this operation does not accept an end bound.
+        Keyword Args:
+            actual_end (ttnn.Tensor, optional): Replicated, interleaved UINT32
+                row-major device scalar containing the exclusive absolute end.
+                It need not be 32-aligned; with ``actual_start`` it defines a nonempty
+                interval no longer than the full physical capacity. Omission uses full
+                capacity.
+
+        Bounds are read on every execution without host readback. Keep their
+        addresses stable and update their contents before replaying a captured trace.
+        Runtime values are caller preconditions on every replay. Each device's rank
+        comes from its mesh coordinate.
 
         Returns:
             ttnn.Tensor: Interleaved UINT32 row-major DRAM table of shape
-                ``[7 + 2 * SP_size, 8]`` per device. This private representation
-                contains three history-index records, paired start/exclusive-end
-                bounds for local entry and final state, and one bounds pair per
-                chronological affine-transform step. Consumers must use the shared
-                ``_selection_layout`` definitions rather than hard-coded offsets.
+                ``[6, 8]`` per device. This private representation contains three
+                history-index records, paired start/exclusive-end bounds for the
+                final state, and a local final-history record. Its first three words
+                select local rows; the next three select the three tokens ending at the
+                rank's valid end from the candidate rows ``[layer history; predecessor
+                history; those local rows]``, so an end segment with fewer than three
+                valid rows continues the history before it (placeholders on empty
+                ranks). Consumers must use the shared ``_selection_layout`` definitions
+                rather than hard-coded offsets.
         )doc",
         &ttnn::experimental::kda::chronological_selections,
         nb::arg("actual_start").noconvert(),
@@ -54,6 +64,8 @@ void bind_chronological_selections(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("batch_heads"),
         nb::arg("key_dim"),
-        nb::arg("value_dim"));
+        nb::arg("value_dim"),
+        nb::kw_only(),
+        nb::arg("actual_end") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::chronological_selections::detail

@@ -18,6 +18,14 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
+uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<uint32_t> cluster_axis) {
+    if (!cluster_axis.has_value()) {
+        return 1u;
+    }
+    const auto& mesh_view = mesh_device.get_view();
+    return static_cast<uint32_t>((*cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols());
+}
+
 void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -26,6 +34,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const auto& trans_mat = tensor_args.transformation_mat;
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
+    const auto& tile_row_map = tensor_args.affine_tile_row_map;
 
     // Welford LayerNorm (Phases 2-3): whole-row, bf16 input, no RoPE. TP=1 reduces
     // locally; TP>1 gathers per-shard Welford (mean, var) partials over the fabric
@@ -118,10 +127,12 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         const auto& w_logical = weight->logical_shape();
         const auto w_n = w_logical[-2];
         TT_FATAL(
-            w_n == 1 || w_n == shape[2],
-            "Weight second-to-last logical dim ({}) must be 1 (broadcast) or N ({}) for per-token",
+            w_n == 1 || w_n == shape[2] || (tile_row_map.has_value() && w_n % TILE_HEIGHT == 0),
+            "Weight second-to-last logical dim ({}) must be 1 (broadcast), N ({}) for per-token, or a multiple of "
+            "{} with affine_tile_row_map",
             w_n,
-            shape[2]);
+            shape[2],
+            TILE_HEIGHT);
     }
 
     if (bias.has_value()) {
@@ -139,10 +150,49 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         const auto& b_logical = bias->logical_shape();
         const auto b_n = b_logical[-2];
         TT_FATAL(
-            b_n == 1 || b_n == shape[2],
-            "Bias second-to-last logical dim ({}) must be 1 (broadcast) or N ({}) for per-token",
+            b_n == 1 || b_n == shape[2] || (tile_row_map.has_value() && b_n % TILE_HEIGHT == 0),
+            "Bias second-to-last logical dim ({}) must be 1 (broadcast), N ({}) for per-token, or a multiple of "
+            "{} with affine_tile_row_map",
             b_n,
-            shape[2]);
+            shape[2],
+            TILE_HEIGHT);
+    }
+
+    if (tile_row_map.has_value()) {
+        const auto& map = tile_row_map.value();
+        TT_FATAL(
+            map.storage_type() == StorageType::DEVICE && map.buffer() != nullptr,
+            "affine_tile_row_map must be an allocated device tensor");
+        // The reader binds the map's raw buffer address on the input's mesh, so a map that lives on
+        // another mesh would be read as unrelated memory.
+        TT_FATAL(
+            map.device() == input.device(), "affine_tile_row_map must be on the same mesh device as the input");
+        TT_FATAL(
+            map.dtype() == DataType::UINT32 || map.dtype() == DataType::INT32,
+            "affine_tile_row_map must be UINT32 or INT32, got {}",
+            map.dtype());
+        TT_FATAL(map.layout() == Layout::ROW_MAJOR, "affine_tile_row_map must be ROW_MAJOR, got {}", map.layout());
+        TT_FATAL(
+            map.physical_volume() == map.padded_shape()[-1],
+            "affine_tile_row_map must be a single row [1, 1, 1, T], got {}",
+            map.padded_shape());
+        TT_FATAL(
+            map.buffer()->num_pages() == 1u,
+            "affine_tile_row_map must occupy one buffer page (the reader loads a single page), got {}",
+            map.buffer()->num_pages());
+        const uint32_t input_tile_rows = input.physical_volume() / padded[3] / TILE_HEIGHT;
+        TT_FATAL(
+            map.logical_shape()[-1] >= input_tile_rows,
+            "affine_tile_row_map has {} entries, the input has {} tile rows",
+            map.logical_shape()[-1],
+            input_tile_rows);
+        TT_FATAL(
+            map.buffer()->aligned_page_size() <= 65536u,
+            "affine_tile_row_map page ({} B) exceeds the 64 KiB reader buffer",
+            map.buffer()->aligned_page_size());
+        const bool pt_w = weight.has_value() && weight->logical_shape()[-2] > 1;
+        const bool pt_b = bias.has_value() && bias->logical_shape()[-2] > 1;
+        TT_FATAL(pt_w || pt_b, "affine_tile_row_map needs a per-token ([.., rows, H]) weight or bias");
     }
 
     const bool rope_present = trans_mat.has_value() || rope_cos.has_value() || rope_sin.has_value();
@@ -362,7 +412,7 @@ namespace ttnn::prim {
 
 Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology,
@@ -381,7 +431,8 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type,
-    const std::optional<const Tensor>& reciprocals) {
+    const std::optional<const Tensor>& reciprocals,
+    const std::optional<const Tensor>& affine_tile_row_map) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -391,16 +442,7 @@ Tensor dit_fused_distributed_rmsnorm(
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
-    const auto& mesh_view = mesh_device.get_view();
-    const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    // get_usable_topology reaches into the fabric context, which is null when the op runs on a
-    // single device with fabric uninitialized (TP=1, ring_size==1). At num_devices==1 there is no
-    // ring / all-gather and the topology is never used (every ring path is guarded on
-    // ring_size>1), so skip the fabric query and use a harmless default.
-    tt::tt_fabric::Topology topology_ = (num_devices > 1)
-                                            ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis)
-                                            : tt::tt_fabric::Topology::Linear;
+    const uint32_t num_devices = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 
     auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,
@@ -408,10 +450,10 @@ Tensor dit_fused_distributed_rmsnorm(
         per_head_norm,
         dtype,
         memory_config.value_or(input_tensor.memory_config()),
-        cluster_axis,
+        cluster_axis.value_or(0),
         static_cast<uint32_t>(num_preferred_links.value_or(1)),
         static_cast<uint32_t>(num_devices),
-        topology_,
+        topology,
         multi_device_global_semaphore,
         subdevice_id,
         kernel_config_val,
@@ -425,7 +467,8 @@ Tensor dit_fused_distributed_rmsnorm(
         .rope_cos = rope_cos,
         .rope_sin = rope_sin,
         .persistent_output_buffer = persistent_output_buffer,
-        .reciprocals = reciprocals};
+        .reciprocals = reciprocals,
+        .affine_tile_row_map = affine_tile_row_map};
 
     auto outputs = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     // outputs[0] = rmsnorm output, outputs[1] (if present) = stats DRAM scratch.

@@ -50,7 +50,7 @@ namespace unit_tests::compute::broadcast {
 
 enum ApiConvention : std::uint8_t {
     DEFAULT = 0,
-    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init_short instead of init_bcast
+    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init instead of init_bcast
     SHORT_CALL = 2,  // call <op>_tiles_bcast_<dim> instead of <op>_tiles_bcast
     SHORT_BOTH = 3   // both SHORT_INIT and SHORT_CALL
 };
@@ -93,26 +93,46 @@ constexpr float k_broadcast_rtol = 0.0155;
 // the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
 experimental::DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+            },
+    };
 }
 
 experimental::DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+            },
+    };
 }
 
 experimental::ComputeHardwareConfig make_compute_hw_config(
     const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
+        return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
     }
-    return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
+    return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
 }
 
 struct BroadcastConfig {
@@ -286,15 +306,7 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
         defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_bcast_" +
-                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-
-        if ((test_config.eltwise_op == EltwiseOp::SUB || test_config.eltwise_op == EltwiseOp::MUL) &&
-            test_config.broadcast_dim == BroadcastDim::SCALAR) {
-            // FIXME sub_bcast_scalar_init_short and mul_bcast_scalar_init_short are instead called
-            // sub_tiles_bcast_scalar_init_short and mul_tiles_bcast_scalar_init_short
-            defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast_" +
-                                       broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-        }
+                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init";
 
         log_info(tt::LogTest, "Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
@@ -539,13 +551,20 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
 
     // srcA and the output are total_tile_rows x ct_dim grids; srcB is rt_dim tiles, each reused by
     // its row in every block.
-    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    //
+    // One page per buffer rather than one per tile, because the reader and writer kernels walk a
+    // single DRAM bank linearly (bank_id 0, the address advancing by one tile per transfer). A
+    // page-per-tile buffer is interleaved, so page k lands in bank k % num_banks -- two banks on
+    // Quasar -- and a linear walk of bank 0 would read page 2k for tile k and run off the end of
+    // that bank's share of the buffer once k passes half the tile count. Giving the allocator one
+    // page puts the whole buffer in one bank, which is what these kernels address.
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
 
-    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, test_config.rt_dim);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * test_config.rt_dim, 1);
     std::uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
 
-    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;

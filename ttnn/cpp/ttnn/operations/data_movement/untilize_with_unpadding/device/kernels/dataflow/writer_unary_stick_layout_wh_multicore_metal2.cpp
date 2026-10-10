@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This is the Metal 2.0 fork of writer_unary_stick_layout_wh_multicore.cpp, which lives beside
-// it. Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy
-// API. Until the last of them migrates and the original is retired, changes here likely belong there
-// too.
+// NOTE: This forked writer_unary_stick_layout_wh_multicore.cpp during the Metal 2.0 migration. Its
+// last legacy binder has migrated and the original is retired, so this is the only copy and the
+// _metal2 suffix is historical.
 //
 // The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
@@ -44,22 +43,21 @@ void kernel_main() {
         dfb_out0.wait_front(single_block_size * has_rows);
         std::uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
-        for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            std::uint32_t total_size = start_column_id + width_size;
-            std::uint32_t write_size = width_size;
+        // The work split runs over the input padded width.
+        if (start_column_id < unpadded_X_size) {
+            const std::uint32_t total_size = start_column_id + width_size;
+            const std::uint32_t write_size =
+                (total_size > unpadded_X_size) ? (unpadded_X_size - start_column_id) : width_size;
 
-            if (total_size > unpadded_X_size) {
-                std::uint32_t padded_size = total_size - unpadded_X_size;
-                write_size -= padded_size;
+            for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+                CoreLocalMem<std::uint32_t> src(l1_read_addr);
+                noc.async_write(
+                    src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
+
+                noc.async_write_barrier();
+
+                l1_read_addr += width_size;
             }
-
-            CoreLocalMem<std::uint32_t> src(l1_read_addr);
-            noc.async_write(
-                src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
-
-            noc.async_write_barrier();
-
-            l1_read_addr += width_size;
         }
 
         dfb_out0.pop_front(single_block_size * has_rows);

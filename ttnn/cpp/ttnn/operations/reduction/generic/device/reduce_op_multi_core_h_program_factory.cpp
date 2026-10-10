@@ -68,7 +68,7 @@ uint32_t reduce_h_num_cols(
 auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, uint32_t num_cols) {
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_cols)
-               : tt::tt_metal::split_work_to_cores(a.mutable_device().compute_with_storage_grid_size(), num_cols);
+               : tt::tt_metal::split_work_to_cores(a.device().compute_with_storage_grid_size(), num_cols);
 }
 
 // Whether the compute_g2 kernel exists. override_runtime_arguments cannot see the built Program,
@@ -121,7 +121,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::IDevice* device = &a.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = a.device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
     const bool use_width_sharding = reduce_h_use_width_sharding(a, output);
@@ -165,12 +165,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // PostMul means the compute kernel applies the scalar after the reduction.
     const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
-    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    // Int32 max/min/sum and bf16 min use the SFPU reduce path; fp32 only for the accurate opt-in.
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
     auto num_cols = NC * num_h_slices * Wt;
     uint32_t num_cores;
@@ -369,9 +369,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         // calculation.
         const uint64_t per_cb_bytes = negate_cb_tiles * dst_single_tile_size;
         const uint64_t negate_cb_bytes = 2ull * per_cb_bytes;
-        const auto lowest_address = device->lowest_occupied_compute_l1_address();
-        uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-        const uint64_t base_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        const auto lowest_address = device.lowest_occupied_compute_l1_address();
+        uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device.l1_size_per_core();
+        const uint64_t base_addr = device.allocator()->get_base_allocator_addr(HalMemType::L1);
         TT_FATAL(
             max_l1_space > base_addr,
             "Negate H reduce: L1 base allocator address {} >= lowest occupied address {}; no room for buffers",
@@ -547,7 +547,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema =
             {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -594,7 +594,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernels (one per core group) ----
@@ -604,43 +604,33 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // would otherwise carry the caller's math_approx_mode into sfpu_precision_mode, silently
     // changing SFPU precision. (Unlike the other three factories, this one *does* forward
     // dst_full_sync_en, so double_buffer_dest keeps the helper's inverted value.)
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
-    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
-    // ComputeGen2Config on Quasar, and the fields set below exist on both generations. The
-    // explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
-    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
-    // (Unlike the other three factories, this one forwarded dst_full_sync_en, so double_buffer_dest
-    // is left at whatever the caller's config resolved to.)
-    std::visit(
-        [&](auto& compute_cfg) {
-            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            if (fp32_sfpu_reduce) {
-                // Unpack FP32 inputs, RM rows, and partials to DEST so SrcA does not truncate them to tf32.
-                compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
-                if (rm_path) {
-                    compute_cfg.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
-                    compute_cfg.unpack_modes.emplace(RM_DFB, UnpackMode::UnpackToDest);
-                }
-            }
-            // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
-            // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
-            // so state the legacy value for those.
-            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
-                }
-            };
-            require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
-            require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
-            if (rm_path) {
-                require_explicit_unpack_mode(RM_DFB, src0_cb_data_format);
-                require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
-            } else if (use_fpu_negate) {
-                require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
-                require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
-            }
-        },
-        compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+    if (fp32_sfpu_reduce) {
+        // Unpack FP32 inputs, RM rows, and partials to DEST so SrcA does not truncate them to tf32.
+        compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+        if (rm_path) {
+            compute_hw.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
+            compute_hw.unpack_modes.emplace(RM_DFB, UnpackMode::UnpackToDest);
+        }
+    }
+    // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
+    // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
+    // so state the legacy value for those.
+    auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+        if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+        }
+    };
+    require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
+    require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
+    if (rm_path) {
+        require_explicit_unpack_mode(RM_DFB, src0_cb_data_format);
+        require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
+    } else if (use_fpu_negate) {
+        require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
+        require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
+    }
 
     // For width-sharding, num_cols_per_core_group_1 == NC * shard_Wt. Expose (shard_Wt, NC)
     // to the compute kernel so its (nc, wt_chunk, ht, wt_in_chunk) iteration matches the
@@ -648,8 +638,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
     uint32_t compute_NC = use_width_sharding ? NC : 1;
 
-    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); fast-mode float/bf16 MIN
-    // uses -MAX(-x) in reduce_h_neg.
+    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); every other MIN
+    // (bfloat8_b, fast-mode fp32) uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

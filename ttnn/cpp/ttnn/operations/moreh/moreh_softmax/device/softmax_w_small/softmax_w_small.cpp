@@ -64,8 +64,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     // Circular-buffer formats
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // The reader writes bfloat16 mask and scaler tiles.
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
+    const std::uint32_t tile_size_mask_scaler = tile_size(mask_scaler_format);
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -92,17 +95,20 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = tile_size_data, .num_entries = Wt, .data_format_metadata = data_format},
         DataflowBufferSpec{
-            .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
+            .unique_id = MASK,
+            .entry_size = tile_size_mask_scaler,
+            .num_entries = 1,
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = tile_size_data,
+            .entry_size = tile_size_mask_scaler,
             .num_entries = 1,
-            .data_format_metadata = data_format},
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = tile_size_data,
+            .entry_size = tile_size_mask_scaler,
             .num_entries = 1,
-            .data_format_metadata = data_format},
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = tile_size_data, .num_entries = Wt, .data_format_metadata = data_format},
         DataflowBufferSpec{
@@ -151,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .compile_time_args = {{"is_fp32", static_cast<std::uint32_t>(input.dtype() == DataType::FLOAT32)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt", "mask_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -162,7 +168,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Wt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute defines ----
@@ -175,7 +181,8 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-    if (fp32_dest_acc_en) {
+    // Bfp8_b input needs the format reconfig this define enables.
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
@@ -183,9 +190,9 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
     // Legacy set unpack_to_dest_mode = all-Default (=> UnpackToSrc). Metal 2.0 requires an explicit
     // entry for every Float32 DFB a compute kernel consumes when enable_32_bit_dest is set (fp32 path).
     auto make_compute_hw = [&]() {
-        auto hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+        auto hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen1Config>(hw).unpack_modes = {
+            hw.unpack_modes = {
                 {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MASK, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {MAX_SCALER, tt::tt_metal::UnpackMode::UnpackToSrc},

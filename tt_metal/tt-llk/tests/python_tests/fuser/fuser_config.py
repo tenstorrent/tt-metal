@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import shutil
 from dataclasses import dataclass, field
 from functools import reduce
 from hashlib import sha256
@@ -9,18 +10,27 @@ from typing import List
 
 import pandas as pd
 import pytest
+from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 from helpers.device_io import read_words_from_device
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import PERF_RUN_TYPES_QUASAR, DestAccumulation, PerfRunType
 from helpers.logger import logger
 from helpers.perf.core import PerfReport
 from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
-from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
+from helpers.test_config import (
+    BuildMode,
+    CoverageBuild,
+    ProfilerBuild,
+    StimuliMode,
+    TestConfig,
+)
 
+from .fpu_node import FpuNode
 from .l1_operation import L1Operation
 from .operand import OperandRegistry
 from .sentinel import FuserSentinel
+from .sfpu_node import SfpuNode
 
 
 @dataclass
@@ -77,9 +87,36 @@ class FuserConfig(TestConfig):
         self.pipeline = pipeline
         self.global_config = global_config
         self.operand_registry = operand_registry
+        self._kernel_sources = None
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
+        self._validate_pack_sfpu_formats()
+
+    def _validate_pack_sfpu_formats(self):
+        config = self.global_config
+        if config.dest_acc.value or not any(
+            isinstance(node, SfpuNode) for op in self.pipeline for node in op.pack_nodes
+        ):
+            return
+        formats = set()
+        for op in self.pipeline:
+            config.sentinel.prepare_operation(config, op)
+            output_format = op._get_pack_nodes()[0].output.data_format
+            for node in op.math_nodes:
+                if isinstance(node, FpuNode) and node.src_a is not None:
+                    formats.add(
+                        config.sentinel._infer_node_formats(
+                            config, node, output_format, op
+                        )[4]
+                    )
+            for node in op.pack_nodes:
+                if isinstance(node, SfpuNode):
+                    formats.add(config.sentinel._dest_source_format(config, op, node))
+        if len(formats) > 1:
+            raise ValueError(
+                "pack-thread SFPU requires a stable math format throughout a 16-bit Dst pipeline"
+            )
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -94,6 +131,7 @@ class FuserConfig(TestConfig):
             "pipeline",
             "global_config",
             "operand_registry",
+            "_kernel_sources",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]
@@ -110,11 +148,50 @@ class FuserConfig(TestConfig):
         from .kernel_generator import FusedKernelGenerator
 
         code_generator = FusedKernelGenerator(self)
-        code_generator.write_kernel(self.test_name)
+        self._kernel_sources = code_generator.write_kernel(self.test_name)
         self.build_elfs()
 
-    def run_perf_test(self, worker_id: str, run_count: int = 2):
-        """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
+    def _compile_kernel_part(self, name, compile_command, source):
+        if (
+            self.global_config.architecture != ChipArchitecture.QUASAR
+            or not self._kernel_sources
+            or not self.skip_build_header
+            or self.coverage_build == CoverageBuild.Yes
+            or "-save-temps=obj" in self.OPTIONS_ALL
+        ):
+            return super()._compile_kernel_part(name, compile_command, source)
+
+        variant_dir = self.ARTEFACTS_DIR / self.test_name / self.variant_id
+        options = [arg for arg in compile_command[:-2] if arg != f"-I{variant_dir}"]
+        kernel = self._kernel_sources[name]
+        source_include = self._kernel_source_include()
+        expanded_source = source.replace(source_include, kernel)
+        key = sha256(repr((options, expanded_source)).encode()).hexdigest()
+        cache_dir = self.ARTEFACTS_DIR / "fused-kernels" / key
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached_elf = cache_dir / "kernel.elf"
+        done = cache_dir / ".build_complete"
+
+        with FileLock(cache_dir / "build.lock"):
+            if not done.exists():
+                kernel_path = cache_dir / "kernel.cpp"
+                kernel_path.write_text(kernel)
+                cached_source = source.replace(
+                    source_include, f'#include "{kernel_path}"\n'
+                )
+                super()._compile_kernel_part(
+                    name,
+                    [*options, "-o", str(cached_elf)],
+                    cached_source,
+                )
+                done.touch()
+
+        shutil.copyfile(cached_elf, compile_command[-1])
+
+    def run_perf_test(
+        self, run_type: PerfRunType, run_count: int = 2, *, session_id: str
+    ):
+        """Build or measure one perf mode and join its results into the session report."""
 
         from .kernel_generator import FUSED_TESTS_DIR
 
@@ -124,73 +201,72 @@ class FuserConfig(TestConfig):
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes
 
-        run_types = [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
+        self.global_config.perf_run_type = run_type
+        self.global_config.sentinel = FuserSentinel()
+        self.test_name = (
+            FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
+        )
+        self.generate_variant_hash()
+        self.operand_registry.allocate_l1_addresses()
 
+        if self.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+            self.generate_and_build_test()
+        if self.BUILD_MODE == BuildMode.PRODUCE:
+            return
+
+        logger.info("Running perf test for run type: {}", run_type.name)
+        runs = []
+        for run_index in range(run_count):
+            self.run_elf_files()
+            self.wait_for_tensix_operations_finished()
+
+            meta = Profiler._get_meta(self.test_name, self.variant_id)
+            buffer_data = [
+                read_words_from_device(
+                    self.TENSIX_LOCATION,
+                    addr,
+                    word_count=self.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
+                )
+                for addr in self.THREAD_PERFORMANCE_DATA_BUFFER
+            ]
+            profiler_data = Profiler._parse_buffers(buffer_data, meta)
+            profiler_data.df["run_index"] = run_index
+            runs.append(profiler_data)
+
+        result = Profiler.STATS_FUNCTION[run_type](ProfilerData.concat(runs))
+        test_name = self.global_config.test_name
+        case_key = sha256(test_name.encode()).hexdigest()
+        parts_dir = self.PERF_DATA_DIR / "fuser" / session_id / case_key
+        parts_dir.mkdir(parents=True, exist_ok=True)
+        parts = [parts_dir / f"{mode.name}.csv" for mode in PERF_RUN_TYPES_QUASAR[0]]
+        report_lock = FileLock(parts_dir / "report.lock")
+
+        with report_lock:
+            result.to_csv(parts_dir / f"{run_type.name}.csv", index=False)
+            if not all(path.exists() for path in parts):
+                return
+            all_results = [
+                pd.read_csv(path, float_precision="round_trip") for path in parts
+            ]
+
+        results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=MARKER, how="outer", validate="1:1"
+            ),
+            all_results,
+        )
+        results[TEST_NAME_COLUMN] = test_name
+        results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
         perf_report = PerfReport()
-        all_results = []
+        perf_report.append(results)
+        logger.info("Perf results:\n{}", results)
 
-        for run_type in run_types:
-            runs = []
-            self.global_config.perf_run_type = run_type
-            self.global_config.sentinel = FuserSentinel()
-
-            self.test_name = (
-                FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
-            )
-
-            self.generate_variant_hash()
-
-            self.operand_registry.allocate_l1_addresses()
-
-            if self.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-                self.generate_and_build_test()
-
-            if self.BUILD_MODE == BuildMode.PRODUCE:
-                continue
-
-            logger.info("Running perf test for run type: {}", run_type.name)
-            for run_index in range(run_count):
-                self.run_elf_files()
-                self.wait_for_tensix_operations_finished()
-
-                meta = Profiler._get_meta(self.test_name, self.variant_id)
-                buffer_data = [
-                    read_words_from_device(
-                        self.TENSIX_LOCATION,
-                        addr,
-                        word_count=self.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
-                    )
-                    for addr in self.THREAD_PERFORMANCE_DATA_BUFFER
-                ]
-                profiler_data = Profiler._parse_buffers(buffer_data, meta)
-                profiler_data.df["run_index"] = run_index
-                runs.append(profiler_data)
-
-            get_stats = Profiler.STATS_FUNCTION[run_type]
-            all_results.append(get_stats(ProfilerData.concat(runs)))
-
-        if self.BUILD_MODE != BuildMode.PRODUCE and all_results:
-            results = reduce(
-                lambda left, right: pd.merge(
-                    left, right, on=MARKER, how="outer", validate="1:1"
-                ),
-                all_results,
-            )
-            results[TEST_NAME_COLUMN] = self.global_config.test_name
-            results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
-            perf_report.append(results)
-            logger.info("Perf results:\n{}", results)
-
-            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
-            perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
+        # A stable shard name keeps the output independent of worker scheduling.
+        csv_prefix = f"{test_name.replace('/', '_')}_fused_test"
+        with report_lock:
+            perf_report.dump_csv(f"{csv_prefix}.master.csv")
             perf_report.post_process()
-            perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")
+            perf_report.dump_csv(f"{csv_prefix}.master.post.csv")
 
     def run_regular_test(self):
         """Run functional test: generate, build, write inputs to L1, execute kernel, read outputs and verify against golden."""

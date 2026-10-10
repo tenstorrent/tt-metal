@@ -8,6 +8,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import Chronol
 
 def exchange_convolution_carry(
     projected_qkv: ttnn.Tensor,
+    layer_history: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
@@ -24,15 +25,7 @@ def exchange_convolution_carry(
         outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     predecessor = selections.select_predecessor_history(gathered_outgoing_history)
-    # A split rank sends its head's history to its successor, but its physical
-    # tail supplies the final carry. Exchange physical tails separately so both
-    # sources remain available to the runtime selections.
-    batch, rows, width = projected_qkv.shape
-    physical_tail_history = ttnn.slice(
-        projected_qkv,
-        (0, rows - outgoing.shape[1], 0),
-        (batch, rows, width),
-    )
+    physical_tail_history = selections.select_local_final_history(projected_qkv, layer_history, predecessor)
     broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
     candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     final_carry = selections.select_final_history(candidates)

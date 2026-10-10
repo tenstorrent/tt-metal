@@ -9,11 +9,11 @@
 // Everything the streaming backend adds on top of the DRAM profiler's hostdev/profiler_common.h lives here,
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
 // time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
-// producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
+// producer for this backend is internal/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
 // Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
-// (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
-// (impl/streaming_profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
+// (impl/streaming_profiler/kernels/drisc_relay.cpp) and the host receiver
+// (impl/streaming_profiler/receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 

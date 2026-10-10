@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -54,14 +55,24 @@ def collect_mesh_accuracy_and_determinism_results(
     run: Callable[[], Sequence[ttnn.Tensor]],
     *,
     count: int = 3,
+    defined: Sequence[ttnn.Tensor | None] | None = None,
 ) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...]]:
-    """Retain first mesh outputs and reduce exact repeat mismatches on device."""
+    """Retain first mesh outputs and reduce exact repeat mismatches on device.
+
+    ``ttnn.ne`` compares values: +0 and -0, and subnormals and zero, compare equal.
+    ``defined`` optionally gives, per output, a 0/1 mask broadcastable to it that
+    selects the defined elements; mismatches elsewhere, such as NaN padded rows
+    (NaN != NaN), are ignored. ``None`` compares the whole output.
+    """
     if count <= 1:
         raise ValueError("count must be greater than one")
 
     reference_outputs = tuple(run())
     if not reference_outputs:
         raise ValueError("run must return at least one output")
+    masks = tuple(defined) if defined is not None else (None,) * len(reference_outputs)
+    if len(masks) != len(reference_outputs):
+        raise ValueError("defined must give one mask or None per output")
 
     mismatch_marker = None
     for _ in range(1, count):
@@ -70,7 +81,7 @@ def collect_mesh_accuracy_and_determinism_results(
             for output in outputs:
                 ttnn.deallocate(output)
             raise ValueError("run returned a different number of outputs")
-        for reference, output in zip(reference_outputs, outputs, strict=True):
+        for reference, output, mask in zip(reference_outputs, outputs, masks, strict=True):
             if (
                 output.shape != reference.shape
                 or output.dtype != reference.dtype
@@ -81,6 +92,11 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            if mask is not None:
+                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
+                defined_mismatch = ttnn.multiply(mismatch, mask)
+                ttnn.deallocate(mismatch)
+                mismatch = defined_mismatch
             current_marker = ttnn.max(mismatch)
             ttnn.deallocate(mismatch)
             if mismatch_marker is None:
@@ -194,8 +210,13 @@ def check_kimi_k3_accuracy(
     tensor_parallel_axis: int,
     *,
     pcc_threshold: float,
+    valid_length: int | None = None,
 ) -> dict[str, float]:
-    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint."""
+    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint.
+
+    ``valid_length`` restricts the output to rows before an ``actual_end``; padded rows
+    are unspecified. Input rows must be in natural order (``actual_start`` of zero).
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
@@ -208,6 +229,8 @@ def check_kimi_k3_accuracy(
         tp_dim=2,
         sp_dim=1,
     )
+    if valid_length is not None:
+        actual_output = actual_output[:, :valid_length]
     golden_output = golden_output.to(torch.bfloat16)
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
@@ -338,8 +361,11 @@ def make_kimi_k3_device_case(
     )
     selected_program_config = program_config or kimi_k3_program_config(
         active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
+        # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
         tp_ccl_topology=(
-            ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
+            ttnn.Topology.Ring
+            if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
+            else per_axis_topology()[tensor_parallel_axis]
         ),
     )
     if summary_group_chunks is not None:
@@ -518,7 +544,7 @@ def assert_matches_reference(
 
     assert_accurate(
         expected_output,
-        natural_output,
+        natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
         rmse_threshold=0.05,

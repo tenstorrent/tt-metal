@@ -41,6 +41,7 @@
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -325,12 +326,11 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     auto trace_inst = mesh_device->get_mesh_trace(tid);
     vector<uint32_t> data_fd, data_bd;
 
-    // Backdoor read the trace buffer - using the actual device buffer
-    auto* device_buffer = trace_inst->mesh_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
-    detail::ReadFromBuffer(*device_buffer, data_bd);
+    // Backdoor read the trace buffer
+    slow_dispatch::ReadFromBuffer(*trace_inst->mesh_buffer, data_bd);
 
     // Frontdoor read the trace buffer
-    data_fd.resize(device_buffer->size() / sizeof(uint32_t));
+    data_fd.resize(data_bd.size());
     distributed::ReadShard(
         mesh_command_queue, data_fd, trace_inst->mesh_buffer, distributed::MeshCoordinate{0, 0}, kBlocking);
     EXPECT_EQ(data_fd, data_bd);
@@ -657,6 +657,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -680,6 +683,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -731,6 +737,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -759,6 +768,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -923,6 +935,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -976,6 +991,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
@@ -1099,12 +1117,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     CreateDevice(dfb_total_size * 4);
 
-    IDevice* device = this->device_->get_devices()[0];
     CoreCoord worker = {0, 0};
 
     // Each execution writes 1 uint32 (entry_size).  Pick addresses after the
     // DFB's L1 region to avoid overlap.
-    const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t l1_base = static_cast<uint32_t>(this->device_->allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t output_addr_a = l1_base + dfb_total_size;
     const uint32_t output_addr_b = output_addr_a + 64;
 
@@ -1128,7 +1145,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
     // Verify config A was dispatched correctly in eager mode.
     {
         vector<uint32_t> l1_data;
-        detail::ReadFromDeviceL1(device, worker, output_addr_a, sizeof(uint32_t), l1_data);
+        slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_a, sizeof(uint32_t), l1_data);
         EXPECT_EQ(l1_data[0], entry_size_a) << "eager: entry_size mismatch";
     }
 
@@ -1157,15 +1174,15 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     // Clear L1 output locations before replay.
     vector<uint32_t> zeros(16, 0);
-    detail::WriteToDeviceL1(device, worker, output_addr_a, zeros);
-    detail::WriteToDeviceL1(device, worker, output_addr_b, zeros);
+    slow_dispatch::WriteToL1(*this->device_, worker, output_addr_a, zeros);
+    slow_dispatch::WriteToL1(*this->device_, worker, output_addr_b, zeros);
 
     this->device_->replay_mesh_trace(mesh_command_queue, tid, true);
 
     // Read back entry_size written by each execution.
     vector<uint32_t> result_a, result_b;
-    detail::ReadFromDeviceL1(device, worker, output_addr_a, sizeof(uint32_t), result_a);
-    detail::ReadFromDeviceL1(device, worker, output_addr_b, sizeof(uint32_t), result_b);
+    slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_a, sizeof(uint32_t), result_a);
+    slow_dispatch::ReadFromL1(*this->device_, worker, output_addr_b, sizeof(uint32_t), result_b);
 
     EXPECT_EQ(result_a[0], entry_size_a) << "trace execution 1: entry_size mismatch";
     EXPECT_EQ(result_b[0], entry_size_b) << "trace execution 2: entry_size mismatch";

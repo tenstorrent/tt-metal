@@ -11,12 +11,37 @@
 #endif
 
 namespace ckernel {
+
+// Strongly typed so removed legacy_compat Boolean arguments cannot silently select DEST precision.
+enum class ReciprocalDestAcc { BF16, FP32 };
+enum class ReciprocalApproxMode { Default, Precise, Approximate };
+
 /**
  * Please refer to documentation for any_init.
+ * DEST precision defaults to DST_ACCUM_MODE. Explicit overrides must use ReciprocalDestAcc,
+ * e.g. recip_tile_init<ReciprocalDestAcc::FP32>(); use the same mode for recip_tile.
+ * approximation defaults to the kernel's APPROX setting; override it for callers that need a more
+ * accurate reciprocal without changing the approximation of other operations in the kernel.
+ * On Wormhole, precise BF16 reciprocal is correctly rounded only with the seed loaded here;
+ * other SFPU inits may overwrite it, so call recip_tile_init again before recip_tile after them.
+ * The former legacy_compat Boolean template argument is no longer accepted.
  */
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
+    ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, is_fp32_dest_acc_en, legacy_compat)));
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    MATH(constexpr bool approximate = approximation == ReciprocalApproxMode::Default
+                                          ? APPROX
+                                          : approximation == ReciprocalApproxMode::Approximate;)
+#ifdef ARCH_WORMHOLE
+    // Match the explicit BF16 rounding in calculate_reciprocal. Other users
+    // of the shared reciprocal helper retain its default minimax constants.
+    MATH(SFPU_UNARY_INIT_FN(
+        reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en, !approximate && !is_fp32_dest_acc_en)));
+#else
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en)));
+#endif
 }
 // clang-format off
 /**
@@ -25,6 +50,9 @@ ALWI void recip_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  * Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.
+ * DEST precision defaults to DST_ACCUM_MODE and approximation defaults to APPROX.
+ * Explicit destination and approximation overrides must match recip_tile_init.
+ * Legacy Boolean template arguments are no longer accepted.
  *
  * Return value: None
  *
@@ -34,13 +62,18 @@ ALWI void recip_tile_init() {
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16,
+    ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_reciprocal,
-        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
+        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
+         is_fp32_dest_acc_en,
+         8 /*ITERATIONS*/),
         idst,
         vector_mode));
 }

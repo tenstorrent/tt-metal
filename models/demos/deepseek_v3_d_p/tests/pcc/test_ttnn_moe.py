@@ -24,7 +24,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
@@ -151,7 +151,7 @@ def run_model(
     engaged on the perf (non-PCC) path — a full-tensor PCC check would (correctly)
     mismatch on the skipped padded rows, and padded-row correctness is covered by the
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
-    (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
+    (TtMoe builds a padding_config only for DEVICE_FP32 and GPT_DEVICE gates).
 
     ``routed_activation`` selects the fused routed-expert kernel's activation and ``shared_activation``
     the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
@@ -182,7 +182,7 @@ def run_model(
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if gate_fallback_mode in _HASH_GATE_MODES:
-        # TtMoe builds a padding config for DEVICE_FP32 only, and the hash gate's input_ids
+        # TtMoe builds a padding config for DEVICE_FP32 and GPT_DEVICE only, and the hash gate's input_ids
         # sharding assumes sequential SP placement.
         if padded_percent or is_balanced:
             raise ValueError(f"{gate_fallback_mode} needs padded_percent=0 and is_balanced=False")
@@ -534,7 +534,7 @@ def run_model(
         routed_expert_activation=routed_activation,
         # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
-        # fused-only sentinel for K2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
+        # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
         routed_expert_hybrid_token_threshold=getattr(
             variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
@@ -964,7 +964,7 @@ def test_ds_moe(
 
 
 # ---------------------------------------------------------------------------
-# GLM-5.2 MoE
+# GLM-5.3 MoE
 # ---------------------------------------------------------------------------
 #
 # 256 experts / top-8, emb 6144, moe_int 2048. Exercises the >64-expert unfused
@@ -977,8 +977,8 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
         # fmt: on
     ],
 )
@@ -1017,9 +1017,9 @@ def test_ds_moe(
     ],
     indirect=["mesh_device", "device_params"],
 )
-# Deliberately the DSv3 variant, not glm_5_2: the GLM adapter bundles no upstream MoE reference,
+# Deliberately the DSv3 variant, not glm_5_3: the GLM adapter bundles no upstream MoE reference,
 # so running under it would silently drop the CPU cross-check this test still gets. The MoE dims
-# all come from GLM52Config above; the variant only supplies the generic gate config and the
+# all come from GLM53Config above; the variant only supplies the generic gate config and the
 # reference class.
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
 def test_glm_moe(
@@ -1307,6 +1307,9 @@ def test_kimi_k3_moe(
         # fmt: off
         pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
         pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
+        # run_pcc_check=False: the device-perf wrapper in tests/perf/test_moe_perf.py selects this row
+        # so the timed region is the device forward alone, with no host reference pass inside it.
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-perf"),
         # fmt: on
     ],
 )
@@ -1326,6 +1329,16 @@ def test_kimi_k3_moe(
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
+        ),
+        # SP=8 proxy on a LoudBox -- the stage shape PP=4 actually runs (SP=8 x TP=1), where the
+        # 8x4 row above is the single-rank shape. torus_y matches the PP=4 rank binding's fabric.
+        # An (8,1) row cannot run on a Galaxy at all, so this slot is LoudBox-only.
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
