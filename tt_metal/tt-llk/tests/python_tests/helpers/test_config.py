@@ -1243,6 +1243,14 @@ class TestConfig:
 
         pytest.skip()
 
+    @staticmethod
+    def _nk_flag(name: str) -> int:
+        """experiment hook (nikola): N of a -D<name>=N token in LLK_EXP_CFLAGS, 0 when absent"""
+        for word in os.environ.get("LLK_EXP_CFLAGS", "").split():
+            if word.startswith(f"-D{name}="):
+                return int(word.split("=", 1)[1])
+        return 0
+
     def _barrier_reservation_include(self) -> str:
         """First in the unit, so barrier.h's reservation covers the driver whatever it includes first."""
         if self.profiler_build != ProfilerBuild.Yes:
@@ -1447,6 +1455,9 @@ class TestConfig:
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
             OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            # experiment hook (pkfast): extra flags, e.g. the INIT NOP hooks -DLLK_EXP_NOP_PACK_INIT=4
+            if os.environ.get("LLK_EXP_CFLAGS"):
+                OPTIONS_COMPILE += os.environ["LLK_EXP_CFLAGS"] + " "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1501,7 +1512,19 @@ class TestConfig:
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
                     f"{perf_cnt_flag}"
-                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
+                    + (  # experiment hook (nikola): -DLLK_NK_FN_NOPS_BRISC=N, -DLLK_RELEASE_GAP=N reach the BRISC build
+                        (
+                            f"-fpatchable-function-entry={TestConfig._nk_flag('LLK_NK_FN_NOPS_BRISC')},{TestConfig._nk_flag('LLK_NK_FN_NOPS_BRISC')} "
+                            if TestConfig._nk_flag("LLK_NK_FN_NOPS_BRISC")
+                            else ""
+                        )
+                        + (
+                            f"-DLLK_RELEASE_GAP={TestConfig._nk_flag('LLK_RELEASE_GAP')} "
+                            if TestConfig._nk_flag("LLK_RELEASE_GAP")
+                            else ""
+                        )
+                    )
+                    + f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
                 logger.trace(compile_command)
@@ -1864,6 +1887,12 @@ class TestConfig:
             optional_kernel_flags,
             f"-DLLK_TRISC_{trisc_define}",
             device_print_flags,
+            (  # experiment hook (nikola): -DLLK_NK_FN_NOPS_<THREAD>=N puts N never executed nops before every function
+                f"-fpatchable-function-entry={TestConfig._nk_flag(f'LLK_NK_FN_NOPS_{trisc_define}')},"
+                f"{TestConfig._nk_flag(f'LLK_NK_FN_NOPS_{trisc_define}')}"
+                if TestConfig._nk_flag(f"LLK_NK_FN_NOPS_{trisc_define}")
+                else ""
+            ),
         )
         link_flags = TestConfig._argv(
             TestConfig.OPTIONS_LINK,
@@ -1914,8 +1943,21 @@ class TestConfig:
                 str(assembly),
             ]
             logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-            text = assembly.read_text()
+            if os.environ.get("LLK_EXP_COMPILE_CACHE"):
+                # experiment hook (speed agent): content-addressed cache of this compile, see compile_cache.py
+                from .compile_cache import compile_assembly
+
+                text = compile_assembly(
+                    TestConfig.GXX,
+                    compile_flags,
+                    TestConfig.TESTS_WORKING_DIR,
+                    source,
+                    assembly,
+                    {variant_dir: "VARIANT", TestConfig.TESTS_WORKING_DIR: "TESTS"},
+                )
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+                text = assembly.read_text()
             if not init_only:
                 # level 6: a seventh of the time of the default 9 for 6 % more bytes
                 with gzip.open(
@@ -1923,7 +1965,7 @@ class TestConfig:
                 ) as f:
                     f.write(text)
                 TestConfig._remember_assembly(assembly.with_suffix(".s.gz"), text)
-            assembly.unlink()
+            assembly.unlink(missing_ok=True)
         else:
             text = TestConfig._kept_assembly(assembly.with_suffix(".s.gz"), probe)
         p, z = pads or (0, 0)
@@ -1985,7 +2027,45 @@ class TestConfig:
         os.environ.get("LLK_PERF_INIT_LAUNCH", "1") == "1"
     )
 
+    @staticmethod
+    def _layout_shared_root() -> Path:
+        """experiment hook (speed agent): with LLK_EXP_LAYOUT_CACHE a persistent layout cache shared by builds"""
+        if not os.environ.get("LLK_EXP_LAYOUT_CACHE"):
+            return TestConfig.ARTEFACTS_DIR / "layout_shared"
+        from .compile_cache import layout_context
+        from .perf import layout
+
+        sources = [
+            layout.__file__,
+            __file__,
+            *sorted(Path(TestConfig.LINKER_SCRIPTS).glob("*.ld")),
+        ]
+        words = shlex.split(
+            f"{TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} "
+            f"{TestConfig.INITIAL_OPTIONS_COMPILE} {os.environ.get('LLK_EXP_CFLAGS', '')}"
+        )
+        return Path(os.environ["LLK_EXP_LAYOUT_CACHE"]) / layout_context(
+            TestConfig.GXX, TestConfig.ARCH_COMPUTE, sources, words
+        )
+
     def _layout_elf_dir(self, build: bool) -> Path:
+        out = self._layout_elf_dir_fid(build)
+        # experiment hook (fidelity agent): which ELF dir each node and run type runs
+        if os.environ.get("LLK_FID_MAP") and getattr(self, "current_run_type", None) is not None:
+            rec = {
+                "node": os.environ.get("PYTEST_CURRENT_TEST", ""),
+                "test": str(self.test_name),
+                "variant": self.variant_id,
+                "run_type": self.current_run_type.name,
+                "init_launch": bool(getattr(self, "init_launch", False)),
+                "bytes": self.runtime_arguments_bytes().hex(),
+                "elf": str(out),
+            }
+            with open(f"{os.environ['LLK_FID_MAP']}.{os.getpid()}.jsonl", "a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        return out
+
+    def _layout_elf_dir_fid(self, build: bool) -> Path:
         """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
         """
@@ -2006,12 +2086,22 @@ class TestConfig:
         runtime = self.runtime_arguments_bytes()
         key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
         choice = variant_dir / "layout" / f"{key}.json"
+        # experiment hook (fidelity agent): take the pads another build (its RUNNER_TEMP) chose for this variant and
+        # runtime config instead of choosing them for this build's code
+        frozen = os.environ.get("LLK_PAD_FROM")
         try:
-            pads = {t: tuple(v) for t, v in json.loads(choice.read_text()).items()}
+            src = (
+                Path(frozen) / "tt-llk-build" / self.test_name / self.variant_id / "layout" / f"{key}.json"
+                if frozen
+                else choice
+            )
+            pads = {t: tuple(v) for t, v in json.loads(src.read_text()).items()}
         except (
             OSError,
             ValueError,
         ):  # not chosen yet, or being written by another worker
+            if frozen:
+                raise
             pads = {}
             for t in threads:
                 try:
@@ -2026,7 +2116,7 @@ class TestConfig:
                         log=os.environ.get("LLK_LAYOUT_LOG"),
                         # variants whose thread compiles to the same code share the layout work
                         shared=(
-                            TestConfig.ARTEFACTS_DIR / "layout_shared",
+                            TestConfig._layout_shared_root(),
                             TestConfig._code_key(variant_dir / "obj" / f"{t}.s.gz"),
                         ),
                     )
@@ -2038,6 +2128,9 @@ class TestConfig:
                     )
                     pads[t] = (0, 0)
             layout.write_json(choice, pads)
+        if "pack" in pads and TestConfig._nk_flag("LLK_NK_PAD_SHIFT_PACK"):  # experiment hook (nikola)
+            p, z = pads["pack"]
+            pads = {**pads, "pack": (p + 4 * TestConfig._nk_flag("LLK_NK_PAD_SHIFT_PACK"), z)}
         tag = "_".join(f"{t}{p}-{z}" for t, (p, z) in sorted(pads.items()) if p or z)
         if not tag:
             return variant_dir / "elf"
