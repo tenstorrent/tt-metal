@@ -12,7 +12,7 @@ log() { echo "$(date -u '+%F %T') $*" >> $L; }
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp CPM_SOURCE_CACHE=$F/.cpmcache
 build() {
   set -x
-  git -C $A cat-file -e $REV^{commit} 2>/dev/null || git -C $A fetch -q $D/t374.bundle refs/heads/t374 || return 11
+  git -C $A cat-file -e $REV^{commit} 2>/dev/null || git -C $A fetch -q $D/t374.bundle refs/heads/t374-bundle-tmp || return 11
   git -C $A cat-file -e $REV^{commit} || return 12
   [ -d $B ] || git -C $A worktree add --detach $B $REV || return 13
   cd $B || return 14
