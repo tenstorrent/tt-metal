@@ -352,3 +352,19 @@ reuses the gathered x as before.
 - Block outputs bit-identical to the old path (layers 3 and 4, real weights, test_layer_perf GLM_LP_SAVE A/B).
 - Per-layer device time (fake weights, chunk 5120 at 51200, busiest chip): dsa_moe 15.45 -> 14.95, kda_moe 11.45 ->
   10.91 ms; whole-model estimate 555.8 -> 533.6 ms per chunk (-4.0%).
+
+## KDA chunk preparation: exact gate exponents in a fork (2026-10-10), GLM_KDA_DECAY=fork (default)
+
+The +1.44 ms per KDA layer of `_PreciseDecayRecurrence` (14 ttnn ops recomputing k_dec_t after
+prepare_chunk_recurrence, 9% of a chunk) is gone. The bias it corrected comes from prepare_chunk_recurrence reading
+FP32 values at TF32 precision in the source registers: the subtraction G - G_last/2 and the copies of G_last/2 and of
+the centered exponent into the SFPU (|G| ~ 150 at the -5 gate bound: a 0.125 step). The fork
+`ttnn.bringup.prepare_chunk_recurrence(precise_gate_factors=True)` forms the three exponents as exact matmuls of the
+BF16 gate with constant masks (+-scale/2) and exponentiates them straight from DST (CHANGELOG.md there). The source
+program sits ~1.7 KB under the kernel config buffer; the option builds the compute kernel at -O2 and shares the q / k
+norm reduce to fit.
+- Layer 0 KDA component test: output rel 0.0072, state rel 0.0142, worst head 0.0227 (precise ops 0.0070 / 0.0140 /
+  0.0222; source kernel 0.0070 / 0.0149 / 0.0537 FAIL).
+- KDA attention per layer (fake weights, chunk 5120 at 51200): 5.75 (precise ops) -> 4.20 ms; the op itself 0.471 ms
+  (source 0.586). Layer device time kda_moe 10.91 -> 9.37, kda_dense 10.26 -> 8.69 ms.
+- GLM_KDA_DECAY=precise / kernel keep the old paths.
