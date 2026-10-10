@@ -27,3 +27,6 @@
 - After: quote the last PERFORMANCE table of out/run.log verbatim, check its clamp count is 0, still from the mp4, compare
   with job 363 (7.32 s clamped, ltx-rt prompt) and job 356 (7.33 s clamped, test prompt, same config as this one).
 - Cleanup: blx03 ~/fasth3/t315 worktree (git -C ~/fasth3/tt-metal worktree remove --force), /var/tmp/fasth3/t315/jit, tmp.
+- 05:24:52 UTC: blx03 build done (setup rc 0), ~/fasth3/t315 @ f6547442b30. Device lint of run315.sh passes
+  (--device --timeout 570 --cold 380, needs checkpoint/gemma). run315.sh logs "[t315] AICLK clamp warnings: N"; N must be 0.
+- Probe at 05:26 UTC: still clamped on both boxes. Handed off waiting on clkprobe.sh.

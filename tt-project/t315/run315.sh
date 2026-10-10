@@ -13,6 +13,9 @@ set -o pipefail
 F=/var/tmp/fasth3; D=$F/t315; W=/home/smarton/fasth3/t315; WANT=f6547442b30; OUT=$D/out
 # blx03 caps: / at most 85% used.
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le 85 ] || { echo "[t315] df / $use% > 85%"; exit 5; }
+# This task's footprint (JIT cache + outputs) at most 20G; /home (HOME) keeps 150G free.
+gb=$(timeout 120 du -sxBG $D | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 20 ] || { echo "[t315] $D ${gb}G > 20G"; exit 5; }
+free=$(df --output=avail -BG /home | tail -1 | tr -dc 0-9); [ "$free" -ge 150 ] || { echo "[t315] /home ${free}G free < 150G"; exit 5; }
 rm -rf $OUT; mkdir -p $OUT $D/tmp
 export HOME=/home/smarton TMPDIR=$D/tmp HF_HOME=/home/sulphur/hf HF_HUB_OFFLINE=1
 source /home/smarton/fasth3/tt-metal/python_env/bin/activate
@@ -38,6 +41,7 @@ python -u -m pytest -c $W/pytest.ini --rootdir=$W -sv -p no:cacheprovider --time
   "$T::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]" 2>&1 | tee -a run.log
 rc=${PIPESTATUS[0]}
 echo "[t315] process wall $(( $(date +%s) - T0 )) s" | tee -a run.log
+echo "[t315] AICLK clamp warnings: $(grep -c "AICLK failed to settle" run.log)" | tee -a run.log
 md5sum ltx_av_fast_*.mp4 2>/dev/null | tee -a run.log
 echo "T315_EXIT=$rc" | tee -a run.log
 exit $rc
