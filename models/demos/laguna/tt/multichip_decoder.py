@@ -1856,13 +1856,15 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = self.cfg
         pad = self.meta.get("qkvg_pad")
         if self._dflash_fold_g and self._dflash_regroup and self.use_dram_sharded and pad and "wqkvg_ds" in self.w:
-            ln_q = self._rms(x_q, self.w["input_ln"], out_cores=_decode_shard_cores(cfg.hidden, pad))
-            qkvg = self._dram_mm(ln_q, None, self.w["wqkvg_ds"], cfg.hidden, pad, self._ck_qkv)
-            qkvg = ttnn.sharded_to_interleaved(qkvg, ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, 32, pad]
+            # an interleaved copy of the fused weight (made at the first -- eager -- call) through the 1D program: at
+            # the draft's HiFi4 the DRAM-sharded matmul is compute-bound on its 32 cores (~69 vs ~27 us)
+            if "dflash_wqkvg" not in self.w:
+                self.w["dflash_wqkvg"] = ttnn.to_memory_config(self.w["wqkvg_ds"], ttnn.DRAM_MEMORY_CONFIG)
+            ln_q = self._rms(x_q, self.w["input_ln"])
+            qkvg = self._prefill_linear(ln_q, self.w["dflash_wqkvg"], self._ck_qkv)  # [1, 32, pad]
             if qkvg.dtype == ttnn.bfloat16:
                 qkv_w = self.meta["qkv_w"]
-                g = ttnn.reshape(ttnn.slice(qkvg, [0, 0, 0, qkv_w], [1, 1, TILE, qkv_w + cfg.num_heads]),
-                                 (1, TILE, cfg.num_heads))  # fmt: skip
+                g = ttnn.slice(qkvg, [0, 0, qkv_w], [1, TILE, qkv_w + cfg.num_heads])  # [1, 32, num_heads]
                 q, k, v = tile_regroup.split_heads(qkvg, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim,
                                                    ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
                 q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
@@ -1917,6 +1919,20 @@ class MultichipDecoder(OptimizedDecoder):
                                               dtype=ttnn.bfloat16))
         else:
             attn = self._gate(attn, ln_q, g=g)
+        R = getattr(self, "_dflash_ar_rows", 0)
+        if R and self.D > 1 and x_q.dtype == ttnn.bfloat16:
+            # only the first R (the proposal block's) rows matter (no real row attends to a later one): residual +
+            # all-reduce of those rows in one row-packed collective + sum (allreduce_rows) instead of the composite
+            # all_reduce (reduce_scatter + all_gather) and an add; rows R.. become 0
+            h = self._reduce_rows_add(self._prefill_linear(attn, self.w["wo"], self._ck_o), x_q,
+                                      ttnn.DRAM_MEMORY_CONFIG, rows=R)  # fmt: skip
+            ln2 = self._rms(h, self.w["post_ln"])
+            self._defer_reduce = True
+            try:
+                partial = self._mlp(ln2, TILE, sharded=False)
+            finally:
+                self._defer_reduce = False
+            return self._reduce_rows_add(ttnn.reshape(partial, (1, TILE, cfg.hidden)), h, ttnn.DRAM_MEMORY_CONFIG, rows=R)
         h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
         ln2 = self._rms(h, self.w["post_ln"])
         return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))

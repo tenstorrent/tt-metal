@@ -22,9 +22,11 @@ def _cb(grid, i, fmt, page, pages):
     )
 
 
-def _grid(device, H):
+def _grid(device, H, rows=1):
     tiles = H // 32
     per = 3 if tiles % 3 == 0 and tiles // 3 <= 64 else 1
+    while per > 1 and rows * per * 32 > 1024:  # a core's rows x columns must fit one tile-sized slot
+        per -= 1
     while (tiles // per) > 64 or tiles % per:
         per += 1
     cores = tiles // per
@@ -40,7 +42,7 @@ def pack_row0(x, rows=1):
     assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT and H % 32 == 0, (x.dtype, x.layout, H)
     out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, rows, H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device,
                                          ttnn.L1_MEMORY_CONFIG)
-    per, cores, gs, grid = _grid(device, H)
+    per, cores, gs, grid = _grid(device, H, rows)
     acc = list(ttnn.TensorAccessorArgs(x).get_compile_time_args()) + list(
         ttnn.TensorAccessorArgs(out).get_compile_time_args()
     )
@@ -67,7 +69,7 @@ def sum_rows_add(g, residual, memory_config=None):
     device = rows[0].device()
     D, H = (len(rows) if split else g.shape[1]), rows[0].shape[-1]
     R = rows[0].shape[-2]
-    per, cores, gs, grid = _grid(device, H)
+    per, cores, gs, grid = _grid(device, H, R)
     mem = memory_config or residual.memory_config()
     out = ttnn.allocate_tensor_on_device(residual.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
     reader = ttnn.KernelDescriptor(

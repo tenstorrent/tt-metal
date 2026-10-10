@@ -1005,6 +1005,10 @@ class DFlashTTCore:
         self.decoder_config = decoder_config
         self.shared = shared
         self.layers = dict(layers)
+        # the draft's all-reduces cover only the proposal block's rows (MultichipDecoder._dflash_query_tail)
+        if os.environ.get("TT_LAGUNA_DFLASH_AR_ROWS", "1") == "1":
+            for layer in self.layers.values():
+                layer._dflash_ar_rows = int(config.block_size)
         self.mesh_device = mesh_device
         self.max_seq_len = max_seq_len
         self.rope_tables = rope_tables
