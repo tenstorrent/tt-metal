@@ -689,19 +689,33 @@ class LagunaForCausalLM:
         self._dflash_controller.update_context = self._dflash_update_context
         print("[laguna dflash] warmup: context K/V ring update traced", flush=True)
 
+    def _dflash_update_stage(self, position):
+        """Upload the ring-update inputs of a verify starting at ``position``: they write every verify row (only the
+        committed ones become context, see DFlashTTProposalCache.ring_commit), so they do not wait for the verify."""
+        st = getattr(self, "_dflash_update_state", None)
+        stv = getattr(self, "_verify_dec", {}).get("dflash")
+        if st is None or st.get("tid") is None or stv is None:
+            return
+        rows = int(stv["rows"])
+        for key, t in zip(("place", "keep", "cos", "sin"), self._dflash_cache.ring_append_inputs(position, rows)):
+            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            ttnn.copy_host_to_device_tensor(host, st[key])
+        st["staged"] = (int(position), rows)
+
     def _dflash_update_context(self, verify_capture, committed):
-        """Controller hook after a verify: write the ``committed`` rows' K/V into the rings by replaying the update
-        trace. False (the controller then runs the eager update) unless the capture is the traced verify's buffer."""
+        """Controller hook after a verify: write the verify rows' K/V into the rings by replaying the update trace
+        (the first ``committed`` become context). False (the controller then runs the eager update) unless the
+        capture is the traced verify's buffer."""
         st = getattr(self, "_dflash_update_state", None)
         stv = getattr(self, "_verify_dec", {}).get("dflash")
         if st is None or st.get("tid") is None or stv is None or verify_capture.hidden_states is not stv.get("aux"):
             return False
-        cache = self._dflash_cache
-        for key, t in zip(("place", "keep", "cos", "sin"), cache.ring_append_inputs(verify_capture.start_position, committed)):
-            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
-            ttnn.copy_host_to_device_tensor(host, st[key])
+        start, rows = int(verify_capture.start_position), int(verify_capture.row_count)
+        if st.get("staged") != (start, rows):
+            self._dflash_update_stage(start)
+        st["staged"] = None
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
-        cache.ring_commit(verify_capture.start_position, committed)
+        self._dflash_cache.ring_commit(start, committed, written=rows)
         return True
 
     def close_dflash(self):
@@ -3225,6 +3239,8 @@ class LagunaForCausalLM:
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        # the context ring update's inputs (they write every verify row), uploaded while the verify runs
+        self._dflash_update_stage(int(pos[0]))
         if "tok32" in st:
             greedy = [int(t) for t in self.gen._read_token(st["tok32"], B)]
         else:

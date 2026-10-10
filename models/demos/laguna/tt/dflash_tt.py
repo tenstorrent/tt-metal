@@ -425,7 +425,10 @@ class DFlashTTProposalCache:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device),
         )
 
-    RING = 512  # >= max_context_rows (511) + the oldest slot a round overwrites
+    # >= max_context_rows (511) + the uncommitted verify rows a traced update also writes (it writes every verify
+    # row, so its inputs are known before the verify ends; a row written past the commit lands in a slot whose old
+    # position is outside the window, and the next round rewrites it)
+    RING = 544
 
     @property
     def kv_ring(self) -> bool:
@@ -458,7 +461,10 @@ class DFlashTTProposalCache:
 
         core = self.core
         start, rows = int(self._context_start), int(self._context_rows)
-        src = self._fixed_rows(self.RING)  # context rows, then zeros
+        n = min(self.RING, int(self._fixed.shape[1]))
+        src = self.buffer_rows(n)  # context rows, then zeros
+        if n < self.RING:
+            src = ttnn.pad(src, [(0, 0), (0, self.RING - n), (0, 0)], value=0.0)
         cos, sin = core.rope_window(start, self.RING)
         for index, layer in core.layers.items():
             k, v = layer.dflash_kv_rows(src, (cos, sin))
@@ -467,7 +473,8 @@ class DFlashTTProposalCache:
             _deallocate_owned(k)
             _deallocate_owned(v)
         for tensor in (src, cos, sin):
-            _deallocate_owned(tensor)
+            if tensor is not self._fixed:
+                _deallocate_owned(tensor)
         self._ring_base = start
         self._slot_pos = [start + j if j < rows else -1 for j in range(self.RING)]
         self._fixed_stale = False
@@ -506,15 +513,19 @@ class DFlashTTProposalCache:
             ttnn.copy(updated, ring)
             _deallocate_owned(updated)
 
-    def ring_commit(self, start_pos: int, count: int) -> None:
-        """Bookkeeping after ``count`` rows at positions start_pos.. were written into the rings."""
+    def ring_commit(self, start_pos: int, count: int, written: int | None = None) -> None:
+        """Bookkeeping after rows at positions start_pos.. were written into the rings: the first ``count`` are
+        committed context; rows ``count``..``written`` - 1 (an update that wrote every verify row) are not."""
 
         start_pos, count = int(start_pos), int(count)
+        written = count if written is None else int(written)
         expected = int(self._context_start) + int(self._context_rows)
         if start_pos != expected:
             raise ValueError(f"DFlash target capture is not adjacent: expected start {expected}, got {start_pos}")
-        for i in range(count):
-            self._slot_pos[(start_pos + i - self._ring_base) % self.RING] = start_pos + i
+        if written - count > self.RING - int(self.max_context_rows):
+            raise ValueError(f"{written - count} uncommitted ring rows would overwrite retained context")
+        for i in range(written):
+            self._slot_pos[(start_pos + i - self._ring_base) % self.RING] = start_pos + i if i < count else -1
         rows = min(int(self.max_context_rows), int(self._context_rows) + count)
         self._context_start = start_pos + count - rows
         self._context_rows = rows
