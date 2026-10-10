@@ -189,6 +189,27 @@ class _Block:
         gw = ttnn.to_layout(self.gw_t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return gx, gi, gw, True
 
+    def gather_full(self, x, idx, w):
+        """Full-mesh form of gather (split, GLM_MOE_FULL_MESH): x [1, 1, S/n, H] TILE, idx / w [1, 1, S/n, K] TILE, this
+        chip's own rows of the split residual (the router ran on them) -> the same gathered x / idx / w as gather: one
+        cluster_axis=None gather per tensor, row-major chip order = chip d's rows at d S/n (MiMo's gather_full)."""
+        if not hasattr(self, "_mesh_dim2"):
+            # the split inputs declare the mesh shards on dims 0 / 1 (split_from_host's reshape); the bytes are dim 2
+            # split over all chips in row-major order, which is what the full-mesh gather validates
+            rows, cols = tuple(self.mesh.shape)
+            dist = ttnn.MeshShape(rows, cols)
+            coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+            self._mesh_dim2 = ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+        for t in (x, idx, w):
+            t.update_tensor_topology(self._mesh_dim2)
+        all_gather_rows(x, self.gx, None, self.links)
+        all_gather_rows(idx, self.gidx_t, None, self.links)
+        all_gather_rows(w, self.gw_t, None, self.links)
+        gx = ttnn.to_layout(self.gx, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gi = ttnn.to_layout(self.gidx_t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gw = ttnn.to_layout(self.gw_t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return gx, gi, gw, True
+
     def plan(self, gidx, lmap):
         ttnn.bringup.moe_ag_route_plan(
             gidx, lmap, self.epc, self.rows, outputs=[self.counts, self.regions, self.token_index, self.y_slot]
@@ -309,10 +330,12 @@ class TtExpertsAg:
         wts, idx = ttnn.topk(dense, k=self.K, dim=-1, largest=True, sorted=True)
         return idx, wts
 
-    def __call__(self, x, dense=None, idx=None, wts=None, split=False):
+    def __call__(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
         """x [1,1,S,H] replicated; routing as dense [1,1,S,E] or (idx, wts) [1,1,S,K] -> experts_out [1,1,S,H] bf16
         replicated. split: x and the routing are mesh row r's half [r S/2, (r+1) S/2) (on every chip of the row); the
-        output is this chip's rows [r S/2 + c S/(2 C), + S/(2 C)) (the split residual layout)."""
+        output is this chip's rows [r S/2 + c S/(2 C), + S/(2 C)) (the split residual layout). full_mesh (with split):
+        x and the routing are this chip's own rows only (S/n); one full-mesh gather replaces the row's axis-1 gather and
+        the axis-0 gather (GLM_MOE_FULL_MESH)."""
         tmp = []
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
@@ -335,8 +358,14 @@ class TtExpertsAg:
             tmp.append(wts)
         S = x.shape[-2]
         s = S if split else S // 2
+        if full_mesh:
+            assert split, "full_mesh needs the split layout"
+            s = S * tuple(self.mesh.shape)[1]  # the mesh row's tokens, as the axis-1 gather would have made them
         blk = self._block(s)
-        gx, gi, gw, own_gx = blk.gather(x, idx, wts, replicated=not split)
+        if full_mesh:
+            gx, gi, gw, own_gx = blk.gather_full(x, idx, wts)
+        else:
+            gx, gi, gw, own_gx = blk.gather(x, idx, wts, replicated=not split)
         self.gathered_x = blk.gx if split else None
         for t in tmp:
             ttnn.deallocate(t)

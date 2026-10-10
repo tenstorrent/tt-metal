@@ -44,6 +44,9 @@ CACHE_ROOT_EMBED = "embed_bf16"
 # DSA layers (split layout): attn_norm, q_a, pooled keys and the MLA latent on the chip's own rows, keys / latent
 # all-gathered into the caches (no full-row attn_norm gather, no 8x duplicated key / latent projections)
 DSA_LOCAL = os.environ.get("GLM_DSA_LOCAL", "1") != "0"
+# the split MoE input on the all-gather experts: router on the chip's own rows + one full-mesh gather per tensor (1),
+# or the mesh row's axis-1 gather, router on the row's half, then axis-0 gathers (0)
+MOE_FULL_MESH = os.environ.get("GLM_MOE_FULL_MESH", "1") != "0"
 
 
 def block_graph(cfg, layer: int):
@@ -246,11 +249,11 @@ class TtGlmBlock:
                 ttnn.deallocate(wts)
                 return dense
 
-            def experts(ctx, x, r, split=False):
+            def experts(ctx, x, r, split=False, full_mesh=False):
                 if not ag:
                     return self.experts(x, dense=r, split=split)
                 wts, self._router_wts = self._router_wts, None
-                out = self.experts(x, idx=r, wts=wts, split=split)
+                out = self.experts(x, idx=r, wts=wts, split=split, full_mesh=full_mesh)
                 ttnn.deallocate(wts)
                 return out
 
@@ -260,7 +263,19 @@ class TtGlmBlock:
                 shared_expert=lambda ctx, x: self.shared(x),
                 moe_add=lambda ctx, a, b: add(a, b),
             )
-            if split:
+            full = split and ag and MOE_FULL_MESH and min(tuple(mesh.shape)) > 1
+            if full:
+                # GLM_MOE_FULL_MESH (default): ffn_norm and the router on the chip's own S/n rows; the experts gather x,
+                # idx and weights over the whole mesh in one call each (MiMo's gather_full); the shared expert reuses
+                # the gathered x as before
+                def shared_full(ctx, x):
+                    return self.shared(self.experts.gathered_x, split=True)
+
+                steps.update(
+                    experts=lambda ctx, x, r: experts(ctx, x, r, split=True, full_mesh=True),
+                    shared_expert=shared_full,
+                )
+            elif split:
                 # ffn_norm on the chip's rows, gathered to the mesh row's half (the experts' dispatch rows); the
                 # router routes that half; experts reduce-scatter back to the quarter; the shared expert (TP 4)
                 # gathers the other half and reduce-scatters on both axes.
