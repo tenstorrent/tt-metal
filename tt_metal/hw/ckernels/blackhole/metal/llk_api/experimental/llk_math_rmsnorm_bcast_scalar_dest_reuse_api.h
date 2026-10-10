@@ -18,6 +18,10 @@ inline void llk_math_rmsnorm_clear_product_tile(const std::uint32_t dst_index) {
 }
 
 // Version with operands
+/**
+ * @tparam whole_tile: The whole-tile HiFi multiply; tiles with faces under 16 rows or one face keep the per-face form.
+ * @note Pair with @ref llk_unpack_A_rmsnorm_init with the same whole_tile.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     std::uint32_t num_tiles,

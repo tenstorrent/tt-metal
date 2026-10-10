@@ -100,10 +100,11 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     {
         // One SrcA bank per tile, for a math pass that sweeps the tile once per fidelity phase.
         // The x end grows to the tile for this MOP only, so the per-face callers keep theirs.
-        const std::uint32_t tile_x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+        const std::uint32_t tile_x_end         = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+        constexpr std::uint32_t replay_buf_len = 2;
         load_replay_buf(
             0,
-            2,
+            replay_buf_len,
             [tile_x_end]
             {
                 TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -111,8 +112,9 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
             });
         static constexpr std::uint32_t unpack_srca_tile =
             TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        ckernel_template tmp(1, num_tiles, unpack_srca_tile, TT_OP_INCADCZW(p_setadc::UNP_A, 0, 0, 0, num_faces));
-        tmp.set_start_op(lltt::replay_insn(0, 2));
+        constexpr std::uint32_t outerloop = 1;
+        ckernel_template tmp(outerloop, num_tiles, unpack_srca_tile, TT_OP_INCADCZW(p_setadc::UNP_A, 0, 0, 0, num_faces));
+        tmp.set_start_op(lltt::replay_insn(0, replay_buf_len));
         tmp.set_end_op(TT_OP_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0));
         tmp.program();
     }
@@ -126,6 +128,13 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     }
 }
 
+/**
+ * @brief Configure the unpacker and MOP of the scalar-broadcast dest-reuse op.
+ *
+ * @param whole_tile: One SrcA bank per tile for the whole-tile HiFi multiply; needs 16-row faces, more than one face and
+ *        no transpose.
+ * @note Init the math thread with the same whole_tile (@ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_).
+ */
 template <
     std::uint32_t num_tiles,
     BroadcastType BType                          = BroadcastType::NONE,
@@ -142,6 +151,7 @@ inline void _llk_unpack_A_rmsnorm_init_(
     const bool whole_tile                           = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!whole_tile || (face_r_dim == FACE_R_DIM && num_faces > 1), "whole_tile needs 16-row faces and more than one face");
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);

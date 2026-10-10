@@ -37,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto seed = [&]
     {
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         for (std::uint32_t tile = 0; tile < 2; ++tile)
         {
             _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -46,7 +46,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     };
     const auto op = [&](const bool whole_tile)
     {
-        _llk_unpack_A_rmsnorm_init_<1, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0, 0, FACE_R_DIM, 4, 0, 0, whole_tile);
+        _llk_unpack_A_rmsnorm_init_<1, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            0 /* transpose_of_faces */,
+            0 /* within_face_16x16_transpose */,
+            FACE_R_DIM,
+            TILE_NUM_FACES,
+            0 /* unpack_src_format */,
+            0 /* unpack_dst_format */,
+            whole_tile);
         _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
             L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
     };
@@ -93,12 +100,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     };
     const auto sub = []
     {
-        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWSUB, 1, MathFidelity::LoFi>(4, 0);
+        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWSUB, 1, MathFidelity::LoFi>(TILE_NUM_FACES, 0 /* acc_to_dest */);
         _llk_math_rmsnorm_bcast_scalar_dest_reuse_<EltwiseBinaryType::ELWSUB, 1, DST_SYNC, is_fp32_dest_acc_en, MathFidelity::LoFi, false>(1, 1);
     };
     const auto mul = []
     {
-        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWMUL, 1, MATH_FIDELITY>(4, 0, RMSNORM_WHOLE_TILE);
+        _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<EltwiseBinaryType::ELWMUL, 1, MATH_FIDELITY>(TILE_NUM_FACES, 0 /* acc_to_dest */, RMSNORM_WHOLE_TILE);
         _llk_math_rmsnorm_bcast_scalar_dest_reuse_<EltwiseBinaryType::ELWMUL, 1, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, false>(0, 0);
     };
 

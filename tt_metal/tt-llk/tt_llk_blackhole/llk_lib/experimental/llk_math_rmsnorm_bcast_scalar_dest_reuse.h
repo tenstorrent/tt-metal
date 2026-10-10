@@ -79,7 +79,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(const std::uint32_t nu
             if (whole_tile)
             {
                 // Each fidelity phase sweeps the whole tile, so no multiply waits on the row it rewrites.
-                ckernel_template tmp(to_underlying(math_fidelity), num_faces * 2, TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0));
+                ckernel_template tmp(to_underlying(math_fidelity), num_faces * innerloop, TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0));
                 tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_2, 0));
                 tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_4, 0));
                 tmp.program();
@@ -224,10 +224,18 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
     }
 }
 
+/**
+ * @brief Program the address modifiers and MOP of the scalar-broadcast dest-reuse op.
+ *
+ * @param whole_tile: Sweep the whole tile once per fidelity phase; only for ELWMUL above LoFi.
+ * @note Init the unpack thread with the same whole_tile (@ref _llk_unpack_A_rmsnorm_init_).
+ */
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest, const bool whole_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        !whole_tile || (eltwise_binary_type == EltwiseBinaryType::ELWMUL && is_high_fidelity(math_fidelity)), "whole_tile is for the multiply above LoFi");
 
     rmsnorm_bcast_scalar_dest_reuse_configure_addrmod<eltwise_binary_type, math_fidelity>(num_faces);
 
