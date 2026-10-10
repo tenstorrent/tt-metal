@@ -633,6 +633,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::log1p)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
+        ckernel::sfpu::log1p_bf16_tile_init<!is_fp32_dest_acc_en && !FAST_MODE && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
