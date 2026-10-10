@@ -3,9 +3,11 @@
 
 """Functional coverage for the EMA SFPU kernel.
 
-Two tests, both driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
+Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
 
 - `test_sfpu_ema` -- the default-suite check, one alpha over 1/2/4 time tiles.
+- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init between the
+  datacopy and `ema_tile` in every DEST section.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
 
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
@@ -34,6 +36,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     EMA_ALPHA_BETA,
+    EMA_INTERLEAVED_INIT,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -48,6 +51,9 @@ EMA_BETA = 1.0 - EMA_ALPHA
 # 2 tiles is 64 time steps per channel, enough for the recurrence to settle and for
 # rounding differences to accumulate through the carry.
 SWEEP_NUM_TIME_TILES = 2
+
+# Two time tiles, so the carry crosses a DEST section after the interleaved init.
+AFTER_INIT_NUM_TIME_TILES = 2
 
 # k/1000 for k in 0..999. alpha=0 is a degenerate pass-through (beta=1) and is kept
 # deliberately: it is the cheapest check that the carry term is actually multiplied
@@ -94,11 +100,20 @@ def _ema_golden_fp64(input_2d: torch.Tensor, alpha_f32: float, beta_f32: float):
     return out
 
 
-def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc):
+def _run_ema_on_device(
+    alpha: float,
+    beta: float,
+    num_time_tiles: int,
+    dest_acc,
+    binary_init_before_ema: bool = False,
+):
     """Run the EMA kernel over a [num_time_tiles*32, 32] input.
 
     Returns (untilized device result, untilized 2D input view). Row = time step,
     column = parallel channel, for both.
+
+    With ``binary_init_before_ema`` the kernel issues an eltwise binary init between
+    the datacopy and ``ema_tile`` in every DEST section, as a fused kernel would.
     """
     torch.manual_seed(0)
 
@@ -128,6 +143,7 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
         templates=[
             APPROX_MODE(ApproximationMode.No),
             EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
+            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -170,6 +186,28 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     assert passed_test(
         golden_tensor, res_tensor, DataFormat.Float16_b
     ), "EMA result does not match golden"
+
+
+# Another math init in the same DEST section must not change the EMA result.
+# One axis, so pytest's own parametrize: the harness helper hands a single axis over as a tuple.
+@pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=["dest_acc:No", "dest_acc:Yes"],
+)
+def test_sfpu_ema_after_binary_init(dest_acc):
+    res_tensor, golden_input = _run_ema_on_device(
+        EMA_ALPHA,
+        EMA_BETA,
+        AFTER_INIT_NUM_TIME_TILES,
+        dest_acc,
+        binary_init_before_ema=True,
+    )
+    golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
+
+    assert passed_test(
+        golden_tensor, res_tensor, DataFormat.Float16_b
+    ), "EMA result after an eltwise binary init does not match golden"
 
 
 @pytest.mark.nightly

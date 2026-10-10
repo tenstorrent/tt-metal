@@ -74,7 +74,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // SrcA a face at a time, so this count has to include num_faces. It must stay
             // in step with whatever the math isolate path actually retires -- a mismatch
             // in either direction hangs the handshake.
-            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+            }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
@@ -135,16 +138,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ false>(TILE_CNT * LOOP_FACTOR);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    }
+                    else
+                    {
+                        // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
+                        _perf_math_loop_clear_valid</* clear A */ true, /* clear B */ true>(num_faces);
+                    }
+                }
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Isolates the math pipe: no dest handshake with pack, so what is left is
-            // the datacopy plus the EMA kernel.
-            //
-            // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
-            // stays in. It is what consumes the SrcA valid bits that unpack sets, so
-            // dropping it and trying to retire them with a bare TTI_CLEARDVALID hangs the
+            // the datacopy plus the EMA kernel; with unpack to DEST (Float32) the unpacker
+            // fills DEST itself and only the EMA kernel is left.
+            // For the 16-bit forms this is the shape of eltwise_unary_sfpu_perf.cpp's
+            // MATH_ISOLATE: the datacopy stays in. It consumes the SrcA valid bits unpack
+            // sets, so dropping it and retiring them with a bare TTI_CLEARDVALID hangs the
             // math thread. The datacopy is therefore a fixed cost inside this marker, the
             // same way it is for every other unary SFPU op measured this way -- it is
             // constant across a before/after comparison of the SFPU block, so it cancels
@@ -152,13 +170,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             //
             // EMA always works through dst tile 0 (input) and dst tile 1 (output) via
             // compile-time offsets, so there is no MAX_TILES_DEST blocking here: every
-            // iteration copies into tile 0 and the kernel writes tile 1.
+            // iteration fills tile 0 and the kernel writes tile 1.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                        EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    if constexpr (!unpack_to_dest)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    }
                     llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
                 }
             }
