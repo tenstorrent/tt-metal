@@ -1,0 +1,26 @@
+{
+  "source": "User-provided Qwen3.8-27B Decode Kernel Plan PDF, saved text extraction dated 2026-10-06",
+  "extracted_text_sha256": "d797dd4ada31c64a39369183c4c8ff243fd580f92e8fe93237ab7e592e6760b7",
+  "artifact_url": "https://claude.ai/artifact/4gXpveXRCaEoaS9uCxa3zD",
+  "current_artifact_content_verified": false,
+  "retrieval": "2026-10-10: web open unavailable; HTML shell fetched with HTTP 200, public content request returned HTTP 403. No claim that saved PDF equals current online content.",
+  "batch": 16,
+  "context": 8192,
+  "weights": "bfloat4_b",
+  "kv": "bfloat8_b",
+  "recurrent": "float32",
+  "rounded_weights_bytes_per_chip": 3600000000.0,
+  "rounded_memory_floor_ms": 11.6,
+  "rounded_memory_tsu_ceiling": 86,
+  "p2_bandwidth_fraction": 0.85,
+  "p2_fixed_overhead_ms": 4.7,
+  "compute_fidelity_in_plan": "LoFi",
+  "compute_fidelity_in_current_candidate": "HiFi2",
+  "original_galaxy_throughput_target": {
+    "tokens_per_second": 14000,
+    "context": 8192,
+    "batch_per_tp4_replica": 64,
+    "replicas": 8
+  },
+  "note": "Use original rounded values as labeled; matched scenarios retain measured current padded projection shapes."
+}

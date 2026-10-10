@@ -169,6 +169,15 @@ qualification remain separate release gates.
 
 ## What reaching 30 TSU at B16/32K would require
 
+The [matched roofline audit](../galaxy-evidence/roofline-reconciliation-v1/README.md)
+separates the saved specification's BFP4/8K assumptions from today's BFP8/32K
+measurement. Its original 86-TSU memory ceiling becomes 39.74 TSU for our
+current useful-byte estimate. Applying the plan's unproven 85%-bandwidth and
+4.7-ms-overhead assumptions gives 29.15 TSU. The remaining gap from 16.55 TSU
+is still 1.76x; the original operating point must not be presented as the
+current workload's ceiling. The current artifact contents could not be
+refreshed; the audit identifies the saved October 6 PDF extraction it used.
+
 **Current user requirement: 30 native tokens/s/user at B16/32K; no speculative
 decoding.** This supersedes the earlier conditional MTP scope. Retain BFP8
 weights/KV, BF16 activations and FP32 recurrent state. Historical speculative

@@ -2068,3 +2068,12 @@ No session connection is needed for that queue to continue.
   it made no partial edit. No native install, firmware or NFS changes.
 
 [Launch, source manifest, tests and remaining gates](../galaxy-evidence/compact-gdn-launch-v1/README.md).
+
+## 2026-10-10T07:21:47.735565+00:00 - Matched roofline reconciliation
+
+- Revalidated active fusion controller PID 3530696 and its qualification child; native G0 was loading replicas, not terminal. B16/compact/projection followers remained live and waiting. No hardware job was restarted.
+- Completed B16/32K control drift is +0.003082%, with identical before/after output hashes. Candidate remains 60.422 ms / 16.550 TSU; its accuracy qualification is not complete. Retained completed sweep, control comparison and exact live invocation receipt in `galaxy-evidence/roofline-reconciliation-v1`.
+- The saved October 6 specification's 86-TSU B16 ceiling assumes BFP4 weights and 8K. Current BFP8 weights and 32K increase useful modeled traffic to 12.883 GB/chip/step, a 25.162-ms floor (39.743 TSU). Applying its 85%-bandwidth plus 4.7-ms overhead assumptions gives 34.302 ms / 29.153 TSU. The candidate is 1.761x away from that scenario, or 26.120 ms slower. Neither ceiling nor P2 scenario is a combined compute/memory feasibility guarantee.
+- Reproduced arithmetic with a hardware-free report script, retaining current padded projection shapes for the BFP4/BFP8 and 8K/32K scenarios. Profiled family sums are not treated as additive wall time or remaining removable work; existing 6.82-ms fusion gain is not counted twice.
+- Issues: web open could not retrieve the artifact. Direct shell fetch initially failed sandbox DNS, then succeeded with approved access, but returned only the HTML shell; the shell's public content endpoint returned HTTP 403. Used the hashed saved PDF extraction and explicitly did not claim a refreshed online version. Initial receipt collector hit sandbox SSH restrictions; retried with approved access and collected successfully.
+- Priority remains compact/fused native B16/32K dataflow, supported by projection and SDPA tuning. No speculative or precision change, no serving promotion, and no claim of 30 TSU.

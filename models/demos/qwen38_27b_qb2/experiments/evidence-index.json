@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T07:01:12.451566+00:00",
+  "generated_at": "2026-10-10T07:22:21.463366+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -179,13 +179,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 152062,
-      "sha256": "2fade0cf1c56d10afe8ee349e452872c9fc19cf75dbaaf12896d08f091bfdc77"
+      "bytes": 154001,
+      "sha256": "7bbf3995d7af4910c588f996d6787504ac1d8b1cc6347e32a20935f952e168fe"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 20835,
-      "sha256": "892dd0393031110ab00dbd9ff5f39c7d7442000b144022135cd13d585b26be01"
+      "bytes": 21450,
+      "sha256": "bc501f498dd7dcde7c7c7be14fed9dd48ebf880bcdba9a8e237f01f851fd281f"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -9495,6 +9495,46 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/README.md",
+      "bytes": 6179,
+      "sha256": "22350011a62e53101ecf9c4caec277bde8e337170e8bdb279073e090e031a246"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/candidate-sweep.json",
+      "bytes": 44110,
+      "sha256": "dc0289eeee91dd4e6567ae8d55b1930331a9edc457f5b6f6968a0f40d5519048"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/comparison.json",
+      "bytes": 4750,
+      "sha256": "a887317c153387ae6c88f839c8705be712dacc51375a74da63b8c04385a3e69e"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/control-drift.json",
+      "bytes": 4490,
+      "sha256": "6cfe4c392f5591e43a685f194984a19a40887760e7939aa3a7658ddee0d58512"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/live-unit.txt",
+      "bytes": 98,
+      "sha256": "0f291521f81f6d69224f19ee8e923105d0dd427e7500071e5bdb89ec20281754"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/qualification-queue.json",
+      "bytes": 8966,
+      "sha256": "f610e5d5cbe1534f563bacc9425f75935e23b01b55ed778df0058fc1e9bcc4f6"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/reconcile.py",
+      "bytes": 5438,
+      "sha256": "0f31a9088df9b264fb93c3bd67540faf0d973c243540a6868cbfff037684887b"
+    },
+    {
+      "path": "galaxy-evidence/roofline-reconciliation-v1/spec-snapshot.json",
+      "bytes": 1155,
+      "sha256": "025156770d9a9ec563cfae334c8ff3fa266eedade58789c5ea79c6b121400bd6"
     },
     {
       "path": "galaxy-evidence/serving-launch-host.xml",

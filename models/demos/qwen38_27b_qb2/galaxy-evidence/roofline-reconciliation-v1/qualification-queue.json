@@ -1,0 +1,216 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "flat-layer",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/flat-layer/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606651.154409,
+      "finished_at": 1791606729.249228
+    },
+    {
+      "name": "profile-s32768-b32-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b32-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606729.2605486,
+      "finished_at": 1791606789.337389
+    },
+    {
+      "name": "profile-s32768-b32-shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606789.4339015,
+      "finished_at": 1791606849.5076828
+    },
+    {
+      "name": "profile-s32768-b16-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b16-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606849.594881,
+      "finished_at": 1791606903.6650434
+    },
+    {
+      "name": "profile-s32768-b16-shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b16-shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606903.7644062,
+      "finished_at": 1791606957.8377385
+    },
+    {
+      "name": "native-before",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/native-before/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "completed",
+      "started_at": 1791606957.9246602,
+      "finished_at": 1791610527.369546
+    },
+    {
+      "name": "shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "completed",
+      "started_at": 1791610527.379526,
+      "finished_at": 1791613040.5133195
+    },
+    {
+      "name": "native-after",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/native-after/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "completed",
+      "started_at": 1791613040.5236182,
+      "finished_at": 1791615533.6553621
+    },
+    {
+      "name": "candidate-qualification",
+      "command": [
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+        "-m",
+        "models.demos.qwen38_27b_qb2.demo.run_overnight_qualification",
+        "--task",
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+        "--source",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "--weights",
+        "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+        "--results",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/candidate-qualification/results",
+        "--candidate-g0",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/candidate-qualification/results/native-g0/receipts",
+        "--tau-root",
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/tau3",
+        "--delivery-source",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "--native-control-only",
+        "--accuracy-only",
+        "--control-precision",
+        "precision_single_step_flat_prepare_epilogue_bfp8_all.json"
+      ],
+      "timeout_seconds": 21600,
+      "state": "running",
+      "started_at": 1791615536.8460703
+    }
+  ],
+  "predecessor_unit": "qwen38-gdn-flat-layer-v1-20261010.service",
+  "predecessor_invocation": "a05780afd8804a82860a5162399ef5b2",
+  "hardware_started": true,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791606651.1373858,
+  "profiles_first": true,
+  "epilogue_first": false,
+  "release_audit": false,
+  "variant_configs": {
+    "native": "precision_single_step_shared_qk_bfp8_all.json",
+    "shared-qk": "precision_single_step_flat_prepare_epilogue_bfp8_all.json"
+  },
+  "fusion_followup": true,
+  "updated_at": "2026-10-10T06:58:56Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "candidate-qualification",
+  "native_control_stable_within_3_percent": true
+}

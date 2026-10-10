@@ -1,0 +1,123 @@
+{
+  "scope": "One TP4 replica, batch 16; native decode only, no HTTP/prefill or speculative decoding",
+  "source_sha256": {
+    "operators": "4b67b79f14d5e9b291229c85765532d28504cc486265e2ba580994d1546b5c92",
+    "candidate": "dc0289eeee91dd4e6567ae8d55b1930331a9edc457f5b6f6968a0f40d5519048",
+    "controls": "6cfe4c392f5591e43a685f194984a19a40887760e7939aa3a7658ddee0d58512",
+    "plan": "025156770d9a9ec563cfae334c8ff3fa266eedade58789c5ea79c6b121400bd6"
+  },
+  "plan_snapshot": {
+    "source": "User-provided Qwen3.8-27B Decode Kernel Plan PDF, saved text extraction dated 2026-10-06",
+    "extracted_text_sha256": "d797dd4ada31c64a39369183c4c8ff243fd580f92e8fe93237ab7e592e6760b7",
+    "artifact_url": "https://claude.ai/artifact/4gXpveXRCaEoaS9uCxa3zD",
+    "current_artifact_content_verified": false,
+    "retrieval": "2026-10-10: web open unavailable; HTML shell fetched with HTTP 200, public content request returned HTTP 403. No claim that saved PDF equals current online content.",
+    "batch": 16,
+    "context": 8192,
+    "weights": "bfloat4_b",
+    "kv": "bfloat8_b",
+    "recurrent": "float32",
+    "rounded_weights_bytes_per_chip": 3600000000.0,
+    "rounded_memory_floor_ms": 11.6,
+    "rounded_memory_tsu_ceiling": 86,
+    "p2_bandwidth_fraction": 0.85,
+    "p2_fixed_overhead_ms": 4.7,
+    "compute_fidelity_in_plan": "LoFi",
+    "compute_fidelity_in_current_candidate": "HiFi2",
+    "original_galaxy_throughput_target": {
+      "tokens_per_second": 14000,
+      "context": 8192,
+      "batch_per_tp4_replica": 64,
+      "replicas": 8
+    },
+    "note": "Use original rounded values as labeled; matched scenarios retain measured current padded projection shapes."
+  },
+  "physical_dram_counters": false,
+  "combined_compute_memory_roofline_calibrated": false,
+  "assumptions": {
+    "per_chip_peak_gbs": 512,
+    "weights_read_once": true,
+    "kv_read_once": true,
+    "recurrent_state_read_write_once": true,
+    "current_projection_padding_retained_in_all_scenarios": true,
+    "excluded": [
+      "extra physical traffic",
+      "activation traffic",
+      "compute",
+      "collectives",
+      "program dependencies"
+    ]
+  },
+  "scenarios": [
+    {
+      "weights": "bfloat4_b",
+      "context": 8192,
+      "weights_bytes": 3764920320,
+      "kv_bytes": 1140850688,
+      "recurrent_bytes": 1207959552,
+      "useful_bytes": 6113730560,
+      "memory_only_floor_ms": 11.94088,
+      "memory_only_tsu_ceiling": 83.74592157361937,
+      "assumed_p2_step_ms": 18.74809411764706,
+      "assumed_p2_tsu": 53.33875506090658
+    },
+    {
+      "weights": "bfloat4_b",
+      "context": 32768,
+      "weights_bytes": 3764920320,
+      "kv_bytes": 4563402752,
+      "recurrent_bytes": 1207959552,
+      "useful_bytes": 9536282624,
+      "memory_only_floor_ms": 18.625552,
+      "memory_only_tsu_ceiling": 53.689683935273436,
+      "assumed_p2_step_ms": 26.612414117647056,
+      "assumed_p2_tsu": 37.576448178629775
+    },
+    {
+      "weights": "bfloat8_b",
+      "context": 8192,
+      "weights_bytes": 7111516160,
+      "kv_bytes": 1140850688,
+      "recurrent_bytes": 1207959552,
+      "useful_bytes": 9460326400,
+      "memory_only_floor_ms": 18.4772,
+      "memory_only_tsu_ceiling": 54.120754226830904,
+      "assumed_p2_step_ms": 26.437882352941177,
+      "assumed_p2_tsu": 37.82451206379438
+    },
+    {
+      "weights": "bfloat8_b",
+      "context": 32768,
+      "weights_bytes": 7111516160,
+      "kv_bytes": 4563402752,
+      "recurrent_bytes": 1207959552,
+      "useful_bytes": 12882878464,
+      "memory_only_floor_ms": 25.161872,
+      "memory_only_tsu_ceiling": 39.74267097456024,
+      "assumed_p2_step_ms": 34.30220235294118,
+      "assumed_p2_tsu": 29.152647101513494
+    }
+  ],
+  "measured": {
+    "step_ms": 60.422221096012535,
+    "tsu": 16.550202588729288,
+    "useful_byte_gbs": 213.21424850517758,
+    "useful_byte_fraction_of_peak": 0.41643407911167496,
+    "p2_scenario_speedup_required": 1.7614676887016774,
+    "p2_scenario_excess_ms": 26.120018743071356,
+    "before_after_control_drift_percent": 0.0030822093007865092,
+    "gpqa_qualified": false
+  },
+  "native_30_tsu": {
+    "target_step_ms": 33.333333333333336,
+    "further_ms_to_remove": 27.0888877626792,
+    "minimum_useful_byte_bandwidth_fraction": 0.7548561599999999,
+    "other_work_budget_at_85_percent_ms": 3.731130980392159
+  },
+  "caveats": [
+    "Current 128-token timing scans a growing context; modeled traffic uses the initial 32768 tokens.",
+    "P2 overhead and bandwidth are assumptions, not established current performance.",
+    "Operator inventory predates current fusion; profiled family sums are not additive wall time.",
+    "Matched BFP4 scenarios are hypothetical byte substitutions, not qualified precision changes."
+  ]
+}
