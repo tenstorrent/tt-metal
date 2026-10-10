@@ -564,7 +564,14 @@ void kernel_main() {
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                        pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        // As for the subblock pack: the block run does not pay off for these subblocks.
+                        if constexpr (out_subblock_w == 1 && in0_block_w < 4) {
+                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                pack_tile(i, untilize_mode_out_cb_id);
+                            }
+                        } else {
+                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        }
 #else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
