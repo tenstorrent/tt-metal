@@ -10,8 +10,10 @@ Layout per device (r, c), S = padded prefill length:
     (the stored tensors are not touched; the gathered copy is freed after the layer).
   - attention / MLP inputs: the local norm output all-gathered over the rows (axis 0) -> [S/4, 5120] bf8; WO / FF2
     outputs are reduce-scattered over the rows back to [S/32, 5120].
-  - K / V of the column's S/4 rows are gathered over the columns and reordered to the natural order with a
-    permuting paged_fill_cache into a scratch buffer, which feeds the KV cache fill and ring SDPA.
+  - K / V of the column's S/4 rows are gathered over the columns. Paged KV cache (block KV_BLOCK, bf8): one
+    paged_fill_cache with the composed table (gathered block i -> the cache block of natural block kv_perm[i])
+    writes the cache in the natural order and ring SDPA reads K / V from the cache (page_table, chunk_start_idx=0).
+    Otherwise a permuting paged_fill_cache into a scratch buffer gives the natural K / V for the fill and the SDPA.
 
 Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache), S > 8192,
 S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default). QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
@@ -22,6 +24,7 @@ from __future__ import annotations
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -251,6 +254,55 @@ def kv_to_natural(ctx: CPContext, tt_ccl, kv_local, scratch):
     return ttnn.reshape(scratch, [1, 1, ctx.lay.S, scratch.shape[-1]])
 
 
+def paged_kv_enabled() -> bool:
+    """QWEN_CP_PAGED_KV=0 keeps the scratch reorder (kv_to_natural) in front of the cache fill and ring SDPA."""
+    return os.environ.get("QWEN_CP_PAGED_KV", "1") == "1"
+
+
+def paged_kv_tables(ctx: CPContext, page_table, keys):
+    """Device page tables of the reorder-free K / V path for one user, or None when it does not apply (no page
+    table, cache block != KV_BLOCK, cache not bf8, QWEN_CP_PAGED_KV=0). page_table: the user's device page table
+    (row 0 = this user, as paged_fill_cache(batch_idx=0) reads it). Returns (fill, sdpa): fill [1, S/KV_BLOCK] maps
+    gathered block i to the cache block of natural block kv_perm[i]; sdpa = row 0 of page_table. One host read of
+    the page table per user and forward (call it before the layer loop)."""
+    ok = (
+        page_table is not None
+        and paged_kv_enabled()
+        and len(keys.shape) == 4
+        and int(keys.shape[2]) == KV_BLOCK
+        and keys.dtype == ttnn.bfloat8_b
+    )
+    if not getattr(ctx, "_paged_kv_logged", False):
+        ctx._paged_kv_logged = True
+        logger.info(f"Qwen CP prefill S={ctx.lay.S}: paged K/V without the scratch reorder: {ok}")
+    if not ok:
+        return None
+    pt = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0]).to(torch.int32)
+    row = pt.reshape(-1, pt.shape[-1])[0]
+    fill = row[torch.tensor(ctx.lay.kv_perm(), dtype=torch.long)].reshape(1, -1)
+    rep = ttnn.ReplicateTensorToMesh(ctx.mesh)
+    return tuple(
+        ttnn.from_torch(
+            t.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=ctx.mesh, mesh_mapper=rep
+        )
+        for t in (fill, row.reshape(1, -1))
+    )
+
+
+def free_kv_tables(tables):
+    if tables is not None:
+        for t in tables:
+            ttnn.deallocate(t)
+
+
+def kv_fill_paged(ctx: CPContext, tt_ccl, kv_local, cache, fill_table):
+    """Column-local K or V [1, 1, S/4, 128] -> the user's paged cache in the natural order: gather over the
+    columns, then one paged_fill_cache with the composed table (the same block moves as kv_to_natural + fill)."""
+    g = _ag(tt_ccl, kv_local, 2, 1)
+    ttnn.experimental.paged_fill_cache(cache, g, fill_table, batch_idx=0)
+    ttnn.deallocate(g)
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Entry / exit (once per forward)
 # ---------------------------------------------------------------------------------------------------------------
@@ -359,9 +411,13 @@ def _row_rs(tt_ccl, model_config, t, seq_len, key):
     return _rs(tt_ccl, t, 2, 0, **kw)
 
 
-def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_id=0, page_table=None, kv_cache=None):
+def attention_prefill(
+    ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_id=0, page_table=None, kv_cache=None, kv_tables=None
+):
     """Design B attention (steps 2-12). x_local: attention-norm output [1, 1, S/32, 5120] bf8 (deallocated).
-    Returns the WO output reduce-scattered over the rows, [1, 1, S/32, 5120] bf8. Fills the KV cache as today."""
+    Returns the WO output reduce-scattered over the rows, [1, 1, S/32, 5120] bf8. Fills the KV cache as today.
+    kv_tables: paged_kv_tables(...) of this user (cache fill without the scratch reorder, ring SDPA on the cache);
+    None keeps the scratch reorder."""
     S = ctx.lay.S
     H, D = attn.n_local_heads, attn.head_dim
     mc = attn.model_config
@@ -415,23 +471,33 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     )
     ttnn.deallocate(xqkv)
 
-    # K / V to the natural order (views of the persistent scratch buffers: never deallocated here).
-    ks, vs = ctx.scratch()
-    k_nat = kv_to_natural(ctx, tt_ccl, k_loc, ks)
-    v_nat = kv_to_natural(ctx, tt_ccl, v_loc, vs)
-    ttnn.deallocate(k_loc)
-    ttnn.deallocate(v_loc)
-
-    # KV cache fill, as today's forward_prefill (no prefix cache here).
     keys, values = (kv_cache[0], kv_cache[1]) if kv_cache else (attn.layer_past[0], attn.layer_past[1])
-    if page_table:
-        ttnn.experimental.paged_fill_cache(keys, k_nat, page_table, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(values, v_nat, page_table, batch_idx=0)
+    if kv_tables is not None and page_table:
+        # Paged cache in the natural order straight from the column gather; ring SDPA reads it through the page
+        # table (job136: same speed, outputs equal to the contiguous K / V).
+        kv_fill_paged(ctx, tt_ccl, k_loc, keys, kv_tables[0])
+        kv_fill_paged(ctx, tt_ccl, v_loc, values, kv_tables[0])
+        ttnn.deallocate(k_loc)
+        ttnn.deallocate(v_loc)
+        k_sdpa, v_sdpa, sdpa_pt, sdpa_cs = keys, values, kv_tables[1], 0
     else:
-        k_fill = attn.prefill_prepare_tensor_for_kv_cache(k_nat, user_id)
-        v_fill = attn.prefill_prepare_tensor_for_kv_cache(v_nat, user_id)
-        ttnn.fill_cache(keys, k_fill, user_id % attn.batch_size_per_device_group)
-        ttnn.fill_cache(values, v_fill, user_id % attn.batch_size_per_device_group)
+        # K / V to the natural order (views of the persistent scratch buffers: never deallocated here).
+        ks, vs = ctx.scratch()
+        k_nat = kv_to_natural(ctx, tt_ccl, k_loc, ks)
+        v_nat = kv_to_natural(ctx, tt_ccl, v_loc, vs)
+        ttnn.deallocate(k_loc)
+        ttnn.deallocate(v_loc)
+
+        # KV cache fill, as today's forward_prefill (no prefix cache here).
+        if page_table:
+            ttnn.experimental.paged_fill_cache(keys, k_nat, page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(values, v_nat, page_table, batch_idx=0)
+        else:
+            k_fill = attn.prefill_prepare_tensor_for_kv_cache(k_nat, user_id)
+            v_fill = attn.prefill_prepare_tensor_for_kv_cache(v_nat, user_id)
+            ttnn.fill_cache(keys, k_fill, user_id % attn.batch_size_per_device_group)
+            ttnn.fill_cache(values, v_fill, user_id % attn.batch_size_per_device_group)
+        k_sdpa, v_sdpa, sdpa_pt, sdpa_cs = k_nat, v_nat, None, None
 
     # Ring SDPA, today's call: Q owned slices, natural K / V -> [1, H, S/4, D] in the column's local order.
     ring_cfg = mc.get("SDPA_RING_PROGCFG", mc["SDPA_PROGCFG"])
@@ -447,14 +513,14 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
             )
     attn_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
         q_8b,
-        k_nat,
-        v_nat,
+        k_sdpa,
+        v_sdpa,
         ring_size=COLS,
         scale=attn.scale,
         compute_kernel_config=ckc,
         program_config=ring_cfg(S, chunk_start_idx=0),
-        page_table=None,
-        chunk_start_idx=None,
+        page_table=sdpa_pt,
+        chunk_start_idx=sdpa_cs,
     )
     ttnn.deallocate(q_8b)
     cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S/4, H*D]
@@ -558,15 +624,18 @@ def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
     return out
 
 
-def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_table=None, kv_cache=None, w=None):
+def decoder_prefill(
+    ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_table=None, kv_cache=None, w=None, kv_tables=None
+):
     """One decoder layer in layout B. h: residual [1, 1, S/32, 5120] bf16 (deallocated). Returns the new residual.
-    w: this layer's gathered weights (gather_layer_weights); gathered and freed here when None."""
+    w: this layer's gathered weights (gather_layer_weights); gathered and freed here when None.
+    kv_tables: paged_kv_tables(...) of this user, or None (scratch reorder)."""
     ckc = layer.args.compute_kernel_config_hifi2
     own_w = w is None
     if own_w:
         w = gather_layer_weights(tt_ccl, layer.attention, layer.feed_forward)
     xn = local_norm(layer.attention_norm, h, ckc)
-    a = attention_prefill(ctx, tt_ccl, layer.attention, xn, rot_mats, w, user_id, page_table, kv_cache)
+    a = attention_prefill(ctx, tt_ccl, layer.attention, xn, rot_mats, w, user_id, page_table, kv_cache, kv_tables)
     h2 = ttnn.add(h, a, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(h)
     ttnn.deallocate(a)
@@ -580,6 +649,10 @@ def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_
     return out
 
 
+def _layer_keys(model, kv_cache, i):
+    return kv_cache[i][0] if kv_cache is not None else model.layers[i].attention.layer_past[0]
+
+
 def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None):
     """llama_model.forward body for the guarded case: natural embedding x [1, 1, S, 1280] -> natural pre-norm
     output [1, 1, S, 1280] (the same tensor today's prefill forward returns)."""
@@ -587,6 +660,7 @@ def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None)
     ctx = get_context(model.tt_ccl, model.mesh_device, S)
     h = entry(ctx, model.tt_ccl, x)
     x.deallocate(True)
+    kv_tables = paged_kv_tables(ctx, page_table, _layer_keys(model, kv_cache, 0))
     for i, layer in enumerate(model.layers):
         h = decoder_prefill(
             ctx,
@@ -597,7 +671,9 @@ def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None)
             user_id,
             page_table,
             kv_cache[i] if kv_cache is not None else None,
+            kv_tables=kv_tables,
         )
+    free_kv_tables(kv_tables)
     out = exit_natural(ctx, model.tt_ccl, h)
     ttnn.deallocate(h)
     return out
@@ -666,6 +742,7 @@ def layer_major_prefill(model, users, rot_mats, kv_cache):
     S = int(users[0]["h"].shape[-2]) * ROWS * COLS
     ctx = get_context(model.tt_ccl, model.mesh_device, S)
     hs = [u["h"] for u in users]
+    tables = [paged_kv_tables(ctx, u["page_table"], _layer_keys(model, kv_cache, 0)) for u in users]
     for i, layer in enumerate(model.layers):
         w = gather_layer_weights(model.tt_ccl, layer.attention, layer.feed_forward)
         for k, u in enumerate(users):
@@ -679,8 +756,11 @@ def layer_major_prefill(model, users, rot_mats, kv_cache):
                 u["page_table"],
                 kv_cache[i] if kv_cache is not None else None,
                 w=w,
+                kv_tables=tables[k],
             )
         free_weights(w)
+    for t in tables:
+        free_kv_tables(t)
     windows = []
     for k, u in enumerate(users):
         windows.append(exit_last_token(ctx, model.tt_ccl, hs[k], int(u["last_idx"])))
