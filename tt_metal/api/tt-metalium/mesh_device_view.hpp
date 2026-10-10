@@ -40,19 +40,14 @@ class MeshDeviceViewImpl;
 
 class MeshDeviceView {
 public:
-    // Constructors for MeshDeviceView for fully and partially local meshes.
-    explicit MeshDeviceView(
-        const MeshShape& shape,
-        const std::vector<IDevice*>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
-    explicit MeshDeviceView(
-        const MeshShape& shape,
-        const std::vector<MaybeRemote<IDevice*>>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
+    explicit MeshDeviceView(std::unique_ptr<MeshDeviceViewImpl> impl);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
     [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
-    [[nodiscard]] std::vector<IDevice*> get_devices() const;
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
+        "instead. This will be removed after 2026-11-13.")]] [[nodiscard]] std::vector<IDevice*>
+    get_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
@@ -74,7 +69,13 @@ public:
     // In multi-host context, fabric node IDs are always available, even for remote devices.
     [[nodiscard]] tt::tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
+        "instead. This will be removed after 2026-11-13.")]]
     std::vector<MaybeRemote<IDevice*>>::const_iterator begin() const;
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
+        "instead. This will be removed after 2026-11-13.")]]
     std::vector<MaybeRemote<IDevice*>>::const_iterator end() const;
 
     // Throws if no device corresponds to `device_id`.
@@ -106,7 +107,10 @@ public:
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
-    [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
+    [[deprecated(
+        "Deprecated, use get_line_coordinates or get_line_fabric_node_ids instead. This will be removed after "
+        "2026-11-13.")]] [[nodiscard]] std::vector<IDevice*>
+    get_line_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
 

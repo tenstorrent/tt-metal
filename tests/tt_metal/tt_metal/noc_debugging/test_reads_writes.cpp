@@ -14,6 +14,7 @@
 
 #include "hal_types.hpp"
 #include "noc_debugging_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -1142,7 +1143,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
     std::vector<tt::tt_metal::IDevice*> all_devices;
     for (const auto& md : this->devices_) {
-        for (auto* d : md->get_devices()) {
+        for (auto* d : md->impl().get_devices()) {
             all_devices.push_back(d);
         }
     }

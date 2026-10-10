@@ -1135,7 +1135,7 @@ static bool run_all_devices(
 
     // Pre-fill each device before the simultaneous stress phase.
     for (const auto& mesh_device : mesh_devices) {
-        IDevice* device = mesh_device->get_devices().at(0);
+        auto* device = mesh_device->impl().get_devices().at(0);
         MaxUtilConfig cfg =
             full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops, super_sync);
         auto prefill_program = build_prefill_program(device, cfg);
