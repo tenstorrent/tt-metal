@@ -298,20 +298,18 @@ ttnn::Tensor transpose_impl(
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
-    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
+    const bool identity =
+        (normalized_dim1 == normalized_dim2) || (input_unsqueezed.padded_shape()[normalized_dim1] == 1 &&
+                                                 input_unsqueezed.padded_shape()[normalized_dim2] == 1);
+    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !identity;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     Tensor output;
-    if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
-                                                 input_typecasted.padded_shape()[normalized_dim2] == 1)) {
-        if (memory_config_arg.has_value() && input_typecasted.memory_config() != memory_config_arg.value()) {
-            output = ttnn::clone(
-                input_typecasted,
-                std::nullopt,
-                memory_config_arg.value_or(input_typecasted.memory_config()),
-                std::nullopt);
+    if (identity) {
+        if (memory_config_arg.has_value() && input_unsqueezed.memory_config() != *memory_config_arg) {
+            output = ttnn::clone(input_unsqueezed, std::nullopt, memory_config_arg, std::nullopt);
         } else {
-            output = input_typecasted;
+            output = input_unsqueezed;
         }
     } else {
         // covered in main if branch => not a TT_FATAL
