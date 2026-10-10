@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 
