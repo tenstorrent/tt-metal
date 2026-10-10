@@ -229,8 +229,8 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-// Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B.
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (26 * 1024)
+// Must fit both ERISC images and runtime args: the watcher-enabled ring router needs 29264B.
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (32 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
