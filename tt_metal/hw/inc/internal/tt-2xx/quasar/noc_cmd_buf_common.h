@@ -427,8 +427,6 @@ inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint3
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8, NOC_OVERLAY_MAX_BYTES_IN_PACKET);
 }
 
 inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {

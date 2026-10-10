@@ -12,6 +12,7 @@
 #include "hostdev/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "math.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
@@ -24,11 +25,11 @@ constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT 
 namespace {
 
 // Convert a wall-time margin into device ticks for the NOC-debug watermark.
-uint64_t noc_debug_margin_to_ticks(const std::vector<IDevice*>& devices, std::chrono::milliseconds margin) {
+uint64_t noc_debug_margin_to_ticks(
+    const Cluster& cluster, const std::vector<IDevice*>& devices, std::chrono::milliseconds margin) {
     uint32_t aiclk_mhz = 0;
     for (auto* device : devices) {
-        aiclk_mhz = std::max(
-            aiclk_mhz, static_cast<uint32_t>(MetalContext::instance().get_cluster().get_device_aiclk(device->id())));
+        aiclk_mhz = std::max(aiclk_mhz, static_cast<uint32_t>(cluster.get_device_aiclk(device->id())));
     }
     if (aiclk_mhz == 0) {
         aiclk_mhz = 1000;  // conservative nominal clock if the frequency is unavailable
@@ -85,11 +86,6 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
     return dram_bank_size_per_risc_bytes;
 }
 
-uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
-    llrt::RunTimeOptions& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    return get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
-}
-
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {
     const uint32_t per_buffer_size = get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
     const bool debug_dump_enabled = rtoptions.get_experimental_noc_debug_dump_enabled();
@@ -108,7 +104,8 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     return div_up(rtoptions.get_streaming_profiler_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
 }
 
-ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
+ProfilerStateManager::ProfilerStateManager(MetalContext& ctx) :
+    ctx_(ctx), env_(MetalEnvAccessor(ctx.get_env()).impl()), do_sync_on_close(true) {}
 
 void ProfilerStateManager::cleanup_device_profilers() {
     // This thread only exists when debug dump is enabled
@@ -208,7 +205,7 @@ void ProfilerStateManager::start_debug_dump_thread(
 
     constexpr uint64_t max_margin_ticks = uint64_t(1) << (kernel_profiler::PROFILER_MARKER_TS_BITS - 1);
     TT_FATAL(
-        noc_debug_margin_to_ticks(active_devices, watermark_margin) < max_margin_ticks,
+        noc_debug_margin_to_ticks(env_.get_cluster(), active_devices, watermark_margin) < max_margin_ticks,
         "TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS ({}) is too large: it exceeds half the {}-bit device timestamp wrap "
         "window, which would silently disable the mid-run watermark.",
         watermark_margin.count(),
@@ -258,6 +255,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     }
                     constexpr auto state = ProfilerReadState::LAST_FD_READ;
                     detail::ReadDeviceProfilerResultsInternal(
+                        ctx_,
                         device->get_mesh_device().get(),
                         device,
                         virtual_cores_map.at(device->id()),
@@ -302,6 +300,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     DeviceProfiler& profiler = profiler_it->second;
                     profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
                     detail::ReadDeviceProfilerResultsInternal(
+                        ctx_,
                         device->get_mesh_device().get(),
                         device,
                         virtual_cores_map.at(device->id()),
@@ -315,10 +314,10 @@ void ProfilerStateManager::start_debug_dump_thread(
                         ProfilerDataBufferSource::DRAM_AND_L1,
                         {});
                 }
-                if (auto& noc_debug_state = MetalContext::instance().noc_debug_state();
-                    noc_debug_state && !active_devices.empty()) {
+                if (auto& noc_debug_state = ctx_.noc_debug_state(); noc_debug_state && !active_devices.empty()) {
                     // Recomputed each pass rather than hoisted, because the aiclk can change at runtime (DVFS).
-                    const uint64_t margin_ticks = noc_debug_margin_to_ticks(active_devices, watermark_margin);
+                    const uint64_t margin_ticks =
+                        noc_debug_margin_to_ticks(env_.get_cluster(), active_devices, watermark_margin);
                     noc_debug_state->process_accumulated_events_up_to(margin_ticks);
                     noc_debug_state->report_new_issues();
                 }

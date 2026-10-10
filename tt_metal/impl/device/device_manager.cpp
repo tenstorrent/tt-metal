@@ -370,24 +370,6 @@ Device* DeviceManager::get_device(ChipId id) const {
     return it->get();
 }
 
-std::size_t DeviceManager::get_max_num_eth_cores_across_all_devices() const {
-    // This API is needed due to Issue #19729:
-    // Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Records the maximum number of active ethernet cores across all devices opened in the cluster.
-    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
-    // ethernet cores (uniformity assumption)
-    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
-    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
-    // value host dispatch provides, if its incorrect).
-    std::size_t max_eth_core_count = 0;
-    for (const auto& device : this->devices_) {
-        max_eth_core_count = std::max(
-            env_impl_.get_control_plane().get_active_ethernet_cores(device->id(), /*skip_reserved_cores*/ true).size(),
-            max_eth_core_count);
-    }
-    return max_eth_core_count;
-}
-
 void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     std::set<ChipId> devices_to_activate;
 
@@ -446,7 +428,6 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
         this,
         [this]() -> tt::tt_fabric::ControlPlane& { return env_impl_.get_control_plane(); },
         [this]() -> const tt::tt_metal::DispatchQueryManager& { return ctx_.get_dispatch_query_manager(); },
-        [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
         [this](ChipId id) {
             auto& s = ctx_.dprint_server();
             return s && s.get() && s->reads_dispatch_cores(id);
@@ -508,7 +489,6 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
             this,
             [this]() -> tt::tt_fabric::ControlPlane& { return env_impl_.get_control_plane(); },
             [this]() -> const tt::tt_metal::DispatchQueryManager& { return ctx_.get_dispatch_query_manager(); },
-            [this]() { return static_cast<uint32_t>(this->get_max_num_eth_cores_across_all_devices()); },
             [this](ChipId id) {
                 auto& s = ctx_.dprint_server();
                 return s && s.get() && s->reads_dispatch_cores(id);
