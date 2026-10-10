@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import ttnn
-from models.common.modules import tt_ccl as common_tt_ccl
+from models.common import tt_ccl as common_tt_ccl
 from models.tt_transformers.tt import ccl as tt_transformers_ccl
 
 
@@ -47,7 +47,7 @@ def test_get_num_links_rejects_invalid_cluster_axis(monkeypatch, ccl_module):
     monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
     mesh_device = FakeMeshDevice(global_num_devices=8, local_device_ids=range(8))
 
-    with pytest.raises(ValueError, match="Unsupported cluster_axis: 2"):
+    with pytest.raises(ValueError, match="Unsupported cluster_axis: 2"):  # allow-pytest.raises: pre-existing
         ccl_module.get_num_links(mesh_device, cluster_axis=2)
 
 
@@ -56,7 +56,9 @@ def test_get_num_links_requires_local_devices(monkeypatch, ccl_module):
     monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
     mesh_device = FakeMeshDevice(global_num_devices=64, local_device_ids=[])
 
-    with pytest.raises(ValueError, match="requires at least one host-local device"):
+    with pytest.raises(  # allow-pytest.raises: pre-existing
+        ValueError, match="requires at least one host-local device"
+    ):
         ccl_module.get_num_links(mesh_device)
 
 
@@ -65,5 +67,7 @@ def test_get_num_links_normalizes_get_device_ids_failures(monkeypatch, ccl_modul
     monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
     mesh_device = FakeMeshDeviceGetDeviceIdsRaises(global_num_devices=64, local_device_ids=[])
 
-    with pytest.raises(ValueError, match="requires at least one host-local device"):
+    with pytest.raises(  # allow-pytest.raises: pre-existing
+        ValueError, match="requires at least one host-local device"
+    ):
         ccl_module.get_num_links(mesh_device)

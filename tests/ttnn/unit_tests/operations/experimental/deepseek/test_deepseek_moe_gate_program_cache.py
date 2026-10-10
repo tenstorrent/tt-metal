@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.modules.moe.tt_moe_gate import TTMoEGate
+from models.common.moe.tt_moe_gate import TTMoEGate
 
 
 def _allocate(device, batch_size, seed, enable_sigmoid):

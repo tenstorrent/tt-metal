@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.modules.tt_ccl import get_num_links as get_common_num_links
+from models.common.tt_ccl import get_num_links as get_common_num_links
 
 
 def get_num_links(mesh_device, cluster_axis=None):

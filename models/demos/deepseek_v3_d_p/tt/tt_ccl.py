@@ -8,12 +8,12 @@ from loguru import logger
 
 import ttnn
 
-# NOTE: This file is forked from models/common/modules/tt_ccl.py
+# NOTE: This file is forked from models/common/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
 #       One col is taken for the CCL communication of the op
 
 # =============================================================================
-# CCL tuning defaults - shared across all TTTv2 modules
+# CCL tuning defaults - shared by every TT_CCL user
 # =============================================================================
 
 # Default number of chunks per synchronization barrier in CCL operations.
