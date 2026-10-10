@@ -887,6 +887,7 @@ class VectorMode(Enum):
       * ``R``: faces 0 and 1 (top face-row of the tile).
       * ``C``: faces 0 and 2 (left face-column of the tile).
       * ``RC``: all four faces — the default.
+      * ``RC_custom``: one SFPU call; the kernel advances through the rows itself.
     """
 
     None_ = 0
