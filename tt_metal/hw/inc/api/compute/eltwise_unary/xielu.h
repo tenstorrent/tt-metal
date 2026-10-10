@@ -30,6 +30,20 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
+    MATH(if constexpr (ckernel::sfpu::xielu_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        if (alpha_p == 0x3f4ccccdu && alpha_n == 0x3f4ccccdu) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_xielu,
+                (APPROX, is_fp32_dest_acc_en, 32),
+                idst,
+                VectorMode::None,
+                alpha_p,
+                alpha_n);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

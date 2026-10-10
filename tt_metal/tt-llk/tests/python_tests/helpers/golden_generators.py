@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Optional
 
+import mpmath
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -2483,6 +2484,34 @@ class UnarySFPUGolden:
         self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
+    def _round_once_to_dest(self, value) -> float:
+        """The mpmath *value* rounded once, to nearest even, onto Dest's grid (its subnormals included).
+
+        A float64 or float32 intermediate would round twice. A magnitude past the format's largest
+        finite value is an infinity; a nonzero value that rounds to zero keeps its sign.
+        """
+        if mpmath.isnan(value):
+            return math.nan
+        if mpmath.isinf(value) or value == 0:
+            return float(value)
+        info = torch.finfo(format_dict[self.dst_format])
+        significand_bits = 1 - round(math.log2(info.eps))
+        _, exponent = mpmath.frexp(value)
+        exponent = max(exponent, round(math.log2(info.smallest_normal)) + 1)
+        quantum = mpmath.ldexp(1, exponent - significand_bits)
+        rounded = mpmath.nint(value / quantum) * quantum
+        if abs(rounded) > info.max:
+            return math.copysign(math.inf, value)
+        return float(rounded) if rounded != 0 else math.copysign(0.0, value)
+
+    def _infinite(self, value: float) -> float:
+        """An infinite result as Dest's format returns it (see handle_infinite_numbers)."""
+        return (
+            math.copysign(self.handle_infinite_numbers(math.inf), value)
+            if math.isinf(value)
+            else value
+        )
+
     def __call__(
         self,
         operation,
@@ -3489,8 +3518,8 @@ class UnarySFPUGolden:
     _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
     _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
     _POLYGAMMA_ORDER = 1
-    _XIELU_ALPHA_P = 1.0
-    _XIELU_ALPHA_N = 1.0
+    _XIELU_ALPHA_P = 0.800000011920929
+    _XIELU_ALPHA_N = 0.800000011920929
     _XIELU_BETA = 0.5
     _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
     _SOFTPLUS_BETA = SOFTPLUS_BETA
@@ -3572,11 +3601,32 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
 
     def _xielu(self, x):
-        # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
-        beta_mul_x = self._XIELU_BETA * x
-        if x > 0.0:
-            return self._XIELU_ALPHA_P * x * x + beta_mul_x
-        return self._XIELU_ALPHA_N * (math.expm1(x) - x) + beta_mul_x
+        # Generated from activations/xielu.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact 0.800000011920929*(exp(x) - 1) - 0.30000001192092896*x where x <= -9.999999974752427e-07; 0.800000011920929*(exp(-9.999999974752427e-07) - 1) - 0.30000001192092896*x where x < 1.401298464324817e-45; 0.800000011920929*x^2 + 0.5*x elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 13,703 of the 65,536 BF16 inputs.
+        if math.isnan(x):
+            return math.nan
+        if math.isinf(x):
+            return math.inf if x > 0 else math.nan
+        if x == 0.0:
+            return (
+                -8.009374141693115e-07
+                if math.copysign(1.0, x) > 0
+                else -8.009374141693115e-07
+            )
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            if x <= -9.999999974752427e-07:
+                return self._round_once_to_dest(
+                    0.800000011920929 * (mpmath.exp(x) - 1) - 0.30000001192092896 * x
+                )
+            if x < 1.401298464324817e-45:
+                return self._round_once_to_dest(
+                    0.800000011920929 * (mpmath.exp(-9.999999974752427e-07) - 1)
+                    - 0.30000001192092896 * x
+                )
+            return self._round_once_to_dest(0.800000011920929 * x**2 + 0.5 * x)
 
     def _hardshrink(self, x):
         # hardshrink(x) = x when |x| > lambda, else 0. NaN propagates rather than falling into
