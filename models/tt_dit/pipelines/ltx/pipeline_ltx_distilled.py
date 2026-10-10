@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import torch
@@ -73,17 +74,43 @@ class LTXDistilledPipeline(LTXPipeline):
         base: torch.Tensor,
         denoise_mask: torch.Tensor | None,
         sigma: torch.Tensor,
-        seed: int,
+        noise: torch.Tensor,
     ) -> torch.Tensor:
         """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
 
         ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
-        ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
-        bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
-        torch.manual_seed(seed)
-        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. ``noise`` is the bf16
+        seeded draw (``_seeded_noise``) — the device latent dtype — matching the reference, which
+        draws at ``latent.dtype``."""
+        noise = noise.to(base.dtype)
         scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
         return noise * scaled_mask + base * (1.0 - scaled_mask)
+
+    @staticmethod
+    def _draw_seeded_noise(seed: int, shapes: tuple) -> list[torch.Tensor]:
+        """bf16 ``randn`` per shape, in order, from one generator seeded with ``seed``: the same values
+        as ``torch.manual_seed(seed)`` followed by ``torch.randn(shape, dtype=torch.bfloat16)`` per shape."""
+        gen = torch.Generator().manual_seed(seed)
+        return [torch.randn(shape, dtype=torch.bfloat16, generator=gen) for shape in shapes]
+
+    def _prefetch_noise(self, seed: int, draws: list[tuple]) -> None:
+        """Start this gen's seeded draws on a host thread. bf16 ``randn`` is ~4x slower than fp32 on the
+        host (~90 ms for a 1080p stage-2 latent) and sat serially in each stage's denoise init; drawn
+        here it overlaps the prompt encode and stage 1 on the device."""
+        pool = getattr(self, "_noise_pool", None)
+        if pool is None:
+            pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltx-noise")
+        self._noise_prefetch = {
+            (seed, shapes): pool.submit(self._draw_seeded_noise, seed, shapes) for shapes in map(tuple, draws)
+        }
+
+    def _seeded_noise(self, seed: int, *shapes: tuple) -> list[torch.Tensor]:
+        """``_draw_seeded_noise``, served from ``_prefetch_noise`` when it started the same draws."""
+        shapes = tuple(tuple(s) for s in shapes)
+        pending = getattr(self, "_noise_prefetch", {}).pop((seed, shapes), None)
+        if pending is not None:
+            return pending.result()
+        return self._draw_seeded_noise(seed, shapes)
 
     def _build_i2v_conditioning(
         self,
@@ -354,6 +381,20 @@ class LTXDistilledPipeline(LTXPipeline):
                 device=self.mesh_device,
             )
 
+    def _stage_prompts(self, v_embeds, a_embeds, traced: bool, reuse_prompt: bool):
+        if reuse_prompt:
+            assert traced and self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        prompt_v = self._prepare_prompt(v_embeds)
+        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
+        if traced:
+            self._prompt_v.update(prompt_v, traced)
+            self._prompt_a.update(prompt_a, traced)
+            return self._prompt_v.value, self._prompt_a.value
+        return prompt_v, prompt_a
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -370,6 +411,9 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
+        # The persistent prompt buffers already hold v_embeds/a_embeds (a traced stage of the same
+        # generate() wrote them); skip the re-upload.
+        reuse_prompt: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -405,14 +449,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_axis=sp_axis,
         )
 
-        prompt_v = self._prepare_prompt(v_embeds)
-        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
-        # fragmenting DRAM for the downstream VAE decode.
-        if traced:
-            self._prompt_v.update(prompt_v, traced)
-            self._prompt_a.update(prompt_a, traced)
-            prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+        prompt_v, prompt_a = self._stage_prompts(v_embeds, a_embeds, traced, reuse_prompt)
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
@@ -435,7 +472,12 @@ class LTXDistilledPipeline(LTXPipeline):
             ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
         else:  # T2V S1: pure noise from zeros
             base_v = torch.zeros(B, video_N_real, self.in_channels)
-        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
+        v_shape = (B, video_N_real, self.in_channels)
+        if initial_audio_latent is None:  # stage-1 audio noise continues the video's seeded stream
+            noise_v, noise_a = self._seeded_noise(seed, v_shape, (B, audio_N_real, self.in_channels))
+        else:
+            (noise_v,) = self._seeded_noise(seed, v_shape)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], noise_v)
 
         if video_N > video_N_real:
             video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -451,11 +493,7 @@ class LTXDistilledPipeline(LTXPipeline):
             noise_a = torch.randn_like(audio_lat)
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
-            torch.manual_seed(seed)
-            # Consume the same RNG draws a video_N-sized randn would, so the audio noise stream
-            # stays independent of video sequence length.
-            _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
-            audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            audio_lat_real = noise_a.float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = audio_lat_real
 
@@ -676,6 +714,14 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_height = height // 2
         s1_width = width // 2
 
+        # Every seeded draw is known up front (stage 1 video + audio, stage 2 video).
+        C = self.in_channels
+        s1_n, s2_n = (math.prod(latent_grid(num_frames, h, w)) for h, w in ((s1_height, s1_width), (height, width)))
+        audio_n = AudioLatentShape.from_video_pixel_shape(
+            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=self.fps)
+        ).frames
+        self._prefetch_noise(seed, [((1, s1_n, C), (1, audio_n, C)), ((1, s2_n, C),)])
+
         # (label, seconds) rows counted toward the total; prepares and export excluded.
         timings: list[tuple[str, float]] = []
 
@@ -775,6 +821,8 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s2",
+            # Stage 1 (traced) left this gen's prompt in the shared buffers.
+            reuse_prompt=self._traced and os.environ.get("LTX_S2_PROMPT_REUSE", "1") == "1",
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
