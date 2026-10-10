@@ -17,6 +17,9 @@
 #
 # Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
 #
+# Environment:
+#   SAFE_PYTEST_TIMEOUT  Dispatch hang timeout in seconds (default 5).
+#
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
@@ -49,7 +52,9 @@ set -o pipefail
 # pytest's own stdout/stderr pass through unchanged.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+# Seconds of dispatch no-progress before a run is declared hung. Override with SAFE_PYTEST_TIMEOUT for
+# workloads with legitimately long device waits (the same value also bounds fabric topology mapping).
+DISPATCH_TIMEOUT="${SAFE_PYTEST_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"

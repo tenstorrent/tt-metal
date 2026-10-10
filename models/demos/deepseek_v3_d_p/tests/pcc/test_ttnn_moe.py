@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -1192,6 +1193,8 @@ def test_kimi_moe(
         # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
+        # 1280 tokens per chip: a 4x4 stage (SP=4) at a 5120-token chunk, or an 8x4 at a 10240-token chunk.
+        pytest.param(2 * PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-1280tpc-pcc"),
         # fmt: on
     ],
 )
@@ -1213,6 +1216,24 @@ def test_kimi_moe(
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 half of a galaxy (a pipeline stage when a galaxy runs two): 896 / 16 = 56 experts
+        # per chip, twice the 8x4's 28. A half wraps only its in-tray axis, so it is line x ring: run
+        # with TT_VISIBLE_DEVICES = the half's 16 chips and TT_MESH_GRAPH_DESC_PATH =
+        # experimental_descriptors/single_bh_galaxy_subtorus_x4 (torus-x) or _y4 (torus-y).
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_y_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-y-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

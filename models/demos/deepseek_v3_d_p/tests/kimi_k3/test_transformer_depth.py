@@ -23,6 +23,7 @@ plane now picks its direction from the forwarding table rather than from rank or
 arms are green upstream and this is a choice rather than a constraint.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import att
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
@@ -59,7 +61,10 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
 SP_AXIS, TP_AXIS = 0, 1
-SEQ_LEN = 5120
+# One chunk. `KIMI_K3_TEST_SEQ_LEN` overrides it so a 4x4 stage (SP=4) can run at the 640 tokens per chip
+# the MLA/KDA program configs are tuned for (2560) before moving to 5120 (1280 per chip). It must stay a
+# multiple of 32 * SP.
+SEQ_LEN = int(os.getenv("KIMI_K3_TEST_SEQ_LEN", "5120"))
 
 # Per-layer, against the model itself. The package's chunked per-layer bar is 0.88 at depth 61-78;
 # at depths 1-2 the accumulated error should be far smaller, so this starts strict and the ladder's
@@ -108,7 +113,29 @@ PLACEMENTS = [
         {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
-    )
+    ),
+    # One 4x4 half of a galaxy: one pipeline stage when a galaxy runs two. A half wraps only its
+    # 4-wide in-tray axis, so it is line x ring. Run with TT_VISIBLE_DEVICES set to the half's 16 chips
+    # and TT_MESH_GRAPH_DESC_PATH set to experimental_descriptors/single_bh_galaxy_subtorus_x4 (torus-x,
+    # TP ring) or _y4 (torus-y, SP ring); fabric2d-4x4 runs both axes Linear with either descriptor.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_y_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-y-4x4",
+    ),
+    pytest.param(
+        (4, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="fabric2d-4x4",
+    ),
 ]
 
 

@@ -445,6 +445,9 @@ class ProducerConfig:
     interleave: str = "random"
     slot_lengths: dict = None
     multi_turn_prob: float = 0.0
+    # Round a mid-chunk request end down to this many tokens. Kimi-K3's KDA layers take only 32-token
+    # aligned ends (`validate_kda_bounds`), so a K3 workload sets 32; 1 keeps any end.
+    end_align: int = 1
 
 
 def _config_from_env() -> ProducerConfig:
@@ -473,6 +476,7 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        end_align=int(os.environ.get("PREFILL_PRODUCER_END_ALIGN", "1")),
     )
 
 
@@ -516,7 +520,11 @@ def _new_request(
     slot.target_chunks = rng.randint(chunks_min, chunks_max)
     full_tokens = prefix_len + slot.target_chunks * CHUNK_SIZE
     if cfg.mid_chunk_end_prob > 0 and rng.random() < cfg.mid_chunk_end_prob and slot.target_chunks >= 1:
-        slot.actual_isl = full_tokens - rng.randint(1, CHUNK_SIZE - 1)
+        actual_isl = full_tokens - rng.randint(1, CHUNK_SIZE - 1)
+        if cfg.end_align > 1:
+            # Stay inside the last chunk: an end aligned down past its start would drop the chunk.
+            actual_isl = max(actual_isl - actual_isl % cfg.end_align, full_tokens - CHUNK_SIZE + cfg.end_align)
+        slot.actual_isl = actual_isl
     else:
         slot.actual_isl = full_tokens
 

@@ -5,8 +5,10 @@ set -euo pipefail
 
 MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
 # First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
+# sc1pp2: one galaxy as two 4x4 pipeline stages (top/bottom halves), one rank each.
 case "${MODEL}" in
   mistral4) MODEL_CONFIGS="sc1" ;;
+  kimi_k3)  MODEL_CONFIGS="sc4 sc1 sc1pp2" ;;
   *)        MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -28,7 +30,9 @@ manifest_env() {
 
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
-CHUNK_SIZE=5120
+# PREFILL_CI_CHUNK_SIZE lets a 4x4-stage run start at 2560 (640 tokens per chip, where the MLA/KDA
+# configs are tuned) before moving to 5120.
+CHUNK_SIZE="${PREFILL_CI_CHUNK_SIZE:-5120}"
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
@@ -43,8 +47,12 @@ RUNNER_ENV=""
 PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
-# Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
+# Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block,
+# together with PP_STAGE_SHAPE (gen_pipeline_binding.py --stage-shape) and PP_PRECHECK, a shell snippet
+# run on the galaxy host before the binding probe (checkpoint / cache / golden presence).
 PP_RANKS=0
+PP_STAGE_SHAPE=8x1
+PP_PRECHECK=""
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
@@ -89,6 +97,17 @@ case "${MODEL}" in
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+    if [ "${CONFIG}" = sc1pp2 ]; then
+      # Same 24 layers as sc1, as 12 + 12 on the galaxy's two 4x4 halves. Each half wraps only its
+      # in-tray axis: 2d_torus_x rings TP, 2d_torus_y rings SP, 2d rings neither.
+      PP_RANKS=2
+      PP_STAGE_SHAPE=4x4
+      K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
+      PP_PRECHECK="test -d '${K3_CACHE}/kimi_k3_bh_16dev/4x4' || { echo 'Stage the 4x4 weight cache under ${K3_CACHE}/kimi_k3_bh_16dev/4x4 (or set PREFILL_TTNN_CACHE)' >&2; exit 1; };"
+      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}'; export PREFILL_SP=4; export PREFILL_TP=4; \
+        export PREFILL_FABRIC_MODE=${PREFILL_FABRIC_MODE:-2d_torus_x};"
+      PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -111,6 +130,11 @@ case "${MODEL}" in
         export TT_METAL_OPERATION_TIMEOUT_SECONDS=0;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR='${MISTRAL_GOLDEN}'; export PREFILL_SP=8; export PREFILL_TP=1;"
+    PP_PRECHECK="test -r '${MISTRAL_MODEL}/config.json' || { echo 'Mistral checkpoint missing: ${MISTRAL_MODEL}' >&2; exit 1; }; \
+      test -d '${MISTRAL_CACHE}/mistral_small_4_bh_8dev/8x1' || { echo 'Stage the PP4 8dev/8x1 weight cache under ${MISTRAL_CACHE} (or set PREFILL_TTNN_CACHE)' >&2; exit 1; }; \
+      for layer in {0..35}; do \
+        test -r '${MISTRAL_GOLDEN}/kv_cache/layer_'\${layer}'.safetensors' || { echo \"Missing golden KV layer \${layer} in ${MISTRAL_GOLDEN}\" >&2; exit 1; }; \
+      done;"
     ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
@@ -130,7 +154,7 @@ RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
-if [ "${CONFIG}" = sc1 ]; then
+if [ "${CONFIG}" = sc1 ] || [ "${CONFIG}" = sc1pp2 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS=${SC1_NUM_USERS}
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
@@ -236,22 +260,18 @@ if [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
   # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
-    echo "mistral4 PP4 requires exactly one Galaxy host in ${TTRUN_DIR}/hostfile" >&2; exit 2;
+    echo "${MODEL} ${CONFIG} (PP${PP_RANKS}) requires exactly one Galaxy host in ${TTRUN_DIR}/hostfile" >&2; exit 2;
   }
   HOSTS="${RESOLVED_HOSTS}:${PP_RANKS}"
   EXPECTED_RANKS=${PP_RANKS}
-  BINDING="${MR_DIR}/mistral4_pp4_binding.yaml"
+  BINDING="${MR_DIR}/${MODEL}_pp${PP_RANKS}_binding.yaml"
   "${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS}:1" --bind-to none --allow-run-as-root \
     bash -lc "set -e; cd '${TT_METAL_HOME}'; \
-      test -r '${MISTRAL_MODEL}/config.json' || { echo 'Mistral checkpoint missing: ${MISTRAL_MODEL}' >&2; exit 1; }; \
-      test -d '${MISTRAL_CACHE}/mistral_small_4_bh_8dev/8x1' || { echo 'Stage the PP4 8dev/8x1 weight cache under ${MISTRAL_CACHE} (or set PREFILL_TTNN_CACHE)' >&2; exit 1; }; \
-      for layer in {0..35}; do \
-        test -r '${MISTRAL_GOLDEN}/kv_cache/layer_'\${layer}'.safetensors' || { echo \"Missing golden KV layer \${layer} in ${MISTRAL_GOLDEN}\" >&2; exit 1; }; \
-      done; \
+      ${PP_PRECHECK} \
       export PYTHONPATH='${TT_METAL_HOME}'; \
       export TT_METAL_OPERATION_TIMEOUT_SECONDS=0; \
       export TT_MESH_GRAPH_DESC_PATH='${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto'; \
-      exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --out '${BINDING}'"
+      exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --stage-shape ${PP_STAGE_SHAPE} --out '${BINDING}'"
   TTRUN_ARGS=(--rank-binding "${BINDING}")
   RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
   # Each producer reads its own stage's nine layers; merging the four maps would read the whole

@@ -25,6 +25,7 @@ Layers 12-23 are the load-bearing half. Layers 0-11 run on the first rank and wo
 with the handoff entirely broken.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -43,7 +45,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
 SP_AXIS, TP_AXIS = 0, 1
-SEQ_LEN = 5120
+# `KIMI_K3_TEST_SEQ_LEN`: see test_transformer_depth.py (2560 keeps a 4x4 stage at 640 tokens per chip).
+SEQ_LEN = int(os.getenv("KIMI_K3_TEST_SEQ_LEN", "5120"))
 NUM_LAYERS = 24
 BOUNDARY = 12
 
@@ -65,6 +68,20 @@ PLACEMENTS = [
         id="fabric2d-8x4",
     )
 ]
+
+# Two stages on one galaxy: open the whole 8x4 and carve its top and bottom 4x4 halves, one per rank, so
+# each rank holds only its own 12 layers (all 24 on one 4x4 would be twice a real stage's weights).
+# TORUS_X: a half wraps only its 4-wide in-tray axis (mesh axis 1); torus_xy would ask Ring on the
+# half's unwrapped 4-row axis.
+SUBMESH_PLACEMENTS = [
+    pytest.param(
+        (8, 4),
+        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-x-8x4-as-2x4x4",
+    )
+]
+STAGE_SHAPE = (4, 4)
 
 
 def _compose(mesh_device, tensor):
@@ -101,23 +118,46 @@ def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_f
     )
 
 
-# Two 12-layer stacks get built and run before anything is scored, which is past the suite's
-# 300s default. The measurement itself is quick; the model build is not.
-@pytest.mark.timeout(2400)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
-def test_pipeline_split_matches_golden(mesh_device, device_params):
+def _host_handoff(packed, src_mesh, dst_mesh):
+    """Move rank 0's packed boundary tensor onto rank 1's submesh, sharded the way the runner's D2D
+    socket carries it (`D2D_MAPPER_CONFIG`: rows on the SP axis, hidden on the TP axis). Lossless: the
+    tensor is bf16 on both sides, so any difference from the single-mesh result is a placement bug."""
+    shape = tuple(src_mesh.shape)
+    # A mesh tensor's `.shape` is the per-device shard: rows / SP and hidden / TP when it is sharded the
+    # way the socket carries it.
+    per_device = tuple(packed.shape)
+    assert (
+        per_device[2] * shape[SP_AXIS] == SEQ_LEN and per_device[3] * shape[TP_AXIS] == KimiK3Config.EMB_SIZE
+    ), f"packed tensor is not [rows on SP, hidden on TP] sharded: per device {per_device} on a {shape} mesh"
+    dims = [0, 0]
+    dims[SP_AXIS], dims[TP_AXIS] = 2, 3
+    host = ttnn.to_torch(packed, mesh_composer=ttnn.ConcatMesh2dToTensor(src_mesh, dims=tuple(dims), mesh_shape=shape))
+    return ttnn.from_torch(
+        host,
+        dtype=packed.dtype,
+        layout=packed.layout,
+        device=dst_mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dst_mesh, dims=tuple(dims), mesh_shape=tuple(dst_mesh.shape)),
+    )
+
+
+def _run_split(mesh_0, mesh_1, handoff):
+    """Rank 0 (layers [0, 12)) on `mesh_0`, rank 1 (layers [12, 24)) on `mesh_1`, joined by `handoff`."""
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M)
     if checkpoint is None or trace is None:
         pytest.skip("needs KIMI_K3_HF_MODEL and the 1M golden trace")
+    assert tuple(mesh_0.shape) == tuple(mesh_1.shape), "both ranks must run the same stage shape"
 
     checkpoint = Path(checkpoint)
     resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=SEQ_LEN)
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_0.shape), TP_AXIS)
 
-    rank0 = _build_rank(mesh_device, config, cache, 0, BOUNDARY, is_first=True, is_last=False)
-    rank1 = _build_rank(mesh_device, config, cache, BOUNDARY, NUM_LAYERS - BOUNDARY, is_first=False, is_last=True)
+    rank0 = _build_rank(mesh_0, config, cache, 0, BOUNDARY, is_first=True, is_last=False)
+    rank1 = _build_rank(mesh_1, config, cache, BOUNDARY, NUM_LAYERS - BOUNDARY, is_first=False, is_last=True)
+    meshes = {"rank0": mesh_0, "rank1": mesh_1}
 
     # The plane counts the runner would size the socket with. Asserted here so a mismatch is a
     # readable failure in-process rather than a rendezvous TT_FATAL on two machines.
@@ -130,12 +170,13 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     # occupy slots 0..2 of its own cache, not slots 3..5 of a shared one.
     caches = {}
     for name, model in (("rank0", rank0), ("rank1", rank1)):
+        mesh = meshes[name]
         caches[name] = (
             allocate_mla_kvpe_cache(
-                mesh_device=mesh_device,
+                mesh_device=mesh,
                 hf_config=config,
                 max_seq_len=SEQ_LEN,
-                mesh_shape=tuple(mesh_device.shape),
+                mesh_shape=tuple(mesh.shape),
                 sp_axis=SP_AXIS,
                 num_layers=model.schedule.num_mla_layers,
                 num_users=1,
@@ -146,31 +187,30 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 
     tokens_tt = prepare_prefill_input_tensor(
         trace.token_ids(SEQ_LEN)[0].tolist(),
-        mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
+        mesh_0,
+        tuple(mesh_0.shape)[SP_AXIS],
         False,
-        tuple(mesh_device.shape),
+        tuple(mesh_0.shape),
         SP_AXIS,
     )
 
     per_layer = {}
 
-    def tap_for(first_layer_idx):
+    def tap_for(first_layer_idx, mesh):
         def tap(local_idx, hidden):
-            per_layer[first_layer_idx + local_idx] = _compose(mesh_device, hidden)
+            per_layer[first_layer_idx + local_idx] = _compose(mesh, hidden)
 
         return tap
 
     try:
-        # The handoff, with nothing in between: rank 0's packed [live | sealed] goes straight into
-        # rank 1. Over a real pipeline the same tensor crosses a D2D socket, which is a lossless
-        # bf16 transfer of a tensor that is already bf16 — so any runner-level difference from this
-        # result is a transport bug, not an AttnRes one.
-        packed = rank0.forward(tokens_tt, kvpe_cache=caches["rank0"], layer_tap=tap_for(0))
+        # The handoff: rank 0's packed [live | sealed] goes into rank 1. Over a real pipeline the same
+        # tensor crosses a D2D socket, which is a lossless bf16 transfer of a tensor that is already
+        # bf16 — so any runner-level difference from this result is a transport bug, not an AttnRes one.
+        packed = rank0.forward(tokens_tt, kvpe_cache=caches["rank0"], layer_tap=tap_for(0, mesh_0))
         assert (
             packed.shape[1] == rank0.outbound_planes
         ), f"rank 0 handed off {packed.shape[1]} planes, declared {rank0.outbound_planes}"
-        rank1.forward(packed, kvpe_cache=caches["rank1"], layer_tap=tap_for(BOUNDARY))
+        rank1.forward(handoff(packed), kvpe_cache=caches["rank1"], layer_tap=tap_for(BOUNDARY, mesh_1))
     finally:
         for model in (rank0, rank1):
             if model.kda_states is not None:
@@ -182,6 +222,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
         kvpe = caches[name]
         if kvpe is None:
             continue
+        mesh = meshes[name]
         # slot -> GLOBAL layer, via the schedule rather than `mla_layer_ids[:num_mla_layers]`.
         # `mla_layer_ids` is the whole MODEL's list, so slicing its head gives 3/7/11 for every
         # rank — right only for a rank starting at layer 0, and silently wrong for any other
@@ -192,8 +233,8 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
             for local, slot in enumerate(model.schedule.kv_slot_of_local)
             if slot is not None
         }
-        gathered = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
+        gathered = gather_cache_tp0(kvpe.storage, mesh)
+        positions = blockcyclic_positions(tuple(mesh.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
         for slot, model_layer in sorted(slot_to_global.items()):
             if not trace.has_kv_cache(model_layer):
                 continue
@@ -235,3 +276,20 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
         f"no recovery by layer {RECOVERY_FROM}+ (min {tail:.6f} < {RECOVERY_PCC}); the second block "
         f"is not reading the first block's sealed snapshot"
     )
+
+
+# Two 12-layer stacks get built and run before anything is scored, which is past the suite's
+# 300s default. The measurement itself is quick; the model build is not.
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+def test_pipeline_split_matches_golden(mesh_device, device_params):
+    _run_split(mesh_device, mesh_device, lambda packed: packed)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device, device_params", SUBMESH_PLACEMENTS, indirect=True)
+def test_pipeline_split_on_stage_submeshes(mesh_device, device_params):
+    """The same split with each rank on its own 4x4 half of the galaxy: real per-stage memory, and a
+    boundary tensor that has to move between meshes."""
+    top, bottom = mesh_device.create_submeshes(ttnn.MeshShape(*STAGE_SHAPE))
+    _run_split(top, bottom, lambda packed: _host_handoff(packed, top, bottom))

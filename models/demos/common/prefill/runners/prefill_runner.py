@@ -80,6 +80,13 @@ WARMUP_METADATA_WORD = -2
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 256))
+# Parallel fabric links (sender lanes) per device for the stage-to-stage D2D stream; the service caps it
+# at the forwarding links available. 1 = single lane. Under FABRIC_2D_TORUS_X with stages carved from one
+# galaxy, the second lane intermittently stalls in fabric_write_bytes on the boundary chips (the router
+# never frees a slot), so that mode defaults to one lane; see
+# models/demos/deepseek_v3_d_p/tt/kimi_k3/K3_PREFILL_4X4_SINGLE_GALAXY_PLAN.md section 9.
+_D2D_DEFAULT_LANES = 1 if os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower() == "2d_torus_x" else 2
+D2D_MAX_SENDER_LANES = int(os.environ.get("PREFILL_D2D_MAX_LANES", _D2D_DEFAULT_LANES))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
@@ -112,6 +119,8 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+# Fence the warm-up exchange before any rank captures its trace (see _capture_trace).
+WARMUP_BARRIER = os.environ.get("PREFILL_WARMUP_BARRIER", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
@@ -277,6 +286,7 @@ def build_d2d_pipeline_endpoints(
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
+            max_sender_lanes=D2D_MAX_SENDER_LANES,
         )
 
     inbound = None
@@ -1004,6 +1014,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     def _capture_trace() -> None:
         if d2d_out is not None:
             _forward_send_warmup(runtime, d2d_out, rank)
+        if WARMUP_BARRIER and num_ranks > 1:
+            # Every rank reaches here after its warm-up exchange: the upstream record received (non-first
+            # ranks) and its own forwarded (non-last ranks). Without this fence a downstream rank can still
+            # be receiving the warm-up record -- its D2D receiver returning credits across the upstream
+            # mesh's boundary chips -- while the upstream rank's capture forward runs ring collectives on
+            # those chips. With two 4x4 stages on one galaxy under FABRIC_2D_TORUS_X that overlap hangs the
+            # TP-ring reduce-scatter on the boundary rows. One barrier at startup, nothing per chunk.
+            ttnn.synchronize_device(mesh_device)
+            ttnn.distributed_context_barrier()
+            logger.info(f"[pp rank {rank}] warm-up exchange fenced across {num_ranks} ranks")
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
