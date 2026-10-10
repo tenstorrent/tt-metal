@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -36,13 +37,14 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
     SFPU_TERNARY_OP,
+    SFPU_TERNARY_PRIOR_UNARY_INIT,
     SFPU_TERNARY_SCALAR,
 )
 
 _SCALAR_VALUE = 2.0
 
-#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
-#: one test_sfpu_ternary's contract names.
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_prior_init overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -81,6 +83,8 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    approx_mode=_APPROX_MODE,
+    prior_unary_init=None,
 ):
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
@@ -120,16 +124,20 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        DISABLE_SRC_ZERO_FLAG(True),
+        DEST_SYNC(),
+    ]
+    if prior_unary_init is not None:
+        templates.append(SFPU_TERNARY_PRIOR_UNARY_INIT(prior_unary_init))
+
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
+        templates=templates,
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -165,7 +173,7 @@ def _run_sfpu_ternary(
     # rows were measured over this driver's own variants. The mode the kernel compiled
     # is passed: left unset, a row keyed `approx: "No"` would not match.
     assert_against_contract(
-        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
     )
 
 
@@ -196,6 +204,46 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode.
+# MathOperation.SfpuSnakeBeta has the same shape; it joins this list with its own init fix
+# (tenstorrent/tt-metal#59859, tenstorrent/tt-llk#1701 item 2).
+_TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_RECIP_NEWTON_OPS,
+)
+def test_sfpu_ternary_approx_after_prior_init(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes, after another op's init has left its own vConstFloatPrgm0.
+
+    cbrt's init runs first and leaves 0x1.c09806p0 (~1.75) in vConstFloatPrgm0, as a fused
+    kernel would. On Blackhole, sfpu_reciprocal_init<true> leaves vConstFloatPrgm0 alone
+    (the approximate reciprocal runs no Newton step), so an init that forwarded
+    APPROX_MODE there handed the Newton step 1.75 instead of 2.0 and scaled 1/c by 0.75.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "item 5, verified on Blackhole silicon only; Wormhole's "
+            "sfpu_reciprocal_init programs its constants in both modes"
+        )
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode=ApproximationMode.Yes,
+        prior_unary_init=MathOperation.Cbrt,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
