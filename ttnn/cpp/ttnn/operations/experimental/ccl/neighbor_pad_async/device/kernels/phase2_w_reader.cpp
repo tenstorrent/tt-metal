@@ -66,6 +66,7 @@ void kernel_main() {
     const uint32_t t_front_pad = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t logical_h = get_arg_val<uint32_t>(arg_idx++);        // 0 = no masking
     const uint32_t device_h_offset = get_arg_val<uint32_t>(arg_idx++);  // device_index * h_in
+    const uint32_t num_valid_cols = get_arg_val<uint32_t>(arg_idx++);   // input cols >= this read as zeros
 
     const uint32_t h_out = h_pad_top + h_in + h_pad_bot;
     const bool do_h_masking = (logical_h > 0);
@@ -97,13 +98,13 @@ void kernel_main() {
 
             if (is_first_chip) {
                 cb_output.reserve_back(1);
-                if (is_t_front || h_masked || is_padding_zeros) {
+                // direction=0: replicate leftmost input col; direction=1: rightmost
+                const uint32_t edge_col = direction ? (num_interior_sticks - 1) : 0;
+                if (is_t_front || h_masked || is_padding_zeros || edge_col >= num_valid_cols) {
                     zeroPad<stick_size>(noc_obj, cb_output);
                     noc_obj.async_read_barrier();
                 } else {
-                    // direction=0: replicate leftmost input col; direction=1: rightmost
-                    uint32_t input_col = direction ? (num_interior_sticks - 1) : 0;
-                    uint32_t src_stick = input_row_base + input_col;
+                    uint32_t src_stick = input_row_base + edge_col;
                     noc_obj.async_read(src_accessor, cb_output, stick_size, {.page_id = src_stick}, {});
                     noc_obj.async_read_barrier();
                 }
@@ -116,13 +117,13 @@ void kernel_main() {
                 // (is_first_chip branch above), never inter-device boundaries.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_output.reserve_back(1);
-                    if (is_t_front || h_masked) {
+                    // direction=0: send rightmost boundary cols (W_in - pad_id)
+                    // direction=1: send leftmost boundary cols (padding - pad_id)
+                    const uint32_t input_col = direction ? (padding - pad_id) : (num_interior_sticks - pad_id);
+                    if (is_t_front || h_masked || input_col >= num_valid_cols) {
                         zeroPad<stick_size>(noc_obj, cb_output);
                         noc_obj.async_read_barrier();
                     } else {
-                        // direction=0: send rightmost boundary cols (W_in - pad_id)
-                        // direction=1: send leftmost boundary cols (padding - pad_id)
-                        uint32_t input_col = direction ? (padding - pad_id) : (num_interior_sticks - pad_id);
                         uint32_t src_stick = input_row_base + input_col;
                         noc_obj.async_read(src_accessor, cb_output, stick_size, {.page_id = src_stick}, {});
                         noc_obj.async_read_barrier();

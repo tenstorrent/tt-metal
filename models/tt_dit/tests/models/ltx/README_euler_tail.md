@@ -41,7 +41,7 @@ C10_RESULTS=<fresh.pt> python -m pytest \
 `[f07]` selects its 2x4 mesh. The test preallocates independent baseline/candidate
 latents, velocity inputs and masks before all captures. Tiny traced producers
 supply retained declared outputs. Two sequence lengths and both velocity dtypes
-exercise all11 steps, changed inputs, per-chip exact BF16 comparisons, padding,
+exercise all 11 steps, changed inputs, per-chip exact BF16 comparisons, padding,
 and a final stage revisit after all trace families coexist. Raw mismatches and
 partial records are saved before failure. The five recorded tail-only timings
 exclude the producer, uploads and validation readback; they are observations,
@@ -51,7 +51,7 @@ Prewarm that manifest using the host's existing CPU tool before collection.
 
 Native contract success is only the first gate. Follow with fresh-process
 baseline/candidate full-model runs at the frozen source/build/model scope,
-all11 latent step comparisons and real prompt A/B/A, existing AV quality gates,
+all 11 latent step comparisons and real prompt A/B/A, existing AV quality gates,
 compile-free warm generations, and inclusive generation timings. The potential
 benefit is reduced dispatch of the Euler tail; its contribution to full-pipeline
 latency is not yet measured.

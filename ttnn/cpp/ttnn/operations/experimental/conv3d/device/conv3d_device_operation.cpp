@@ -216,7 +216,11 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         total_cores);
 
     if (tensor_args.halo_buffer.has_value()) {
-        TT_FATAL(args.padding_mode == "zeros", "Halo mode requires padding_mode \"zeros\". got {}", args.padding_mode);
+        // Replicate clamps only T in halo mode; the H/W boundary always comes from the halo buffer.
+        TT_FATAL(
+            args.padding_mode == "zeros" || args.padding_mode == "replicate",
+            "Halo mode requires padding_mode \"zeros\" or \"replicate\". got {}",
+            args.padding_mode);
         // Halo reads exist only on the shard-gather path. The direct reader (no spatial reuse, or
         // any dilation) zero-pads boundaries with no halo branch, so it would drop the halo.
         const bool has_spatial_reuse = args.kernel_size[0] > 1 || args.kernel_size[1] > 1 || args.kernel_size[2] > 1;

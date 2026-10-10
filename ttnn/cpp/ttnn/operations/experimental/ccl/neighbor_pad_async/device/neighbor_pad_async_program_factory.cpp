@@ -241,6 +241,20 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     // Offset (in sticks) added to all output write addresses so input data lands at T>=t_front_pad
     const uint32_t t_front_pad_stick_offset = t_front_pad * output_halo_dim_size * output_num_sticks_per_halo_dim;
 
+    // logical_w: number of leading local W columns that hold data. Every kernel that reads an input stick
+    // at a column >= w_valid_sticks uses zeros instead. Halo and corner sticks are copies of input sticks
+    // (corners via the H halo rows already in the output), so this equals padding the masked input.
+    uint32_t w_valid_sticks = num_sticks_per_halo_dim;
+    if (operation_attributes.logical_w > 0) {
+        const uint32_t w_device_offset =
+            ::ttnn::ccl::get_linearized_index_from_physical_coord(
+                tensor_args.input_tensor, mesh_coordinate, operation_attributes.pad2_cluster_axis.value()) *
+            num_sticks_per_halo_dim;
+        w_valid_sticks = (operation_attributes.logical_w > w_device_offset)
+                             ? std::min(operation_attributes.logical_w - w_device_offset, num_sticks_per_halo_dim)
+                             : 0u;
+    }
+
     // Get worker cores
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;  // kernel arrays sized for pad2_num_links * 2 = 8 targets
 
@@ -499,6 +513,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
+            reader_rt_args.push_back(
+                (operation_attributes.dim == 0) ? link_dims_to_read : w_valid_sticks);  // num_valid_sticks
             SetRuntimeArgs(program, h_reader_kernel_id, {core}, reader_rt_args);
 
             // For 2D case, H fabric writer uses output row width and W offset
@@ -645,7 +661,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 output_num_sticks_per_halo_dim,     // CRTA[7]
                 operation_attributes.logical_h,     // CRTA[8]
                 mask_device_h_offset,               // CRTA[9]
-                t_front_pad_stick_offset};          // CRTA[10]
+                t_front_pad_stick_offset,           // CRTA[10]
+                w_valid_sticks};                    // CRTA[11]: sticks per row at >= this index are zeroed
             SetCommonRuntimeArgs(program, local_writer_kernel_id, local_writer_crta);
 
             // Distribute work evenly across local-copy cores and set per-core runtime args
@@ -820,7 +837,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     operation_attributes.padding_right,                  // h_pad_bot
                     t_front_pad,                                         // t_front_pad
                     operation_attributes.logical_h,                      // logical_h (0 = no masking)
-                    w_reader_device_h_offset};                           // device_h_offset = device_index * h_in
+                    w_reader_device_h_offset,                            // device_h_offset = device_index * h_in
+                    w_valid_sticks};                                     // input cols >= this are read as zeros
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // W writer runtime args (addresses in CRTAs, not here)

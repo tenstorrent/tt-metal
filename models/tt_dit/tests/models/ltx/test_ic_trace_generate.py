@@ -82,8 +82,8 @@ def _build_shim() -> tuple[type, dict]:
     def _lines(node: ast.AST) -> str:
         return "".join(src_lines[node.lineno - 1 : node.end_lineno])
 
-    p2l = _lines(_top("pixel_to_latent_frame"))
-    methods = ("warmup_buffers", "_prealloc_trace_io", "generate")
+    p2l = _lines(_top("pixel_to_latent_frame")) + "\n\n" + _lines(_top("_env_on"))
+    methods = ("warmup_buffers", "_prealloc_trace_io", "generate", "_assert_trace_family_warmed")
     method_blocks = [_lines(_method(n)) for n in methods]
 
     shim_src = (
@@ -92,9 +92,11 @@ def _build_shim() -> tuple[type, dict]:
 
     ns: dict = {
         "torch": torch,
+        "math": __import__("math"),
         "os": __import__("os"),
         "time": __import__("time"),
         "logger": mock.MagicMock(name="logger"),
+        "timing_tree": mock.MagicMock(name="timing_tree"),
         "walltime": mock.MagicMock(name="walltime"),  # .timed(...) is a CM; .record(...) a no-op
         "latent_grid": _latent_grid,
         "TEMPORAL_COMPRESSION": _TEMPORAL_COMPRESSION,
@@ -125,7 +127,18 @@ def _make_warmup_pipe():
     obj = Pipe()
     obj._traced = True
     obj.dynamic_load = False
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
+    obj.upsampler = mock.MagicMock(name="upsampler")
     obj.vae_encoder = mock.MagicMock(name="vae_encoder")
     obj.parallel_config = SimpleNamespace(sequence_parallel=SimpleNamespace(factor=1, mesh_axis=2))
     obj.gemma_encoder_pair = SimpleNamespace(
@@ -144,11 +157,20 @@ def _make_warmup_pipe():
         "_warmup_encode",
         "_warmup_ref_encode",
         "_ensure_upsampler_frames",
+        "_prepare_upsampler",
         "_ensure_vae_decoder_frames",
         "decode_audio",
     ):
         setattr(obj, name, mock.MagicMock(name=name))
     return obj
+
+
+def _track_order(obj, *names):
+    """A parent mock that records calls to the named collaborator mocks in call order."""
+    parent = mock.Mock()
+    for name in names:
+        parent.attach_mock(getattr(obj, name), name)
+    return parent
 
 
 def _denoise_calls_by_key(obj):
@@ -160,6 +182,7 @@ def test_warmup_accepts_ref_num_frames_and_ref_stages(monkeypatch):
     monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
     monkeypatch.setenv("LTX_WARMUP_ENCODERS", "1")
     obj = _make_warmup_pipe()
+    calls_in_order = _track_order(obj, "_warmup_ref_encode", "_denoise_no_guidance")
     # A dedicated -ref worker: warm ONLY the reference family.
     obj.warmup_buffers(
         num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17, capture_traced=True
@@ -182,8 +205,71 @@ def test_warmup_accepts_ref_num_frames_and_ref_stages(monkeypatch):
         assert calls[key].kwargs["ref_latent"] is not None, f"{key} must feed a (dummy) ref_latent"
     assert "s1" not in calls and "s2" not in calls, "ref-only worker must not run base denoise"
 
-    # The ref encoders are warmed last (post-DiT ordering).
+    # Static traced mesh: the ref encoders warm once, before any trace capture, so their weights
+    # never land in a captured trace's activation region.
     obj._warmup_ref_encode.assert_called_once_with(17, 64, 64)
+    order = [c[0] for c in calls_in_order.mock_calls]
+    assert order[0] == "_warmup_ref_encode", "ref encoders must warm before the first denoise capture"
+
+
+@pytest.mark.parametrize("traced, dynamic_load", [(True, True), (False, False)])
+def test_warmup_ref_encoders_late_path_warms_once(monkeypatch, traced, dynamic_load):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_ENCODERS", "1")
+    obj = _make_warmup_pipe()
+    obj._traced = traced
+    obj.dynamic_load = dynamic_load
+    calls_in_order = _track_order(obj, "_warmup_ref_encode", "_denoise_no_guidance")
+    obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
+
+    obj._warmup_ref_encode.assert_called_once_with(17, 64, 64)
+    order = [c[0] for c in calls_in_order.mock_calls]
+    assert order[-1] == "_warmup_ref_encode", "without the early warm, ref encoders warm after the DiT"
+
+
+def test_warmup_encoders_off_skips_ref_encoders(monkeypatch):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_ENCODERS", "0")
+    obj = _make_warmup_pipe()
+    obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
+    obj._warmup_ref_encode.assert_not_called()
+
+
+@pytest.mark.parametrize("t2v_only", [False, True])
+def test_warmup_t2v_only_skips_i2v_families(monkeypatch, t2v_only):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_T2V_ONLY", "1" if t2v_only else "0")
+    obj = _make_warmup_pipe()
+    obj.transformer = SimpleNamespace(image_conditioning=True)
+    obj.warmup_buffers(num_frames=17, height=64, width=64, capture_traced=True)
+
+    pre = {c.args[0] for c in obj._prealloc_trace_io.call_args_list}
+    # The per-token warmup passes the base key plus a frame-0 pin; _denoise_no_guidance adds _i2v.
+    denoised = {
+        c.kwargs["trace_key"] for c in obj._denoise_no_guidance.call_args_list if not c.kwargs.get("image_conds")
+    }
+    pinned = {c.kwargs["trace_key"] for c in obj._denoise_no_guidance.call_args_list if c.kwargs.get("image_conds")}
+    assert {"s1", "s2"} <= pre and {"s1", "s2"} <= denoised, "the scalar family is always warmed"
+    if t2v_only:
+        assert not ({"s1_i2v", "s2_i2v"} & pre) and not pinned, "LTX_WARMUP_T2V_ONLY=1 must skip the i2v family"
+    else:
+        assert {"s1_i2v", "s2_i2v"} <= pre and {"s1", "s2"} <= pinned, "default warmup captures the i2v family"
+    assert obj._warmup_t2v_only is t2v_only
+
+
+def test_t2v_only_worker_refuses_uncaptured_i2v_family(expect_error):
+    Pipe, _ns = _build_shim()
+    obj = Pipe()
+    obj._trace_state = {"s1": object(), "s2": object()}
+    obj._assert_trace_family_warmed("s1_i2v", traced=True)  # default warmup: no refusal
+    obj._warmup_t2v_only = True
+    obj._assert_trace_family_warmed("s1", traced=True)
+    obj._assert_trace_family_warmed("s1_i2v", traced=False)  # eager gens never capture
+    with expect_error(RuntimeError, r"LTX_WARMUP_T2V_ONLY"):
+        obj._assert_trace_family_warmed("s1_i2v", traced=True)
 
 
 def test_warmup_ref_denoise_uses_grid_initial_latent(monkeypatch):
@@ -243,6 +329,16 @@ def test_warmup_base_path_unchanged_no_ref(monkeypatch):
 def _make_prealloc_pipe(sp_factor=1):
     Pipe, _ns = _build_shim()
     obj = Pipe()
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
     obj.mesh_device = mock.MagicMock(name="mesh_device")
     obj.parallel_config = SimpleNamespace(sequence_parallel=SimpleNamespace(factor=sp_factor, mesh_axis=2))
@@ -325,6 +421,16 @@ def _make_generate_pipe():
     obj = Pipe()
     obj._traced = True
     obj.dynamic_load = False
+    obj.fps = 24.0
+    obj._resolve_fps = lambda fps: obj.fps if fps is None else float(fps)
+    obj._device_prompt_handoff = False
+    obj._trace_variant_key = lambda key, per_token: key if key is None or not per_token else f"{key}_i2v"
+    obj._device_resident = mock.MagicMock(return_value=False)
+    obj._prefetch_noise = mock.MagicMock()
+    obj._log_latent_stats = mock.MagicMock()
+    obj._vae_traced = False
+    obj._trace_euler_tail = False
+    obj.transformer = SimpleNamespace(image_conditioning=False)
     obj.in_channels = 128
     obj.vae_encoder = mock.MagicMock(name="vae_encoder")
     obj.vae_ref_encoder_s1 = mock.MagicMock(name="ref_enc_s1")

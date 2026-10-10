@@ -19,7 +19,7 @@ import pytest
 
 import ttnn
 
-from ....encoders.gemma.encoder_pair import _read_connector_checkpoint
+from ....encoders.gemma3.encoder_pair import _read_connector_checkpoint
 from ....pipelines.ltx.pipeline_ltx import LTXPipeline
 from ....utils import cache
 from ....utils.ltx import default_ltx_checkpoint

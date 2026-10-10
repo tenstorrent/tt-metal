@@ -69,6 +69,7 @@ class NativeTraceFake:
         self.capture = None
         self.traces = {}
         self.executions = 0
+        self.blocking = []
         self.snapshots = []
         self.watch = ()
         self.fail_execute = False
@@ -125,6 +126,7 @@ class NativeTraceFake:
         if self.fail_execute:
             raise RuntimeError("synthetic execution failure")
         self.executions += 1
+        self.blocking.append(blocking)
         for operation in self.traces[trace_id]:
             operation()
 
@@ -160,8 +162,11 @@ def load(fake):
         for i in range(first, len(loop.body))
         if isinstance(loop.body[i], ast.If)
         and isinstance(loop.body[i].test, ast.Name)
-        and loop.body[i].test.id == "trace_euler"
+        and loop.body[i].test.id == "ancestral"
         and loop.body[i].orelse
+        and isinstance(loop.body[i].orelse[0], ast.If)
+        and isinstance(loop.body[i].orelse[0].test, ast.Name)
+        and loop.body[i].orelse[0].test.id == "trace_euler"
     )
     block = compile(ast.Module(body=loop.body[first : last + 1], type_ignores=[]), str(PIPELINE), "exec")
     return ns, block
@@ -185,7 +190,19 @@ class EulerTraceContract(unittest.TestCase):
             tt_audio_pad_mask=make(torch.cat((torch.ones(1, 1, 29, 1), torch.zeros(1, 1, 3, 1)), 2).bfloat16()),
         )
 
-    def step(self, state, velocities, sigma, sigma_next, *, enabled=True, traced=True, image_cond=False, captured=True):
+    def step(
+        self,
+        state,
+        velocities,
+        sigma,
+        sigma_next,
+        *,
+        enabled=True,
+        traced=True,
+        image_cond=False,
+        captured=True,
+        step_sync=False,
+    ):
         transformer = object()
         ns = dict(self.ns)
         ns.update(
@@ -200,9 +217,11 @@ class EulerTraceContract(unittest.TestCase):
             a_out=velocities[1],
             sigma=sigma,
             sigma_next=sigma_next,
+            ancestral=False,
             image_cond=image_cond,
             traced=traced,
             trace_key="stage",
+            step_sync=step_sync,
             tt_i2v_mask=None,
             tt_i2v_clean=None,
             LTXTransformerModel=SimpleNamespace(
@@ -299,6 +318,16 @@ class EulerTraceContract(unittest.TestCase):
         self.assertEqual(len(next(iter(self.fake.traces.values()))), 10)
         state._euler_tail.release()
         self.assertEqual(self.ns["Tracer"]._traces_live[7], 0)
+
+    def test_tail_replay_blocks_only_under_step_sync(self):
+        for step_sync in (False, True):
+            self.fake.blocking.clear()
+            state = self.state()
+            velocity = [Tensor(torch.ones(t.shape), self.fake.device) for t in (state.tt_video_lat, state.tt_audio_lat)]
+            self.step(state, velocity, 1.0, 0.5, step_sync=step_sync)
+            self.step(state, velocity, 1.0, 0.5, step_sync=step_sync)
+            self.assertEqual(self.fake.blocking, [step_sync, step_sync])
+            state._euler_tail.release()
 
     def test_routes_without_real_unconditioned_producer_never_own_tail(self):
         for change in (dict(enabled=False), dict(traced=False), dict(image_cond=True), dict(captured=False)):

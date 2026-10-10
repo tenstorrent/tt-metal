@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from loguru import logger
-from safetensors.torch import load_file
+from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
@@ -35,7 +35,8 @@ from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
+from models.tt_dit.utils.tracing import Tracer
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -704,10 +705,17 @@ def _load_22b_state_dict(num_layers: int, checkpoint_path: str) -> dict | None:
     """Load LTX-2.3-22B weights filtered to the first num_layers blocks; None if checkpoint missing."""
     if not os.path.exists(checkpoint_path):
         return None
-    raw = load_file(checkpoint_path)
     prefix = "model.diffusion_model."
-    sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
-    return {k: v for k, v in sd.items() if not k.startswith("transformer_blocks.") or int(k.split(".")[1]) < num_layers}
+
+    def wanted(k: str) -> bool:
+        if not k.startswith(prefix):
+            return False
+        k = k[len(prefix) :]
+        return not k.startswith("transformer_blocks.") or int(k.split(".")[1]) < num_layers
+
+    # Read only the requested blocks: the full 22B file is ~46 GB and loads while the device is held.
+    with safe_open(checkpoint_path, framework="pt") as f:
+        return {k[len(prefix) :]: f.get_tensor(k) for k in f.keys() if wanted(k)}
 
 
 def _scale_init_(module: torch.nn.Module, seed: int = WEIGHT_SEED) -> None:
@@ -1886,3 +1894,159 @@ def test_ring_sdpa_chunk_override_malformed_names_env_var(bad, expect_error):
     # value fails with an actionable message rather than a raw int() error.
     with expect_error(ValueError, "LTX_SDPA_RING_CHUNK"):
         attention_ltx.LTXAttention.resolve_ring_sdpa_chunks((True, 8, 4), bad)
+
+
+def _build_block_trace_setup(*, mesh_device, sp_axis, tp_axis, num_links, topology, F, H, W, checkpoint_variant):
+    """AV block on the 22B checkpoint's block-0 weights plus device inputs at production shapes.
+
+    Same inputs as the non-PCC AV path of ``test_ltx_transformer_block``. Returns
+    ``(tt_block, forward_kwargs, video_N_real, audio_N_real)``.
+    """
+    checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_block = _make_tt_block(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=False,
+        has_audio=True,
+    )
+    sd = _load_22b_state_dict(num_layers=1, checkpoint_path=checkpoint_22b)
+    if sd is None:
+        pytest.skip(f"22B checkpoint not found at {checkpoint_22b}")
+    block_sd = {k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")}
+    tt_block.load_torch_state_dict(block_sd, strict=False)
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+    a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+    a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
+    a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+    a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
+    a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
+    av_ca_v = torch.randn(1, 1, 5 * DIM, dtype=torch.float32)
+    av_ca_a = torch.randn(1, 1, 5 * AUDIO_DIM, dtype=torch.float32)
+
+    def outer(t, n, d, sharded=True):
+        t = t.reshape(n, d).unsqueeze(1).unsqueeze(1)
+        if sharded:
+            return bf16_tensor(t, device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
+        return bf16_tensor(t, device=mesh_device)
+
+    rope_kw = dict(mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    tt_cos, tt_sin = _tt_rope(_video_rope_freqs, F, H, W, pad_to=video_N, **rope_kw)
+    a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, **rope_kw)
+    vx_cos, vx_sin = _tt_rope(_video_cross_pe_freqs, F, H, W, pad_to=video_N, **rope_kw)
+    ax_cos, ax_sin = _tt_rope(_audio_cross_pe_freqs, audio_N, **rope_kw)
+    ax_cos_full, ax_sin_full = _tt_rope_full(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis)
+    a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
+        audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+    )
+    shard = {sp_axis: 2, tp_axis: 3}
+    forward_kwargs = dict(
+        video_1BND=bf16_tensor_2dshard(
+            _pad_seq_dim(x, video_N, dim=1).unsqueeze(0), device=mesh_device, shard_mapping=shard
+        ),
+        video_prompt=bf16_tensor(context.unsqueeze(0), device=mesh_device),
+        video_temb=outer(temb, 9, DIM),
+        video_N=video_N_real,
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
+        trans_mat=bf16_tensor(get_rot_transformation_mat(), device=mesh_device),
+        video_prompt_temb=outer(prompt_temb, 2, DIM, sharded=False),
+        audio_1BND=bf16_tensor_2dshard(a_x.unsqueeze(0), device=mesh_device, shard_mapping=shard),
+        audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
+        audio_temb=outer(a_temb, 9, AUDIO_DIM),
+        audio_prompt_temb=outer(a_prompt_temb, 2, AUDIO_DIM, sharded=False),
+        av_ca_temb=outer(av_ca_v, 5, DIM),
+        av_ca_audio_temb=outer(av_ca_a, 5, AUDIO_DIM),
+        audio_N=audio_N,
+        audio_rope_cos=a_cos,
+        audio_rope_sin=a_sin,
+        video_cross_pe_cos=vx_cos,
+        video_cross_pe_sin=vx_sin,
+        audio_cross_pe_cos=ax_cos,
+        audio_cross_pe_sin=ax_sin,
+        audio_cross_pe_cos_full=ax_cos_full,
+        audio_cross_pe_sin_full=ax_sin_full,
+        audio_attn_mask=a_attn_mask,
+        audio_padding_mask=a_pad_sp,
+        audio_padding_mask_full=a_pad_full,
+        video_padding_mask=build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis),
+    )
+    return tt_block, forward_kwargs, video_N_real, audio_N_real
+
+
+# The serving pipeline's traced 4x8 ring device params, and the same with an 8 KB fabric payload.
+_BLOCK_TRACE_PARAMS = {"trace_region_size": 64 * 1024 * 1024, "l1_small_size": 32768}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((4, 8), 1, 0, 2, {**ring_params, **_BLOCK_TRACE_PARAMS}, ttnn.Topology.Ring, id="ring_bh_4x8"),
+        pytest.param(
+            (4, 8), 1, 0, 2, {**ring_params_8k, **_BLOCK_TRACE_PARAMS}, ttnn.Topology.Ring, id="ring_bh_4x8_8k"
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), _LTX_TRANSFORMER_SHAPE_PARAMS)
+def test_ltx_transformer_block_trace_perf(
+    mesh_device, sp_axis, tp_axis, num_links, device_params, topology, F, H, W, reset_seeds
+) -> None:
+    """Traced replay time of one AV block, the unit the denoise trace repeats 48 times per step.
+
+    Logs BLOCK_TRACE_MS. LTX_BLOCK_DUMP=<path> saves the video/audio output so variants can be
+    compared off-device.
+    """
+    tt_block, forward_kwargs, video_N_real, audio_N_real = _build_block_trace_setup(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        topology=topology,
+        F=F,
+        H=H,
+        W=W,
+        checkpoint_variant="fast",
+    )
+    tracer = Tracer(tt_block.forward, device=mesh_device, prep_run=False, clone_prep_inputs=False)
+    tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    tracer(**forward_kwargs, traced=True)
+    ttnn.synchronize_device(mesh_device)
+
+    n_replay = int(os.environ.get("LTX_BLOCK_REPLAYS", "20"))
+    laps = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        for _ in range(n_replay):
+            result = tracer(**forward_kwargs, traced=True)
+        ttnn.synchronize_device(mesh_device)
+        laps.append((time.perf_counter() - t0) * 1000 / n_replay)
+    logger.info(
+        f"BLOCK_TRACE_MS={min(laps):.3f} laps={','.join(f'{x:.3f}' for x in laps)} "
+        f"shape={F}x{H}x{W} params={os.environ.get('PYTEST_CURRENT_TEST', '').split('[')[-1]}"
+    )
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+    tt_v = ttnn.to_torch(result[0], mesh_composer=composer).squeeze(0)[:, :video_N_real, :].float()
+    tt_a = ttnn.to_torch(result[1], mesh_composer=composer).squeeze(0)[:, :audio_N_real, :].float()
+    assert torch.isfinite(tt_v).all() and torch.isfinite(tt_a).all(), "NaN/Inf in traced block output"
+    dump = os.environ.get("LTX_BLOCK_DUMP")
+    if dump:
+        torch.save({"video": tt_v, "audio": tt_a}, dump)
+    tracer.release_trace()

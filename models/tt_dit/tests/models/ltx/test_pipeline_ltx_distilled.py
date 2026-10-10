@@ -23,6 +23,7 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
     LTXDistilledPipeline,
     pixel_to_latent_frame,
 )
+from models.tt_dit.tests.models.ltx.tools.ltx_eval import write_sidecar
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
@@ -31,7 +32,7 @@ from models.tt_dit.utils.ltx import (
     traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
 
@@ -76,7 +77,8 @@ _apply_local_iter_env()
 # where the stage-2 activation footprint fills DRAM) can drop it to 0 for an UNTRACED pass,
 # reclaiming ~500 MB of general DRAM. Only meaningful with LTX_TRACED=0 (no trace is captured).
 _LTX_TRACE_REGION = int(os.environ.get("LTX_TRACE_REGION", "500000000"))
-ring_trace_params = {**ring_params, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
+# 8 KB fabric payload: bit-identical output, one AV block 5.0% (stage 1) / 3.7% (stage 2) faster on BH 4x8.
+ring_trace_params = {**ring_params_8k, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
 line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_small_size": 32768}
 
 
@@ -99,6 +101,8 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
         # BH on 2x4. trace_params (not bare line_params): LTX_TRACED needs the trace region, and the
         # native conv1d audio taps need the L1_SMALL pool (bare line_params leaves it 0 -> vocoder OOM).
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # Same, carved out of the full BH galaxy mesh (shared boxes open the full mesh, then submesh).
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
         [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -111,6 +115,7 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
         "2x2sp0tp1",
         "2x4sp0tp1",
         "bh_2x4sp1tp0",
+        "bh_4x8sub2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0_linear",
         "bh_4x8sp1tp0_ring",
@@ -159,9 +164,7 @@ def test_pipeline_distilled(
     # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
     traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
-    # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
-    # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
-    # the fast scalar-AdaLN path. Resolved before create_pipeline so the bool can gate the build.
+    # Conditioning image (I2V). The pipeline decides image capability itself (RUN_I2V=0 opts out).
     image_path = os.environ.get("LTX_I2V_IMAGE")
     images = None
     if image_path:
@@ -170,10 +173,8 @@ def test_pipeline_distilled(
         strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
         images = [(image_path, 0, strength)]
 
-    pipeline = LTXDistilledPipeline.create_pipeline(
+    common = dict(
         mesh_device=mesh_device,
-        checkpoint_name=ckpt,
-        gemma_path=gemma,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_links=num_links,
@@ -186,13 +187,34 @@ def test_pipeline_distilled(
         height=height,
         width=width,
         fps=fps,
-        image_conditioning=bool(image_path),
     )
+    # LTX_VERSION=2.5 runs the same protocol on the LTX-2.5 split checkpoints (Gemma-4); LTX25_DIFFVAE=1
+    # decodes with the DiffVAE in its 4x8 production configuration instead of the conv decoder.
+    if os.environ.get("LTX_VERSION") == "2.5":
+        from models.tt_dit.models.vae.diffvae_ltx import DiffVAEOptions
+        from models.tt_dit.pipelines.ltx.pipeline_ltx25_distilled import LTX25DistilledPipeline
+
+        diffvae = os.environ.get("LTX25_DIFFVAE", "0") == "1"
+        slab = int(os.environ.get("DIFFVAE_SLAB_FRAMES", "78"))
+        pipeline = LTX25DistilledPipeline.create_pipeline(
+            **common,
+            video_vae=os.environ.get("LTX25_VIDEO_VAE"),
+            diffusion_decoder=diffvae,
+            diffvae_options=DiffVAEOptions.production(slab_frames=slab or None) if diffvae else None,
+        )
+    else:
+        pipeline = LTXDistilledPipeline.create_pipeline(**common, checkpoint_name=ckpt, gemma_path=gemma)
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    git_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(__file__), capture_output=True, text=True
+    ).stdout.strip()
 
     def run(*, prompt, number, seed):
-        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+        output_filename = os.environ.get(
+            "OUTPUT_PATH",
+            os.path.join(os.environ.get("LTX_OUT_DIR", ""), f"ltx_av_fast_{width}x{height}_{number}.mp4"),
+        )
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
         logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
@@ -202,6 +224,7 @@ def test_pipeline_distilled(
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
             return
 
+        t_gen = time.perf_counter()
         pipeline.generate(
             prompt,
             output_path=output_filename,
@@ -212,7 +235,23 @@ def test_pipeline_distilled(
             seed=seed,
             fps=fps,
         )
+        # Wall of the whole generate() call, export included: the gap to the stage-table total is
+        # host overhead the per-stage timers do not see.
+        logger.info(f"E2E_WALL_S gen#{number}: {time.perf_counter() - t_gen:.3f}")
         logger.info(f"Saved video to: {output_filename}")
+        # ltx_eval refuses to score a clip against a reference made from another prompt or seed.
+        write_sidecar(
+            output_filename,
+            prompt=prompt,
+            seed=seed,
+            gen=number,
+            LTX_FRESH_PROMPTS=os.environ.get("LTX_FRESH_PROMPTS", "0"),
+            LTX25_DIFFVAE=os.environ.get("LTX25_DIFFVAE", "0"),
+            num_frames=num_frames,
+            width=width,
+            height=height,
+            git_head=git_head or None,
+        )
         print_ltx_timing_table(
             pipeline,
             label="LTX DISTILLED",
@@ -393,15 +432,55 @@ def test_pipeline_distilled(
         # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
         # replay — its Stage 1/2 denoise times are the steady-state measurement.
         if traced:
-            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=prompt, number=1, seed=seed)
-            check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1)
+            # LTX_FRESH_PROMPTS=1: every replay gen encodes a prompt no earlier gen has seen, so the
+            # encoder is on the measured path and nothing is served from an embedding cache.
+            fresh = os.environ.get("LTX_FRESH_PROMPTS", "0") == "1"
+
+            def replay_prompt(gen: int) -> str:
+                return FRESH_LTX_PROMPTS[(gen - 1) % len(FRESH_LTX_PROMPTS)] if fresh else prompt
+
+            # LTX_E2E_SEEDS=0,1,2: one pure-replay gen per listed seed (gen #1, #2, ...) instead of a
+            # single gen #1 at SEED, so a multi-seed timing and quality sample shares one trace capture.
+            # A seed written "N+" runs with LTX_E2E_AB_ENV set, so "0,0+,1,1+" A/Bs every seed in one session.
+            ab_env = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV", "").split())
+            replay_tokens = os.environ.get("LTX_E2E_SEEDS", str(seed)).split(",")
+            replay_seeds = [int(s.rstrip("+")) for s in replay_tokens]
+            for gen, (token, gen_seed) in enumerate(zip(replay_tokens, replay_seeds), start=1):
+                arm_on = token.endswith("+")
+                for k, v in ab_env.items():
+                    if arm_on:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                arm = f", ab={'on' if arm_on else 'off'}" if ab_env else ""
+                logger.info(f"=== traced steady-state pass (gen #{gen}, seed {gen_seed}, pure replay{arm}) ===")
+                run(prompt=replay_prompt(gen), number=gen, seed=gen_seed)
+                check_output_with_clip(replay_prompt(gen), gen)
+                check_output_with_vbench(replay_prompt(gen), gen)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
+            # LTX_E2E_AB_ENV="K=V K2=V2": set on the even extra gens (#2, #4, ...) and unset on the odd ones,
+            # so one session A/Bs pipeline flags read at call time against interleaved baseline gens.
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
-                logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
-                run(prompt=prompt, number=extra + 2, seed=seed)
+                gen = len(replay_seeds) + extra + 1
+                arm_on = extra % 2 == 0
+                for k, v in ab_env.items():
+                    if arm_on:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                arm = f", ab={'on' if arm_on else 'off'}" if ab_env else ""
+                logger.info(f"=== traced steady-state pass (gen #{gen}, pure replay{arm}) ===")
+                run(prompt=replay_prompt(gen), number=gen, seed=seed)
+            for k in ab_env:
+                os.environ.pop(k, None)
+            # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
+            # the timed gens because the dump forces the slower float readback instead of the yuv path.
+            ref_frames = os.environ.get("LTX_REF_FRAMES")
+            if ref_frames:
+                os.environ["LTX_DUMP_FRAMES"] = ref_frames
+                run(prompt=prompt, number=99, seed=seed)
+                del os.environ["LTX_DUMP_FRAMES"]
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
@@ -539,6 +618,17 @@ def _kf_gen_images(num_frames):
             return None
         out.append((p, num_frames - 1 if frame == "last" else frame, 1.0, 1.0))
     return out
+
+
+FRESH_LTX_PROMPTS = (
+    "A red paper boat drifts across a still pond at dusk, ripples spreading behind it. "
+    "The camera holds a low steady shot near the waterline as the light fades. "
+    "Audio: gentle water laps, distant crickets, soft evening air.",
+    "An old fisherman mends a net on a wooden pier at sunrise, gulls wheeling overhead. "
+    "The camera slowly dollies in on his weathered hands. Audio: waves against pilings, gull cries.",
+    "A barista pours steamed milk into a latte, drawing a leaf pattern, in a busy cafe. "
+    "Close-up, shallow depth of field. Audio: espresso machine hiss, low chatter, cups clinking.",
+)
 
 
 @pytest.mark.skipif(

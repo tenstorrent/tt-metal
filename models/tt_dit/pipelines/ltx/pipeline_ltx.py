@@ -18,6 +18,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from io import BytesIO
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -28,8 +29,9 @@ from safetensors.torch import load_file
 
 import ttnn
 
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
+from ...models.transformers.ltx.attention_ltx import LTX_FUSE_GATE_ON_DEVICE
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -42,6 +44,7 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
+from ...utils.memory_log import log_dram
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
@@ -275,6 +278,7 @@ class LTXPipeline:
         run_warmup: bool = False,
         traced: bool = False,
         audio_only: bool = False,
+        vae_traced: bool | None = None,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         # Host affinity, explicit (not an import side effect): in a process re-execed by
@@ -299,6 +303,9 @@ class LTXPipeline:
         self._trace_euler_tail = os.environ.get("LTX_EULER_TAIL_TRACE", "0") == "1" and not dynamic_load
         # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
         # so static inputs are bound once and the latent/timestep buffers refreshed in place.
+        # Whether the VAE decode is captured as its own trace inside a traced pipeline; None follows
+        # ``traced``. False keeps the decoder eager while the transformer replays.
+        self._vae_traced = traced if vae_traced is None else vae_traced
         self._trace_state: dict[str, LTXTransformerState] = {}
         # Prompt buffers shared by both stages (the embedding is identical), built on the first
         # traced step — before s1's capture — so they sit below both traces' activations and
@@ -359,15 +366,7 @@ class LTXPipeline:
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
-        self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
-            gemma_path,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.vae_ccl_manager,
-            parallel_config=self.encoder_parallel_config,
-            checkpoint_name=self.checkpoint_name,
-            mode=self.mode,
-            dynamic_load=self.dynamic_load,
-        )
+        self.gemma_encoder_pair = self._make_gemma_encoder_pair(gemma_path)
         if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
             self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
@@ -538,6 +537,18 @@ class LTXPipeline:
         ``decode_audio``. Backed by ``LTXAudioDecoderAdapter``."""
         return self._audio_adapter.vocoder_with_bwe if self._audio_adapter is not None else None
 
+    def _make_gemma_encoder_pair(self, gemma_path: str | None):
+        """Build the text encoder pair. 2.3 uses Gemma-3; LTX-2.5 overrides for Gemma-4."""
+        return GemmaTokenizerEncoderPair(
+            gemma_path,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.encoder_parallel_config,
+            checkpoint_name=self.checkpoint_name,
+            mode=self.mode,
+            dynamic_load=self.dynamic_load,
+        )
+
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
         """Resolve a checkpoint reference to a local file path."""
@@ -695,7 +706,10 @@ class LTXPipeline:
         with open(checkpoint_path, "rb") as f:
             header_size = int.from_bytes(f.read(8), "little")
             header = json.loads(f.read(header_size))
-        vae_cfg = json.loads(header.get("__metadata__", {}).get("config", "{}")).get("vae", {})
+        header_cfg = json.loads(header.get("__metadata__", {}).get("config", "{}"))
+        # LTX-2.5 ships ``ff_bias: false`` and drops the video-FFN bias tensors; 2.3 omits the flag.
+        self._ff_bias = bool(header_cfg.get("transformer", {}).get("ff_bias", True))
+        vae_cfg = header_cfg.get("vae", {})
         self._vae_checkpoint_path = checkpoint_path
         self._vae_decoder_blocks = vae_cfg.get("decoder_blocks", [])
         self._vae_encoder_blocks = vae_cfg.get("encoder_blocks", [])
@@ -758,6 +772,7 @@ class LTXPipeline:
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
+            ff_bias=self._ff_bias,
             image_conditioning=(
                 self.SUPPORTS_IMAGE_CONDITIONING
                 and bool(getattr(self, "_vae_encoder_blocks", []))
@@ -944,20 +959,40 @@ class LTXPipeline:
             assert (
                 self._init_height > 0 and self._init_width > 0 and self._init_num_frames > 0
             ), f"{type(self).__name__} requires num_frames/height/width at create_pipeline."
-            self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
+            self._upsampler_path = self._upsampler_checkpoint_path()
             self.upsampler = self._new_upsampler()
             self._upsampler_nf = self._init_num_frames
 
         if self.checkpoint_name is not None:
             self._new_audio_decoder()
 
+    def _upsampler_checkpoint_path(self) -> str:
+        return LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
+
+    def _audio_checkpoint_path(self) -> str:
+        return self.checkpoint_name
+
     def _register_coresident_exclusions(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
         before decode. LTX needs the eviction on both WH and BH."""
-        if not self.dynamic_load:
-            return
         models = [s.model for s in self.transformer_states]
+        if not self.dynamic_load:
+            # Static loading deliberately keeps everything resident, but a decoder that cannot fit
+            # beside the transformer has to evict it regardless of the request's load policy.
+            # ``_prepare_transformer`` reloads from the disk cache before the next stage 1.
+            # Static loading registers nothing: a decoder that needs the mesh to itself is served by
+            # ``_prepare_vae``, which evicts at decode time. Registration cannot do it — this runs
+            # before ``_prime_caches``, so the lazily built peers (Gemma encoder, connectors) do not
+            # exist yet, and the exclusion set is only consulted when a module loads anyway.
+            decoder = self.vae_decoder
+            if decoder is not None and getattr(decoder, "requires_exclusive_residency", False) and self._traced:
+                raise RuntimeError(
+                    f"{type(decoder).__name__} must evict its peers to decode, which invalidates "
+                    "their captured traces under static loading. Run with LTX_TRACED=0, or use a "
+                    "dynamic_load config, which pages weights per request."
+                )
+            return
 
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
@@ -1019,6 +1054,33 @@ class LTXPipeline:
         # even with the fp32 vocoder's conv3d activations live. Excluding them only
         # forces a redundant audio reload at decode (~6s warm) for no memory gain.
 
+    def _video_decode_evictable(self) -> list:
+        """Every module whose weights are dead space while the video decoder runs.
+
+        For a decoder that needs the mesh to itself, "not the transformer" is not enough: with the
+        DiT evicted, the text encoder, its projection and connectors, the upsampler and the audio
+        decoder still held ~8 GB, which is most of what DiffVAE needs for its activations. Each of
+        these is reloaded from the disk cache by its own ``_prepare_*`` before next use, and audio
+        decode runs *after* video decode so it can page back in then.
+
+        The Gemma encoder and its connectors go together on purpose: ``ensure_loaded`` decides
+        whether to reload from the encoder's state alone, so evicting the connectors without it
+        would leave them deallocated and never restored.
+        """
+        pair = self.gemma_encoder_pair
+        candidates = [
+            *(state.model for state in self.transformer_states),
+            self.upsampler,
+            self.vae_encoder,
+            self.tt_mel_decoder,
+            self.tt_vocoder_with_bwe,
+            getattr(pair, "gemma_encoder", None),
+            getattr(pair, "feature_extractor", None),
+            getattr(pair, "video_connector", None),
+            getattr(pair, "audio_connector", None),
+        ]
+        return [module for module in candidates if module is not None]
+
     def _prime_caches(self, *, audio_only: bool = False) -> None:
         """Load every module in reverse use order so variant 0 is resident in
         DRAM after ``__init__`` (matches Wan's reverse-use-order priming).
@@ -1056,6 +1118,15 @@ class LTXPipeline:
         # prep code that produced it: without this the entry is content-blind and a mismatched or
         # half-written cache is served back silently instead of missing and rebuilding.
         sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
+        post_load_hook = getattr(self, "_transformer_post_load_hook", None)
+        if LTX_FUSE_GATE_ON_DEVICE:
+            quant_hook = post_load_hook
+
+            def post_load_hook(model):
+                if quant_hook is not None:
+                    quant_hook(model)
+                model.fold_gates_on_device()
+
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
@@ -1066,7 +1137,7 @@ class LTXPipeline:
             is_fsdp=self.is_fsdp,
             sources=sources,
             get_torch_state_dict=state.state_dict_provider,
-            post_load_hook=getattr(self, "_transformer_post_load_hook", None),
+            post_load_hook=post_load_hook,
         )
         self.transformer = state.model
 
@@ -1085,7 +1156,13 @@ class LTXPipeline:
         except OSError as e:
             logger.warning(f"prompt-embedding cache unavailable ({e}); encoding without it")
             return None
-        identity = {"prompts": prompts, "encoder": self.gemma_encoder_pair.embedding_cache_identity()}
+        identity_of = getattr(self.gemma_encoder_pair, "embedding_cache_identity", None)
+        if identity_of is None:
+            # An encoder that cannot name its sources (the Gemma-4 pair) gets no cache rather than a
+            # prompt-only key that would serve another model's embeddings.
+            logger.warning(f"{type(self.gemma_encoder_pair).__name__} has no cache identity; encoding without it")
+            return None
+        identity = {"prompts": prompts, "encoder": identity_of()}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
@@ -1096,6 +1173,7 @@ class LTXPipeline:
         cache (orchestration kept here). A cache hit returns saved embeddings without running
         the encoder; ``use_cache=False`` forces a real encode (used by warmup)."""
         cache_path = self._device_embed_cache_path(prompts) if use_cache else None
+        use_cache = use_cache and cache_path is not None
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
@@ -1117,6 +1195,11 @@ class LTXPipeline:
         ``C_in_block`` changes (mirrors Wan)."""
         if self.vae_decoder is None:
             return
+        # A decoder that needs the mesh to itself (a replicated DiffVAE) evicts every peer first;
+        # the exclusion set is only walked when a module loads, so a resident one would not.
+        if getattr(self.vae_decoder, "requires_exclusive_residency", False):
+            for module in self._video_decode_evictable():
+                module.deallocate_weights()
         # Static load keeps the VAE resident across the audio decode — skip the per-request reload.
         if self.vae_decoder.is_loaded():
             return
@@ -1344,7 +1427,14 @@ class LTXPipeline:
         return tensor / 127.5 - 1.0
 
     def decode_latents(
-        self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
+        self,
+        latent: torch.Tensor,
+        latent_frames: int,
+        latent_h: int,
+        latent_w: int,
+        *,
+        output_type: str = "float",
+        defer_yuv: bool = False,
     ) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
@@ -1354,6 +1444,7 @@ class LTXPipeline:
             output_type: "float" → (B, 3, F, H, W) torch in [-1, 1] (for in-pipeline export);
                          "rgb"   → (B, 3, F, H, W) uint8 numpy, RGB planar
                          "yuv"   → (T, H*3//2, W) uint8 numpy, yuv420p planar (converted on device)
+            defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` whose host assembly runs on ``result()``
 
         Returns:
             decoded video in the requested format
@@ -1367,21 +1458,44 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
+        if dump_dir := os.environ.get("LTX_DUMP_LATENT"):
+            self._dump_decode_input(latent_spatial, dump_dir)
+
         with Watchdog("vae decode"):
-            if output_type == "yuv" and self.vae_decoder.trace_yuv_output and self.dynamic_load:
+            if output_type == "yuv" and getattr(self.vae_decoder, "trace_yuv_output", False) and self.dynamic_load:
                 raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
-            video = self.vae_decoder(latent_spatial, output_type=output_type)
+            log_dram(self.mesh_device, f"before video decode ({type(self.vae_decoder).__name__})")
+            # DiffVAE has no deferred form; it returns the finished array, which callers also accept.
+            defer_yuv = defer_yuv and getattr(self.vae_decoder, "supports_defer_yuv", False)
+            extra = {"defer_yuv": True} if defer_yuv else {}
+            video = self.vae_decoder(latent_spatial, output_type=output_type, **extra)
+            log_dram(self.mesh_device, f"after video decode ({type(self.vae_decoder).__name__})")
         if output_type == "yuv":
-            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array (or its deferred form)
         if output_type != "float":
             return video.numpy()
         return video
+
+    def _dump_decode_input(self, latent_spatial: torch.Tensor, dump_dir: str) -> None:
+        """Save the BCTHW latent handed to the VAE decoder, for host-side decoder work.
+
+        Written in normalized latent space, which is what both decoders expect: the conv
+        decoder denormalizes in ``decode_device`` and DiffVAE in ``forward_stages_1_to_3``.
+        Numbered per call so a two-stage run yields stage 1 and stage 2 separately.
+        """
+        path = Path(dump_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        index = getattr(self, "_latent_dump_index", 0)
+        self._latent_dump_index = index + 1
+        out = path / f"latent_{index}_{'x'.join(str(d) for d in latent_spatial.shape)}.pt"
+        torch.save(latent_spatial.to(torch.float32).cpu(), out)
+        logger.info(f"dumped decode-input latent to {out}")
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
         broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
         if getattr(self, "_pcs_cache", None) is None:
-            self._pcs_cache = read_vae_per_channel_stats(self.checkpoint_name)
+            self._pcs_cache = read_vae_per_channel_stats(self._vae_checkpoint_path)
         return self._pcs_cache
 
     def _prepare_upsampler(self) -> None:
@@ -1428,18 +1542,6 @@ class LTXPipeline:
         self._prepare_vae_encoder()
         self.vae_encoder(torch.zeros(1, 3, 1, height, width))
 
-    def _warmup_encode(self, height: int, width: int) -> None:
-        """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
-        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints).
-
-        Always device-only (bypasses ``encode_image``'s host parity path): a zeros input gives a
-        degenerate PCC, and the meaningful device-vs-host comparison is logged on the real
-        conditioning image during generate()."""
-        if self.vae_encoder is None:
-            return
-        self._prepare_vae_encoder()
-        self.vae_encoder(torch.zeros(1, 3, 1, height, width))
-
     def _warmup_ref_encode(self, ref_pixel_frames: int, height: int, width: int) -> None:
         """Build + JIT-compile the IC-LoRA reference encoders at both stage resolutions with a
         zero looped clip. No-op when no encoder is configured (non-I2V checkpoints)."""
@@ -1459,7 +1561,9 @@ class LTXPipeline:
         self._prepare_vae()
         # Capture the output tail before the subsequent audio captures. Delaying
         # it until generation can put its workspace over their persistent inputs.
-        output_type = "yuv" if self.vae_decoder.fuse_yuv_output or self.vae_decoder.trace_yuv_output else "float"
+        decoder = self.vae_decoder
+        yuv = getattr(decoder, "fuse_yuv_output", False) or getattr(decoder, "trace_yuv_output", False)
+        output_type = "yuv" if yuv else "float"
         self.decode_latents(dummy, latent_frames, latent_h, latent_w, output_type=output_type)
 
     def _resolve_fps(self, fps: float | None) -> float:
@@ -1908,7 +2012,7 @@ class LTXPipeline:
         loaded here — ``_prepare_audio_decoder`` handles that via the adapter's disk cache.
         """
         self._audio_adapter = LTXAudioDecoderAdapter(
-            self.checkpoint_name,
+            self._audio_checkpoint_path(),
             mesh_device=self.audio_mesh_device,
             vae_ccl_manager=self.audio_ccl_manager,
             dit_parallel_config=self.parallel_config,

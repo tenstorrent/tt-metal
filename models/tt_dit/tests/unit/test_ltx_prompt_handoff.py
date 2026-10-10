@@ -72,7 +72,7 @@ class PromptHandoffTest(unittest.TestCase):
         allocate = load(ROOT / "pipelines/ltx/pipeline_ltx_distilled.py", {"_allocate_device_prompt_buffers"}, ns)[
             "_allocate_device_prompt_buffers"
         ]
-        handoff = load(ROOT / "encoders/gemma/encoder_pair.py", {"encode_to_device_buffers"}, ns)[
+        handoff = load(ROOT / "encoders/gemma3/encoder_pair.py", {"encode_to_device_buffers"}, ns)[
             "encode_to_device_buffers"
         ]
         self.video = Tensor((1, 1024, 4096), [0.0])

@@ -484,6 +484,19 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 shard_bytes_alloc,
                 cb_input_shard_id);
         } else {
+            // The direct reader has no halo branch: it would clamp at the shard edge and drop the halo.
+            TT_FATAL(
+                !halo_mode,
+                "Conv3d halo mode needs the L1 prefetch shard, but it ({} bytes) exceeds the L1 left after the "
+                "other CBs ({} bytes). Use a smaller blocking (T_out_block={}, H_out_block={}, W_out_block={}, "
+                "C_in_block={}, C_out_block={}).",
+                shard_bytes,
+                l1_prefetch_max_bytes,
+                config.T_out_block,
+                config.H_out_block,
+                config.W_out_block,
+                C_in_block,
+                C_out_block);
             log_debug(
                 tt::LogOp,
                 "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",

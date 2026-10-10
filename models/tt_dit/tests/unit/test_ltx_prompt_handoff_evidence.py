@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import torch
 
-SOURCE = Path(__file__).parents[1] / "encoders/gemma/test_prompt_device_handoff.py"
+SOURCE = Path(__file__).parents[1] / "encoders/gemma3/test_prompt_device_handoff.py"
 NAMES = {"_bits", "_tensor_sha", "_sha", "_verify", "_cast_values"}
 NAMESPACE = {"torch": torch, "hashlib": hashlib, "math": math, "json": json, "Path": Path, "__file__": str(SOURCE)}
 TREE = ast.parse(SOURCE.read_text())

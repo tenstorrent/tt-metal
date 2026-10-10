@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import torch
@@ -44,11 +45,37 @@ LTX_FOLD_GATED_RESIDUAL = os.environ.get("LTX_FOLD_GATED_RESIDUAL", "1") in ("1"
 # measures how far the sampler amplifies a rounding-scale perturbation, independent of the fold.
 LTX_PROBE_ADDCMUL_SPLIT = os.environ.get("LTX_PROBE_ADDCMUL_SPLIT", "0") in ("1", "true", "True")
 
+# Skip the V->A video pad-mask multiply when the ring cross SDPA already drops those rows. Exact only
+# when the mask's real region is >= kv_logical_n, which holds for the distilled pipeline (it builds
+# the mask from kv_logical_n). The non-distilled pipeline passes no kv_logical_n and keeps the multiply.
+# On by default; =0 restores the multiply.
+LTX_V2A_SKIP_PAD_MUL = os.environ.get("LTX_V2A_SKIP_PAD_MUL", "1") in ("1", "true", "True")
+
+# Add each AdaLN table kind to its timestep embedding once per step for all blocks (one broadcast
+# add over a (num_blocks, coeff, 1, D) stack) instead of six small adds inside every block.
+LTX_BATCH_ADALN_ADDS = os.environ.get("LTX_BATCH_ADALN_ADDS", "0") in ("1", "true", "True")
+
+
+def _v2a_skip_pad_mul(video_kv_logical_n: int | None, sp_factor: int) -> bool:
+    # Only the ring cross path (SP > 1, explicit kv_logical_n) masks padded K/V inside SDPA.
+    return LTX_V2A_SKIP_PAD_MUL and video_kv_logical_n is not None and sp_factor > 1
+
+
+def _slice_block_row(stack: ttnn.Tensor, block_idx: int) -> list[ttnn.Tensor]:
+    """Per-coefficient ``(1, 1, 1, D)`` slices of block ``block_idx`` from a ``(nb, coeff, 1, D)`` stack."""
+    coeff, d = stack.shape[1], stack.shape[3]
+    return [ttnn.slice(stack, [block_idx, i, 0, 0], [block_idx + 1, i + 1, 1, d]) for i in range(coeff)]
+
 
 def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Tensor:
     if LTX_PROBE_ADDCMUL_SPLIT:
         return ttnn.add(t, ttnn.multiply(t1, t2))
     return ttnn.addcmul(t, t1, t2)
+
+
+def _fuse_norm_adaln_enabled() -> bool:
+    # On by default: no visible or VBench loss on 5 seeds, ~0.1 s faster per 1080p gen; =0 turns it off.
+    return os.environ.get("LTX_FUSE_NORM_ADALN", "1") not in ("0", "false", "False")
 
 
 def _norm_adaln(norm, x, shift, scale_p1, *, fuse: bool):
@@ -155,6 +182,7 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        ff_bias: bool = True,
         quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> None:
@@ -167,9 +195,9 @@ class LTXTransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-        # Construction-time opt-in: captured graphs cannot switch arithmetic
+        # Fixed at construction: captured graphs cannot switch arithmetic
         # routes after creation. Shared A<->V normalization stays unfused below.
-        self._fuse_norm_adaln = os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
+        self._fuse_norm_adaln = _fuse_norm_adaln_enabled()
 
         rms_norm_kwargs = {
             "norm_eps": eps,
@@ -212,11 +240,12 @@ class LTXTransformerBlock(Module):
             **attn_kwargs,
         )
         self.norm3 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
+        # LTX-2.5 sets ``ff_bias=false`` on the video FFN; audio keeps bias (checkpoint still ships it).
         self.ffn = ParallelFeedForward(
             video_dim,
             inner_dim=video_ffn_dim,
             activation_fn="gelu_tanh",
-            bias=True,
+            bias=ff_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
@@ -406,10 +435,16 @@ class LTXTransformerBlock(Module):
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
         video_kv_logical_n: int | None = None,
+        adaln_pre: dict[str, list[ttnn.Tensor]] | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        # adaln_pre: this block's table+temb slices, already added once per step for all blocks
+        # (keys "v", "pv", "a", "pa", "av", "ava"; see _adaln_pre_stacks).
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
-        shifted_v = self.scale_shift_table.data + video_temb
-        chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
+        if adaln_pre is not None:
+            chunks = adaln_pre["v"]
+        else:
+            shifted_v = self.scale_shift_table.data + video_temb
+            chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
         v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
         v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
@@ -431,7 +466,10 @@ class LTXTransformerBlock(Module):
         # Video text cross-attention
         if self.cross_attention_adaln:
             video_ca_input = _norm_adaln(self.norm2, video_1BND, v_shift_ca, v_scale_ca_p1, fuse=self._fuse_norm_adaln)
-            if video_prompt_temb is not None:
+            if adaln_pre is not None:
+                v_kv_shift, v_kv_scale_p1 = adaln_pre["pv"]
+                video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
+            elif video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
                 v_kv_shift, v_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_v, 2)
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
@@ -460,8 +498,11 @@ class LTXTransformerBlock(Module):
             return self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio path (has_audio=True from here)
-        shifted_a = self.audio_scale_shift_table.data + audio_temb
-        a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=0)
+        if adaln_pre is not None:
+            a_chunks = adaln_pre["a"]
+        else:
+            shifted_a = self.audio_scale_shift_table.data + audio_temb
+            a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=0)
         a_shift_sa, a_scale_sa_p1, a_gate_sa = a_chunks[0], a_chunks[1], a_chunks[2]
         a_shift_ff, a_scale_ff_p1, a_gate_ff = a_chunks[3], a_chunks[4], a_chunks[5]
         if self.cross_attention_adaln:
@@ -486,7 +527,10 @@ class LTXTransformerBlock(Module):
             audio_ca_input = _norm_adaln(
                 self.audio_norm2, audio_1BND, a_shift_ca, a_scale_ca_p1, fuse=self._fuse_norm_adaln
             )
-            if audio_prompt_temb is not None:
+            if adaln_pre is not None:
+                a_kv_shift, a_kv_scale_p1 = adaln_pre["pa"]
+                audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
+            elif audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
                 a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
@@ -516,11 +560,15 @@ class LTXTransformerBlock(Module):
         # Bidirectional A<->V cross-attention
         if not skip_cross_attn:
             # Chunk layout [scale, shift, scale, shift, gate]: scale slots (idx 0, 2) have +1 baked in.
-            shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
-            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=0)
-
-            shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + av_ca_audio_temb
-            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=0)
+            if adaln_pre is not None:
+                av_chunks, av_a_chunks = adaln_pre["av"], adaln_pre["ava"]
+            else:
+                shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
+                av_chunks = ttnn.chunk(shifted_av, 5, dim=0)
+                shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + av_ca_audio_temb
+                av_a_chunks = ttnn.chunk(shifted_av_a, 5, dim=0)
+            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = av_chunks
+            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = av_a_chunks
 
             video_normed_xattn = self.norm3(video_1BND)
             audio_normed_xattn = self.audio_norm3(audio_1BND)
@@ -554,7 +602,8 @@ class LTXTransformerBlock(Module):
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
             video_kv_v2a = ttnn.addcmul(a_ca_shift_v, video_normed_xattn, a_ca_scale_v_p1)
             # Zero padded video tokens (on the SP-local shard) after the affine, before to_kv.
-            if video_padding_mask is not None:
+            sp_factor = self.parallel_config.sequence_parallel.factor
+            if video_padding_mask is not None and not _v2a_skip_pad_mul(video_kv_logical_n, sp_factor):
                 video_kv_v2a = ttnn.multiply(video_kv_v2a, video_padding_mask)
             v2a_output = self.video_to_audio_attn(
                 spatial_1BND=audio_q_v2a,
@@ -613,6 +662,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        ff_bias: bool = True,
         image_conditioning: bool = False,
         lora_enabled: bool = False,
         quant_config: LtxQuantProfile | None = None,
@@ -625,6 +675,7 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        self.ff_bias = ff_bias
         # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
         # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
         self.image_conditioning = image_conditioning
@@ -762,6 +813,7 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    ff_bias=ff_bias,
                     quant_config=quant_config,
                     lora_enabled=lora_enabled,
                 )
@@ -799,6 +851,9 @@ class LTXTransformerModel(Module):
             pop_substate(state, "prompt_adaln_single")
             if self.has_audio:
                 pop_substate(state, "audio_prompt_adaln_single")
+        # 2.5 keyframe absolute-pos table — only used by generated-keyframe / DFR paths; T2V distilled
+        # does not consume it yet, so drop it rather than fail strict load.
+        state.pop("keyframes_abs_pos_embedding", None)
 
     def weight_cache_subfolder(self) -> str:
         """Cache subfolder naming this model's weight LAYOUT, not just its parallel config.
@@ -814,6 +869,51 @@ class LTXTransformerModel(Module):
         """
         fused = any(getattr(block.attn1, "fuse_gate", False) for block in self.transformer_blocks)
         return "transformer_fusedgate" if fused else "transformer"
+
+    def fold_gates_on_device(self) -> None:
+        """Post-load hook for LTX_FUSE_GATE_ON_DEVICE: fold every block's gates into Q/QKV."""
+        names = ("attn1", "attn2", "audio_attn1", "audio_attn2", "audio_to_video_attn", "video_to_audio_attn")
+        for block in self.transformer_blocks:
+            for name in names:
+                attn = getattr(block, name, None)
+                if attn is not None:
+                    attn.fold_gate_on_device()
+
+    _ADALN_TABLES = (
+        ("v", "scale_shift_table"),
+        ("pv", "prompt_scale_shift_table"),
+        ("a", "audio_scale_shift_table"),
+        ("pa", "audio_prompt_scale_shift_table"),
+        ("av", "scale_shift_table_a2v_ca_video"),
+        ("ava", "scale_shift_table_a2v_ca_audio"),
+    )
+
+    def _adaln_pre_stacks(self, tembs: dict[str, ttnn.Tensor | None]) -> dict[str, ttnn.Tensor] | None:
+        """LTX_BATCH_ADALN_ADDS: every block's ``table + temb`` per kind, as ``(nb, coeff, 1, D)``.
+
+        Returns None (blocks add their own tables) unless every temb is a scalar-per-sample
+        ``(coeff, 1, 1, D)``; per-token I2V modulation keeps the per-block path. The table stacks are
+        built on the first eligible call, which must be untraced (the warmup forward is), and they
+        are not rebuilt if block tables are reloaded afterwards.
+        """
+        if not (LTX_BATCH_ADALN_ADDS and self.has_audio and self.cross_attention_adaln):
+            return None
+        if any(t is None or tuple(t.shape)[1:3] != (1, 1) for t in tembs.values()):
+            return None
+        if getattr(self, "_adaln_table_stacks", None) is None:
+            stacks = {}
+            for key, attr in self._ADALN_TABLES:
+                rows = []
+                for block in self.transformer_blocks:
+                    data = getattr(block, attr).data
+                    rows.append(ttnn.reshape(data, (1, data.shape[0], 1, data.shape[3])))
+                stacks[key] = ttnn.concat(rows, dim=0)
+            self._adaln_table_stacks = stacks
+        out = {}
+        for key, _ in self._ADALN_TABLES:
+            temb = tembs[key]
+            out[key] = ttnn.add(self._adaln_table_stacks[key], ttnn.reshape(temb, (1, temb.shape[0], 1, temb.shape[3])))
+        return out
 
     def forward(
         self,
@@ -1054,10 +1154,26 @@ class LTXTransformerModel(Module):
         # through unchanged). Baked into the trace, so it must be constant across capture+replay.
         _prune = {int(x) for x in os.environ.get("LTX_SKIP_BLOCKS", "").split(",") if x.strip().isdigit()}
 
+        adaln_stacks = self._adaln_pre_stacks(
+            {
+                "v": video_mod_CB1D,
+                "pv": video_prompt_2B1D,
+                "a": audio_mod_CB1D,
+                "pa": audio_prompt_2B1D,
+                "av": av_ca_video_temb,
+                "ava": av_ca_audio_temb,
+            }
+        )
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
             if block_idx in _prune:
                 continue
+            adaln_pre = (
+                None
+                if adaln_stacks is None
+                else {key: _slice_block_row(stack, block_idx) for key, stack in adaln_stacks.items()}
+            )
             result = block(
                 video_1BND=video_1BND,
                 video_prompt=video_prompt_1BLP,
@@ -1089,6 +1205,7 @@ class LTXTransformerModel(Module):
                 audio_padding_mask_full=audio_padding_mask_full,
                 video_padding_mask=video_padding_mask,
                 video_kv_logical_n=video_kv_logical_n,
+                adaln_pre=adaln_pre,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result
@@ -1222,7 +1339,15 @@ class LTXTransformerCheckpoint:
             else:
                 self.cross_attention_adaln = True
             self.has_gate = any("to_gate_logits" in k for k in keys)
-        logger.info(f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}")
+            # 2.3 omits the flag (True); 2.5 ships ``ff_bias: false`` and drops video-FF bias tensors.
+            meta = f.metadata() or {}
+            cfg = json.loads(meta["config"]) if "config" in meta else {}
+            tcfg = cfg.get("transformer", cfg)
+            self.ff_bias = bool(tcfg.get("ff_bias", True))
+        logger.info(
+            f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}, "
+            f"ff_bias={self.ff_bias}"
+        )
 
     def state_dict(self, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
         """Load + LoRA-fuse the transformer state dict from safetensors. Only
@@ -1285,6 +1410,7 @@ class LTXTransformerCheckpoint:
             has_audio=has_audio,
             apply_gated_attention=self.has_gate,
             cross_attention_adaln=self.cross_attention_adaln,
+            ff_bias=self.ff_bias,
             image_conditioning=image_conditioning,
             quant_config=quant_config,
             lora_enabled=lora_enabled,

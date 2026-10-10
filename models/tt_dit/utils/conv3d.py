@@ -5,6 +5,7 @@
 import collections
 import hashlib
 import math
+import os
 from itertools import repeat
 from typing import NamedTuple
 
@@ -158,16 +159,16 @@ _BLOCKINGS = {
     (4, 8, 256, 256, (3, 3, 3), 155, 34, 30): (64, 256, 1, 16, 2),  # 4537us, 7.2x vs fallback
     (4, 8, 512, 4096, (3, 3, 3), 41, 17, 15): (128, 64, 5, 16, 2),  # 11489us, 23.5x vs fallback
     (4, 8, 512, 512, (3, 3, 3), 41, 17, 15): (64, 256, 1, 16, 2),  # 1301us, 23.2x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (64, 256, 2, 8, 4),  # 1414us, 17.3x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (128, 64, 5, 4, 8),  # T=21 winner; old one had no L1 prefetch shard
     (4, 8, 1024, 128, (3, 3, 3), 22, 10, 8): (128, 64, 3, 4, 8),  # 178us, 11.0x vs fallback
     (4, 8, 1024, 4096, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 3887us, 13.9x vs fallback
     (4, 8, 1024, 1024, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 1373us, 15.6x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 5, 2, 2),  # 485us, 6.9x vs fallback, partial sweep 350/500
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 64, 7, 2, 4),  # T=21 winner; old one had no L1 prefetch shard
     # Unswept at 153f: carried from the 145f winners at identical spatial shape (T +1 only);
     # without them these sites hit the worst-case fallbacks. Re-sweep to replace.
     (4, 8, 1024, 4096, (1, 3, 3), 20, 5, 4): (256, 64, 1, 4, 4),  # ups_ups — 1235us @ T=19
     (4, 8, 128, 1024, (3, 3, 3), 22, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us @ T=21
-    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us @ T=21
+    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     # === end LTX-2.3 153f ===
     # ===================================================================
     # BH Galaxy 6U 4x32, 480p, 81 frames full-T (latent T=21)
@@ -449,10 +450,10 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (
         64,
         128,
-        12,
+        10,
         4,
         8,
-    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
+    ),  # ltx_s4_res — untimed; T_out_block 12 had no L1 prefetch shard
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -486,16 +487,16 @@ _BLOCKINGS = {
     (4, 8, 1024, 1024, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_res — 1974us
     (4, 8, 1024, 4096, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_up — 5448us
     (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 1, 4, 8),  # ltx_s1_res — 1912us
-    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 4, 8),  # ltx_s1_up — 16547us
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 2, 16),  # ltx_s1_up — 20915us halo-only
     (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
     (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
     (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
     # This table feeds standalone conv3d (LTX VAE)
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us standalone
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 4, 8),  # ltx_s4_res — 8170us halo-only
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
-    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
+    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
@@ -727,6 +728,24 @@ def _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_si
     return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T
 
 
+def _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W):
+    """Profiling aid: ``LTX_CONV3D_BLOCKING_MESH=4,8`` looks up blockings as if on that mesh.
+
+    A smaller (sub)mesh at a lower resolution can have the same per-chip T/H/W as production
+    (e.g. 544x960 on 2x4 vs 1080p on 4x8), but the table keys on the mesh factors, so it would
+    fall back to slow default blockings. The override applies only when the overridden key has
+    an exact or T-relaxed entry; otherwise the real factors are kept. Unset means no change.
+    """
+    spec = os.environ.get("LTX_CONV3D_BLOCKING_MESH")
+    if not spec:
+        return h_factor, w_factor
+    hf, wf = (int(x) for x in spec.split(","))
+    key = (hf, wf, in_channels, out_channels, kernel_size, T, H, W)
+    if key in _BLOCKINGS or _t_relaxed_blocking(*key) is not None:
+        return hf, wf
+    return h_factor, w_factor
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -754,6 +773,7 @@ def get_conv3d_config(
             compute_with_storage_grid_size=grid_size,
         )
 
+    h_factor, w_factor = _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     channel_key = (in_channels, out_channels, kernel_size)
 

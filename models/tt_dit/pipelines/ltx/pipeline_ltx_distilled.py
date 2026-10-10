@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import torch
@@ -24,12 +25,12 @@ from ...models.transformers.ltx.transformer_ltx import (
     build_video_pad_mask,
 )
 from ...models.vae.vae_ltx import upsample_latent
-from ...utils import walltime
+from ...utils import timing_tree, walltime
 from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
-from ...utils.video import export_video_audio, export_video_audio_yuv
+from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
@@ -40,6 +41,11 @@ _DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
 
 # Serial number for LTX_DUMP_LATENTS files; see the dump site in generate().
 _LATENT_DUMP_N = 0
+
+
+def _env_on(name: str, default: str = "0") -> bool:
+    """Read at call time, so a serving process (or an A/B harness) can flip it between gens."""
+    return os.environ.get(name, default).strip() in ("1", "true", "True")
 
 
 def _sigma_override(env_name: str, default: list[float]) -> list[float]:
@@ -161,6 +167,103 @@ def build_conditioning_tensors(conds, latent_frames, latent_h, latent_w, in_chan
 # cheap, a missed corruption costs us the next occurrence.
 WHITENESS_WARN_THRESHOLD = 0.85
 
+# LTX-2.5+ distilled stage 1 uses ancestral Euler (eta=1, s_noise=1). Stage 2 stays deterministic —
+# its 3-step schedule is too short to clear freshly injected noise. Seed offset keeps the loop's
+# first randn distinct from the initial GaussianNoiser draw (same shape/dtype/seed would collide).
+ANCESTRAL_ETA = 1.0
+ANCESTRAL_S_NOISE = 1.0
+ANCESTRAL_NOISE_SEED_OFFSET = 10000
+
+
+def _euler_ancestral_step(
+    sample: torch.Tensor,
+    velocity: torch.Tensor,
+    sigma: float,
+    sigma_next: float,
+    noise: torch.Tensor | None,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> torch.Tensor:
+    """Rectified-flow ancestral Euler step (ltx_core ``EulerAncestralDiffusionStep``).
+
+    ``velocity`` is the flow-matching velocity; ``denoised = sample - sigma * velocity``.
+    Host float32 in/out; caller owns dtype cast. Kept for parity checks; the denoise loop
+    uses ``_euler_ancestral_step_tt`` on device.
+    """
+    x = sample.float()
+    vel = velocity.float()
+    denoised = x - sigma * vel
+    if sigma_next == 0.0:
+        return denoised
+    if eta > 0.0 and noise is None:
+        raise ValueError("ancestral Euler requires noise when eta > 0")
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    x_next = sigma_down_ratio * x + (1.0 - sigma_down_ratio) * denoised
+    if eta > 0.0:
+        alpha_next = 1.0 - sigma_next
+        alpha_down = 1.0 - sigma_down
+        renoise_coeff = sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2
+        renoise_coeff = max(0.0, renoise_coeff) ** 0.5
+        x_next = (alpha_next / alpha_down) * x_next + noise.float() * s_noise * renoise_coeff
+    return x_next
+
+
+def _ancestral_step_coeffs(
+    sigma: float,
+    sigma_next: float,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> tuple[float, float, float] | None:
+    """Return ``(sigma_down_ratio, alpha_scale, noise_scale)``, or ``None`` when σ_next==0 (x0 only)."""
+    if sigma_next == 0.0:
+        return None
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    alpha_next = 1.0 - sigma_next
+    alpha_down = 1.0 - sigma_down
+    renoise_coeff = max(0.0, sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2) ** 0.5
+    return sigma_down_ratio, alpha_next / alpha_down, s_noise * renoise_coeff
+
+
+def _euler_ancestral_step_tt(
+    tt_x: ttnn.Tensor,
+    tt_vel: ttnn.Tensor,
+    pad_mask: ttnn.Tensor,
+    sigma: float,
+    sigma_next: float,
+    tt_noise: ttnn.Tensor | None,
+) -> None:
+    """In-place ancestral Euler into ``tt_x`` (SP-sharded). Matches ``_euler_ancestral_step``."""
+    vel = ttnn.typecast(tt_vel, ttnn.bfloat16)
+    ttnn.multiply_(vel, pad_mask)
+    coeffs = _ancestral_step_coeffs(sigma, sigma_next)
+    if coeffs is None:
+        # x0 estimate: x - sigma * vel
+        x_next = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+    else:
+        sigma_down_ratio, alpha_scale, noise_scale = coeffs
+        denoised = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+        x_next = ttnn.add(
+            ttnn.multiply(tt_x, sigma_down_ratio),
+            ttnn.multiply(denoised, 1.0 - sigma_down_ratio),
+        )
+        ttnn.deallocate(denoised)
+        scaled = ttnn.multiply(x_next, alpha_scale)
+        ttnn.deallocate(x_next)
+        if tt_noise is not None and noise_scale != 0.0:
+            x_next = ttnn.add(scaled, ttnn.multiply(tt_noise, noise_scale))
+            ttnn.deallocate(scaled)
+        else:
+            x_next = scaled
+    ttnn.multiply_(x_next, pad_mask)
+    ttnn.copy(x_next, tt_x)
+    ttnn.deallocate(x_next)
+
 
 @dataclass
 class _I2VConditioning:
@@ -204,17 +307,43 @@ class LTXDistilledPipeline(LTXPipeline):
         base: torch.Tensor,
         denoise_mask: torch.Tensor | None,
         sigma: torch.Tensor,
-        seed: int,
+        noise: torch.Tensor,
     ) -> torch.Tensor:
         """GaussianNoiser (ltx_core): ``noise·(mask·σ) + base·(1−mask·σ)``.
 
         ``denoise_mask`` None is the plain forward step (mask ≡ 1); a per-token mask holding
-        ``1−strength`` at the conditioning tokens pins them toward ``base``. Noise is drawn at
-        bf16 — the device latent dtype — matching the reference, which draws at ``latent.dtype``."""
-        torch.manual_seed(seed)
-        noise = torch.randn(base.shape, dtype=torch.bfloat16).to(base.dtype)
+        ``1−strength`` at the conditioning tokens pins them toward ``base``. ``noise`` is the bf16
+        seeded draw (``_seeded_noise``) — the device latent dtype — matching the reference, which
+        draws at ``latent.dtype``."""
+        noise = noise.to(base.dtype)
         scaled_mask = sigma if denoise_mask is None else denoise_mask * sigma
         return noise * scaled_mask + base * (1.0 - scaled_mask)
+
+    @staticmethod
+    def _draw_seeded_noise(seed: int, shapes: tuple) -> list[torch.Tensor]:
+        """bf16 ``randn`` per shape, in order, from one generator seeded with ``seed``: the same values
+        as ``torch.manual_seed(seed)`` followed by ``torch.randn(shape, dtype=torch.bfloat16)`` per shape."""
+        gen = torch.Generator().manual_seed(seed)
+        return [torch.randn(shape, dtype=torch.bfloat16, generator=gen) for shape in shapes]
+
+    def _prefetch_noise(self, seed: int, draws: list[tuple]) -> None:
+        """Start this gen's seeded draws on a host thread. bf16 ``randn`` is ~4x slower than fp32 on the
+        host (~90 ms for a 1080p stage-2 latent) and sat serially in each stage's denoise init; drawn
+        here it overlaps the prompt encode and stage 1 on the device."""
+        pool = getattr(self, "_noise_pool", None)
+        if pool is None:
+            pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ltx-noise")
+        self._noise_prefetch = {
+            (seed, shapes): pool.submit(self._draw_seeded_noise, seed, shapes) for shapes in map(tuple, draws)
+        }
+
+    def _seeded_noise(self, seed: int, *shapes: tuple) -> list[torch.Tensor]:
+        """``_draw_seeded_noise``, served from ``_prefetch_noise`` when it started the same draws."""
+        shapes = tuple(tuple(s) for s in shapes)
+        pending = getattr(self, "_noise_prefetch", {}).pop((seed, shapes), None)
+        if pending is not None:
+            return pending.result()
+        return self._draw_seeded_noise(seed, shapes)
 
     def _build_i2v_conditioning(
         self,
@@ -363,6 +492,13 @@ class LTXDistilledPipeline(LTXPipeline):
         # per-token family (frame-0 gens); a scalar-only transformer has just the scalar family.
         kf_per_token = image_capable and bool(kf_anchors)
         i2v_families = image_capable and not kf_anchors and not skip_dit_warmup
+        # LTX_WARMUP_T2V_ONLY=1: a worker that only ever serves plain t2v skips the per-token
+        # family (~39 s of 4x8 warmup). A pinned gen on such a worker then refuses instead of
+        # capturing at gen time (deferred capture is the blank-video bug).
+        self._warmup_t2v_only = i2v_families and _env_on("LTX_WARMUP_T2V_ONLY")
+        if self._warmup_t2v_only:
+            logger.info("  LTX_WARMUP_T2V_ONLY=1: skipping the s1_i2v/s2_i2v trace families")
+            i2v_families = False
 
         if self._traced:
 
@@ -412,6 +548,14 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
+                # The IC-LoRA reference encoders are also built once and never reloaded here, so the
+                # same before-capture rule applies; the late warmup below skips them on this path.
+                if ref_num_frames is not None:
+                    logger.info(
+                        f"warmup reference encoder (before capture): {ref_num_frames}f @ "
+                        f"{height // 2}x{width // 2} + {height}x{width}"
+                    )
+                    self._warmup_ref_encode(ref_num_frames, height, width)
                 image_encoder_warmed_early = True
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
@@ -610,6 +754,9 @@ class LTXDistilledPipeline(LTXPipeline):
                 if self._traced:
                     logger.info("warmup audio decode (capture pass)")
                     self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=self.fps)
+            # Programs are now compiled
+            if self._vae_traced and self.vae_decoder is not None:
+                self.vae_decoder._vae_traced = True
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
@@ -811,6 +958,20 @@ class LTXDistilledPipeline(LTXPipeline):
             return trace_key
         return f"{trace_key}_i2v"
 
+    def _assert_trace_family_warmed(self, trace_key, traced):
+        """Refuse a traced per-token gen whose family a T2V-only warmup skipped."""
+        if (
+            traced
+            and getattr(self, "_warmup_t2v_only", False)
+            and trace_key is not None
+            and trace_key.endswith("_i2v")
+            and trace_key not in self._trace_state
+        ):
+            raise RuntimeError(
+                f"trace family {trace_key} was not captured: warmup ran with LTX_WARMUP_T2V_ONLY=1, "
+                "so this worker serves plain t2v only (unset it to serve image-conditioned gens)"
+            )
+
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width, ref_num_frames=0):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front,
         before any capture. A ttnn trace bakes absolute tensor addresses; activations allocated
@@ -916,6 +1077,73 @@ class LTXDistilledPipeline(LTXPipeline):
                     True,
                 )
 
+    def _stage_prompts(self, v_embeds, a_embeds, traced: bool, device_prompts: bool, reuse_prompt: bool):
+        if device_prompts:
+            assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
+            assert self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        if reuse_prompt:
+            assert traced and self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        if traced and _env_on("LTX_PROMPT_HOST_COPY") and self._write_prompts_in_place(v_embeds, a_embeds):
+            return self._prompt_v.value, self._prompt_a.value
+        prompt_v = self._prepare_prompt(v_embeds)
+        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
+        if traced:
+            self._prompt_v.update(prompt_v, traced)
+            self._prompt_a.update(prompt_a, traced)
+            return self._prompt_v.value, self._prompt_a.value
+        return prompt_v, prompt_a
+
+    @staticmethod
+    def _prompt_host_bf16(embeds: torch.Tensor, width: int) -> torch.Tensor:
+        """Host twin of _prepare_prompt: same shape and padding, already bf16.
+
+        Same values as the fp32 -> bf16 cast ttnn.from_torch does: the encoder output is bf16, so
+        the fp32 copy is bf16-exact and the cast is lossless either way.
+        """
+        prompt = embeds.unsqueeze(0)
+        if prompt.shape[-1] < width:
+            prompt = torch.nn.functional.pad(prompt, (0, width - prompt.shape[-1]))
+        elif prompt.shape[-1] > width:
+            prompt = prompt[..., :width]
+        return prompt.to(torch.bfloat16).contiguous()
+
+    def _write_prompts_in_place(self, v_embeds, a_embeds) -> bool:
+        """Tilize the prompts on host and write them straight into the persistent buffers.
+
+        Skips the fresh device allocation and the device-side copy into the address-baked buffer that
+        the default path pays per new prompt. Returns False (caller takes the default path) until the
+        buffers exist with matching shapes, i.e. on the capture gen.
+        """
+        buffers = (self._prompt_v.value, self._prompt_a.value)
+        if any(b is None for b in buffers):
+            return False
+        hosts = (
+            self._prompt_host_bf16(v_embeds, self.cross_attention_dim),
+            self._prompt_host_bf16(a_embeds, a_embeds.shape[-1]),
+        )
+        if any(tuple(h.shape) != tuple(b.shape) for h, b in zip(hosts, buffers)):
+            return False
+        for host, buf in zip(hosts, buffers):
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), buf)
+        if _env_on("LTX_PROMPT_STAGING_CHECK"):
+            self._check_prompt_staging(v_embeds, a_embeds)
+        return True
+
+    def _check_prompt_staging(self, v_embeds, a_embeds) -> None:
+        """Assert the in-place write matches the default upload bit for bit, on every device."""
+        refs = (self._prepare_prompt(v_embeds), bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device))
+        for name, ref, buf in zip(("video", "audio"), refs, (self._prompt_v.value, self._prompt_a.value)):
+            want = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ref)]
+            got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(buf)]
+            same = all(torch.equal(w, g) for w, g in zip(want, got))
+            logger.info(f"LTX_PROMPT_STAGING_CHECK {name}: {len(got)} devices, bit-identical={same}")
+            assert same, f"in-place prompt staging differs from the default upload ({name})"
+            ttnn.deallocate(ref)
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -943,9 +1171,15 @@ class LTXDistilledPipeline(LTXPipeline):
         # path (generate) may set this.
         profile_drain: bool = False,
         device_prompts: bool = False,
+        ancestral: bool = False,
+        ancestral_noise_seed: int | None = None,
+        # The persistent prompt buffers already hold v_embeds/a_embeds (a traced stage of the same
+        # generate() wrote them); skip the re-upload.
+        reuse_prompt: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         _t_init = time.perf_counter()
+        _t_marks = []
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         hw = latent_h * latent_w
         # THREE lengths that COINCIDE for base/i2v/keyframe but SPLIT for reference:
@@ -980,6 +1214,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # worker takes the scalar-AdaLN path, which is a different graph, so it owns its own trace family.
         needs_video_ts = getattr(self.transformer, "image_conditioning", False) and image_cond
         trace_key = self._trace_variant_key(trace_key, needs_video_ts)
+        self._assert_trace_family_warmed(trace_key, traced)
         logger.info(f"  conditioning path: {'per-token' if needs_video_ts else 'scalar'} (trace family {trace_key})")
         # AdaLN's 2-value timestep pair (in the step loop) carries one pinned noise level, so the
         # modulation uses a single shared strength; the per-token pin/denoise_mask below still honors
@@ -1038,6 +1273,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # Persist buffers only when traced (baked addresses); untraced uses a transient state so
         # statics rebuild — resolution can differ across generates.
         state = self._trace_state.setdefault(trace_key, LTXTransformerState()) if traced else LTXTransformerState()
+        _t_marks.append(("cond", time.perf_counter()))
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -1054,20 +1290,10 @@ class LTXDistilledPipeline(LTXPipeline):
             ref_latent_frames=ref_latent_frames,
         )
 
-        if device_prompts:
-            assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
-            assert self._prompt_v.value is not None and self._prompt_a.value is not None
-            prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
-        else:
-            prompt_v = self._prepare_prompt(v_embeds)
-            prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-            # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
-            # fragmenting DRAM for the downstream VAE decode.
-            if traced:
-                self._prompt_v.update(prompt_v, traced)
-                self._prompt_a.update(prompt_a, traced)
-                prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+        _t_marks.append(("statics", time.perf_counter()))
+        prompt_v, prompt_a = self._stage_prompts(v_embeds, a_embeds, traced, device_prompts, reuse_prompt)
 
+        _t_marks.append(("prompt", time.perf_counter()))
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
         # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
@@ -1092,13 +1318,18 @@ class LTXDistilledPipeline(LTXPipeline):
             ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
         else:  # T2V S1: pure noise from zeros
             base_v = torch.zeros(B, video_N_real, self.in_channels)
-        video_lat_dev = None
+        video_lat_dev = noise_a = None
         if initial_video_latent_device is not None:
             assert not image_cond, "device-resident stage input is T2V only"
             video_lat_dev = initial_video_latent_device  # the traced transition already noised and sharded it
             video_lat = None
         else:
-            video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
+            v_shape = (B, video_N_real, self.in_channels)
+            if initial_audio_latent is None:  # stage-1 audio noise continues the video's seeded stream
+                noise_v, noise_a = self._seeded_noise(seed, v_shape, (B, audio_N_real, self.in_channels))
+            else:
+                (noise_v,) = self._seeded_noise(seed, v_shape)
+            video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], noise_v)
 
             if video_N > video_N_real:
                 video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -1114,14 +1345,16 @@ class LTXDistilledPipeline(LTXPipeline):
             noise_a = torch.randn_like(audio_lat)
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
-            torch.manual_seed(seed)
-            # Consume the same RNG draws a video_N-sized randn would, so the audio noise stream
-            # stays independent of video sequence length.
-            _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
-            audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
+            if noise_a is None:
+                # The audio draws always follow a video-sized draw from the same seed.
+                _, noise_a = self._seeded_noise(
+                    seed, (B, video_N_real, self.in_channels), (B, audio_N_real, self.in_channels)
+                )
+            audio_lat_real = noise_a.float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)
             audio_lat[:, :audio_N_real, :] = audio_lat_real
 
+        _t_marks.append(("noise", time.perf_counter()))
         num_steps = len(sigma_values) - 1
 
         # Device-resident loop: inner_step returns SP-sharded velocity, stepped in place by an
@@ -1152,7 +1385,26 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
-        logger.info(f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms")
+        _t_marks.append(("upload", time.perf_counter()))
+        _t_prev, _t_parts = _t_init, []
+        for _name, _t in _t_marks:
+            _t_parts.append(f"{_name} {(_t - _t_prev) * 1000:.0f}")
+            _t_prev = _t
+        logger.info(
+            f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms "
+            f"[{', '.join(_t_parts)} ms]"
+        )
+        ancestral_gen = None
+        if ancestral:
+            noise_seed = (
+                ancestral_noise_seed if ancestral_noise_seed is not None else seed + ANCESTRAL_NOISE_SEED_OFFSET
+            )
+            ancestral_gen = torch.Generator().manual_seed(noise_seed)
+            logger.info(f"  ancestral Euler on-device (eta={ANCESTRAL_ETA}) noise_seed={noise_seed}")
+
+        # Replays are CQ-ordered, so the host need not wait for one step before enqueuing the next;
+        # LTX_STEP_SYNC=1 blocks on each replay so STEP_MS reports device step time.
+        step_sync = _env_on("LTX_STEP_SYNC")
         for step_idx in range(num_steps):
             _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
@@ -1223,19 +1475,48 @@ class LTXDistilledPipeline(LTXPipeline):
                 gather_output=False,
                 traced=traced,
                 tracer_trace_key=trace_key,
+                tracer_blocking_execution=step_sync,
             )
             # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
             # baked latent address holds across replays.
             dt = sigma_next - sigma
             trace_euler = (
-                self._trace_euler_tail and traced and not image_cond and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
+                not ancestral
+                and self._trace_euler_tail
+                and traced
+                and not image_cond
+                and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
             )
             if trace_euler:
                 producer = LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).get(trace_key)
                 # Recipe-only capture produces transient skipped-dispatch outputs:
                 # never retain them or create a tail owner before a real DiT trace.
                 trace_euler = producer is not None and producer.trace_captured
-            if trace_euler:
+            if ancestral:
+                # Noise is drawn on host (seeded RNG parity with upstream); the Euler math stays
+                # on-device so latents/velocities never round-trip. Video then audio from one
+                # generator (upstream euler_ancestral_denoising_loop order).
+                tt_noise_v = tt_noise_a = None
+                if sigma_next != 0.0:
+                    noise_v = torch.randn(1, 1, video_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    noise_a = torch.randn(1, 1, audio_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    if video_N > video_N_real:
+                        noise_v[:, :, video_N_real:, :] = 0.0
+                    if audio_N > audio_N_real:
+                        noise_a[:, :, audio_N_real:, :] = 0.0
+                    tt_noise_v = bf16_tensor(noise_v, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                    tt_noise_a = bf16_tensor(noise_a, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                _euler_ancestral_step_tt(
+                    state.tt_video_lat, v_out, state.tt_video_pad_mask, sigma, sigma_next, tt_noise_v
+                )
+                _euler_ancestral_step_tt(
+                    state.tt_audio_lat, a_out, state.tt_audio_pad_mask, sigma, sigma_next, tt_noise_a
+                )
+                if tt_noise_v is not None:
+                    ttnn.deallocate(tt_noise_v)
+                if tt_noise_a is not None:
+                    ttnn.deallocate(tt_noise_a)
+            elif trace_euler:
                 if state._euler_tail is None:
                     state._euler_tail = EulerTail(self.mesh_device)
                 state._euler_tail(
@@ -1246,6 +1527,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     state.tt_video_pad_mask,
                     state.tt_audio_pad_mask,
                     dt,
+                    blocking=step_sync,
                 )
             else:
                 v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
@@ -1270,7 +1552,11 @@ class LTXDistilledPipeline(LTXPipeline):
             # STEP_MS covers the step body only. A delta between successive log lines would fold the
             # host-side profiler drain into the step wall and corrupt the measurement.
             _step_ms = (time.perf_counter() - _t_step) * 1000.0
-            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} STEP_MS={_step_ms:.1f}")
+            # Without the per-step sync the body only enqueues; a distinct key keeps STEP_MS parsers honest.
+            _step_key = "STEP_MS" if step_sync or not traced else "ENQUEUE_MS"
+            logger.info(
+                f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} {_step_key}={_step_ms:.1f}"
+            )
             if os.environ.get("LTX_DEBUG_STATS", "0") == "1":
                 # Device-0 shard only: enough to see whether the DiT's velocity or the running latent
                 # first leaves the finite range, without a mesh-wide gather inside the step loop.
@@ -1311,6 +1597,12 @@ class LTXDistilledPipeline(LTXPipeline):
         return v_final[:, :decode_N, :], a_final[:, :audio_N_real, :]
 
     # ----- device-resident stage transition (T2V) -----------------------------------------------------------
+    def _sync_for_stage_timing(self, device_resident: bool) -> None:
+        """LTX_TIME_STAGES=1: block so async device work is charged to the stage that enqueued it.
+        Off by default: the sync would stall the host and change the e2e time."""
+        if device_resident and _env_on("LTX_TIME_STAGES"):
+            ttnn.synchronize_device(self.mesh_device)
+
     def _device_resident(self, images) -> bool:
         """Keep the video latent on device from stage 1 through the upsampler into stage 2 (T2V only).
         The transition is a trace of its own: eager collectives issued after a replay deadlock on this
@@ -1453,8 +1745,7 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         B, C = 1, self.in_channels
         _t0 = time.perf_counter()
-        torch.manual_seed(seed)
-        noise = torch.randn((B, video_N_real, C), dtype=torch.bfloat16)  # identical draws to the host path
+        (noise,) = self._seeded_noise(seed, (B, video_N_real, C))  # identical draws to the host path
         noise_p = torch.zeros(1, B, video_N, C, dtype=torch.float32)
         noise_p[0, :, :video_N_real, :] = noise.float()
         _t1 = time.perf_counter()
@@ -1474,6 +1765,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_axis=sp_axis,
             traced=traced,
             tracer_trace_key="t12",
+            tracer_blocking_execution=_env_on("LTX_STEP_SYNC"),
         )
         if traced and io["weights"] is None:
             io["weights"] = self._upsampler_weight_addresses()
@@ -1525,6 +1817,10 @@ class LTXDistilledPipeline(LTXPipeline):
         Good and bad generations are otherwise indistinguishable in the log -- same steps,
         same sigmas, same timings -- so without this a noise report has nothing to correlate.
         """
+        if not _env_on("LTX_LATENT_STATS", "0"):
+            # Opt-in (LTX_LATENT_STATS=1): the fingerprints are host reductions over the whole latent
+            # (~7 ms at S1, ~10 ms at S2 for 1080p/145f) on the critical path between stages.
+            return
         for name, tensor in (("video", video), ("audio", audio)):
             if tensor is None:
                 continue
@@ -1650,6 +1946,15 @@ class LTXDistilledPipeline(LTXPipeline):
         }
         if eager_stages:
             logger.info(f"LTX gen: running stages {sorted(eager_stages)} eager (untraced, byte-identical)")
+
+        if not images and reference_video is None:
+            # Plain T2V knows every seeded draw up front: stage 1 video + audio, stage 2 video.
+            C = self.in_channels
+            s1_n, s2_n = (math.prod(latent_grid(num_frames, h, w)) for h, w in ((s1_height, s1_width), (height, width)))
+            audio_n = AudioLatentShape.from_video_pixel_shape(
+                VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=self.fps)
+            ).frames
+            self._prefetch_noise(seed, [((1, s1_n, C), (1, audio_n, C)), ((1, s2_n, C),)])
 
         # (label, seconds) rows counted toward the total; prepares and export are excluded.
         timings: list[tuple[str, float]] = []
@@ -1817,6 +2122,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # Reference gens keep the host round-trip: their combined (target+reference) rows are sliced on the
         # host and the device transition models the target grid only.
         device_resident = self._device_resident(images) and not has_ref
+        s1_traced = self._traced and "s1" not in eager_stages
+        s2_traced = self._traced and "s2" not in eager_stages
         s1_video, s1_audio = self._denoise_no_guidance(
             v_embeds,
             a_embeds,
@@ -1828,18 +2135,21 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=s1_image_conds,
             ref_latent=ref_latent_s1,
             ref_strength=ref_strength,
-            traced=self._traced and "s1" not in eager_stages,
+            traced=s1_traced,
             trace_key=s1_trace_key,
             profile_drain=True,
             return_device_video=device_resident,
             device_prompts=self._device_prompt_handoff,
         )
+        self._sync_for_stage_timing(device_resident)  # device-resident S1 replays do not block
         t_stage1 = time.time() - t0
         if not device_resident:
             _stats("s1_video", s1_video)
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        _h0 = time.perf_counter()
         self._log_latent_stats("s1", s1_video, s1_audio)
+        _h1 = time.perf_counter()
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -1847,6 +2157,7 @@ class LTXDistilledPipeline(LTXPipeline):
         t0 = time.time()
         self._ensure_upsampler_frames(num_frames)  # tail-pad upsamples one extra latent frame
         self._prepare_upsampler()
+        _h2 = time.perf_counter()
         if device_resident:
             upsampled_dev = self._run_stage_transition(
                 s1_video,
@@ -1874,11 +2185,18 @@ class LTXDistilledPipeline(LTXPipeline):
             upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
                 1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
             )
-        if device_resident and os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True"):
-            ttnn.synchronize_device(self.mesh_device)  # the eager transition is async; charge it here, not to stage 2
+        self._sync_for_stage_timing(device_resident)  # the eager transition is async; charge it here, not to stage 2
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
+        _h3 = time.perf_counter()
+        # Host wall only: a device-resident transition is enqueued here and its device time lands in
+        # stage 2 unless LTX_TIME_STAGES syncs above.
+        logger.info(
+            f"S1->S2 hand-off: {(_h3 - _h0) * 1000:.1f} ms [stats {(_h1 - _h0) * 1000:.1f}, "
+            f"upsampler prep {(_h2 - _h1) * 1000:.1f}, upsample {(_h3 - _h2) * 1000:.1f}"
+            f"{' (device-resident)' if device_resident else ''}]"
+        )
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -1894,10 +2212,11 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent_device=upsampled_dev,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             device_prompts=self._device_prompt_handoff,
+            reuse_prompt=s1_traced and s2_traced and os.environ.get("LTX_S2_PROMPT_REUSE", "1") == "1",
             image_conds=full_image_conds,
             ref_latent=ref_latent_full,
             ref_strength=ref_strength,
-            traced=self._traced and "s2" not in eager_stages,
+            traced=s2_traced,
             trace_key=s2_trace_key,
             profile_drain=True,
         )
@@ -1964,19 +2283,39 @@ class LTXDistilledPipeline(LTXPipeline):
         # either way, so fidelity is unchanged; what moves is ~1.8 GB of bf16 planes per 6 s clip that no
         # longer cross PCIe (yuv420p is 1.5 B/px vs 6 B/px) and the host-side float->uint8 conversion.
         # LTX_YUV_EXPORT=0 restores the float readback + host conversion.
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "1") != "0"
+        # DiffVAE without device boundaries returns host pixels and takes the float path.
+        yuv_export = (
+            output_path is not None
+            and os.environ.get("LTX_YUV_EXPORT", "1") != "0"
+            and getattr(self.vae_decoder, "supports_yuv", True)
+        )
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         # The raw-frame dump reads RGB float, so it forces the float readback.
         dump_path = os.environ.get("LTX_DUMP_FRAMES", "").strip()
         yuv_export = yuv_export and not dump_path
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        # Roots recorded before this call belong to warm-up or an earlier gen; keep only what THIS
+        # decode records so the perf table's breakdown never describes a different pass.
+        roots_before = timing_tree.root_count()
+        # LTX_AUDIO_OVERLAP=1 (opt-in): the VAE returns once its YUV reads land and the export worker
+        # assembles the planar frames, so the audio decode is queued on the device without waiting for that
+        # host-only step. The bytes are the same either way.
+        defer_yuv = (
+            yuv_export
+            and os.environ.get("LTX_AUDIO_OVERLAP", "0") == "1"
+            and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0"
+        )
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        video_pixels = self.decode_latents(
+            s2_video, latent_frames, latent_h, latent_w, output_type=decode_type, defer_yuv=defer_yuv
+        )
         if num_frames_out != num_frames:  # drop the tail-pad frame(s): (T,H*3/2,W) yuv planes or (B,3,F,H,W) float
             video_pixels = video_pixels[:num_frames_out] if yuv_export else video_pixels[:, :, :num_frames_out]
         t_vae_decode = time.time() - t0
         _stats("video_pixels", video_pixels)
         timings.append(("VAE decode", t_vae_decode))
+        new_roots = timing_tree.roots()[roots_before:]
+        self.last_decode_tree = new_roots[-1] if new_roots else None
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
         # LTX_DUMP_FRAMES writes the exact (F,H,W,C) uint8 tensor the H.264 export would quantize.
@@ -1992,12 +2331,28 @@ class LTXDistilledPipeline(LTXPipeline):
         # The vocoder decodes s2_audio, a latent distinct from the s2_video that produced video_pixels
         # above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the eager vocoder
         # decode, which is trace-hidden in production but costs minutes untraced.
+        video_only = os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True")
+        # The host libx264 encode of the video track (~0.7 s at 1080p/145f) runs on a worker thread
+        # under the device audio decode; the mp4 is byte-identical to the serial export.
+        # LTX_ASYNC_EXPORT=0 restores the serial export.
+        video_export = None
+        if yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0":
+            rate = None if video_only else self.tt_vocoder_with_bwe.output_sampling_rate
+            video_export = YuvVideoExport(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
         t0 = time.time()
-        if os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
-            audio_obj = None
-            logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
-        else:
-            audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to length
+        try:
+            if video_only:
+                audio_obj = None
+                logger.info("LTX_VIDEO_ONLY=1: skipping audio decode (video pixels unaffected)")
+            else:
+                audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to length
+        except BaseException:
+            if video_export is not None:
+                try:
+                    video_export.finish(None)
+                except Exception:
+                    pass  # surface the decode error, not the aborted export's
+            raise
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
@@ -2013,14 +2368,18 @@ class LTXDistilledPipeline(LTXPipeline):
             return video_pixels, audio_obj
 
         t0 = time.time()
-        if yuv_export:
+        if video_export is not None:
+            video_export.finish(audio_obj)
+        elif yuv_export:
             export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
         else:
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
-        # capture is last and nothing left will reclaim its activation region.
+        # capture is last and nothing left will reclaim its activation region. Capturing it here,
+        # after this request's output is written, keeps it off the next request's path.
         if self._traced and not self.dynamic_load:
             self.gemma_encoder_pair.open_trace_gate()
+            self.gemma_encoder_pair.capture_trace()
         return output_path

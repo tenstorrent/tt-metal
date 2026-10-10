@@ -48,6 +48,7 @@ Tensor neighbor_pad_async(
     std::optional<size_t> pad2_num_links = std::nullopt,
     const std::optional<Tensor>& persistent_output_buffer = std::nullopt,
     uint32_t logical_h = 0,
-    uint32_t t_front_pad = 0);
+    uint32_t t_front_pad = 0,
+    uint32_t logical_w = 0);
 
 }  // namespace ttnn::prim

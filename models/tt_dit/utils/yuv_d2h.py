@@ -91,7 +91,8 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
-) -> np.ndarray:
+    defer: bool = False,
+) -> "np.ndarray | DeferredYuvPlanar":
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
     Per-shard input shapes (kernel-native BHWT with C=1):
@@ -122,6 +123,9 @@ def _yuv_planar_d2h(
         view: Optional mesh device view for multi-host environments.
             When provided, uses ``host_buffer()`` / ``get_shard()`` with
             ``view.is_local()`` filtering instead of ``get_device_tensors()``.
+        defer: Return a :class:`DeferredYuvPlanar` once the reads have landed, leaving the host-only
+            assembly to whoever calls ``result()`` (e.g. the export worker), so the caller can queue
+            more device work first.
     """
     Hu, Wu = H // 2, W // 2
     hw = H * W
@@ -137,6 +141,7 @@ def _yuv_planar_d2h(
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
+    keep_alive = [host_Y, host_Cb, host_Cr]
 
     if view is not None:
         # --- Multi-host: extract local shards via host_buffer/get_shard ---
@@ -187,6 +192,7 @@ def _yuv_planar_d2h(
 
         def _extract(host_tensor):
             host_shards = ttnn.get_device_tensors(host_tensor)
+            keep_alive.append(host_shards)
             logical_shape = list(host_shards[0].shape)
             trim = tuple(slice(0, d) for d in logical_shape)
             return [_to_torch_zero_copy(s)[trim] for s in host_shards]
@@ -195,6 +201,86 @@ def _yuv_planar_d2h(
         Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
         Cr_shards = _extract(host_Cr)
 
+    out_Hu, out_Wu = out_H // 2, out_W // 2
+    out_row = out_H * out_W + 2 * out_Hu * out_Wu
+
+    def _assemble():
+        # keep_alive pins the host buffers the shards may view until the copy is done.
+        out = _assemble_planar(
+            mesh_coords,
+            Y_shards,
+            Cb_shards,
+            Cr_shards,
+            TP_eff,
+            SP_eff,
+            T,
+            out_H,
+            out_W,
+            h_per_y,
+            w_per_y,
+            h_per_uv,
+            w_per_uv,
+            pool,
+        )
+        keep_alive.clear()
+        return out
+
+    if defer:
+        return DeferredYuvPlanar(_assemble, (T, out_row))
+    return _assemble()
+
+
+class DeferredYuvPlanar:
+    """Planar YUV whose host assembly runs on the first :meth:`result` call.
+
+    Exposes ``shape`` and the leading-axis slicing and ``reshape`` the pipeline applies to the eager
+    array, so it can stand in for one until a consumer needs the bytes.
+    """
+
+    def __init__(self, produce, shape: tuple[int, ...]) -> None:
+        self._produce = produce
+        self.shape = tuple(shape)
+
+    def result(self) -> np.ndarray:
+        out = self._produce()
+        if tuple(out.shape) != self.shape:
+            msg = f"deferred YUV produced {tuple(out.shape)}, expected {self.shape}"
+            raise RuntimeError(msg)
+        return out
+
+    def reshape(self, *shape) -> "DeferredYuvPlanar":
+        new_shape = tuple(int(d) for d in (shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape))
+        if any(d < 0 for d in new_shape) or int(np.prod(new_shape)) != int(np.prod(self.shape)):
+            msg = f"cannot reshape deferred YUV {self.shape} to {shape}"
+            raise ValueError(msg)
+        produce = self._produce
+        return DeferredYuvPlanar(lambda: produce().reshape(new_shape), new_shape)
+
+    def __getitem__(self, key) -> "DeferredYuvPlanar":
+        if not isinstance(key, slice):
+            msg = "deferred YUV supports only a leading-axis slice"
+            raise TypeError(msg)
+        n = len(range(*key.indices(self.shape[0])))
+        produce = self._produce
+        return DeferredYuvPlanar(lambda: produce()[key], (n,) + self.shape[1:])
+
+
+def _assemble_planar(
+    mesh_coords,
+    Y_shards,
+    Cb_shards,
+    Cr_shards,
+    TP_eff,
+    SP_eff,
+    T,
+    out_H,
+    out_W,
+    h_per_y,
+    w_per_y,
+    h_per_uv,
+    w_per_uv,
+    pool,
+) -> np.ndarray:
     # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
     if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
         triples = sorted(
@@ -264,6 +350,7 @@ def fast_device_to_host_yuv(
     coefficients=None,
     pool: ThreadPoolExecutor | None = None,
     debug: bool = False,
+    defer: bool = False,
     logical_h: int | None = None,
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
@@ -314,6 +401,8 @@ def fast_device_to_host_yuv(
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
         debug: If ``True``, print diagnostic shape information.
+        defer: Return a :class:`DeferredYuvPlanar` instead of the array; its ``result()`` runs the host
+            assembly after the device reads have landed.
         logical_h: Optional logical (un-padded) height of the output.  When
             the VAE pads ``H`` to a coarser size, pass the true logical height
             here and the function will trim the bottom rows of each plane in
@@ -449,6 +538,8 @@ def fast_device_to_host_yuv(
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool)
+    out = _yuv_planar_d2h(
+        tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool, defer=defer
+    )
 
     return out

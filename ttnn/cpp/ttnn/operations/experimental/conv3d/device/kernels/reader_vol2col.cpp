@@ -434,12 +434,28 @@ void gather_rows_to_shard(
                     const bool in_padding = t_outside || h_outside || w_outside;
                     if (in_padding) {
                         if constexpr (halo_mode) {
-                            // Temporal boundary stays zero; spatial boundary reads
-                            // the neighbor's stick from the compact [Htop|Hbot|Wleft|Wright] halo buffer.
-                            if (t_outside) {
+                            // Temporal boundary is zero, or the clamped edge frame under replicate;
+                            // spatial boundary reads the neighbor's stick from the compact
+                            // [Htop|Hbot|Wleft|Wright] halo buffer (never clamped).
+                            const bool h_or_w_outside = h_outside || w_outside;
+                            if (is_padding_zeros && t_outside) {
                                 zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                            } else if (!h_or_w_outside) {
+                                const uint32_t page_idx =
+                                    batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
+                                    static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
+                                read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
+                                    noc,
+                                    in_reader,
+                                    page_idx,
+                                    c_in_offset_bytes,
+                                    in_row_size_bytes,
+                                    shard_cb,
+                                    shard_offset,
+                                    C_in_block_bytes,
+                                    dram_read_scratch_cb);
                             } else {
-                                const uint32_t frame = halo_frame_base + static_cast<uint32_t>(t_in);
+                                const uint32_t frame = halo_frame_base + static_cast<uint32_t>(t_clamped);
                                 uint32_t halo_page;
                                 if (w_outside) {
                                     const uint32_t hrow =

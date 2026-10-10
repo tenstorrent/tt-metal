@@ -43,6 +43,7 @@ void kernel_main() {
     const uint32_t logical_h = get_common_arg_val<uint32_t>(8);
     const uint32_t device_h_offset = get_common_arg_val<uint32_t>(9);
     const uint32_t t_front_pad_stick_offset = get_common_arg_val<uint32_t>(10);
+    const uint32_t num_valid_sticks = get_common_arg_val<uint32_t>(11);  // sticks at >= this per row are zeroed
     const bool do_masking = (logical_h > 0);
 
     // Per-core runtime args (only work distribution — truly unique per core)
@@ -77,7 +78,7 @@ void kernel_main() {
             (t + padding_left) * num_sticks_per_halo_dim + stick_start_id + outer_dim_offset + t_front_pad_stick_offset;
         for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_output.wait_front(1);
-            if (masked) {
+            if (masked || iter >= num_valid_sticks) {
                 uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                 zeroWrite<stick_size>(dst_noc_addr);
             } else {
