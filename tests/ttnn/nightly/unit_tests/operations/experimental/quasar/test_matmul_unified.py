@@ -2,17 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stages A and B).
+"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul).
 
 Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
 (the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones / zeros), which catch
 indexing and edge-clipping errors that a statistical check would not.
 
-Compute threads (stage B): on Quasar the compute kernel runs on all four NEOs of a cluster by default
+Compute threads: on Quasar the compute kernel runs on all four NEOs of a cluster by default
 (num_compute_threads auto = 4), and each C slice's subblocks are assigned round-robin to the threads.
 Wormhole / Blackhole have one compute engine per core, so there every test runs with one thread and the
 tests that set num_compute_threads > 1 are skipped.
+
+DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin (padded
+to a multiple of four with credit-only K chunks) and two writer threads take the compute threads' shares of C;
+Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight. When each
+core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
+columns, each reader thread multicasting its own K chunks.
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
@@ -22,10 +28,8 @@ Run on the Quasar simulator (one config per process; a sim-side hang ignores pyt
         TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \\
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py -k <case>
 
-    A craq-sim built from the quasar branch of 2026-09-24 or later runs every case here, including K spill
-    (partials through C_partials); the libttsim.so of 2026-08-26 hangs on every K-spill case, for this
-    factory and for the legacy Metal 2.0 reuse factory alike. The emulator is the place to confirm timing
-    on Quasar.
+    Needs a craq-sim built from the quasar branch of 2026-09-24 or later. The emulator is the place to confirm
+    timing on Quasar.
 """
 
 import pytest
@@ -671,7 +675,7 @@ def test_ragged_batched_spill_all_at_once(device):
 
 
 # ----------------------------------------------------------------------------------------------------
-# Compute threads (stage B): a C slice's subblocks are assigned round-robin to the NEOs of a cluster
+# Compute threads: a C slice's subblocks are assigned round-robin to the NEOs of a cluster
 # ----------------------------------------------------------------------------------------------------
 
 # Subblocks are numbered across N then down M. With T threads, round r is subblocks r*T .. r*T + T - 1, one
@@ -781,6 +785,85 @@ def test_compute_threads_rejections(device, expect_error):
     if not _on_quasar(device):
         with expect_error(RuntimeError, "needs Quasar"):
             run(2)
+
+
+# ----------------------------------------------------------------------------------------------------
+# DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin, padded
+# with credit-only K chunks to a multiple of four, and two writer threads take the compute threads' shares
+# ----------------------------------------------------------------------------------------------------
+
+K_CHUNK_SPLITS = [
+    # name, K in elements, K_chunk_tiles: 1, 2, 3, 4 and 6 K chunks per C slice (padded to 4, 4, 4, 4 and 8 on
+    # Quasar); a ragged K zeroes A's padding columns in the last real K chunk.
+    ("one_K_chunk", 3 * TILE, 3),
+    ("two_K_chunks", 4 * TILE, 2),
+    ("three_K_chunks_ragged_K", 2 * TILE + 20, 1),
+    ("four_K_chunks", 4 * TILE, 1),
+    ("six_K_chunks_ragged_K", 5 * TILE + 20, 1),
+]
+
+
+@pytest.mark.parametrize("name,K,K_chunk_tiles", K_CHUNK_SPLITS, ids=[s[0] for s in K_CHUNK_SPLITS])
+def test_K_chunks_across_reader_threads(device, name, K, K_chunk_tiles):
+    """Batch 2, M = 4, N = 2 tiles on one core: two 2x2-tile C slices per batch, four in all (two in flight). On
+    Quasar reader thread t reads K chunks t, t + 4, ... of every C slice and the padding K chunks carry credits only,
+    so every C slice starts at reader thread 0 again; elsewhere one reader reads them all."""
+    B, M, N = 2, 4 * TILE, 2 * TILE
+    torch.manual_seed(23)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=K_chunk_tiles
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+def test_dm_threads_with_K_spill_and_packer_l1_acc(device):
+    """Ragged M / K / N, a batch, several C slices per core on two cores, nine K chunks (padded to twelve on Quasar)
+    with packer L1 accumulation and a padded subblock: on Quasar all six DM cores (four readers, two writers) and
+    two C slices in flight."""
+    B, M, K, N = 2, 5 * TILE + 3, 8 * TILE + 7, 6 * TILE + 9
+    torch.manual_seed(24)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=3,
+        C_slice_N_tiles=3,
+        K_chunk_tiles=1,
+        subblock_M_tiles=2,
+        subblock_N_tiles=2,
+    )
+    out = _run(device, a, b, config, packer_l1_acc=True)
+    _check(out, _golden(a, b))
+
+
+MULTICAST_GRIDS = [
+    # name, cores (columns, rows), K chunks: one C slice per core, so A is multicast along each row of cores and B
+    # down each column (an operand with one core per row / column is read directly).
+    ("row_A_multicast", (4, 1), 3),
+    ("column_B_multicast", (1, 4), 3),
+    ("grid_A_and_B_multicast", (3, 2), 3),
+    ("grid_A_and_B_multicast_long_K", (3, 2), 9),
+]
+
+
+@pytest.mark.parametrize("name,grid,K_chunks", MULTICAST_GRIDS, ids=[g[0] for g in MULTICAST_GRIDS])
+def test_multicast(device, name, grid, K_chunks):
+    """Batch 2, ragged M / K / N, 2-tile K chunks: the first core of each row reads the A slices and multicasts
+    them along the row, and the first core of each column does the same with B. On Quasar each reader thread
+    multicasts its own K chunks; with 9 of them each thread multicasts several per C slice."""
+    gx, gy = _grid(device)
+    columns, rows = grid
+    if columns > gx or rows > gy:
+        pytest.skip(f"needs a {columns}x{rows} grid, device has {gx}x{gy}")
+    B, M, K, N = 2, rows * 2 * TILE - 7, (2 * K_chunks - 1) * TILE + 20, columns * 3 * TILE - 11
+    torch.manual_seed(26)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, columns - 1, rows - 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=2
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
 
 
 # ----------------------------------------------------------------------------------------------------

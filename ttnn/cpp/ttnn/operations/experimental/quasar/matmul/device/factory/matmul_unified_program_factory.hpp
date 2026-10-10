@@ -40,7 +40,10 @@ struct UnifiedMatmulPlan {
     uint32_t C_slice_M_tiles = 0;
     uint32_t C_slice_N_tiles = 0;
     uint32_t K_chunk_tiles = 0;
-    uint32_t num_K_chunks = 0;  // K_tiles / K_chunk_tiles
+    uint32_t K_chunks_per_C_slice = 0;  // K_tiles / K_chunk_tiles; every compute thread multiplies all of them
+    // Rounded up to num_reader_threads so every reader thread pushes as many per C slice; the extra K chunks carry
+    // credits only.
+    uint32_t K_chunks_per_C_slice_padded = 0;
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
     // C slice dims rounded up to subblock multiples (equal when the subblock divides the slice).
@@ -50,11 +53,27 @@ struct UnifiedMatmulPlan {
 
     // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are assigned
     // round-robin to the threads, which all see the whole A and B slices. A thread's share of the C slice
-    // (ceil(subblocks / threads) subblocks, back to back) is C_entries_per_thread entries of C_slice and
-    // C_partials, the credits it moves per K chunk: one entry with several threads (the thread's tile
-    // counter then stays at one address, which block packs and unpacks need), one entry per tile with one.
+    // (ceil(subblocks / threads) subblocks, back to back) is C_entries_per_thread one-tile entries of C_slice and
+    // C_partials, the credits it moves per K chunk. With several threads each owns every num_compute_threads-th
+    // entry, which the packer steps through (a whole stride per tile, #56195) and the writer reads by stride.
     uint32_t num_compute_threads = 1;
     uint32_t C_entries_per_thread = 0;
+
+    // DM threads per core (Quasar DM cores; one each elsewhere). Reader thread t reads the A and B slices of K
+    // chunks t, t + num_reader_threads, ... of every C slice into its own part of the A and B DFBs, which the
+    // compute threads' waits take in turn. Writer thread t writes the
+    // shares of compute threads t, t + num_writer_threads, ... (num_writer_threads divides num_compute_threads).
+    uint32_t num_reader_threads = 0;
+    uint32_t num_writer_threads = 0;
+    // A and B slices each operand DFB holds, and C slices in flight (C_slice holds C_buffer_depth of every compute
+    // thread's shares).
+    uint32_t operand_buffer_depth = 0;
+    uint32_t C_buffer_depth = 0;
+    // Multicast, when each core produces one C slice per batch on a rectangle laid out as the C slices tile C: the
+    // first core of each row reads the row's A slices and multicasts them along the row, and the first core of each
+    // column does the same with B down the column. Cores each sender multicasts to; 0 = that operand is not.
+    uint32_t A_mcast_num_dests = 0;
+    uint32_t B_mcast_num_dests = 0;
 
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
@@ -70,8 +89,8 @@ struct UnifiedMatmulPlan {
     bool borrow_B = false;
     bool borrow_C = false;
 
-    // DFB sizing; entry sizes are in bytes. An A_slice / B_slice entry holds one tile; C_slice / C_partials
-    // hold C_entries_per_thread entries per thread (see above).
+    // DFB sizing; entry sizes are in bytes. Every entry holds one tile; C_slice / C_partials hold
+    // C_entries_per_thread entries per thread (see above).
     bool packer_l1_acc_en = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};

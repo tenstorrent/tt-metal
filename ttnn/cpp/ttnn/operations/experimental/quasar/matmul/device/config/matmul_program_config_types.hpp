@@ -91,8 +91,7 @@ struct MatmulMultiCoreProgramConfig {
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
 // `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
 // cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
-// Limits: one reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
-// sharded output needs batch 1 and one C slice per core.
+// Limits: no bias/activation/untilize, 32x32 tiles only; sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
