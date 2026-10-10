@@ -36,7 +36,8 @@ constexpr std::uint32_t CUSTOM_MM_MAX_DEST_ROWS =
  * change; the bytes packed to L1 are unchanged.
  *
  * Pair with custom_mm_reuse_dest_srcb_pack_uninit().  While active, the
- * `tile_index` given to pack_block_contiguous counts 16-row slots, not 32.
+ * `tile_index` given to pack_block_contiguous counts 16-row slots, not 32,
+ * and 4-face tiles pack one per call: a block steps them by 4 Z strides.
  */
 // clang-format on
 ALWI void custom_mm_reuse_dest_srcb_pack_init() {

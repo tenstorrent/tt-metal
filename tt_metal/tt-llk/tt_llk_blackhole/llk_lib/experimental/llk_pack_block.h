@@ -29,8 +29,8 @@ using namespace ckernel::packer;
  *   START_OP  = REPLAY(all-but-last PACRs for one tile)
  *   last_inner= last PACR with ADDR_MOD_2 (non-last tile)
  *   last_outer= last PACR with ADDR_MOD_1 + Last=1 (final tile)
- *   END_OP0   = INCADCZW(W++) to advance to next Tile32x32 slot
- *   END_OP1   = SETADCZW(Z=0) to reset Z for next tile
+ *   END_OP0   = INCADCZW(W++) to advance to next Tile32x32 slot (not for a full 32x32 tile)
+ *   END_OP1   = SETADCZW(Z=0) to reset Z for next tile (not for a full 32x32 tile)
  *
  * REPLAY buffer stores num_faces * pacrs_per_face - 1 PACR instructions
  * encoding the complete per-tile face traversal. The final PACR of each
@@ -38,7 +38,8 @@ using namespace ckernel::packer;
  * carry the Last=1 bit on the final tile.
  *
  * For a full 32x32 tile the end ops are not programmed: the face step of
- * the tile's last PACR already lands on face 0 of the next DEST slot.
+ * the tile's last PACR already lands on face 0 of the next DEST slot, so
+ * tiles sit 4 Z strides apart and the W stride must be 4 Z strides.
  *
  * Precondition: _llk_pack_init_ or _llk_pack_configure_addrmod_ +
  * set_packer_strides must have been called to establish the normal
@@ -123,17 +124,16 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     }
 
     // --- Program MOP ---
-    // OUTER = num_tiles, INNER = 1
+    // OUTER = num_tiles (from the MOP instruction), INNER = 1
     // START_OP: replay the per-tile PACR sequence (all but last PACR)
     // last_inner: the final PACR of a non-last tile (ADDR_MOD_2, Last=0)
     // last_outer: the final PACR of the last tile (ADDR_MOD_1, Last=1)
-    // END_OP0: W++ (next Tile32x32 slot)
-    // END_OP1: Z=0 (reset for next tile's face traversal)
+    // END_OP0: W++ (next Tile32x32 slot), END_OP1: Z=0, both below a full 32x32 tile
 
     const std::uint32_t start_op = (replay_len > 0) ? lltt::replay_insn(0, replay_len) : TT_OP_NOP;
 
     ckernel::ckernel_template tmp(
-        1,        // OUTER (placeholder — overwritten by mop_cfg[0] in _llk_pack_block_contiguous_)
+        1,        // OUTER (placeholder: each MOP instruction of _llk_pack_block_contiguous_ carries the count)
         1,        // INNER
         TT_OP_NOP // loop_op0 (unused: INNER=1 means only last_inner fires)
     );
@@ -189,15 +189,20 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
 // tile_index: starting tile in DEST (sets W counter)
 // address: L1 destination address for the contiguous output block
 // num_tiles: number of tiles to pack (1-8, runtime parameter)
+// Expects the packer's Z counter at 0 on entry, as every pack op leaves it.
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
+    LLK_ASSERT(num_tiles > 0 && num_tiles < (1u << 10), "num_tiles must fit the MOP outer count field");
+
     set_dst_write_addr(tile_index);
 
     program_packer_destination(address);
 
     // MOP word bits 19:10: a non-zero outer loop count overrides the programmed one for this run only.
-    TT_MOP(1, num_tiles >> 6, (num_tiles & 0x3F) << 10);
+    // loop_count lands at bit 16, so it takes the count's top 4 bits and zmask_lo16 its low 6 bits at bit 10.
+    constexpr std::uint32_t COUNT_LOW_BITS = 6;
+    TT_MOP(1 /* mop_type */, num_tiles >> COUNT_LOW_BITS /* loop_count */, (num_tiles & ((1u << COUNT_LOW_BITS) - 1)) << 10 /* zmask_lo16 */);
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset Z/W
 }
