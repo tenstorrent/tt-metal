@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-tile SFPU compute kernel for binary_ng's multi-thread reader/writer path. The readers deliver one
-// in0 and one in1 entry per output tile over strided DFBs whose producers are several reader threads,
-// so compute waits and pops one tile at a time (each pop moves to the next reader thread's tile
-// counter) and builds its DataflowBuffer objects once: a short-lived one would drain the input DFBs on
+// Per-tile SFPU compute kernel for binary_ng's multi-thread path. The readers deliver one in0 and one in1
+// entry per output tile over strided DFBs; thread t of N computes the tiles t, t + N, ..., which the
+// strided DFBs route to it in order, and its outputs reach the writers in tile order the same way.
+// Compute waits and pops one tile at a time (a pop moves to the next tile counter when a thread has
+// several) and builds its DataflowBuffer objects once: a short-lived one would drain the input DFBs on
 // destruction while the readers run ahead. Broadcast and scalar operands arrive already expanded. Tiles
 // past num_tiles are reader padding: they are unpacked, so the pop follows a real unpack, and dropped.
 
@@ -41,6 +42,7 @@
 #include "api/compute/isclose.h"
 #endif
 
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu_dfb.hpp"
@@ -60,7 +62,7 @@ void kernel_main() {
     copy_init(dfb_lhs_id);
     BINARY_SFPU_INIT
 
-    for (uint32_t t = 0; t < num_padded_tiles; ++t) {
+    for (uint32_t t = get_my_thread_id(); t < num_padded_tiles; t += get_num_threads()) {
         const bool real = t < num_tiles;
         dfb_lhs.wait_front(1);
         dfb_rhs.wait_front(1);

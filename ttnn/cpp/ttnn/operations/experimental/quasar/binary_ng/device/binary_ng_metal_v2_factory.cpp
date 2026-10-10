@@ -511,13 +511,15 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
-    // --- Multi-thread path: 4 reader threads and 2 writer threads, all with implicit sync, for a bf16
-    // SFPU op with no activations on NoC-read operands. Readers send one in0 and one in1 entry per
-    // output tile, expanding a broadcast or scalar operand into a full tile in L1 scratch first; compute
-    // runs one tile at a time. Each core gets at least 4 tiles so every reader thread has work (the
-    // DFB's final-credit barrier waits for all of a kernel's threads). ---
+    // --- Multi-thread path: 4 reader threads and 2 writer threads, all with implicit sync, and 4
+    // compute threads, for a bf16 SFPU op with no activations on NoC-read operands. Readers send one
+    // in0 and one in1 entry per output tile, expanding a broadcast or scalar operand into a full tile in
+    // L1 scratch first; each compute thread runs its tiles one at a time. Each core gets at least 4
+    // tiles so every reader thread has work (the DFB's final-credit barrier waits for all of a kernel's
+    // threads), and the readers' padding to a multiple of 4 gives every compute thread work too. ---
     {
         constexpr uint32_t kReaderThreads = 4;
+        constexpr uint32_t kComputeThreads = 4;
         constexpr uint32_t kWriterThreads = 2;
         const bool has_post_act =
             !compute_defines["PROCESS_POST_ACTIVATIONS(i)"].empty() || compute_defines.contains("PACK_RELU");
@@ -638,7 +640,7 @@ ProgramArtifacts create_no_bcast_artifacts(
             m2::KernelSpec compute_spec{
                 .unique_id = COMPUTE,
                 .source = std::filesystem::path(kComputeSfpuMtDfb),
-                .num_threads = 1,
+                .num_threads = kComputeThreads,
                 .compiler_options =
                     {.include_paths =
                          {std::filesystem::path(kComputeIncludeCommon), std::filesystem::path(kComputeIncludeDfb)},
