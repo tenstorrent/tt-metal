@@ -35,10 +35,12 @@ struct RgbToYuvParams {
     YUVCoefficients coefficients;
     YUVFormat format = YUVFormat::YUV420Planar;
     tt::tt_metal::MemoryConfig output_memory_config;
+    // 0: CHWT input.  Even p >= 2: patchified (1, T, H/p, W/p, 3*p*p) input.
+    uint32_t input_patch_size = 0;
 };
 
 struct RgbToYuvInputs {
-    const Tensor& input;  // CHWT bfloat16, row-major; C=3
+    const Tensor& input;  // CHWT (or patchified, see input_patch_size) bfloat16, row-major; C=3
 };
 
 }  // namespace ttnn::experimental::prim
