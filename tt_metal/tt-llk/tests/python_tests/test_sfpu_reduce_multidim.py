@@ -114,10 +114,20 @@ def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
     return [ReduceOrder.ColRow]
 
 
-def get_multidim_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
+def get_multidim_input_bounds(
+    formats: InputOutputFormat, reduce_pool: ReducePool
+) -> list[tuple[int, int]]:
     """Stimuli bounds. Signed formats include negative ranges, which are required to expose the
     Int32 MAX regression (the row stage running with the column stage's inverted comparator only
-    misorders values once negatives/extremes are present)."""
+    misorders values once negatives/extremes are present). UInt32 MAX/MIN also sweeps the whole
+    unsigned range on Blackhole, so both passes see values with bit 31 set; the Wormhole kernel still
+    ranks those as negative (tenstorrent/tt-llk#1701 item 1)."""
+    if (
+        formats.input_format == DataFormat.UInt32
+        and reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ):
+        return [(0, 1000), (0, 2**32)]
     if formats.input_format in (DataFormat.UInt32, DataFormat.UInt16):
         return [(0, 1000)]
     return [(-1000, 1000), (-1000, 0)]
@@ -181,7 +191,9 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
     reduce_order=lambda reduce_pool: get_multidim_reduce_orders(reduce_pool),
     num_row_tiles=ROW_TILE_COUNTS,
     dest_acc=[DestAccumulation.Yes],
-    input_bounds=lambda formats: get_multidim_input_bounds(formats),
+    input_bounds=lambda formats, reduce_pool: get_multidim_input_bounds(
+        formats, reduce_pool
+    ),
 )
 def test_sfpu_reduce_multidim(
     formats,

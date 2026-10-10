@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -51,6 +51,14 @@ INT32_MIN = torch.iinfo(torch.int32).min  # 0x80000000
 # additive-order minimum, but ttnn's get_pad_value uses INT32_MIN + 1, so we match it.
 INT32_PAD_MIN = INT32_MIN + 1  # -0x7FFFFFFF
 UINT16_MAX = torch.iinfo(torch.uint16).max  # 0xFFFF
+UINT32_MAX = 2**32 - 1  # 0xFFFFFFFF
+UINT32_BIT31 = 2**31  # 0x80000000
+
+# UInt32 MAX/MIN orders the full unsigned range only in the Blackhole kernel. The Wormhole kernel still
+# compares the raw words in sign-magnitude, so every value with bit 31 set ranks below every value without
+# it (tenstorrent/tt-llk#1701 item 1); Wormhole keeps the narrow [0, 1000) stimuli and the INT32_MAX MIN
+# pad until it is ported.
+UINT32_MAX_MIN_FULL_RANGE = get_chip_architecture() == ChipArchitecture.BLACKHOLE
 
 dimension_combinations = [
     [m, n]
@@ -60,10 +68,20 @@ dimension_combinations = [
 ]
 
 
-def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
+def get_format_input_bounds(
+    formats: InputOutputFormat, reduce_pool: ReducePool
+) -> list[tuple[int, int]]:
     """Get valid stimuli bounds based on data format.
     - range needs to be cut off at 1000 for Sum reduction kernels with UInt16 input format to avoid overflow.
+    - UInt32 MAX/MIN also sweeps the whole unsigned range on Blackhole, so values with bit 31 set are
+      compared against values without it (see UINT32_MAX_MIN_FULL_RANGE).
     """
+    if (
+        formats.input_format == DataFormat.UInt32
+        and reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and UINT32_MAX_MIN_FULL_RANGE
+    ):
+        return [(0, 1000), (0, UINT32_MAX + 1)]
     if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]:
         return [(0, 1000)]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
@@ -140,11 +158,13 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
         if input_format == DataFormat.Int32:
             return INT32_MAX
         if input_format == DataFormat.UInt32:
-            # SFPSWAP compares in sign-magnitude (tt-isa SFPSWAP.md), so it only orders UInt32 values
-            # with bit 31 clear, i.e. [0, 2^31). The usual MIN identity 0xFFFFFFFF has bit 31 set and
-            # reads as the most-negative sign-magnitude value, so it would wrongly win. INT32_MAX
-            # (0x7FFFFFFF) is the largest value the comparator ranks as maximal and never wins for
-            # stimuli in [0, 1000].
+            if UINT32_MAX_MIN_FULL_RANGE:
+                # The unsigned MIN identity: the Blackhole kernel orders the full UInt32 range.
+                return UINT32_MAX
+            # The Wormhole kernel compares UInt32 in sign-magnitude (tt-isa SFPSWAP.md), so it only
+            # orders values with bit 31 clear, i.e. [0, 2^31) (tenstorrent/tt-llk#1701 item 1). There
+            # 0xFFFFFFFF reads as the most-negative sign-magnitude value and would wrongly win, so the
+            # pad is INT32_MAX (0x7FFFFFFF), which never wins for stimuli in [0, 1000].
             return INT32_MAX
         if input_format == DataFormat.UInt16:
             # 0xFFFF fits in the 31-bit sign-magnitude positive range the comparator orders.
@@ -618,6 +638,194 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     assert num_mismatch == 0, (
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} (see stdout)"
+    )
+
+
+# =============================================================================
+# UInt32 MAX/MIN over the full unsigned range (tenstorrent/tt-llk#1701 item 1)
+#
+# SFPSWAP(VEC_MIN_MAX) orders its operands as sign-magnitude integers (tt-isa SFPSWAP.md), so a raw
+# UInt32 word with bit 31 set reads as negative: MAX over {1, 0x80000005} returned 1 and MIN over
+# {5, 0xFFFFFFFF} returned 0xFFFFFFFF. The sweep above only reaches bit 31 through random draws; every
+# reduced lane here is a designed ordering edge (the bit-31 boundary, both ends of the range, a lone
+# extreme in a constant lane, ramps that straddle 2^31) plus seeded random lanes, compared exactly.
+# Blackhole only: the Wormhole kernel still has the bug.
+# =============================================================================
+
+
+def _uint32_order_edge_lanes() -> torch.Tensor:
+    """32 lanes x 32 UInt32 values (int64 tensor); one lane is one reduced row or column."""
+    U, H = UINT32_MAX, UINT32_BIT31
+    g = torch.Generator().manual_seed(1701)
+
+    def rep(*vals):
+        return [vals[i % len(vals)] for i in range(TILE_DIM)]
+
+    def one(value, fill, pos=17):
+        lane = [fill] * TILE_DIM
+        lane[pos] = value
+        return lane
+
+    def rand(low, high):
+        return torch.randint(
+            low, high, (TILE_DIM,), generator=g, dtype=torch.int64
+        ).tolist()
+
+    lanes = [
+        rep(0),
+        rep(U),
+        rep(H),
+        rep(H - 1),
+        rep(1, H + 1),
+        rep(1, H + 5),  # the MAX example in the issue
+        rep(5, U),  # the MIN example in the issue
+        rep(0, U),
+        rep(H - 1, H),
+        rep(0, H),
+        rep(H, H + 1),
+        rep(U - 1, U),
+        rep(0, 1),
+        rep(H - 1, U),
+        rep(0, H - 1, H, U),
+        rep(H + 5, 5, H + 1, 1),
+        one(U, 0),
+        one(0, U),
+        one(H, H - 1),
+        one(H - 1, H),
+        one(1, U, pos=0),
+        one(U - 1, 1, pos=TILE_DIM - 1),
+        [H - TILE_DIM // 2 + k for k in range(TILE_DIM)],  # ramp straddling 2^31
+        [U - k for k in range(TILE_DIM)],
+        [k << 27 for k in range(TILE_DIM)],  # full-range ramp
+        [1 << k for k in range(TILE_DIM)],  # powers of two, including 2^31
+        [U ^ (1 << k) for k in range(TILE_DIM)],
+        rand(0, U + 1),
+        rand(0, U + 1),
+        rand(H, U + 1),
+        rand(0, H),
+        rand(H - 64, H + 64),
+    ]
+    assert len(lanes) == TILE_DIM
+    return torch.tensor(lanes, dtype=torch.int64)
+
+
+def _run_uint32_reduce(mathop, reduce_pool, grid: torch.Tensor) -> torch.Tensor:
+    """Run the UInt32 SFPU reduce on `grid` ([32, 32 * tiles], int64) and return the result lanes:
+    row 0 for a column reduce, column 0 for a row reduce."""
+    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
+    input_dimensions = list(grid.shape)
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    src_A = tilize_block(
+        grid.flatten(), input_dimensions, stimuli_format=formats.input_format
+    ).flatten()
+    src_B = torch.zeros_like(src_A)
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
+    if mathop == MathOperation.ReduceColumn:
+        return res_tensor[0].to(torch.int64)
+    return res_tensor[:, 0].to(torch.int64)
+
+
+@pytest.mark.parametrize("tiles", [1, 2])
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+def test_uint32_reduce_max_min_bit31(mathop, reduce_pool, tiles):
+    """UInt32 MAX/MIN must order the full unsigned range, bit 31 included, on every reduced lane.
+
+    Row reduce: lane = row, and with `tiles` = 2 the row spans two tiles, so the per-tile results are
+    folded across tiles too. Column reduce: lane = column, and every tile is reduced on its own. Each
+    tile holds the same lanes in a different (seeded) order, so no tile is a copy of another.
+    """
+    if not UINT32_MAX_MIN_FULL_RANGE:
+        pytest.skip(
+            reason="The Wormhole kernel still compares UInt32 MAX/MIN in sign-magnitude "
+            "(tenstorrent/tt-llk#1701 item 1)"
+        )
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    lanes = _uint32_order_edge_lanes()  # [lane, value]
+    g = torch.Generator().manual_seed(1)
+    blocks = [lanes[:, torch.randperm(TILE_DIM, generator=g)] for _ in range(tiles)]
+    if mathop == MathOperation.ReduceRow:
+        grid = torch.cat(blocks, dim=1)  # [32 lanes (rows), 32 * tiles values]
+        values = grid
+    else:
+        # Tile t is [32 values, 32 lanes (columns)].
+        grid = torch.cat([b.t() for b in blocks], dim=1)
+        values = grid.t()  # [32 * tiles lanes, 32 values]
+
+    if reduce_pool == ReducePool.Max:
+        golden = values.max(dim=1).values
+    else:
+        golden = values.min(dim=1).values
+
+    res = _run_uint32_reduce(mathop, reduce_pool, grid)
+
+    mismatch = golden != res
+    num_mismatch = int(mismatch.sum().item())
+    if num_mismatch:
+        idxs = torch.nonzero(mismatch).flatten().tolist()
+        detail = "\n".join(
+            f"  lane={i}: golden=0x{int(golden[i]):08X} device=0x{int(res[i]):08X}"
+            for i in idxs[:12]
+        )
+        logger.info(
+            "\nUInt32 {} {} tiles={}: {} mismatched lanes\n{}",
+            reduce_pool,
+            mathop,
+            tiles,
+            num_mismatch,
+            detail,
+        )
+
+    assert num_mismatch == 0, (
+        f"{num_mismatch}/{golden.numel()} mismatched UInt32 {reduce_pool} {mathop} lanes "
+        f"(tiles={tiles}, see stdout)"
     )
 
 
