@@ -107,7 +107,11 @@ ALWI void remainder_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for remainder_uint32_tile.
  */
 ALWI void remainder_uint32_tile_init() {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_INIT_FN(remainder_uint32, sfpu::remainder_uint32_binary_init, (APPROX))));
+#else
     MATH((SFPU_BINARY_INIT_FN(remainder_uint32, sfpu::remainder_uint32_init, (APPROX))));
+#endif
 }
 
 // BF16, FP32

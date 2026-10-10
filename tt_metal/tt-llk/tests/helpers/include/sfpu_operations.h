@@ -1821,7 +1821,11 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::REMAINDER_UINT32)
     {
+#if defined(ARCH_BLACKHOLE)
+        SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_binary_init, (APPROXIMATION_MODE));
+#else
         SFPU_BINARY_INIT_FN(remainder_uint32, remainder_uint32_init, (APPROXIMATION_MODE));
+#endif
     }
     else if constexpr (BINOP == BinaryOp::FMOD_INT32)
     {

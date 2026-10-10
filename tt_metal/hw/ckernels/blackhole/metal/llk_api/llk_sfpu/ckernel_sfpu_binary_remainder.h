@@ -527,6 +527,12 @@ template <bool APPROXIMATION_MODE>
 inline void remainder_uint32_init() {
     // Shares the int32 setup: the unsigned path reuses compute_unsigned_remainder_int32().
     div_floor_init<APPROXIMATION_MODE>();
+}
+
+// remainder_uint32_tile's init; the scalar remainder_tile_uint32 keeps remainder_uint32_init, as it runs no load macro.
+template <bool APPROXIMATION_MODE>
+inline void remainder_uint32_binary_init() {
+    remainder_uint32_init<APPROXIMATION_MODE>();
 #ifndef DISABLE_SFPLOADMACRO
     // A disabled unit uses delay 7 so it cancels no pending instruction.
     constexpr std::uint32_t disabled = 7 << 3;
