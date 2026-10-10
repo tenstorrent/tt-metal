@@ -343,6 +343,12 @@ def ff2_bf8_rs() -> bool:
     return os.environ.get("QWEN_CP_FF2_BF8", "1") == "1"
 
 
+def sdpa_fp16_acc() -> bool:
+    """Ring SDPA with 16-bit dest accumulation (HiFi2 kept): sdpa_sweep e1-fid q320/k640 17.08 -> 16.16 ms,
+    PCC vs HiFi4 fp32acc 0.99994 -> 0.99983. QWEN_CP_SDPA_FP16ACC=0 keeps the fp32 dest of keep 09."""
+    return os.environ.get("QWEN_CP_SDPA_FP16ACC", "1") == "1"
+
+
 def _row_ag(tt_ccl, model_config, t, seq_len):
     kw = dict(model_config["QWEN_PREFILL_RING_AG_PARAMS"](seq_len, "FF2") or {})
     return _ag(tt_ccl, t, 2, 0, **kw)
@@ -432,6 +438,13 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     ckc = attn.compute_kernel_config_hifi4
     if attn.compute_kernel_config_ring_sdpa_long is not None:
         ckc = attn.compute_kernel_config_ring_sdpa_long
+        if sdpa_fp16_acc():
+            ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ckc.math_fidelity,
+                math_approx_mode=ckc.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=ckc.packer_l1_acc,
+            )
     attn_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
         q_8b,
         k_nat,
