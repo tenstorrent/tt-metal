@@ -143,6 +143,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
+    if constexpr (CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
+
     // split_acc=false, dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
     // dense_packing MUST be true: the pack thread reads the ct output tiles with the
     // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
