@@ -21,6 +21,18 @@
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
+// Experiment hook (init-opt2): LLK_EXP_NOP_UNPACK_INIT NOPs at the top of the unpack init functions (unpack thread only)
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+#define LLK_EXP_STR2_(x)            #x
+#define LLK_EXP_STR_(x)             LLK_EXP_STR2_(x)
+#define LLK_EXP_NOP_UNPACK_INIT_AT() __asm__ __volatile__(".rept " LLK_EXP_STR_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_NOP_UNPACK_INIT_AT() \
+    do                               \
+    {                                \
+    } while (0)
+#endif
+
 #ifndef EN_DEST_DOUBLE_BUFFERING
 #define EN_DEST_DOUBLE_BUFFERING 1
 #endif
