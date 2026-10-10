@@ -81,6 +81,12 @@ def _dtypes_for(category: str, user: List[str], source_dtype: str = "") -> List[
     return ["bf16"]
 
 
+def _add_dtype_override_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
+    """Single definition of the optional ``--dtype`` override shared by the
+    bring-up subcommands; choices come from ``DTYPE_BYTES``."""
+    parser.add_argument("--dtype", default=None, choices=list(DTYPE_BYTES.keys()), help=help_text)
+
+
 def _parse_mesh(s: str) -> Tuple[int, int]:
     parts = s.replace("x", ",").split(",")
     if len(parts) != 2:
@@ -8652,6 +8658,8 @@ def cmd_bringup(args) -> int:
         f"--auto-max-iters=24 --auto-max-attempts-per-component=5 "
         f"--isolation=worktree"
     )
+    if full.dtype:
+        print(f"  Weight dtype override: --dtype={full.dtype}")
     print(
         f"  Brain G8 will orchestrate: budget-extend, cap-extend, " f"phantom-cleanup, sync, demo-emit, demo-recovery"
     )
@@ -10297,12 +10305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "valid shapes before scaffold/autofill/LLM run. Default: planner picks."
         ),
     )
-    pup.add_argument(
-        "--dtype",
-        default=None,
-        choices=list(DTYPE_BYTES.keys()),
-        help="override dtype for prepare/execute and auto-iterate reruns",
-    )
+    _add_dtype_override_arg(pup, "override dtype for prepare/execute and auto-iterate reruns")
     pup.add_argument("--batch", type=int, default=1, help="batch size for prepare/execute (default: 1)")
     pup.add_argument("--max-seq-len", type=int, default=1024, help="max sequence length for prepare/execute")
     pup.add_argument(
@@ -10697,6 +10700,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         required=True,
         help="Mesh shape, e.g. '1,4' or '2x2' (required); must be canonical for --box.",
     )
+    _add_dtype_override_arg(
+        paut,
+        "override the weight dtype (default: planner picks); e.g. bfp4_b for a model "
+        "that only fits the box at 4-bit weights. Applies to the memory-fit gate, "
+        "prepare/execute and auto-iterate reruns, same as `up --dtype`.",
+    )
     paut.add_argument(
         "--reverify",
         action="store_true",
@@ -10734,12 +10743,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         required=True,
         help="mesh shape (e.g. '1,4') (required); must be canonical for --box.",
     )
-    pprom.add_argument(
-        "--dtype",
-        default=None,
-        choices=list(DTYPE_BYTES.keys()),
-        help="override dtype for reruns",
-    )
+    _add_dtype_override_arg(pprom, "override dtype for reruns")
     pprom.add_argument("--batch", type=int, default=1)
     pprom.add_argument("--max-seq-len", type=int, default=1024)
     pprom.add_argument("--max-generated-tokens", type=int, default=200)
@@ -11155,12 +11159,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="override the planner's box pick",
     )
     pprep.add_argument("--mesh", default=None, help="override the planner's mesh (requires --box, e.g. 1,4)")
-    pprep.add_argument(
-        "--dtype",
-        default=None,
-        choices=list(DTYPE_BYTES.keys()),
-        help="override the planner's dtype pick",
-    )
+    _add_dtype_override_arg(pprep, "override the planner's dtype pick")
     pprep.add_argument("--batch", type=int, default=1, help="pytest --batch_size (default 1)")
     pprep.add_argument("--max-seq-len", type=int, default=1024, help="pytest --max_seq_len (default 1024)")
     pprep.add_argument(

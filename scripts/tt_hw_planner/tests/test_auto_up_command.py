@@ -153,3 +153,46 @@ def test_promote_requires_box_and_mesh() -> None:
     )
     assert p.returncode == 2, p.stderr
     assert "--box" in p.stderr and "--mesh" in p.stderr
+
+
+def test_auto_up_forwards_dtype_to_cmd_up(monkeypatch) -> None:
+    """auto-up --dtype must reach cmd_up (memory-fit gate, prepare, reruns)
+    unchanged; omitting it keeps the planner-picks default (None)."""
+    from scripts.tt_hw_planner import cli
+    from scripts.tt_hw_planner.architecture import DTYPE_BYTES
+
+    seen = []
+    monkeypatch.setattr(cli, "cmd_up", lambda ns: seen.append(ns.dtype) or 0)
+    monkeypatch.setenv("_TT_TTNN_PREFLIGHT_DONE", "1")
+
+    dtype = next(iter(DTYPE_BYTES))
+    assert cli.main(["auto-up", "some/model", "--box", "QB2", "--mesh", "1,4", "--dtype", dtype]) == 0
+    assert cli.main(["auto-up", "some/model", "--box", "QB2", "--mesh", "1,4"]) == 0
+    assert seen == [dtype, None]
+
+
+def test_auto_up_rejects_unknown_dtype() -> None:
+    """--dtype choices are the shared DTYPE_BYTES keys, same as `up`."""
+    import subprocess
+
+    p = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.tt_hw_planner",
+            "auto-up",
+            "some/model",
+            "--box",
+            "QB2",
+            "--mesh",
+            "1,4",
+            "--dtype",
+            "not-a-dtype",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(_REPO_ROOT),
+        timeout=30,
+    )
+    assert p.returncode == 2, p.stderr
+    assert "--dtype" in p.stderr
