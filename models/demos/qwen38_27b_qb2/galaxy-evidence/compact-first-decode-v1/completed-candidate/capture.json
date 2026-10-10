@@ -1,0 +1,35 @@
+{
+  "captured_at": "2026-10-10T19:07:48.003653+00:00",
+  "units": {
+    "qwen38-compact-gdn-v3-20261010.service": {
+      "RuntimeMaxUSec": "1d 14h",
+      "MainPID": "244902",
+      "Result": "success",
+      "MemoryMax": "206158430208",
+      "Id": "qwen38-compact-gdn-v3-20261010.service",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "ddc627b6d8ff4f80bcee38abd1294378"
+    },
+    "qwen38-compact-followup-v3-20261010.service": {
+      "RuntimeMaxUSec": "1d 12h",
+      "MainPID": "244905",
+      "Result": "success",
+      "MemoryMax": "274877906944",
+      "Id": "qwen38-compact-followup-v3-20261010.service",
+      "ActiveState": "active",
+      "SubState": "running",
+      "InvocationID": "28c688b7780445999483523a9cbc75fc"
+    }
+  },
+  "remote_paths": {
+    "before-sweep.json": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/before/sweep.json",
+    "compact-sweep.json": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/compact/sweep.json",
+    "compact-queue.json": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/queue.json",
+    "followup-queue.json": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-v3/queue.json",
+    "followup-launch.json": "/home/ttuser/qwen38-artifacts-20261007/compact-followup-control-v3/launch.json",
+    "source-manifest.json": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/source-manifest.json",
+    "compact-run.log.gz": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/run.log"
+  },
+  "snapshot_note": "Sequential read-only capture; queued qualification is not an accuracy pass."
+}

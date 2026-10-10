@@ -15,7 +15,19 @@ candidate as qualified.
 and 16K second. See the [benefit estimates and queued experiments](experiments/B16_PRIORITIES.md).
 The compact GDN front-end prototype is experimental and not enabled in serving.
 
-**Oct 10, 04:32 UTC:** optimized BFP8 shared-QK completed full GPQA at
+**Oct 10, 19:07 UTC:** compact GDN completed three full-model measurements per
+context: **20.03 TSU at B16/32K** and **22.75 TSU at B16/16K**, respectively
+20.81% and 23.60% above the fresh before-control. Output hashes match; the
+after-control and compact full GPQA remain pending in the persistent queue.
+These are one-TP4 native decode results. The eight-replica 32K estimate is
+2564 output tok/s/Galaxy, not measured full-Galaxy or HTTP throughput.
+See [raw compact results and qualification queue](galaxy-evidence/compact-first-decode-v1/README.md)
+and the [current operator roadmap](experiments/OPERATOR-ROADMAP.md).
+The previously qualified fusion policy achieved 16.55 TSU at B16/32K and
+177/198 GPQA (89.39%); six output cutoffs remained incorrect in the denominator.
+Prefix caching and local SSD offload are [scoped, not enabled](experiments/PREFIX-CACHE-OFFLOAD-SCOPE.md).
+
+**Historical Oct 10, 04:32 UTC:** optimized BFP8 shared-QK completed full GPQA at
 **178/198 (89.90%)**; five output-budget cutoffs remain in the denominator and
 all were incorrect. At32K, measured full-model decode is14.87TSU atB16 and
 10.60 atB32 on one TP4 replica,26.5%/44.4% above the matched native baseline.

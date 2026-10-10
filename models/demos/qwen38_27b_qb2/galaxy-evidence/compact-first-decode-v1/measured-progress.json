@@ -1,0 +1,38 @@
+{
+  "state": "candidate_completed_after_control_pending",
+  "source_hashes_match_manifest": true,
+  "accuracy_qualified": false,
+  "full_galaxy_timing_measured": false,
+  "comparisons": [
+    {
+      "isl": 32768,
+      "batch": 16,
+      "before_tsu": 16.583725267107432,
+      "compact_tsu": 20.034954518414228,
+      "before_step_ms": 60.30008239363592,
+      "compact_step_ms": 49.91276616479937,
+      "gain_percent": 20.810940821312606,
+      "measured_tp4_decode_tokens_per_second": 320.55927229462765,
+      "projected_galaxy_decode_tokens_per_second": 2564.474178357021,
+      "projected_galaxy_not_measured": true,
+      "identical_output_hashes": true,
+      "compact_prefill_seconds": 95.84135824581608,
+      "compact_ttft_seconds": 95.96838924707845
+    },
+    {
+      "isl": 16384,
+      "batch": 16,
+      "before_tsu": 18.40592575131317,
+      "compact_tsu": 22.750584557336303,
+      "before_step_ms": 54.33032891207089,
+      "compact_step_ms": 43.95491454207639,
+      "gain_percent": 23.604674194196207,
+      "measured_tp4_decode_tokens_per_second": 364.00935291738085,
+      "projected_galaxy_decode_tokens_per_second": 2912.074823339047,
+      "projected_galaxy_not_measured": true,
+      "identical_output_hashes": true,
+      "compact_prefill_seconds": 44.31874400610104,
+      "compact_ttft_seconds": 44.47201710008085
+    }
+  ]
+}

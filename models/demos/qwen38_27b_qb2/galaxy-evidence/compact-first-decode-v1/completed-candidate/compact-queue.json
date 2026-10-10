@@ -1,0 +1,124 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "epilogue",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/models/demos/qwen38_27b_qb2/tests/test_compact_gdn_epilogue.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/epilogue/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "started_at": 1791657160.5976288,
+      "finished_at": 1791657190.6347077
+    },
+    {
+      "name": "layer",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/layer/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "started_at": 1791657190.646458,
+      "finished_at": 1791657228.6905725
+    },
+    {
+      "name": "before",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/before/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791657228.703497,
+      "finished_at": 1791658225.9094183
+    },
+    {
+      "name": "compact",
+      "state": "completed",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/compact/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791658225.9205563,
+      "finished_at": 1791659209.106459
+    },
+    {
+      "name": "after",
+      "state": "running",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3/pytest.ini",
+        "-vv",
+        "-s",
+        "--tb=short",
+        "--timeout=5220",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3/after/hardware.xml"
+      ],
+      "timeout_seconds": 5400,
+      "started_at": 1791659209.117112
+    }
+  ],
+  "cleanup_completed": false,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-b16-priority-v2-20261010.service",
+  "predecessor_invocation": "f5b0da5649614052ba7b8ddf37b466d5",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791657160.5787263,
+  "target_tsu": 30,
+  "speculative_decoding": false,
+  "updated_at": "2026-10-10T19:06:49Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "after"
+}
