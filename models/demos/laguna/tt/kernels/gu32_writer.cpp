@@ -24,10 +24,19 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, page);
     const auto sp = TensorAccessor(sp_args, sp_addr, sp_page);
     const uint32_t sp_l1 = get_write_ptr(cb_sp2);
-    noc_async_read(sp.get_noc_addr(0), sp_l1, sp_page);
+    // sp_rows > 1: per-token routing rows (router32.route_local_rows); an expert is active if any row routes to it
+    const uint32_t sp_rows = get_common_arg_val<uint32_t>(2);
+    for (uint32_t r = 0; r < sp_rows; ++r) {
+        noc_async_read(sp.get_noc_addr(r), sp_l1 + r * sp_page, sp_page);
+    }
     noc_async_read_barrier();
     invalidate_l1_cache();
     volatile tt_l1_ptr uint16_t* spv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
+    for (uint32_t r = 1; r < sp_rows; ++r) {
+        for (uint32_t e = 0; e < E; ++e) {
+            spv[e] |= spv[r * (sp_page / 2) + e];
+        }
+    }
     uint32_t seen = 0;
     for (uint32_t e = 0; e < E; ++e) {
         if (spv[e] == 0) {

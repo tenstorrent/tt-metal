@@ -279,7 +279,9 @@ def expert_sum32(x, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
 def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L1_MEMORY_CONFIG):
     """32-token routed gate/up + SwiGLU + routing weight over column-page weights (see colpage.py).
     x [1, 1, 32, H] bf16 TILE interleaved; gu_cols: ColumnPages of the packed [E, H, 2I] weight (Ct = 2 * I/32);
-    wv [1, E, 32, 1] per-(expert, token) weights; sparsity [1, 1, 1, E] union row. Returns [1, E, 32, I]."""
+    wv [1, E, 32, 1] per-(expert, token) weights; sparsity [1, 1, R, E] bf16 row-major: the union row (R = 1) or
+    per-token routing rows (unioned in the kernels). wv None (R > 1 only): each expert's weight tile is built from
+    the routing rows. Returns [1, E, 32, I]."""
     device = x.device()
     E, Kt = gu_cols.E, gu_cols.Kt
     nt = gu_cols.Ct // 2
@@ -291,15 +293,17 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
     assert cores <= gs.x * gs.y and Kt % chunk == 0, (cores, Kt, chunk)
     grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
     page, wt, sp_page = 2048, 576, max(E * 2, 64)
+    sp_rows = int(sparsity.shape[-2])
+    assert wv is not None or sp_rows > 1
     cbs = [
         _cb(grid, 0, ttnn.bfloat16, page, Kt),
         _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * chunk),
         _cb(grid, 2, ttnn.bfloat16, page, 2),
         _cb(grid, 3, ttnn.uint32, 64, 1),
-        _cb(grid, 4, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows + 1),
         _cb(grid, 5, ttnn.bfloat16, page, 1),
         _cb(grid, 6, ttnn.bfloat16, page, 1),
-        _cb(grid, 7, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 7, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 16, ttnn.bfloat16, page, 2),
     ]
     reader = ttnn.KernelDescriptor(
@@ -307,8 +311,9 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
         compile_time_args=[Kt, nt, E, chunk, page, wt, sp_page, gs.x, groups]
-        + _accessor_args(x, gu_cols.buf, wv, sparsity),
-        common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), wv.buffer_address(), sparsity.buffer_address()],
+        + _accessor_args(x, gu_cols.buf, sparsity if wv is None else wv, sparsity),
+        common_runtime_args=[x.buffer_address(), gu_cols.buf.buffer_address(), 0 if wv is None else wv.buffer_address(),
+                             sparsity.buffer_address(), sp_rows],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -316,7 +321,7 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
         compile_time_args=[nt, E, page, sp_page, gs.x, groups] + _accessor_args(out, sparsity),
-        common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
+        common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
     cfg = ttnn.ComputeConfigDescriptor()
@@ -330,13 +335,14 @@ def gate_up32(x, gu_cols, wv, sparsity, groups=3, chunk=48, memory_config=ttnn.L
         compile_time_args=[Kt, chunk],
         config=cfg,
     )
-    ttnn.generic_op([x, gu_cols.buf, wv, sparsity, out], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs))
+    ins = [x, gu_cols.buf, sparsity, out] if wv is None else [x, gu_cols.buf, wv, sparsity, out]
+    ttnn.generic_op(ins, ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs))
     return out
 
 
 def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_config=ttnn.L1_MEMORY_CONFIG):
     """32-token routed down projection + sum over active experts, column-page weights. glu [1, E, 32, I] (gate_up32
-    output); d_cols: ColumnPages of [E, I, H]. Returns [1, 1, 32, H] bf16."""
+    output); d_cols: ColumnPages of [E, I, H]; sparsity as in gate_up32. Returns [1, 1, 32, H] bf16."""
     device = glu.device()
     E, Kt, Nh = d_cols.E, d_cols.Kt, d_cols.Ct
     # partial sums per expert group, reduced over dim 1 after the kernel
@@ -348,12 +354,13 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
     assert Nh % cols_per_core == 0 and cores <= gs.x * gs.y
     grid = ttnn.num_cores_to_corerangeset(cores, gs, True)
     page, wt, sp_page = 2048, 576, max(E * 2, 64)
+    sp_rows = int(sparsity.shape[-2])
     cbs = [
         _cb(grid, 0, ttnn.bfloat16, page, 2 * Kt),
         _cb(grid, 1, ttnn.bfloat4_b, wt, 2 * cols_per_core * Kt),
         _cb(grid, 2, ttnn.uint32, 64, 1),
-        _cb(grid, 3, ttnn.bfloat16, sp_page, 1),
-        _cb(grid, 4, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 3, ttnn.bfloat16, sp_page, sp_rows),
+        _cb(grid, 4, ttnn.bfloat16, sp_page, sp_rows),
         _cb(grid, 5, ttnn.bfloat16, page, 1),
         _cb(grid, 16, ttnn.bfloat16, page, cols_per_core),
     ]
@@ -363,7 +370,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         core_ranges=grid,
         compile_time_args=[Kt, Nh, E, page, wt, sp_page, gs.x, cols_per_core, expert_groups]
         + _accessor_args(glu, d_cols.buf, sparsity),
-        common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address()],
+        common_runtime_args=[glu.buffer_address(), d_cols.buf.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
@@ -371,7 +378,7 @@ def down32(glu, d_cols, sparsity, cols_per_core=8, expert_groups=8, memory_confi
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
         compile_time_args=[page, gs.x, E, sp_page, cols_per_core, expert_groups, Nh] + _accessor_args(out, sparsity),
-        common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
+        common_runtime_args=[out.buffer_address(), sparsity.buffer_address(), sp_rows],
         config=ttnn.WriterConfigDescriptor(),
     )
     cfg = ttnn.ComputeConfigDescriptor()

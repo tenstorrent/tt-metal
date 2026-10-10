@@ -326,6 +326,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
         self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
+        # 2..32-token decode (DFlash verify, batched decode): sigmoid fused into the router matmul, a row-repeated
+        # bias, and the router kernel writing this chip's routing rows and expert weight tiles directly (_moe_rows_local)
+        self._route_local_rows = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROWS", True)
         self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
         self._combine_local = _parse_binary_env("TT_LAGUNA_COMBINE_LOCAL", True)  # all-core local combine kernel
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
@@ -1279,6 +1282,19 @@ class MultichipDecoder(OptimizedDecoder):
             and "gate_w_ds" in self.w
         ):
             return self._moe1_local(ln_flat, sharded)
+        if (
+            1 < T <= TILE
+            and self.D > 1
+            and self._route_local_rows
+            and self._route_dense_mask
+            and getattr(self, "_router32", False)
+            and getattr(self, "_cp32", False)
+            and (T == TILE or self._cp32_short)
+            and "ep_off" in self.w
+            and "gate_w_ds" in self.w
+            and "e_bias_f32_rows" in self.w
+        ):
+            return self._moe_rows_local(ln_flat, sharded)
         logits, idx, wsel = self._route(ln_flat, want_dense=self._route_dense_mask)
         # idx is None when the router returned the dense [1,1,T,E] routing matrix directly
         dense = wsel if idx is None else ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
@@ -1405,6 +1421,52 @@ class MultichipDecoder(OptimizedDecoder):
         if keep:
             # width-sharded shared output as the add's first operand, the interleaved routed sum as the second:
             # the add writes interleaved for the all_gather (no separate sharded->interleaved)
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)
+
+    def _moe_rows_local(self, ln_flat, sharded):
+        """2..32 decode tokens: router scores (sigmoid fused into the logits matmul) + row-repeated bias -> the router
+        kernel writing this chip's per-token routing rows (router32.route_local_rows) -> the 32-row MoE kernels (which
+        union the rows and build the per-token weight tiles from them) + the shared expert and the all-reduce (see _moe). Replaces the
+        sigmoid, the broadcast bias add (~12 us), the dense routing tile, the EP-select matmul, the row sum, the
+        untilize and the weight transpose."""
+        from .router32 import route_local_rows
+
+        cfg = self.cfg
+        H, E, T = cfg.hidden, cfg.num_experts, ln_flat.shape[-2]
+        num_cores = _decode_shard_cores(H, E)
+        x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
+        scores = ttnn.linear(
+            x_sh,
+            self.w["gate_w_ds"],
+            program_config=_dram_matmul_pc(
+                TILE, H, E, num_cores, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+            ),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._ck_router_precise,
+            dtype=ttnn.float32,
+        )
+        ttnn.deallocate(x_sh)
+        scores = ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
+        if T == TILE:
+            bias = self.w["e_bias_f32_rows"]
+        else:  # the bias repeated over T rows (sliced once, at the first eager call, before any trace capture)
+            cache = self.__dict__.setdefault("_bias_rows_t", {})
+            if T not in cache:
+                cache[T] = ttnn.slice(self.w["e_bias_f32_rows"], [0, 0, 0, 0], [1, 1, T, E])
+            bias = cache[T]
+        sel = ttnn.add(scores, bias)
+        rows = route_local_rows(
+            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
+        )
+        x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows)
+        routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows)
+        keep = sharded and self._glu_out_sharded
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        if keep:
             combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))

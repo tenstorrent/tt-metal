@@ -32,7 +32,7 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
         kernel_source=str(_KDIR / "router32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, 0] + args,
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, 0, 0] + args,
         common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), 0],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -126,9 +126,46 @@ def route1_local(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, loc
         kernel_source=str(_KDIR / "router32_reader.cpp"),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=grid,
-        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e)] + args,
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e), 0] + args,
         common_runtime_args=[sel.buffer_address(), scores.buffer_address(), out.buffer_address(), ep_off.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
     ttnn.generic_op([sel, scores, ep_off, out], ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf]))
     return out
+
+
+def route_local_rows(sel, scores, top_k, routed_scaling, norm_topk_prob, ep_off, local_e,
+                     memory_config=ttnn.L1_MEMORY_CONFIG):
+    """2..32 decode tokens: sel, scores [1, 1, T, E] fp32 TILE; ep_off as in route1_local. Returns this chip's
+    [1, 1, T, local_e] bf16 row-major routing rows (normalized, scaled weights of each token's picked local experts,
+    0 elsewhere): moe_decode1.gate_up32 / down32 union them into the active set and gate_up32 builds each expert's
+    per-token weight tile from them. One core per token replaces the dense routing tile, EP-select matmul, row sum,
+    untilize and weight transpose."""
+    device = sel.device()
+    T, E = sel.shape[-2], sel.shape[-1]
+    assert 1 < T <= 32, sel.shape
+    rows = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, T, local_e]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config
+    )
+    grid_size = device.compute_with_storage_grid_size()
+    grid = ttnn.num_cores_to_corerangeset(T, grid_size, True)
+    buf = ttnn.CBDescriptor(
+        total_size=4 * E * 4 + 256,
+        core_ranges=grid,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=4 * E * 4 + 256)],
+    )
+    args = []
+    for t in (sel, scores, rows, ep_off):
+        args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    scale_bits = struct.unpack("<I", struct.pack("<f", float(routed_scaling)))[0]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "router32_reader.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[E, int(top_k), grid_size.x, int(bool(norm_topk_prob)), scale_bits, 4096, int(local_e), T]
+        + args,
+        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), rows.buffer_address(), ep_off.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op([sel, scores, ep_off, rows], ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf]))
+    return rows

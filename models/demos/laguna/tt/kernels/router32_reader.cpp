@@ -6,6 +6,9 @@
 // TILE), picks the K experts with the largest sel (fp32 compared as order-preserving integers), and writes row t
 // of dense = score * routed_scaling / (sum of the K picked scores) at the picked experts and 0 elsewhere.
 // A row of an fp32 tile is two 64-byte runs: face (r / 16) * 2 for columns 0-15 and the next face for 16-31.
+// rows > 0 (T-row local mode): core t writes row t of this chip's [T, local_e] bf16 row-major routing rows -- the
+// batched MoE kernels union them into the active set and build each expert's weight tile from them -- instead of
+// the dense tile, the EP-select matmul, the row sum, the untilize and the weight transpose.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -22,8 +25,9 @@ void kernel_main() {
     // local_e > 0: one-token mode writing only this chip's local_e experts (starting at the uint32 in ep_off) as one
     // bf16 row-major row -- the routing ("sparsity") row the batch-1 MoE kernels read -- instead of the dense tile
     constexpr uint32_t local_e = get_compile_time_arg_val(6);
+    constexpr uint32_t rows = get_compile_time_arg_val(7);
     constexpr uint32_t cb_buf = 0;
-    constexpr auto sel_args = TensorAccessorArgs<7>();
+    constexpr auto sel_args = TensorAccessorArgs<8>();
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto off_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -109,10 +113,17 @@ void kernel_main() {
             const uint32_t u = outu[e0 + e];
             row[e] = static_cast<uint16_t>((u + 0x7FFFu + ((u >> 16) & 1u)) >> 16);
         }
-        const auto row_acc = TensorAccessor(out_args, out_addr);
-        noc_async_write(row_l1, row_acc.get_noc_addr(0), local_e * 2);
-        noc_async_write_barrier();
-        return;
+        if constexpr (rows == 0) {
+            const auto row_acc = TensorAccessor(out_args, out_addr);
+            noc_async_write(row_l1, row_acc.get_noc_addr(0), local_e * 2);
+            noc_async_write_barrier();
+            return;
+        } else {
+            const auto row_acc = TensorAccessor(out_args, out_addr, local_e * 2);
+            noc_async_write(row_l1, row_acc.get_noc_addr(t), local_e * 2);
+            noc_async_write_barrier();
+            return;
+        }
     }
     for (uint32_t j = 0; j < Et; ++j) {
         for (uint32_t h = 0; h < 2; ++h) {

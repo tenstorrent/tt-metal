@@ -37,10 +37,27 @@ void kernel_main() {
     const auto sp = TensorAccessor(sp_args, sp_addr, sp_page);
 
     const uint32_t sp_l1 = get_write_ptr(cb_sp);
-    noc_async_read(sp.get_noc_addr(0), sp_l1, sp_page);
+    // sp_rows > 1: per-token routing rows (router32.route_local_rows); an expert is active if any row routes to it.
+    // The union goes to the slot after the rows, which stay intact: with wv_addr == 0 the expert's weight tile is
+    // built from them (row t, column 0 = row t's weight) instead of read from wv.
+    const uint32_t sp_rows = get_common_arg_val<uint32_t>(4);
+    for (uint32_t r = 0; r < sp_rows; ++r) {
+        noc_async_read(sp.get_noc_addr(r), sp_l1 + r * sp_page, sp_page);
+    }
     noc_async_read_barrier();
     invalidate_l1_cache();
-    volatile tt_l1_ptr uint16_t* spv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
+    volatile tt_l1_ptr uint16_t* rowsv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sp_l1);
+    volatile tt_l1_ptr uint16_t* spv = rowsv;
+    if (sp_rows > 1) {
+        spv = rowsv + sp_rows * (sp_page / 2);
+        for (uint32_t e = 0; e < E; ++e) {
+            uint16_t any = 0;
+            for (uint32_t r = 0; r < sp_rows; ++r) {
+                any |= rowsv[r * (sp_page / 2) + e];
+            }
+            spv[e] = any;
+        }
+    }
     uint32_t units = 0, seen = 0;
     for (uint32_t e = 0; e < E; ++e) {
         if (spv[e] != 0) {
@@ -73,8 +90,20 @@ void kernel_main() {
             continue;
         }
         cb_reserve_back(cb_wv, 1);
-        noc_async_read_tile(e, wv, get_write_ptr(cb_wv));
-        noc_async_read_barrier();
+        if (wv_addr != 0) {
+            noc_async_read_tile(e, wv, get_write_ptr(cb_wv));
+            noc_async_read_barrier();
+        } else {
+            // bf16 tile: face (t / 16) * 2 holds rows t of columns 0-15, 16 values per row
+            volatile tt_l1_ptr uint32_t* tw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_wv));
+            for (uint32_t i = 0; i < x_page / 4; ++i) {
+                tw[i] = 0;
+            }
+            volatile tt_l1_ptr uint16_t* th = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_wv));
+            for (uint32_t t = 0; t < sp_rows; ++t) {
+                th[(t / 16) * 512 + (t % 16) * 16] = rowsv[t * (sp_page / 2) + e];
+            }
+        }
         cb_push_back(cb_wv, 1);
         for (uint32_t half = 0; half < 2; ++half) {
             // tile (k = 0) of the column; its Kt tiles follow contiguously in the column's shard
