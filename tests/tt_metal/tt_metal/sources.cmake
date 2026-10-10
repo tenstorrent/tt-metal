@@ -46,4 +46,5 @@ set(UNIT_TESTS_LEGACY_SRC
     test_noc_atomic_ops.cpp
     test_sem_scope.cpp
     test_globals_tls.cpp
+    test_horizon_isolation.cpp
 )
