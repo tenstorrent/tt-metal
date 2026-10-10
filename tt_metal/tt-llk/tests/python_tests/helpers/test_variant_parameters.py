@@ -2193,6 +2193,39 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
         )
 
 
+# SFPU_MISC_OPERATION values of sources/sfpu_misc_perf.cpp; keep the two in step.
+SFPU_MISC_OPERATIONS = {
+    "rand": 0,
+    "dropout": 1,
+    "copy_dest_values": 3,
+    "reshuffle_rows": 4,
+    "softcap": 5,
+    "situ_glu": 6,
+    "clamped_silu_glu": 7,
+}
+
+
+@dataclass
+class SFPU_MISC_OP(TemplateParameter):
+    """Select the body of sources/sfpu_misc_perf.cpp; ``misc_param`` is the rand scale form, the
+    reshuffle_rows index pattern, or the one-call form of the bodies the Blackhole compute API issues
+    in one call per tile; ``misc_init_per_tile`` re-runs the op's init before every tile.
+    """
+
+    misc_mathop: str = "rand"
+    misc_param: int = 0
+    misc_init_per_tile: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t SFPU_MISC_OPERATION = {SFPU_MISC_OPERATIONS[self.misc_mathop]};",
+                f"constexpr std::uint32_t SFPU_MISC_PARAM = {self.misc_param};",
+                f"constexpr bool SFPU_MISC_INIT_PER_TILE = {'true' if self.misc_init_per_tile else 'false'};",
+            ]
+        )
+
+
 @dataclass
 class GATED_REDUCE_PARAMS(TemplateParameter):
     gate: str
