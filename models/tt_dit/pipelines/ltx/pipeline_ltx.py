@@ -35,7 +35,13 @@ from ...models.transformers.ltx.attention_ltx import LTX_FUSE_GATE_ON_DEVICE
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoEncoder, read_vae_per_channel_stats, upsample_latent
+from ...models.vae.vae_ltx import (
+    LTXVideoDecoder,
+    LTXVideoEncoder,
+    read_vae_per_channel_stats,
+    upsample_latent,
+    vae_key_map,
+)
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
@@ -1207,15 +1213,7 @@ class LTXPipeline:
         def _vae_state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE cache miss — loading safetensors: {self._vae_checkpoint_path}")
             raw = load_file(self._vae_checkpoint_path)
-            vae_state = {}
-            for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
-            return vae_state
+            return {short: raw[k] for k, short in vae_key_map(raw, "decoder").items()}
 
         blocking_key = conv3d_blocking_hash(self.vae_decoder)
         subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
@@ -1242,15 +1240,7 @@ class LTXPipeline:
         def _vae_encoder_state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE encoder cache miss — loading safetensors: {self._vae_checkpoint_path}")
             raw = load_file(self._vae_checkpoint_path)
-            enc_state = {}
-            for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
-            return enc_state
+            return {short: raw[k] for k, short in vae_key_map(raw, "encoder").items()}
 
         blocking_key = conv3d_blocking_hash(enc)
         subfolder = f"vae_enc_{blocking_key}" if blocking_key else "vae_enc"
@@ -1315,16 +1305,8 @@ class LTXPipeline:
             encoder_spatial_padding_mode=PaddingModeType(self._vae_spatial_padding_mode),
         )
         # Pull only the encoder + per-channel-stats tensors (not the full 22B checkpoint) via safe_open.
-        state: dict[str, torch.Tensor] = {}
         with safe_open(self._vae_checkpoint_path, framework="pt") as f:
-            for k in f.keys():
-                if k.startswith("vae.encoder."):
-                    state[k.removeprefix("vae.encoder.")] = f.get_tensor(k)
-                elif k in (
-                    "vae.per_channel_statistics.mean-of-means",
-                    "vae.per_channel_statistics.std-of-means",
-                ):
-                    state[k.removeprefix("vae.")] = f.get_tensor(k)
+            state = {short: f.get_tensor(k) for k, short in vae_key_map(f.keys(), "encoder").items()}
         encoder.load_state_dict(state, strict=True)
         encoder = encoder.to(torch.float32).eval()
         logger.info(f"Built host VAE encoder (ltx_core reference, {len(self._vae_encoder_blocks)} blocks)")

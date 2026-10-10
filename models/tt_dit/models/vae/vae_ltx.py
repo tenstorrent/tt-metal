@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import torch
 from einops import rearrange
@@ -1639,6 +1639,25 @@ def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
         if key.startswith(prefix):
             return key[len(prefix) :]
     return None
+
+
+def vae_key_map(keys: Iterable[str], part: str) -> dict[str, str]:
+    """Map checkpoint keys to ``part`` module keys (``part`` is ``decoder`` or ``encoder``), plus the
+    two per-channel statistics the module also holds.
+
+    Monolith checkpoints prefix the VAE with ``vae.``; split VAE files (LTX-2.5) store bare keys. The
+    prefix is chosen per file, so a monolith's other components can never match the bare form.
+    """
+    keys = list(keys)
+    root = "vae." if any(k.startswith("vae.") for k in keys) else ""
+    mapping = {}
+    for k in keys:
+        short = _strip_vae_prefix(k, f"{root}{part}.")
+        if short is not None:
+            mapping[k] = short
+        elif k in (f"{root}per_channel_statistics.mean-of-means", f"{root}per_channel_statistics.std-of-means"):
+            mapping[k] = k.removeprefix(root)
+    return mapping
 
 
 class LTXVideoVAEAdapter:
