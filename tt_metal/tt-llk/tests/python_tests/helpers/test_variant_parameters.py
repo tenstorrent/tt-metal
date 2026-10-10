@@ -621,10 +621,11 @@ class PACK_NUM_TILES(TemplateParameter):
 
 @dataclass
 class RMSNORM_DEST_REUSE(TemplateParameter):
-    """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
+    """Compile-time knobs for the ``rmsnorm_bcast_scalar_dest_reuse`` test and perf kernels
+    (``_test.cpp``, ``_sequence_test.cpp``, ``_perf.cpp`` and ``_sequence_perf.cpp``).
 
-    All four are template arguments (or a template-fixed runtime argument) on the LLK
-    pair, so none of them can be a runtime parameter:
+    All but ``rmsnorm_shadow_sfpu`` are template arguments (or a template-fixed runtime
+    argument) on the LLK pair, so none of them can be a runtime parameter:
 
     ``rmsnorm_num_tiles``
         Outer-loop count of the math MOP *and* the unpack MOP -- one
@@ -642,10 +643,11 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         restricted to one tile and four faces by ``LLK_ASSERT``.
     ``rmsnorm_whole_tile``
         The HiFi multiply's whole-tile hand-off: one SrcA bank per tile and each fidelity phase
-        sweeping the tile, as ``rmsnorm_bcast_scalar_reuse_tiles_init_fidelity`` selects at HiFi3 and HiFi4.
+        sweeping the tile, as ``rmsnorm_bcast_scalar_reuse_tiles_init_fidelity`` selects at HiFi3 and HiFi4, and
+        at HiFi2 for more than one tile.
     ``rmsnorm_shadow_sfpu``
-        The callers' SFPU steps in the call-order shadow kernel (the exponential after the subtract and the
-        reciprocal of each multiply's scalar).
+        A switch of the call-order shadow kernel only: the callers' SFPU steps (the exponential after the
+        subtract and the reciprocal of each multiply's scalar).
 
     The two count fields carry the ``rmsnorm_`` prefix so they match the constants they
     emit and stay globally unique: ``test_perf_header_gate.py`` requires that no two

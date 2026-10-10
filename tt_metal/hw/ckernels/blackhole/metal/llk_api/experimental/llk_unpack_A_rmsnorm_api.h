@@ -12,6 +12,10 @@
  * LLK UNPACK A
  *************************************************************************/
 
+/**
+ * @tparam whole_tile: The whole-tile HiFi multiply; tiles with faces under 16 rows or one face keep the per-face form.
+ * @note Pair with @ref llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands with the same whole_tile.
+ */
 template <
     std::uint32_t num_tiles,
     BroadcastType BType = BroadcastType::NONE,

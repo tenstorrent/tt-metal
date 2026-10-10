@@ -86,8 +86,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */,
         FACE_R_DIM,
         RMSNORM_NUM_FACES,
-        0,
-        0,
+        0 /* unpack_src_format */,
+        0 /* unpack_dst_format */,
         RMSNORM_WHOLE_TILE);
 
     // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
