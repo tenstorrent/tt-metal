@@ -1901,17 +1901,18 @@ void call_binary_sfpu_operation(
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests take 8 or 32 iterations; 32 asks for a full tile.");
 #if defined(ARCH_BLACKHOLE)
     constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+    // The int32 floor and trunc divisions stay per face: with the LLK asserts on, their 32-row form runs out of LREGs here.
     constexpr bool one_call =
         ITERATIONS == 32 &&
-        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
-         ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
+        (BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::ADD ||
+         BINOP == BinaryOp::SUB || (BINOP == BinaryOp::MUL && !is_int32) || BINOP == BinaryOp::LT || BINOP == BinaryOp::GT ||
          BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE || BINOP == BinaryOp::MAX ||
          BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER || BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE ||
          BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 || BINOP == BinaryOp::BITWISE_AND || BINOP == BinaryOp::BITWISE_OR ||
          BINOP == BinaryOp::BITWISE_XOR || BINOP == BinaryOp::LSHFT || BINOP == BinaryOp::RSHFT || BINOP == BinaryOp::LOGICAL_RSHFT ||
          BINOP == BinaryOp::GCD || BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT || BINOP == BinaryOp::MAX_INT32 ||
          BINOP == BinaryOp::MIN_INT32 || BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32 || BINOP == BinaryOp::REMAINDER_INT32 ||
-         BINOP == BinaryOp::REMAINDER_UINT32 || BINOP == BinaryOp::FMOD_INT32);
+         BINOP == BinaryOp::REMAINDER_UINT32 || BINOP == BinaryOp::FMOD_INT32 || BINOP == BinaryOp::RSUB_INT32 || BINOP == BinaryOp::MUL_INT32);
     constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
     if constexpr (one_call)
     {
