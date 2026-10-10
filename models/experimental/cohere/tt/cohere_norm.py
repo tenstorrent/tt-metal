@@ -239,7 +239,12 @@ class TtCohereLayerNorm(LightweightModule):
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.tt_ccl.get_num_links(1),
             cluster_axis=1,
-            topology=ttnn.Topology.Linear,
+            # Same resolution as _decode_sharded_layernorm: ccl_topology() is Ring on
+            # T3K / TG / Galaxy / P150x4,8 / P300x2 once num_devices >= 8. Command-R's
+            # Stage-1 target is a T3K mesh (1,8) at TP=8, i.e. num_devices == 8, so
+            # the previously hardcoded Linear topology disagreed with the mesh on
+            # exactly the hardware this bring-up targets.
+            topology=self.args.ccl_topology() if self.args is not None else ttnn.Topology.Linear,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
