@@ -214,8 +214,9 @@ inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
-        static_assert(ct.topk <= 8, "the unroll count is the top-k bound");
-#pragma GCC unroll 8
+        // Fully unrolled for every top-k the op accepts. The widest body still leaves each RISC that builds this
+        // header most of its stack.
+#pragma GCC unroll 16
         for (uint32_t k = 0; k < ct.topk; k++) {
             const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {
@@ -249,7 +250,8 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
-#pragma GCC unroll 8
+        // As in count_pass.
+#pragma GCC unroll 16
         for (uint32_t k = 0; k < ct.topk; k++) {
             const uint32_t bucket = bucket_of(es, idx[k]);
             if (bucket >= n) {
