@@ -548,9 +548,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // y writes from the NCRISC on its NOC (se6_dw.cpp) instead of the BRISC, whose NOC carries the h chain (one
         // subgrid): bfp8 x + bf16 h at M 512 / 2048 / 5120 -9 / -9 / -11%, bf16 x + h -4 / -3 / -4% (the doubled h
         // traffic the y writes contended with), bfp8 / bfp8 -4 / -1 / -0%; +1% (~0.4 us) at M <= 64 (perf probe
-        // MIMO_FL_Y_NC=0: the BRISC writes y)
+        // MIMO_FL_Y_NC=0: the BRISC writes y). Not with reader down columns (H > 4992): there the NCRISC's NOC also
+        // carries the larger down weight stream, H 7168 / 6144 bf16 x + h at M 2048 +7 / +6%
         const char* ync_env = std::getenv("MIMO_FL_Y_NC");
-        const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : true);
+        const bool y_nc = yrm && p.nsg == 1 && (ync_env ? std::atoi(ync_env) != 0 : !p.rdown);
         const Defines ync = y_nc ? Defines{{"SE_Y_NC", "1"}} : Defines{};
         auto plus = [](Defines a, const Defines& b) {
             a.insert(b.begin(), b.end());
