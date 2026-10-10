@@ -7,9 +7,9 @@ vector."""
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, PerfRunType
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -42,11 +42,7 @@ def test_perf_hadamard(perf_report, variant):
     configuration = PerfConfig(
         "sources/hadamard_perf.cpp",
         InputOutputFormat(BF16, BF16),
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             HADAMARD(hadamard_normalize=normalize, h16_tile_index=0),
             MATH_FIDELITY(fidelity),

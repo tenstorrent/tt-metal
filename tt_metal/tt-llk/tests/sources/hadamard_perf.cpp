@@ -30,7 +30,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -42,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             HADAMARD_NUM_FACES,
             HADAMARD_NUM_FACES);
-        _llk_unpack_hadamard_h128_init_(L1_ADDRESS(params.buffer_A[HADAMARD_H16_TILE_INDEX]));
+        _llk_unpack_hadamard_h128_init_(L1_ADDRESS(buffer_A[HADAMARD_H16_TILE_INDEX]));
         PROFILER_SYNC();
     }
     {
@@ -54,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _perf_unpack_set_valid(ckernel::SrcB);
                     _perf_unpack_set_valid(ckernel::SrcA);
@@ -66,15 +73,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_unpack_hadamard_h128_(
-                        L1_ADDRESS(params.buffer_A[0]),
-                        L1_ADDRESS(params.buffer_B[0]),
-                        HADAMARD_H16_TILE_INDEX,
-                        tile,
-                        params.TILE_SIZE_UNPACK_A,
-                        params.TILE_SIZE_UNPACK_B);
+                        L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), HADAMARD_H16_TILE_INDEX, tile, TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B);
                 }
             }
         }
@@ -94,12 +96,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+    LLK_ASSERT(
+        (TILE_CNT <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Hadamard tile index exceeds maximum destination tiles");
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_hadamard_h128_init_<MATH_FIDELITY, HADAMARD_NORMALIZE>();
+        // The op needs a zero DEST on entry; after the first section the packer clears each half it releases.
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_7, 0);
         PROFILER_SYNC();
     }
     {
@@ -111,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _perf_math_clear_valid(ckernel::SrcA);
                     _perf_math_clear_valid(ckernel::SrcA);
@@ -123,8 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_7, 0);
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_math_hadamard_h128_<MATH_FIDELITY, HADAMARD_NORMALIZE>(tile);
                 }
@@ -135,8 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_math_wait_for_dest_available_<dest_sync>();
-                TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_7, 0);
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_math_hadamard_h128_<MATH_FIDELITY, HADAMARD_NORMALIZE>(tile);
                 }
@@ -160,12 +167,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT       = params.TILE_CNT;
+    const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+    const std::uint32_t num_faces      = params.num_faces;
+    const Operand& buffer_Res          = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-            formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, FACE_R_DIM, ckernel::TILE_C_DIM, params.num_faces);
-        _llk_pack_init_<ckernel::PackMode::Default, false>(formats.pack_src, FACE_R_DIM, ckernel::TILE_C_DIM, params.num_faces, 1, false);
+            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, FACE_R_DIM, ckernel::TILE_C_DIM, num_faces);
+        _llk_pack_init_<ckernel::PackMode::Default, false /*zero_output*/>(
+            formats.pack_src, FACE_R_DIM, ckernel::TILE_C_DIM, num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -178,9 +192,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
             }
         }
@@ -189,9 +203,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_packer_wait_for_math_done_();
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
