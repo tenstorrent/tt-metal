@@ -419,8 +419,20 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     return r;
 }
 
+bool bf16_dest_atan();
+template <int ITERATIONS>
+void calculate_atan_bf16();
+// Whether BF16 DEST runs the generated atan kernel as one call over the whole tile.
+inline constexpr bool atan_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_atan()) {
+            calculate_atan_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
@@ -692,9 +704,21 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
+bool bf16_dest_cosh();
+template <int ITERATIONS>
+void calculate_cosh_bf16();
+// Whether BF16 DEST runs the generated cosh kernel as one call over the whole tile.
+inline constexpr bool cosh_bf16_whole_tile = true;
+
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_cosh()) {
+            calculate_cosh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -834,8 +858,16 @@ void tangent_init() {
     sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 }
 
+void init_cosh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_cosh()) {
+            init_cosh_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
@@ -860,8 +892,16 @@ void sinh_init() {
     }
 }
 
+void init_atan_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_atan()) {
+            init_atan_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
@@ -1206,3 +1246,7 @@ void init_atanh() {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_atan_bf16.h"
+
+#include "ckernel_sfpu_cosh_bf16.h"
