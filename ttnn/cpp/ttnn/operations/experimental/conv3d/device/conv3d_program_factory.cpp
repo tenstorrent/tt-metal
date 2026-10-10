@@ -14,6 +14,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <cstdlib>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -456,6 +457,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     uint32_t W_shard_max = 0;
     bool enable_coalesced_shard_reads = false;
     uint32_t coalesced_scratch_rows = 0;
+    bool use_row_ring = false;
 
     const bool has_spatial_reuse = (kT > 1 || kH > 1 || kW > 1);
     const bool has_no_dilation =
@@ -469,6 +471,17 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         T_shard_max = (config.T_out_block - 1) * operation_attributes.stride[0] + kT;
         H_shard_max = (config.H_out_block - 1) * operation_attributes.stride[1] + kH;
         W_shard_max = (config.W_out_block - 1) * operation_attributes.stride[2] + kW;
+        // Opt-in row ring (TT_CONV3D_ROW_RING=1): the shard spans the full padded W extent, so the reader
+        // keeps H rows across h_blocks and w_blocks gather nothing. Falls back when it does not fit in L1.
+        const char* row_ring_env = std::getenv("TT_CONV3D_ROW_RING");
+        if (row_ring_env != nullptr && row_ring_env[0] == '1' && operation_attributes.stride[0] == 1 &&
+            operation_attributes.stride[1] == 1 && operation_attributes.stride[2] == 1) {
+            const uint32_t W_ring = (W_out - 1) + kW;
+            if (T_shard_max * H_shard_max * W_ring * C_in_block_bytes <= l1_prefetch_max_bytes) {
+                W_shard_max = W_ring;
+                use_row_ring = true;
+            }
+        }
         uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
         uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
         uint32_t shard_rows_max = T_shard_max * H_shard_max;
@@ -488,7 +501,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         uint32_t shard_bytes_with_coalesced_scratch = shard_positions_with_coalesced_scratch * C_in_block_bytes;
 
         if (shard_bytes <= l1_prefetch_max_bytes) {
-            enable_coalesced_shard_reads = coalesced_shard_reads_candidate &&
+            enable_coalesced_shard_reads = coalesced_shard_reads_candidate && !use_row_ring &&
                                            coalesced_scratch_rows_candidate >= coalesced_scratch_rows_min &&
                                            shard_bytes_with_coalesced_scratch <= l1_prefetch_max_bytes;
             coalesced_scratch_rows = enable_coalesced_shard_reads ? coalesced_scratch_rows_candidate : 0;
@@ -831,7 +844,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         static_cast<uint32_t>(mask_mode),
         operation_attributes.logical_h_mask,
         operation_attributes.logical_w_mask,
-        cb_pad_offset_id};
+        cb_pad_offset_id,
+        static_cast<uint32_t>(use_row_ring)};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
     // Halo buffer accessor follows the input accessor (nullptr when not in halo mode, like bias).
     tt::tt_metal::TensorAccessorArgs(halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr)

@@ -243,7 +243,9 @@ template <
     uint32_t stride_w,
     uint32_t cb_id,
     uint32_t padded_page_bytes,
-    uint32_t patch_pad_bytes>
+    uint32_t patch_pad_bytes,
+    bool row_ring = false,
+    uint32_t H_ring = 0>
 void vol2col_shard_to_cb(
     Noc noc,
     uint32_t shard_l1_base,
@@ -251,15 +253,23 @@ void vol2col_shard_to_cb(
     uint32_t h_base,
     uint32_t w_block,
     uint32_t w_block_end,
-    ChunkWriter<cb_id, padded_page_bytes, patch_pad_bytes>& chunk) {
+    ChunkWriter<cb_id, padded_page_bytes, patch_pad_bytes>& chunk,
+    uint32_t w_ref = 0) {
+    // Row ring: h_base is the ring slot of the patch's first row and W is indexed from w_ref
+    // (the core's first output w), since the shard holds the core's full W extent.
     constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
     experimental::set_read_state<kW_bytes>(noc, shard_l1_base);
     for (uint32_t w = w_block; w < w_block_end; w++) {
-        const uint32_t w_base = (w - w_block) * stride_w;
+        const uint32_t w_base = (w - (row_ring ? w_ref : w_block)) * stride_w;
         for (uint32_t kt = 0; kt < kT; kt++) {
             const uint32_t t_local = t_base + kt;
             for (uint32_t kh = 0; kh < kH; kh++) {
-                const uint32_t h_local = h_base + kh;
+                uint32_t h_local = h_base + kh;
+                if constexpr (row_ring) {
+                    if (h_local >= H_ring) {
+                        h_local -= H_ring;
+                    }
+                }
                 const uint32_t shard_offset =
                     (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_base) * C_in_block_bytes;
                 experimental::read_with_state(
@@ -876,6 +886,7 @@ void kernel_main() {
     constexpr uint32_t logical_h_mask = get_compile_time_arg_val(44);
     constexpr uint32_t logical_w_mask = get_compile_time_arg_val(45);
     constexpr uint32_t cb_pad_offset = get_compile_time_arg_val(46);
+    constexpr bool row_ring = get_compile_time_arg_val(47) == 1;
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -896,7 +907,7 @@ void kernel_main() {
     const uint32_t pad_offset_addr = mask_mode ? get_arg_val<uint32_t>(argidx++) : 0u;
 
     // Tensor accessor for input tensor (CT args 42..46 are scalar flags; input accessor starts at 47).
-    constexpr auto in_args = TensorAccessorArgs<47>();
+    constexpr auto in_args = TensorAccessorArgs<48>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
     // Halo buffer accessor follows the input accessor.
     constexpr auto halo_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -965,6 +976,15 @@ void kernel_main() {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
 
+                    // Row ring: input row r lives in slot (r - ring_first_row) % H_shard_max at the core's full
+                    // W extent; rows gathered for one h_block stay for the next. Reset per t_block.
+                    [[maybe_unused]] const int32_t ring_first_row =
+                        static_cast<int32_t>(h_out_start * stride_h) - static_cast<int32_t>(padding_h);
+                    [[maybe_unused]] int32_t ring_rows_end = ring_first_row;
+                    [[maybe_unused]] const int32_t ring_w_start =
+                        static_cast<int32_t>(w_out_start * stride_w) - static_cast<int32_t>(padding_w);
+                    [[maybe_unused]] const uint32_t ring_w_count = (w_out_end - 1 - w_out_start) * stride_w + kW;
+
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
 
@@ -1027,7 +1047,7 @@ void kernel_main() {
                                     h_rows_gathered = 0;
                                 }
 
-                                if (!is_first_w && overlap_w > 0 && h_rows_gathered > 0) {
+                                if (!row_ring && !is_first_w && overlap_w > 0 && h_rows_gathered > 0) {
                                     shift_retained_w_columns<
                                         C_in_block_bytes,
                                         H_shard_max_W_shard_max,
@@ -1095,7 +1115,66 @@ void kernel_main() {
 
                                         // Gather shard rows needed for this output h (incremental)
                                         const uint32_t h_needed = h_base + kH;
-                                        if (h_needed > h_rows_gathered) {
+                                        [[maybe_unused]] uint32_t h_slot = h_base;
+                                        if constexpr (row_ring) {
+                                            const int32_t row_needed = h_shard_start + static_cast<int32_t>(h_needed);
+                                            while (ring_rows_end < row_needed) {
+                                                const uint32_t slot =
+                                                    static_cast<uint32_t>(ring_rows_end - ring_first_row) % H_shard_max;
+                                                const uint32_t run = std::min(
+                                                    static_cast<uint32_t>(row_needed - ring_rows_end), H_shard_max - slot);
+                                                gather_rows_to_shard_selected<
+                                                    C_in_block_bytes,
+                                                    is_padding_zeros,
+                                                    H_shard_max_W_shard_max,
+                                                    W_shard_max,
+                                                    T_in,
+                                                    H_in,
+                                                    W_in,
+                                                    H_in_W_in,
+                                                    in_row_size_bytes,
+                                                    gather_trids,
+                                                    enable_coalesced_shard_reads,
+                                                    enable_dram_read_staging,
+                                                    dram_read_alignment,
+                                                    halo_mode,
+                                                    halo_h_total,
+                                                    padding_h,
+                                                    padding_w,
+                                                    halo_htop_base,
+                                                    halo_hbot_base,
+                                                    halo_wleft_base,
+                                                    halo_wright_base,
+                                                    mask_mode,
+                                                    logical_h_mask,
+                                                    logical_w_mask>(
+                                                    noc,
+                                                    in_reader,
+                                                    halo_reader,
+                                                    batch_idx * T_in,
+                                                    shard_cb,
+                                                    dram_read_scratch_cb,
+                                                    shard_l1_base,
+                                                    coalesced_scratch_offset,
+                                                    false,
+                                                    false,
+                                                    batch_page_base,
+                                                    c_in_offset_bytes,
+                                                    t_shard_start,
+                                                    T_shard_cur,
+                                                    ring_rows_end - static_cast<int32_t>(slot),
+                                                    slot,
+                                                    slot + run,
+                                                    ring_w_start,
+                                                    0u,
+                                                    ring_w_count,
+                                                    coalesced_scratch_rows);
+                                                ring_rows_end += static_cast<int32_t>(run);
+                                            }
+                                            h_slot = static_cast<uint32_t>(
+                                                         h_shard_start + static_cast<int32_t>(h_base) - ring_first_row) %
+                                                     H_shard_max;
+                                        } else if (h_needed > h_rows_gathered) {
                                             gather_rows_to_shard_selected<
                                                 C_in_block_bytes,
                                                 is_padding_zeros,
@@ -1157,8 +1236,10 @@ void kernel_main() {
                                             stride_w,
                                             cb_vol2col,
                                             padded_page_bytes,
-                                            patch_pad_bytes>(
-                                            noc, shard_l1_base, t_base, h_base, w_block, w_block_end, chunk);
+                                            patch_pad_bytes,
+                                            row_ring,
+                                            H_shard_max>(
+                                            noc, shard_l1_base, t_base, h_slot, w_block, w_block_end, chunk, w_out_start);
                                     }
                                 }
                                 chunk.flush();
