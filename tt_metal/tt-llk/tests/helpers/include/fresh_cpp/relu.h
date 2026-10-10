@@ -12,6 +12,7 @@
 // restores the mathematical NaN pass-through.  Outputs are the input value,
 // the threshold, or 0 — all exactly representable — so no store rounding.
 #include <cstdint>
+#include <limits>
 
 namespace ckernel::sfpu
 {
@@ -38,9 +39,11 @@ __attribute__((noinline)) void calculate_relu_max_fresh_cpp(const float threshol
             v = 0.0f;
         }
         v_endif;
-        // The hardware comparisons total-order NaNs and would otherwise
-        // clamp them.  ReluMax propagates NaN under its mathematical contract.
-        v_if (sfpi::is_nan(input))
+        // Clear the sign explicitly: SFPABS float mode deliberately preserves
+        // the sign of negative NaNs.  After SFPSETSGN, every NaN encoding is
+        // bitwise above +inf while finite values and infinity are not.
+        const sfpi::vFloat magnitude = sfpi::setsgn(input, 0);
+        v_if (magnitude > std::numeric_limits<float>::infinity())
         {
             v = input;
         }

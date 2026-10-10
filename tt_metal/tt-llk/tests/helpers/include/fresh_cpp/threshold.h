@@ -11,9 +11,8 @@
 //                  value  otherwise
 //
 // stated with the same predicate direction as the kernel contract
-// (x <= t -> value; ties replace).  The production hand-isms removed: the
-// "#pragma GCC unroll 8" pin and the store-only-under-predicate pattern —
-// here one value, one unconditional store, a free loop.
+// (x <= t -> value; ties replace).  The production unroll pin remains absent;
+// the explicit NaN-safe predicate leaves complement lanes bit-untouched.
 
 #include <cstdint>
 
@@ -28,18 +27,12 @@ __attribute__((noinline)) void calculate_threshold_fresh_cpp(const float thresho
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
-        sfpi::vFloat v           = input;
-        v_if (v <= threshold)
+        // Leave complement lanes untouched, including either-sign NaNs.
+        v_if (!sfpi::is_nan(input) && input <= threshold)
         {
-            v = value;
+            sfpi::dst_reg[0] = value;
         }
         v_endif;
-        v_if (sfpi::is_nan(input))
-        {
-            v = input;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }

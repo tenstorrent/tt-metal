@@ -605,11 +605,11 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat in = sfpi::dst_reg[0];
-        const sfpi::vUInt in_bits = sfpi::as<sfpi::vUInt>(in);
+        const sfpi::vInt biased_exp = sfpi::exexp(in, sfpi::ExponentMode::Biased);
         const sfpi::vFloat x  = sfpi::setexp(in, 127); // mantissa into [1, 2)
         sfpi::vFloat series   = x * (x * (x * A + B) + C) + D;
 
-        const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(sfpi::exexp(in)), sfpi::RoundMode::Nearest);
+        const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(biased_exp - 127), sfpi::RoundMode::Nearest);
         sfpi::vFloat result     = expf * LN2 + series;
 
         v_if (in == 0.0f)
@@ -617,10 +617,10 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
             result = -std::numeric_limits<float>::infinity();
         }
         v_endif;
-        // The polynomial reduction is finite-only.  Classify specials by
-        // their exponent bits: an FP comparison with NaN is unordered and
-        // previously missed every negative-NaN bf16 payload.
-        v_if ((in_bits & 0x7F800000u) == 0x7F800000u)
+        // The polynomial reduction is finite-only.  A biased exponent of 255
+        // classifies either-sign infinities and NaNs without inspecting their
+        // sign or payload; restore the original value unchanged.
+        v_if (biased_exp >= 255)
         {
             result = in;
         }
