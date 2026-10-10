@@ -1,0 +1,34 @@
+{
+  "properties": {
+    "MainPID": "0",
+    "Result": "exit-code",
+    "ControlGroup": "",
+    "LoadState": "loaded",
+    "ActiveState": "failed",
+    "InvocationID": "69bd534cec5a4302a3e384afd926c429"
+  },
+  "queue": {
+    "state": "failed",
+    "cleanup_completed": false,
+    "hardware_started": false,
+    "survives_disconnect": true,
+    "resumes_after_reboot": false,
+    "promoted_to_serving": false,
+    "predecessor_unit": "qwen38-gdn-resident-hardware-v2-20261010.service",
+    "predecessor_invocation": "bc1621a45a50411c9b8be8ac3150a2fa",
+    "hardware_lock": "/tmp/tt-device.lock",
+    "started_at": 1791668809.3444335,
+    "updated_at": "2026-10-10T21:48:29Z",
+    "predecessor": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "bc1621a45a50411c9b8be8ac3150a2fa"
+    },
+    "error": "ValueError",
+    "detail": "Predecessor exited unsuccessfully",
+    "finished_at": 1791668909.4614854
+  },
+  "manifest_sha256": "94cebbb2d36cdb8c6ab697aee08b9f1badcc8937270f842182030c25a65448f1"
+}

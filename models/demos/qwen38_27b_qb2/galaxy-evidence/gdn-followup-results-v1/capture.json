@@ -1,0 +1,115 @@
+{
+  "captured_at": "2026-10-10T21:52:47.189556+00:00",
+  "files": {
+    "receipts/compact-long-horizon-control-v5/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v5/launch.json",
+      "uncompressed_bytes": 1931,
+      "uncompressed_sha256": "e735addb65e6ed7308b47f592f88d223c3c0d921662b0dc2cc727d0c6408cb3b"
+    },
+    "receipts/compact-long-horizon-v6/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v6/queue.json",
+      "uncompressed_bytes": 1498,
+      "uncompressed_sha256": "cae734632093fb7c7fe6c199ae130b67488ac24c59e7ddb2904fe50cee437583"
+    },
+    "receipts/compact-long-horizon-control-v6/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/launch.json",
+      "uncompressed_bytes": 1931,
+      "uncompressed_sha256": "08f5db76622e4291e1db64a17b16f8e67c0e411bca324112eb88d5478dbbdfa6"
+    },
+    "receipts/compact-long-horizon-control-v6/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/launch-unit.json",
+      "uncompressed_bytes": 280,
+      "uncompressed_sha256": "f202dcc9c4396925e33bfd421131a0ada791b8f1a89f57cf8236a0963610fd38"
+    },
+    "receipts/compact-long-horizon-control-v6/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/predecessor-audit.json",
+      "uncompressed_bytes": 1077,
+      "uncompressed_sha256": "531879552877391c8c0d48180446bd399ac5b47792c443f29a328d42ecaa038b"
+    },
+    "receipts/gdn-resident-hardware-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v3/queue.json",
+      "uncompressed_bytes": 2366,
+      "uncompressed_sha256": "dec4ef20d6757c8324f3aeb41141b02be63665581f49961ba03594e5604e8cda"
+    },
+    "receipts/gdn-resident-hardware-control-v3/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/launch.json",
+      "uncompressed_bytes": 2206,
+      "uncompressed_sha256": "e91113a74a57fe438354087fe3395152c7d820a54d76e666df3c598e0d0cbeef"
+    },
+    "receipts/gdn-resident-hardware-control-v3/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/launch-unit.json",
+      "uncompressed_bytes": 281,
+      "uncompressed_sha256": "c64184d91a9e311ec4d94b56540f17a9d398e1918c43d442fb5215f6b3d3b54b"
+    },
+    "receipts/gdn-resident-hardware-control-v3/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/predecessor-audit.json",
+      "uncompressed_bytes": 1080,
+      "uncompressed_sha256": "c7de70ed918cf0f5bc60abb00dc78312ed76db6efece4b965b969edaa9875451"
+    },
+    "receipts/gdn-compact-gates-v3/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v3/queue.json",
+      "uncompressed_bytes": 5391,
+      "uncompressed_sha256": "08573ecdfcf458c36f58a10a2ad8da12a056020afea1345b2d36715d9b9f248b"
+    },
+    "receipts/gdn-compact-gates-control-v3/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/launch.json",
+      "uncompressed_bytes": 2177,
+      "uncompressed_sha256": "3ccad5bd77e991727ee6c582f1e9e3cba4799525d484113c3c90088264433ffa"
+    },
+    "receipts/gdn-compact-gates-control-v3/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/launch-unit.json",
+      "uncompressed_bytes": 277,
+      "uncompressed_sha256": "c4731c95f2a5d577360a48d531871f9ed046b8b17a329f2ddccf1a9295844789"
+    },
+    "receipts/gdn-compact-gates-control-v3/predecessor-audit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/predecessor-audit.json",
+      "uncompressed_bytes": 1081,
+      "uncompressed_sha256": "af9f0b44999d01cd5c1faab8b794757b37a6ea92149e5ef44adb54662ecbd18d"
+    },
+    "receipts/compact-long-horizon-v6/long-horizon.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v6/long-horizon.json",
+      "uncompressed_bytes": 37698,
+      "uncompressed_sha256": "36b066bbd7d42c302a698694916a5dcccac3fdb5261e6294655aee5fc9241033"
+    },
+    "receipts/gdn-resident-hardware-v3/resident.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v3/resident.json",
+      "uncompressed_bytes": 89987,
+      "uncompressed_sha256": "633e699557ab032a036dffab1e2c89888f41588004d3d11812657b8a723a4108"
+    },
+    "receipts/gdn-compact-gates-v3/compact-gates.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v3/compact-gates.json",
+      "uncompressed_bytes": 87724,
+      "uncompressed_sha256": "e22de00254882760a0a76edc6239d3c4b25bbedf7b393e1574e1944c8f0e6650"
+    },
+    "receipts/compact-long-horizon-v6/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v6/hardware.xml",
+      "uncompressed_bytes": 551,
+      "uncompressed_sha256": "bf18c64ea6877e464184a9795e27161de71eb32a2147be3ea5bf6d7d8ac1c6c6"
+    },
+    "receipts/compact-long-horizon-control-v6/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-control-v6/run.log",
+      "uncompressed_bytes": 8898,
+      "uncompressed_sha256": "872f15d6da27c1a3eb7221f6b8823d2d6b78a14f9392c50012c6d5877d18665e"
+    },
+    "receipts/gdn-resident-hardware-v3/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v3/hardware.xml",
+      "uncompressed_bytes": 527,
+      "uncompressed_sha256": "3133b2f8a0fab729f2162135f823f1e2891181cef92609d8bf4021f1545f0a79"
+    },
+    "receipts/gdn-resident-hardware-control-v3/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-control-v3/run.log",
+      "uncompressed_bytes": 9470,
+      "uncompressed_sha256": "c2e07d4b1f754e8d8357f5a6a38c2b74a92e1ead5e87c725e1ee4e710f9e9166"
+    },
+    "receipts/gdn-compact-gates-v3/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v3/hardware.xml",
+      "uncompressed_bytes": 537,
+      "uncompressed_sha256": "3f285c44f4800b3836d440f9eec62dcabc25215e657d44b3da878886702e651c"
+    },
+    "receipts/gdn-compact-gates-control-v3/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-control-v3/run.log",
+      "uncompressed_bytes": 8803,
+      "uncompressed_sha256": "a1eedacdcee5f7d8ba550af4824e441803c50e286e310fbcb516365bc4096b0a"
+    }
+  }
+}

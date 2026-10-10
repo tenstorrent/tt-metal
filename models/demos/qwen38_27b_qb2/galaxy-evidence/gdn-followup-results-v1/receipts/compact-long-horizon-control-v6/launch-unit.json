@@ -1,0 +1,8 @@
+{
+  "MainPID": "467344",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-compact-long-horizon-v6-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "3e818cd8174c45b2a50af75aad61f7c2"
+}

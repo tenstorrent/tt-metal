@@ -1,0 +1,45 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-projection-sweep-v7-20261010.service",
+  "predecessor_invocation": "fe9095edf11a4a5f8035ce8ef9c9602a",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668997.1512384,
+  "updated_at": "2026-10-10T21:50:35Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-source-v2/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-source-v2/models/demos/qwen38_27b_qb2/tests/test_compact_gdn_long_horizon.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-source-v2",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-source-v2/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1620",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/compact-long-horizon-v6/hardware.xml"
+  ],
+  "validation": {
+    "updates_per_batch": 4096,
+    "batches": [
+      16,
+      32
+    ],
+    "exact_boundary_comparison_passed": true,
+    "independent_dense_reference": false,
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  },
+  "finished_at": 1791669035.2212496
+}

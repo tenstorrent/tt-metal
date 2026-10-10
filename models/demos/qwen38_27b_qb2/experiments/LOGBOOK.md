@@ -2233,3 +2233,14 @@ long-horizon v6, resident GDN v3, compact gates v3. Old unstarted failures and a
 sources are preserved. A staging import error occurred before any hardware
 launch; corrected launch used a fresh directory.
 [Exact persistent queue](../galaxy-evidence/gdn-independent-queue-v1/README.md).
+
+### 21:50-21:52 UTC: recurrence follow-ups completed
+
+All three requeued GDN tests passed with clean teardown. Compact/flat boundaries
+matched exactly for 4096 updates at B16/B32. Resident FP32 state measured 99.041
+-> 88.131 us at B16 (1.124x), projecting 0.524 ms over 48 layers. Compact L1 gates
+measured 66.985 -> 58.346 us (1.148x), projecting 0.415 ms. Each projects about a
+1% full-step improvement, not yet a measured or additive model gain. Resident
+state still misses the state-bandwidth-floor-plus-10-us P1 target. No candidate
+was promoted. All three units are terminal; combined whole-model validation is
+still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README.md).

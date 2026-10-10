@@ -1,0 +1,151 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-resident-hardware-v3-20261010.service",
+  "predecessor_invocation": "7effa827159e4f9cb36e5023d6630b0b",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668997.2299054,
+  "updated_at": "2026-10-10T21:51:55Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_compact_gates.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1620",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-compact-gates-v3/hardware.xml"
+  ],
+  "validation": {
+    "correctness_passed": true,
+    "timings": [
+      {
+        "batch": 1,
+        "placement": "l1",
+        "native_us": 54.19821012765169,
+        "fused_us": 54.191998206079006,
+        "control_drift_fraction": 0.00018460992369828677,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.0001146280221862,
+        "projected_48_layer_saving_ms": 0.0002981722354888916,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 1,
+        "placement": "dram",
+        "native_us": 54.486445151269436,
+        "fused_us": 54.49315067380667,
+        "control_drift_fraction": 0.0010654538025596239,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 0.9998769474245053,
+        "projected_48_layer_saving_ms": -0.0003218650817871094,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "l1",
+        "native_us": 66.98549026623368,
+        "fused_us": 58.34647919982672,
+        "control_drift_fraction": 0.0016948644452730033,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1480639652106484,
+        "projected_48_layer_saving_ms": 0.41467253118753433,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 16,
+        "placement": "dram",
+        "native_us": 68.95842030644417,
+        "fused_us": 59.98875945806503,
+        "control_drift_fraction": 0.0008645092535122245,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1495223593454929,
+        "projected_48_layer_saving_ms": 0.4305437207221985,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 17,
+        "placement": "l1",
+        "native_us": 67.45789898559451,
+        "fused_us": 58.70121996849775,
+        "control_drift_fraction": 0.00012334884592901663,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1491737143077447,
+        "projected_48_layer_saving_ms": 0.4203205928206444,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 17,
+        "placement": "dram",
+        "native_us": 69.57785226404667,
+        "fused_us": 60.46778056770563,
+        "control_drift_fraction": 0.000777362039487528,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1506599317985635,
+        "projected_48_layer_saving_ms": 0.4372834414243698,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 31,
+        "placement": "l1",
+        "native_us": 82.95627078041434,
+        "fused_us": 70.71877829730511,
+        "control_drift_fraction": 0.0017730823608113067,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1730444554862391,
+        "projected_48_layer_saving_ms": 0.5873996391892433,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 31,
+        "placement": "dram",
+        "native_us": 86.53402794152498,
+        "fused_us": 75.97383111715317,
+        "control_drift_fraction": 0.00598407271061463,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1389978189738488,
+        "projected_48_layer_saving_ms": 0.5068894475698471,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "l1",
+        "native_us": 82.99112552776933,
+        "fused_us": 71.02194242179394,
+        "control_drift_fraction": 0.0018904703343933793,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1685279604842587,
+        "projected_48_layer_saving_ms": 0.5745207890868187,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "placement": "dram",
+        "native_us": 86.57068479806185,
+        "fused_us": 76.11243054270744,
+        "control_drift_fraction": 0.0008996340845626172,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1374053381396902,
+        "projected_48_layer_saving_ms": 0.5019962042570114,
+        "full_model_speedup_measured": false
+      }
+    ],
+    "full_model_qualified": false,
+    "promoted_to_serving": false
+  },
+  "finished_at": 1791669115.4054368
+}

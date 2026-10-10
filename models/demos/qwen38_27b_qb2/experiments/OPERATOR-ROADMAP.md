@@ -320,3 +320,13 @@ reference on a ragged chunk with prefix and requires a separate investigation.
 The three GDN experiments are queued independently behind successful projection.
 [Results](../galaxy-evidence/projection-l1-results-v1/README.md) and
 [queue](../galaxy-evidence/gdn-independent-queue-v1/README.md).
+
+## GDN follow-ups completed, 21:52 UTC
+
+Resident FP32 state and compact gates both passed standalone hardware correctness.
+At B16 they project 0.524 ms and 0.415 ms savings respectively from matched
+before/after stage measurements. Each is about 1% of the 49.913-ms full step;
+combined model measurement remains required. The compact-versus-flat 4096-update
+B16/B32 test also passed. All queued tests are complete. These incremental gains
+do not meet 30 TSU; larger attention/GDN dataflow changes remain necessary.
+[Exact measurements and limitations](../galaxy-evidence/gdn-followup-results-v1/README.md).

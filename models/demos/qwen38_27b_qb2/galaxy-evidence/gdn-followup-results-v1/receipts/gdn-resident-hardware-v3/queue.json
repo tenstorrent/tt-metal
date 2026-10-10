@@ -1,0 +1,67 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_started": true,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-compact-long-horizon-v6-20261010.service",
+  "predecessor_invocation": "3e818cd8174c45b2a50af75aad61f7c2",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791668997.1963003,
+  "updated_at": "2026-10-10T21:51:15Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_resident.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1620",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-resident-hardware-v3/hardware.xml"
+  ],
+  "validation": {
+    "correctness_passed": true,
+    "full_model_qualified": false,
+    "promoted_to_serving": false,
+    "comparisons": [
+      {
+        "batch": 16,
+        "state_only_bandwidth_floor_us": 49.152,
+        "p1_target_us": 59.152,
+        "p1_target_met": false,
+        "native_us": 99.04068429023027,
+        "fused_us": 88.1313905119896,
+        "control_drift_fraction": 0.0025550827494378314,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1237844281687188,
+        "projected_48_layer_saving_ms": 0.5236461013555527,
+        "full_model_speedup_measured": false
+      },
+      {
+        "batch": 32,
+        "state_only_bandwidth_floor_us": 98.304,
+        "p1_target_us": 108.304,
+        "p1_target_met": false,
+        "native_us": 166.78782179951668,
+        "fused_us": 149.59900174289942,
+        "control_drift_fraction": 0.0029077092763485357,
+        "timing_comparison_qualified": true,
+        "qualified_speedup": 1.1148992964950257,
+        "projected_48_layer_saving_ms": 0.8250633627176285,
+        "full_model_speedup_measured": false
+      }
+    ]
+  },
+  "finished_at": 1791669075.3256052
+}

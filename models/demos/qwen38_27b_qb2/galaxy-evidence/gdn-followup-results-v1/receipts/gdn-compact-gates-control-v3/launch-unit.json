@@ -1,0 +1,8 @@
+{
+  "MainPID": "467359",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-compact-gates-v3-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "9d7889e59af942ef8e45967635e28d95"
+}
