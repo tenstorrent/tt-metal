@@ -1,0 +1,37 @@
+# Dream-RSI campaign: unified_routed_expert_moe prefill latency on one Blackhole chip.
+name: routed-expert-prefill
+description: unified_routed_expert_moe prefill latency (device kernel time) on one Blackhole chip, 9 production model shapes
+machine: local          # 4x BH p300c visible; the test uses 1 chip
+
+editable:
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/*
+brief: brief.md
+rules:
+  - "Keep the math fidelity and approximation settings of the baseline: MathFidelity::LoFi, math_approx_mode=false, fp32_dest_acc_en as passed in. Do not enable approximate SFPU modes the baseline does not use."
+  - "Do not change the dtypes or layouts of the op's inputs, weights or output (ROW_MAJOR bf16 x, bf4 DRAM ND-sharded weights, bf16 output). The test is fixed."
+  - "Do not lower the precision of internal intermediates below the baseline (Bfp8_b activations/intermediates, Float16_b matmul partials)."
+  - "Every activation variant (Silu, SituGlu, SwiGluOai, ClampedSiluGlu) and the fused-bias path must stay correct; the hybrid min/max_active_tokens band must keep working."
+forbidden_patterns:
+  - 'math_approx_mode\s*=\s*true'
+  - 'DataFormat::Bfp4_b'
+
+eval:
+  command: >-
+    python agent_orch/adapters/ttmetal_op_perf.py
+    --test tests/ttnn/nightly/unit_tests/operations/fused/test_routed_expert_prefill.py
+    --op-code UnifiedRoutedExpertFfnDeviceOperation --warmup 3 --measured 10
+    --extra 'pcc=PCC: ([0-9.eE+-]+)' --extra 'max_abs=max_abs=([0-9.eE+-]+)'
+  direction: minimize
+  unit: us
+  gates: ["pcc >= 0.99"]
+  timeout_s: 2400
+
+budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
+search:
+  policy: fresh
+  W: 4
+  R: 4
+  beta: 0.6
+  max_rounds: 6
+  round_root: origin
+dreaming: {revisions: 5, cost_per_attempt: 0.005, parallel_bonus: 0.01}
