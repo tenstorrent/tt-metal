@@ -48,6 +48,9 @@
 
 using namespace tt::tt_fabric;
 
+// ERISC host bridge (E2H); inert unless the builder sets ENABLE_E2H_BRIDGE.
+#include "tt_metal/fabric/hw/inc/host_bridge/fabric_router_e2h.hpp"
+
 // Type alias for the 1D low-latency hop fields.
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
@@ -507,17 +510,24 @@ FORCE_INLINE void send_next_data(
 
     record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
-    auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
-
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
     }
 
-    if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
-        };
+    if constexpr (sender_channel_uses_e2h(sender_channel_index)) {
+        e2h_write_frame(
+            sender_channel_index,
+            outbound_to_receiver_channel_pointers,
+            src_addr,
+            static_cast<uint32_t>(payload_size_bytes));
+    } else {
+        const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+        if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            };
+        }
+        internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
     }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -531,9 +541,12 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
-    };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    // A bridged frame went to the host, not the wire: the far receiver must not be told it arrived.
+    if constexpr (!sender_channel_uses_e2h(sender_channel_index)) {
+        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        };
+        remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    }
 }
 
 /////////////////////////////////////////////
@@ -1239,7 +1252,14 @@ FORCE_INLINE
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
-    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+    if constexpr (sender_channel_uses_e2h(sender_channel_index)) {
+        can_send = e2h_can_send(
+            sender_channel_index,
+            can_send,
+            receiver_has_space_for_packet,
+            has_unsent_packet,
+            static_cast<uint32_t>(outbound_to_receiver_channel_pointers.num_free_slots));
+    } else if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if (can_send) {
@@ -1258,6 +1278,13 @@ FORCE_INLINE
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+
+        // The far receiver never sees a bridged frame, so retire it here: worker credit and outbound slot.
+        if constexpr (sender_channel_uses_e2h(sender_channel_index)) {
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface, 1, channel_connection_established);
+            outbound_to_receiver_channel_pointers.num_free_slots += 1;
+        }
     }
 
     // Process COMPLETIONs from receiver
@@ -2669,6 +2696,8 @@ void kernel_main() {
 
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
+
+    e2h_init();
 
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     asm volatile("nop");

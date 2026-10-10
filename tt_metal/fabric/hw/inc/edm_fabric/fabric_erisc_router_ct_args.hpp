@@ -174,6 +174,10 @@ constexpr bool fuse_receiver_flush_and_completion_ptr = NAMED_CT_ARG("FUSE_RECEI
 constexpr bool enable_deadlock_avoidance = NAMED_CT_ARG("ENABLE_DEADLOCK_AVOIDANCE");
 constexpr bool enable_speedy_vc0 = NAMED_CT_ARG("ENABLE_SPEEDY_VC0") != 0;
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
+// E2H host bridge: this router pushes its frames to the host instead of the wire.
+constexpr bool enable_e2h_bridge = NAMED_CT_ARG("ENABLE_E2H_BRIDGE") != 0;
+constexpr uint32_t e2h_bridge_block_addr = NAMED_CT_ARG("E2H_BRIDGE_BLOCK_ADDR");
+constexpr uint32_t e2h_bridge_capacity = NAMED_CT_ARG("E2H_BRIDGE_CAPACITY");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
 

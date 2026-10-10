@@ -887,7 +887,14 @@ HDSocketDescriptor D2HSocket::populate_descriptor() const {
     TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
 
     HDSocketDescriptor desc;
-    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
+    desc.populate_from_owner(
+        "d2h",
+        *shm_,
+        fifo_size_,
+        config_buffer_address_,
+        mesh_device_,
+        sender_core_,
+        /*core_is_tensix=*/sender_core_type_ == HalProgrammableCoreType::TENSIX);
     desc.bytes_sent_offset = fifo_size_;
     desc.bytes_acked_device_offset = bytes_acked_device_offset_;
     desc.connector_state_offset = connector_state_offset_;

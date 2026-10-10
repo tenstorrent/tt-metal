@@ -346,6 +346,10 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
+    // ERISC host bridge: the router on the forced eth channel pushes frames to the host, not the wire.
+    bool e2h_bridge_enable = false;
+    std::uint32_t e2h_bridge_force_chan = kE2hBridgeNoForcedChan;
+
     // Only Blackhole acts on this; resolved down when base FW predates debug_buf_t::scratchpad.
     bool eth_ptp_trace = true;
 
@@ -877,6 +881,13 @@ public:
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
+    // Set before MeshDevice::create: routers are compiled during fabric init.
+    bool get_e2h_bridge_enable() const { return e2h_bridge_enable; }
+    void set_e2h_bridge_enable(bool enable) { e2h_bridge_enable = enable; }
+    static constexpr std::uint32_t kE2hBridgeNoForcedChan = 0xFFFFFFFFu;  // 0 is a valid channel
+    std::uint32_t get_e2h_bridge_force_chan() const { return e2h_bridge_force_chan; }
+    void set_e2h_bridge_force_chan(std::uint32_t chan) { e2h_bridge_force_chan = chan; }
 
     bool get_eth_ptp_trace() const { return eth_ptp_trace; }
 

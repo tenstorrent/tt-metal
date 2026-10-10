@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "compute_mesh_router_builder.hpp"
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include "tt_metal/fabric/erisc_bridge_block.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -922,6 +924,17 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);
     const auto& soc_desc = cluster.get_soc_desc(device_id);
     const auto eth_chan = location_.eth_chan;
+
+    // E2H host bridge: only chip 0's router on the forced eth channel; other chips have no socket.
+    const auto& rtopts = fabric_context_.get_rtoptions();
+    std::uint32_t e2h_block_addr = 0;  // nonzero iff this router is bridged
+    if (rtopts.get_e2h_bridge_enable() && rtopts.get_e2h_bridge_force_chan() == eth_chan &&
+        local_node_ == FabricNodeId(MeshId{0}, 0)) {
+        // Derived, not configured: the host opens its sockets against this same address.
+        e2h_block_addr = erisc_bridge::bridge_block_addr(erisc_builder_->config);
+        TT_FATAL(e2h_block_addr != 0, "E2H bridge on eth_chan={}: no room above fabric's channel buffers", eth_chan);
+        log_warning(tt::LogFabric, "E2H bridge on eth_chan={} at 0x{:x}. Test only.", eth_chan, e2h_block_addr);
+    }
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
     // Configure for host signal wait
@@ -941,6 +954,13 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
         named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
         named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
+        if (e2h_block_addr != 0) {
+            named_ct_args["ENABLE_E2H_BRIDGE"] = 1u;
+            named_ct_args["E2H_BRIDGE_BLOCK_ADDR"] = e2h_block_addr;
+            // Speedy VC0 lacks the bridge hooks; its RX ch0 no-forward flag must go off with it.
+            named_ct_args["ENABLE_SPEEDY_VC0"] = 0u;
+            named_ct_args["DISABLE_RX_CH0_FORWARDING"] = 0u;
+        }
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
