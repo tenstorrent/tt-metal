@@ -89,6 +89,16 @@ DTYPE = {
 
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
+# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors are materialized and checked as bfloat16 instead;
+# the PCC floor keeps the block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the capture
+# string, not on the ttnn dtype.
+if os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False"):
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+
+
 MEM_LAYOUT = {
     "INTERLEAVED": ttnn.TensorMemoryLayout.INTERLEAVED,
     "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
