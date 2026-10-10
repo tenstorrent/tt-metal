@@ -340,3 +340,15 @@ profiler signposts; generated/glm53_flash_d_p_lb/moe_routing.json):
 - To do: profiler mode that records the id range per call (no sync) and joins the callback's records; op_report fed
   from it for all 45 layers in one normal-speed pass. Check first against the device profiler on one layer; unsynced
   collectives include wait time on early chips (use the slowest chip's span or a synced CCL-only pass).
+
+## MoE input: router on own rows + full-mesh gathers (2026-10-10), GLM_MOE_FULL_MESH=1 (default)
+
+From MiMo-V2 d_p (b45a923d73c, gather_full: 300.2 -> 286.8 ms traced there). Before: ffn_norm all-gathered the
+mesh row's half on axis 1 (0.21 ms), the router ran on those 2560 rows on all 4 chips of the row (0.54 ms), then x /
+idx / w were gathered on axis 0 (0.30 ms). Now ffn_norm and the router run on the chip's own 640 rows (router 0.23
+ms) and the experts gather x / idx / w once each over the whole mesh (fabric_all_gather cluster_axis=None, row-major
+chip order = the same token order; the inputs' topology relabelled dim-2-over-all-chips as MiMo). The shared expert
+reuses the gathered x as before.
+- Block outputs bit-identical to the old path (layers 3 and 4, real weights, test_layer_perf GLM_LP_SAVE A/B).
+- Per-layer device time (fake weights, chunk 5120 at 51200, busiest chip): dsa_moe 15.45 -> 14.95, kda_moe 11.45 ->
+  10.91 ms; whole-model estimate 555.8 -> 533.6 ms per chunk (-4.0%).
