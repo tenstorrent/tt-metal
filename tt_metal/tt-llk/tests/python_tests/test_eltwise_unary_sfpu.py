@@ -4,11 +4,13 @@
 
 import os
 import struct
-from itertools import chain, product
+from itertools import product
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -151,7 +153,9 @@ FORMATS_BFP4_B = [
 # WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
 # `--coverage` on the arch in question before adding it here.
 #
-# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# Reciprocal on Blackhole is the only entry the sweep has. The counts below were measured when the
+# sweep still ran 12 more Reciprocal ids per arch (dest_acc:No twins of promoted dest_acc:Yes ids).
+# 46 of its 153 Blackhole
 # variants come back with alternate elements stale while its sfp* instruction stream
 # stays byte-identical to the non-coverage build, which is what makes it a timing fault
 # rather than a codegen one. Two things are needed to reproduce it, and neither predicts
@@ -204,31 +208,33 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc always sweeps both values.
+    runs with FastMode.No only. dest_acc sweeps both values, except where TestConfig
+    promotes No to Yes for the format combination; those run as Yes only.
     """
-    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
+    params = []
+    for fmt in formats:
+        dest_accs = distinct_dest_accumulation_modes(
+            fmt, [DestAccumulation.No, DestAccumulation.Yes]
         )
-    )
+        params += product(
+            [fmt],
+            approx_modes,
+            fast_ops,
+            [FastMode.No, FastMode.Yes],
+            dest_accs,
+            input_dimensions,
+        )
+        params += product(
+            [fmt],
+            approx_modes,
+            non_fast_ops,
+            [FastMode.No],
+            dest_accs,
+            input_dimensions,
+        )
+    return params
 
 
 def _assert_broad_profile_valid():
@@ -285,6 +291,29 @@ UNARY_SWEEP_PARAMS = (
 
 
 _assert_broad_profile_valid()
+
+
+def _assert_dest_acc_ids_match_kernels():
+    """Every sweep id must name the Dest width its kernel is built with.
+
+    TestConfig promotes dest_acc to Yes for an outlier format combination, so a dest_acc:No id for
+    one would run the dest_acc:Yes kernel while the golden and tolerances assume No.
+    """
+    promoted = sorted(
+        {
+            f"{formats.input_format.name}->{formats.output_format.name}"
+            for formats, _, _, _, dest_acc, _ in UNARY_SWEEP_PARAMS
+            if effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+            != dest_acc
+        }
+    )
+    assert not promoted, (
+        "These format combinations are swept with a dest_acc the kernel does not run with "
+        f"(TestConfig promotes it): {promoted}"
+    )
+
+
+_assert_dest_acc_ids_match_kernels()
 
 
 def _skip_bh_unsupported_float_combo(formats, dest_acc):
