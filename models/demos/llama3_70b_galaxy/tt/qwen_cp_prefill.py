@@ -591,10 +591,23 @@ def _norm_gammas(dist_norm):
     return g
 
 
+def width_norm_enabled() -> bool:
+    """QWEN_CP_WIDTH_NORM=0 keeps the stock 2-slice form of local_norm instead of custom_ops.qwen_width_norm."""
+    return os.environ.get("QWEN_CP_WIDTH_NORM", "1") == "1"
+
+
 def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
-    """RMSNorm of the residual [1, 1, S/32, 5120] over the full local width, no CCL. The stock ops overflow L1 at
-    width 5120, so stats and apply run on two width halves of 2560 with the stats concatenated (job142: 0.737 ms,
-    pcc 0.99996 vs fp32)."""
+    """RMSNorm of the residual [1, 1, S/32, 5120] over the full local width, no CCL.
+
+    Default: custom_ops.qwen_width_norm (one generic_op: the width split over the 7 grid columns, the per-row partial
+    sums exchanged within each grid row, HiFi4, fp32 partials; cpb job211 S=40960: 0.580 -> 0.296 ms per norm, rel_l2
+    vs fp32 1.329e-2 -> 1.230e-2). Otherwise (or for a non-bf8 output) the stock ops: they overflow L1 at width 5120,
+    so stats and apply run on two width halves of 2560 with the stats concatenated (job142: 0.737 ms, pcc 0.99996 vs
+    fp32)."""
+    if width_norm_enabled() and out_dtype == ttnn.bfloat8_b:
+        from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_width_norm import qwen_width_norm
+
+        return qwen_width_norm(x, dist_norm.norm.weight, eps=dist_norm.norm.eps, fidelity=ttnn.MathFidelity.HiFi4)
     g = _norm_gammas(dist_norm)
     W = int(x.shape[-1])
     rows = int(x.shape[-2])

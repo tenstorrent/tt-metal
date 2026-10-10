@@ -13,6 +13,9 @@ to a descriptor or a kernel needs no `_ttnn.so` rebuild. Conventions follow
             __init__.py, op.py
             kernels/             qprep_common.hpp, norm_{reader,compute,handoff_writer}.cpp,
                                  rope_{reader,compute,writer}.cpp
+        qwen_width_norm/         Qwen context-parallel local RMSNorm, width split with a partial-sum exchange
+            __init__.py, op.py
+            kernels/             wnorm_common.hpp, reader.cpp, compute.cpp, writer.cpp
 
 ## Conventions
 
@@ -210,3 +213,21 @@ For an A/B run, gate the new branch on an environment variable until the device 
 
 `test_qwen_q_prep_bit_exact[16384|40960]` needs the 8x4 mesh. `test_qwen_q_prep_plan_covers_owned_rows`
 checks the work split on the host only.
+
+## qwen_width_norm
+
+Replaces the stock 2-slice form of `qwen_cp_prefill.local_norm` (2 width slices, `rms_norm_pre_all_gather` x2, stats
+concat, `rms_norm_post_all_gather` x2, output concat: 8 ops) on the layout-B residual `[1, 1, S/32, 5120]`
+(bf16, or bf8 for the first layer) -> bf8. `QWEN_CP_WIDTH_NORM=0` keeps the stock form.
+
+Program (one per device, all devices the same): core `(cx, cy)` of the 7x10 grid owns width chunk `cx` (whole blocks
+of 4 tiles: 24 or 20 tiles) of the tile rows of row group `cy`. Per tile row: partial `sum(x^2) / W` over the chunk
+(fp32), written to slot `cx` of `CB_GATH` on the 7 cores of the grid row (two row-halves, cumulative `SEM_RECV`),
+the 7 partials added in slot order, `rsqrt(sum + eps)`, `y = x * rstd * gamma` packed to bf8. x is read once. The
+per-core work comes from the logical coords in the kernels, so the descriptor has only common runtime args (the
+per-core-args first version cost 0.58 ms of host time per call; now 0.16 ms).
+
+Not bit-identical to the stock form (fp32 partials instead of bf16 stats; the model calls it at HiFi4). Measured:
+cpb_sweep job211 S=40960: 0.580 -> 0.296 ms per norm, rel_l2 vs fp32 1.329e-2 -> 1.230e-2;
+`tests/test_qwen_width_norm_op.py` passes at S = 16k/24k/32k/40k for bf16 and bf8 inputs (closer to fp32 than the
+stock form at every bucket); b1 40k TTFT 2129.9 -> 2070.0 ms; 40k gate PASS (pcc40k 0.9993625 -> 0.9995179).
