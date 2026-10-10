@@ -76,7 +76,10 @@ class V41PrefillRuntime:
             table_dir=os.environ.get("DSV41_ENGRAM_TABLE_DIR") or None,
             **kw,
         )
-        self.num_layers = len(self.pf.blocks) + (1 if self.pf.kv_attn is not None else 0)
+        # the CONTRACT's layer count (40), not the 21 layers this rank computes: the driver migrates layers [0, num_layers) and
+        # drains num_layers acks per chunk (PREFILL_NUM_LAYERS on both sides), and the export holds rows for EVERY layer (the
+        # decoder 21..39's entries / keys alias layer 20's) -- with 21, layers 21..39 were never migrated (DS41F-0037 attempt 4)
+        self.num_layers = int(cfg.n_layers)
         self._ack = None
         self._request_id = 0
 
