@@ -194,6 +194,10 @@ class LagunaForCausalLM:
     # .enable_kv_ring); a round projects only its committed rows (one traced update after the verify) and the draft
     # runs only its 32 query rows (one trace for every context size). 0 keeps the fixed combined context.
     _DFLASH_KV_RING = _DFLASH_VERIFY_TRACE and os.environ.get("TT_LAGUNA_DFLASH_KV_RING", "1") == "1"
+    # one ring-mode draft trace per possible accepted count c: it reads its bonus token (the verify's greedy id c) on
+    # device, and its RoPE / mask inputs are uploaded during the verify for every c; the context-ring update is queued
+    # right behind the verify. After the verify the host only launches trace c (no uploads, no update launch).
+    _DFLASH_DRAFT_VARIANTS = _DFLASH_KV_RING and os.environ.get("TT_LAGUNA_DFLASH_DRAFT_VARIANTS", "1") == "1"
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -464,8 +468,9 @@ class LagunaForCausalLM:
             "tid": None,
         }
 
-    def _dflash_draft_alloc_ring(self):
-        """Persistent inputs of the traced ring-mode proposal (one trace for every context size)."""
+    def _dflash_draft_alloc_ring(self, tok32=None, variant=None):
+        """Persistent inputs of the traced ring-mode proposal (one trace for every context size). variant c: the bonus
+        token is the verify's greedy id c (no "tok" input); tok32: share another state's output buffer."""
         core, cache = self._dflash_core, self._dflash_cache
         hd = int(core.config.head_dim)
 
@@ -479,7 +484,9 @@ class LagunaForCausalLM:
             "cos_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "sin_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "mask": dev(torch.zeros((1, 1, 32, cache.RING + 32)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            "tok32": dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "tok32": tok32 if tok32 is not None else dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32,
+                                                         ttnn.ROW_MAJOR_LAYOUT),
+            "variant": variant,
             "tid": None,
         }
 
@@ -488,7 +495,12 @@ class LagunaForCausalLM:
         core, cache = self._dflash_core, self._dflash_cache
         width = int(core.config.hidden_size)
         n = int(core.config.max_speculative_tokens)
-        query_hidden = self.model.embed_prefill(st["tok"])  # [1, 32, width]
+        tok = st["tok"]
+        if st.get("variant") is not None:
+            c = int(st["variant"])
+            bonus = ttnn.reshape(ttnn.slice(self._dflash_verify_tok32, [0, 0, 0, c], [1, 1, 1, c + 1]), (1, 1))
+            tok = ttnn.concat([bonus, self._dflash_mask_ids], dim=-1)
+        query_hidden = self.model.embed_prefill(tok)  # [1, 32, width]
         for index in range(int(core.config.num_hidden_layers)):
             query_hidden = core.layers[index].dflash_query_forward_cached(
                 query_hidden, *cache.ring_kv(index), (st["cos_q"], st["sin_q"]), st["mask"]
@@ -576,18 +588,31 @@ class LagunaForCausalLM:
                 )
                 block = build_proposal_block(core.config, bonus_token_id=0, last_valid_position=0,
                                              num_speculative_tokens=int(core.config.max_speculative_tokens))  # fmt: skip
-                self._dflash_draft_refresh_ring(st, block, q)
-                self._dflash_draft_body_ring(st)  # compile
+                variants = {}
+                vtok = getattr(self, "_dflash_verify_tok32", None)
+                if self._DFLASH_DRAFT_VARIANTS and vtok is not None:
+                    self._dflash_mask_ids = ttnn.from_torch(
+                        torch.full((1, 31), int(core.config.mask_token_id), dtype=torch.int32), dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=_replicate(self.mesh_device),
+                    )  # fmt: skip
+                    variants = {c: self._dflash_draft_alloc_ring(st["tok32"], c) for c in range(self._dflash_verify_rows)}
+                states = [st, *variants.values()]
+                for sv in states:
+                    self._dflash_draft_refresh_ring(sv, block, q)
+                    self._dflash_draft_body_ring(sv)  # compile
                 ttnn.synchronize_device(self.mesh_device)
-                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-                self._dflash_draft_body_ring(st)
-                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
-                st["tid"] = tid
+                for sv in states:
+                    tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                    self._dflash_draft_body_ring(sv)
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                    sv["tid"] = tid
                 ttnn.synchronize_device(self.mesh_device)
             finally:
                 cache.end_request("laguna-dflash-draft-warmup")
             ttnn.deallocate(hidden)
             self._dflash_draft_traces = {"ring": st}
+            self._dflash_draft_variants = variants
             print("[laguna dflash] warmup: draft proposal traced once over the cached context K/V rings", flush=True)
             return
         states = {}
@@ -626,6 +651,12 @@ class LagunaForCausalLM:
             st = states["ring"]
             if st.get("tid") is None:
                 return None
+            nxt, self._dflash_next_variant = getattr(self, "_dflash_next_variant", None), None
+            if nxt is not None and nxt[1] == (cache._request_id, *cache.context_bounds()):
+                # this round's bonus and inputs are on device already (uploaded during the last verify)
+                sv = self._dflash_draft_variants[nxt[0]]
+                ttnn.execute_trace(self.mesh_device, sv["tid"], cq_id=0, blocking=False)
+                return [int(t) for t in self.gen._read_token(sv["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
             start, rows = cache.context_bounds()
             block = build_proposal_block(self._dflash_core.config, bonus_token_id=int(bonus_token_id),
                                          last_valid_position=int(start) + int(rows) - 1,
@@ -728,12 +759,36 @@ class LagunaForCausalLM:
         if st is None or st.get("tid") is None or stv is None or verify_capture.hidden_states is not stv.get("aux"):
             return False
         start, rows = int(verify_capture.start_position), int(verify_capture.row_count)
-        if st.get("staged") != (start, rows):
-            self._dflash_update_stage(start)
-        st["staged"] = None
-        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
-        self._dflash_cache.ring_commit(start, committed, written=rows)
+        if st.get("queued") != (start, rows):
+            if st.get("staged") != (start, rows):
+                self._dflash_update_stage(start)
+            ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        st["staged"] = st["queued"] = None
+        cache = self._dflash_cache
+        cache.ring_commit(start, committed, written=rows)
+        prepared, self._dflash_variants_for = getattr(self, "_dflash_variants_for", None), None
+        if prepared == (start, rows) and 1 <= committed <= rows:
+            self._dflash_next_variant = (committed - 1, (cache._request_id, *cache.context_bounds()))
         return True
+
+    def _dflash_after_verify(self, position, rows):
+        """While the verify runs: queue the ring update behind it and upload every draft variant's inputs (RoPE and
+        mask after committing 1..rows rows; see _DFLASH_DRAFT_VARIANTS)."""
+        st = getattr(self, "_dflash_update_state", None)
+        variants = getattr(self, "_dflash_draft_variants", None)
+        if not variants or st is None or st.get("tid") is None or len(variants) != rows:
+            return
+        if st.get("staged") != (position, rows):
+            self._dflash_update_stage(position)
+        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        st["queued"] = (position, rows)
+        cache = self._dflash_cache
+        q = int(cache.query_rows)
+        for c, sv in variants.items():
+            for key, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs_after(position, c + 1, rows, q)):
+                host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+                ttnn.copy_host_to_device_tensor(host, sv[key])
+        self._dflash_variants_for = (position, rows)
 
     def close_dflash(self):
         """Explicitly release request state and draft-owned KV allocations."""
@@ -3256,8 +3311,10 @@ class LagunaForCausalLM:
             ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
             st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
-        # the context ring update's inputs (they write every verify row), uploaded while the verify runs
+        # the context ring update's inputs (they write every verify row), uploaded while the verify runs; with draft
+        # variants the update is queued now and every variant's inputs are uploaded too
         self._dflash_update_stage(int(pos[0]))
+        self._dflash_after_verify(int(pos[0]), B)
         if "tok32" in st:
             greedy = [int(t) for t in self.gen._read_token(st["tok32"], B)]
         else:
@@ -4143,6 +4200,8 @@ class LagunaForCausalLM:
                 # hung in its logits read on 2026-10-02 06:47 without this).
                 self._dflash_prewarm_eager(kv_cache, width)
                 if self._DFLASH_DRAFT_TRACE:
+                    if self._DFLASH_DRAFT_VARIANTS and "tok32" in staged:
+                        self._dflash_verify_tok32, self._dflash_verify_rows = staged["tok32"], int(staged["rows"])
                     self._dflash_draft_prepare()
                     self._dflash_controller.draft_tokens = self._dflash_draft_tokens
                 self._dflash_verify_capture(staged)

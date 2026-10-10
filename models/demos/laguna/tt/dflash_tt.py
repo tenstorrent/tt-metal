@@ -553,6 +553,16 @@ class DFlashTTProposalCache:
         self._context_rows = rows
         self._fixed_stale = True  # the combined buffer is no longer appended to
 
+    def ring_query_inputs_after(self, start_pos: int, count: int, written: int, query_rows: int):
+        """ring_query_inputs as it will be after ring_commit(start_pos, count, written) (state unchanged)."""
+
+        saved = (list(self._slot_pos), self._context_start, self._context_rows, self._fixed_stale)
+        try:
+            self.ring_commit(start_pos, count, written=written)
+            return self.ring_query_inputs(query_rows)
+        finally:
+            self._slot_pos, self._context_start, self._context_rows, self._fixed_stale = saved
+
     def _ring_append_capture(self, capture: DFlashTargetAuxCapture) -> None:
         count = int(capture.row_count)
         new_rows = self.core.combine_aux_hidden_states(capture.hidden_states)
