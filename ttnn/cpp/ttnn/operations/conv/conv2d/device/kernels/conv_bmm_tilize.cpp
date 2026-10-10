@@ -248,13 +248,13 @@ void kernel_main() {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 #ifdef ARCH_BLACKHOLE
-    // The block run reads slower for short one-column subblocks and, without L1 accumulate, for two-tile rows or
-    // columns, rows over ten or more inner blocks, columns over fewer than nine and two columns over fewer than six.
-    constexpr bool tile_pack_subblocks =
-        (out_subblock_w == 1 && in0_block_w < 4) ||
-        (!packer_l1_acc && (((out_subblock_h == 1 || out_subblock_w == 1) && out_subblock_num_tiles <= 2) ||
-                            (out_subblock_h == 1 && in0_num_blocks_w >= 10) ||
-                            (out_subblock_w == 1 && in0_block_w < 9) || (out_subblock_w == 2 && in0_block_w < 6)));
+    // The block run is kept where it measured faster at the models' inputs: block-sharded 2 x 4 subblocks with L1
+    // accumulate, and without it height-sharded 1 x 4 (over several row blocks) and 4 x 1 ones over 12 or more.
+    constexpr bool block_pack_subblocks =
+        (!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
+        (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
+         ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1) ||
+          (out_subblock_h == 4 && out_subblock_w == 1)));
 #endif
 
     uint32_t bias_block_offset = 0;
@@ -496,11 +496,11 @@ void kernel_main() {
 
                         uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                        if constexpr (tile_pack_subblocks) {
+                        if constexpr (block_pack_subblocks) {
+                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        } else {
                             PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
                                 start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles)));
-                        } else {
-                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
                         }
 #else
                         pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
@@ -572,13 +572,12 @@ void kernel_main() {
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                        // As for the subblock pack, but with packer L1 accumulate the block run still pays off here.
-                        if constexpr (tile_pack_subblocks && !packer_l1_acc) {
+                        if constexpr (block_pack_subblocks) {
+                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        } else {
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, untilize_mode_out_cb_id);
                             }
-                        } else {
-                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
                         }
 #else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
