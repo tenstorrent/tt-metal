@@ -278,6 +278,25 @@ uint32_t finalize_rt_args(
     uint32_t max_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
         metal_ctx, programmable_core_type_index, kernels, kernel_groups, crta_base_offset);
 
+    // A MATH or PACK kernel that selects its processor has no runtime arguments of its own: it reads the
+    // UNPACK kernel's at UNPACK's offsets, so callers set them on the UNPACK kernel.
+    for (auto& kg : kernel_groups) {
+        auto offsets = kg->launch_msg.view().kernel_config().rta_offset();
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            const auto processor = kernel->compute_processor();
+            if (!processor || *processor == ComputeProcessor::UNPACK) {
+                continue;
+            }
+            const auto core_type = kernel->get_kernel_programmable_core_type();
+            const uint32_t unpack = metal_ctx.hal().get_processor_index(core_type, HalProcessorClassType::COMPUTE, 0);
+            const uint32_t own = metal_ctx.hal().get_processor_index(
+                core_type, HalProcessorClassType::COMPUTE, enchantum::to_underlying(*processor));
+            offsets[own].rta_offset() = offsets[unpack].rta_offset();
+            offsets[own].crta_offset() = offsets[unpack].crta_offset();
+        }
+    }
+
     uint32_t offset = max_unique_rta_size + max_crta_size;
 
     rta_offset = base_offset;

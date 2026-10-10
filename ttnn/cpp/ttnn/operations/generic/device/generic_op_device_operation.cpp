@@ -51,6 +51,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
+        const auto* compute = std::get_if<tt::tt_metal::ComputeConfigDescriptor>(&kernel.config);
         return ttsl::hash::hash_objects_with_default_seed(
             kernel.kernel_source,
             kernel.source_type,
@@ -65,6 +66,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             tt::tt_metal::experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
             kernel.runtime_args.size(),
             kernel.config.index(),
+            // Under libc++, an unset processor and UNPACK hash alike inside kernel.config.
+            compute && compute->processor.has_value(),
             kernel.config);
     };
 
