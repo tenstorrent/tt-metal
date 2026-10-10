@@ -39,10 +39,11 @@ void kernel_main() {
     const uint32_t thread_id = get_my_thread_id();
     const uint32_t num_threads = get_num_threads();
 #ifdef IMPLICIT_SYNC
-    // Host enables this only for unpadded blocks: each TXN_ID write drains the next posted DFB entry
-    // and acks it when it lands.
-    for (uint32_t k = thread_id; k < block_num_tiles; k += num_threads) {
-        const uint32_t tile_id = start_id + (k / block_width_tiles) * output_width_tiles + k % block_width_tiles;
+    // Host enables this with a staging DFB that holds the block's unpadded tiles in row-major order:
+    // each TXN_ID write drains the next staged tile and acks it when it lands.
+    for (uint32_t k = thread_id; k < unpadded_block_height_tiles * unpadded_block_width_tiles; k += num_threads) {
+        const uint32_t tile_id =
+            start_id + (k / unpadded_block_width_tiles) * output_width_tiles + k % unpadded_block_width_tiles;
         noc.async_write<NocOptions::TXN_ID>(cb_out, s, {}, {.page_id = tile_id});
     }
 #else
