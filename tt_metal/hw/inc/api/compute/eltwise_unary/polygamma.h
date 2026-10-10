@@ -40,6 +40,20 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
+    MATH(if constexpr (ckernel::sfpu::polygamma_bf16_whole_tile && !is_fp32_dest_acc_en && !APPROX) {
+        if (n_packed == 0x3f800000u && scale_packed == 0x3f800000u) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_polygamma,
+                (APPROX, is_fp32_dest_acc_en, 32),
+                idst,
+                VectorMode::None,
+                n_packed,
+                scale_packed);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -54,6 +68,6 @@ ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX))); }
+ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel
