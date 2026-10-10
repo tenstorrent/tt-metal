@@ -128,12 +128,15 @@ from .policy import (
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     align_num_frames,
     decodable_canvases,
+    filter_warm_layouts,
     get_num_frames,
     keyframe_layout_key,
+    resolve_warm_rungs,
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
     validate_request,
+    warm_keyframe_layout_keys,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
@@ -594,13 +597,7 @@ class MiniMaxH3Pipeline:
             bucket_ladder = preset["bucket_ladder"][task]
         self.bucket_ladder = tuple(bucket_ladder)
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
-        self.warm_rungs = None
-        if warm_rungs is not None:
-            unknown = sorted(set(warm_rungs) - set(self.bucket_ladder))
-            if unknown:
-                raise ValueError(f"warm_rungs {unknown} are not in the ladder {self.bucket_ladder}")
-            # The full walk binds the top rung first; keeping it keeps that allocation order.
-            self.warm_rungs = frozenset(warm_rungs) | {self.bucket_ladder[-1]}
+        self.warm_rungs = resolve_warm_rungs(warm_rungs, self.bucket_ladder)
         self.warm_canvases = None if warm_canvases is None else frozenset(map(tuple, warm_canvases))
         self.arena_caps = arena_caps or preset.get(f"{task}_arena_caps") or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
@@ -1495,6 +1492,28 @@ class MiniMaxH3Pipeline:
             mesh_axes=[..., None, None],
         )
 
+    def _warm_layout_canvases(self) -> frozenset[tuple[int, int]]:
+        # `_warmup_on_init` generates on the 16:9 canvas with one or two keyframes.
+        return self.warm_canvases | {resolve_canvas_size(16, 9)}
+
+    def _check_warm_keyframe_layout(self, n_keyframes: int, canvas: tuple[int, int]) -> None:
+        """Like `_select_bucket` for `warm_rungs`: a keyframe layout outside `warm_canvases` raises when traced."""
+        if self.warm_canvases is None or self._warming:
+            return
+        alignment = self.sp_factor * ttnn.TILE_SIZE
+        if keyframe_layout_key(n_keyframes, canvas, alignment) in warm_keyframe_layout_keys(
+            self._warm_layout_canvases(), alignment
+        ):
+            return
+        message = (
+            f"{n_keyframes} keyframe(s) on canvas {canvas} need a vision layout outside warm_canvases "
+            f"{sorted(self.warm_canvases)}"
+        )
+        # A program first compiled under live traces can corrupt a replay.
+        if self.trace_denoise:
+            raise ValueError(message)
+        self._host_log(f"{message}: this call compiles its programs")
+
     def _select_bucket(self, seq_len: int) -> int:
         """The rung this request pads to: `warmup`'s forced rung, else the smallest that fits."""
         if self._force_bucket is not None:
@@ -1880,6 +1899,9 @@ class MiniMaxH3Pipeline:
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
             f"{num_inference_steps} steps, anchors={keyframe_anchors or '()'}"
         )
+
+        if keyframes:
+            self._check_warm_keyframe_layout(len(keyframes), (height, width))
 
         # 2. Text (plus the vision block, for fl2va).
         with self._track_cache_misses(on_event, "encoder"):
@@ -2410,13 +2432,7 @@ class MiniMaxH3Pipeline:
         layouts = list(served_envelope(self.task, patch_alignment=alignment))
         if self.warm_canvases is not None:
             # `_warmup_on_init` generates on the 16:9 canvas with one or two keyframes.
-            canvases = self.warm_canvases | {resolve_canvas_size(16, 9)}
-            wanted = {keyframe_layout_key(n, canvas, alignment) for n in (1, 2) for canvas in canvases}
-            layouts = [
-                (n_keyframes, canvas)
-                for n_keyframes, canvas in layouts
-                if canvas is None or keyframe_layout_key(n_keyframes, canvas, alignment) in wanted
-            ]
+            layouts = filter_warm_layouts(layouts, self._warm_layout_canvases(), alignment)
 
         host = _is_host_rank()
         if host:

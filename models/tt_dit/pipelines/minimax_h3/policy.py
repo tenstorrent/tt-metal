@@ -315,6 +315,32 @@ def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int,
     return tuple(by_key[key] for key in sorted(by_key))
 
 
+def warm_keyframe_layout_keys(canvases, patch_alignment: int) -> frozenset[tuple[int, bool]]:
+    """The `keyframe_layout_key`s one or two keyframes on any of `canvases` reach."""
+    return frozenset(keyframe_layout_key(n, tuple(canvas), patch_alignment) for n in (1, 2) for canvas in canvases)
+
+
+def filter_warm_layouts(layouts, canvases, patch_alignment: int) -> list:
+    """The `(n_keyframes, canvas)` warm units of `layouts` a request on `canvases` can reach; `(0, None)` stays."""
+    wanted = warm_keyframe_layout_keys(canvases, patch_alignment)
+    return [
+        (n_keyframes, canvas)
+        for n_keyframes, canvas in layouts
+        if canvas is None or keyframe_layout_key(n_keyframes, canvas, patch_alignment) in wanted
+    ]
+
+
+def resolve_warm_rungs(warm_rungs: Sequence[int] | None, ladder: Sequence[int]) -> frozenset[int] | None:
+    """`warm_rungs` checked against `ladder`, plus its top rung; None warms every rung."""
+    if warm_rungs is None:
+        return None
+    unknown = sorted(set(warm_rungs) - set(ladder))
+    if unknown:
+        raise ValueError(f"warm_rungs {unknown} are not in the ladder {tuple(ladder)}")
+    # The full walk binds the top rung first; keeping it keeps that allocation order.
+    return frozenset(warm_rungs) | {ladder[-1]}
+
+
 def served_envelope(task: str, *, patch_alignment: int | None = None) -> Iterator:
     """The vision-layout warm units a deployment must compile.
 
