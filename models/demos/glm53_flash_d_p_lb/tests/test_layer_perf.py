@@ -16,7 +16,7 @@ Builds take seconds per layer (KDA / MLA / dense weights are random host tensors
 Numerics are meaningless (random weights). Routing is near-uniform; GLM_FAKE_HOT=n makes experts 0 .. n-1 hot.
 GLM_LP_REAL=1 loads the real checkpoint instead (spec paths.hf / BRINGUP_HF; the flat expert cache is used).
 
-Knobs: GLM_LP_CALLS=<prefix> (dump every call per layer), GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
+Knobs: GLM_LP_SAVE=<prefix> (save each block's output: A/B accuracy), GLM_LP_CALLS=<prefix> (dump every call per layer), GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
 layer, default 12), GLM_LP_JSON (write the rows there). The spec's device settings (experts dtype / fidelity, links)
 apply as in the model. Mesh and fabric come from the spec (BRINGUP_SPEC).
 
@@ -89,8 +89,14 @@ def test_layer_perf(mesh_device):
         )
         build_s = time.time() - t0
         t0 = time.time()
-        ttnn.deallocate(blk(x, start))  # compile
+        y = blk(x, start)  # compile
         ttnn.synchronize_device(mesh_device)
+        if os.environ.get("GLM_LP_SAVE"):  # the block output (per-chip rows in row-major chip order) for A/B checks
+            torch.save(
+                torch.cat([ttnn.to_torch(t).reshape(-1, t.shape[-1]) for t in ttnn.get_device_tensors(y)]),
+                f"{os.environ['GLM_LP_SAVE']}.L{i}.pt",
+            )
+        ttnn.deallocate(y)
         compile_s = time.time() - t0
         walls = []
         for _ in range(iters):
