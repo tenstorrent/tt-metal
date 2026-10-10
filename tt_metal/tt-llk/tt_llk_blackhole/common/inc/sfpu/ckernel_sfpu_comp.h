@@ -382,22 +382,22 @@ sfpi_inline void _comp_unary_int_ordered_(const int scalar)
     {
         if constexpr (IS_GT)
         {
-            _comp_unary_int_gt_rows_<true, ITERATIONS>(s);
+            _comp_unary_int_gt_rows_<true /*SCALAR_NEGATIVE*/, ITERATIONS>(s);
         }
         else
         {
-            _comp_unary_int_lt_rows_<true, ITERATIONS>(s);
+            _comp_unary_int_lt_rows_<true /*SCALAR_NEGATIVE*/, ITERATIONS>(s);
         }
     }
     else
     {
         if constexpr (IS_GT)
         {
-            _comp_unary_int_gt_rows_<false, ITERATIONS>(s);
+            _comp_unary_int_gt_rows_<false /*SCALAR_NEGATIVE*/, ITERATIONS>(s);
         }
         else
         {
-            _comp_unary_int_lt_rows_<false, ITERATIONS>(s);
+            _comp_unary_int_lt_rows_<false /*SCALAR_NEGATIVE*/, ITERATIONS>(s);
         }
     }
 }
@@ -420,11 +420,11 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
 {
     if constexpr (COMP_MODE == SfpuType::unary_lt)
     {
-        _comp_unary_int_ordered_<false, ITERATIONS>(scalar);
+        _comp_unary_int_ordered_<false /*IS_GT*/, ITERATIONS>(scalar);
     }
     else if constexpr (COMP_MODE == SfpuType::unary_gt)
     {
-        _comp_unary_int_ordered_<true, ITERATIONS>(scalar);
+        _comp_unary_int_ordered_<true /*IS_GT*/, ITERATIONS>(scalar);
     }
     else if constexpr (COMP_MODE == SfpuType::unary_le)
     {
@@ -435,7 +435,7 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
         }
         else
         {
-            _comp_unary_int_ordered_<false, ITERATIONS>(scalar + 1);
+            _comp_unary_int_ordered_<false /*IS_GT*/, ITERATIONS>(scalar + 1);
         }
     }
     else if constexpr (COMP_MODE == SfpuType::unary_ge)
@@ -447,7 +447,7 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
         }
         else
         {
-            _comp_unary_int_ordered_<true, ITERATIONS>(scalar - 1);
+            _comp_unary_int_ordered_<true /*IS_GT*/, ITERATIONS>(scalar - 1);
         }
     }
     else
