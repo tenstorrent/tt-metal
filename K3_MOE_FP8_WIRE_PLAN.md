@@ -80,12 +80,12 @@ All targets below are relative to B0. B0 is recorded at the start of P0 on this 
 
 | B0 quantity | How to measure | Value |
 |---|---|---|
-| T_moe: traced full-MoE wall clock, p50 of 20 | `K3_TRACE=1` | _to fill_ |
-| T_disp: dispatch device time, max over chips | `K3_PERF_ITERS=5` breakdown | _to fill_ |
-| T_comb: combine device time | same | _to fill_ |
-| T_exp: `unified_routed_expert_moe` time | same | _to fill_ |
-| T_pcr: `post_combine_reduce` time | same | _to fill_ |
-| PCC per stage: latent_input, latent_routed_output, routed_output, final_output | `kimi_k3-5k-pcc`, 2×4 | _to fill_ |
+| T_moe: traced full-MoE wall clock, p50 of 20 | `K3_TRACE=1` | 13.83 ms |
+| T_disp: dispatch device time, max over chips | `K3_PERF_ITERS=5` breakdown | 596 µs |
+| T_comb: combine device time | same | 1097 µs |
+| T_exp: `unified_routed_expert_moe` time | same | 10.29 ms |
+| T_pcr: `post_combine_reduce` time | same | 365 µs |
+| PCC per stage: latent_input, latent_routed_output, routed_output, final_output | `kimi_k3-5k-pcc`, 2×4 | 0.9998, 0.9726, 0.9723, 0.9942 |
 
 ### 1.2 Accuracy targets
 
@@ -126,6 +126,37 @@ spans more hops there, so more of its time is bytes.
 
 Dispatch-plus-combine totals alone are not accepted as evidence, because the fusions move work into
 the expert op and `post_combine_reduce`. T_moe is the gate.
+
+### 1.3a Status on the 2×4 LB (2026-10-10, branch `pjosipovic/k3-moe-fp8-wire`)
+
+Shipped wire: per-token fp8 (one pow2 fp32 scale per token row, `fp8_scale_block=0`), fused DQ1 in the
+routed expert, fused DQ2 in `post_combine_reduce`. Program-sum numbers are per-op device time.
+
+| Target | Goal | Measured | |
+|---|---|---|---|
+| T_moe (traced, p50 of 20) | ≤ 13.83 − 0.30 × (0.596 + 1.097) = 13.32 ms | **13.30 ms** | met |
+| T_disp | ≤ 0.70 × B0 = 417 µs | 557 µs | not met: LB dispatch is not byte-bound |
+| T_comb incl. Q2 | ≤ 0.75 × B0 = 823 µs | 555 + 199 = 754 µs | met |
+| Q1 standalone | 0 (fused, F2) | 51 µs | not met: F2 not done |
+| DQ1 | 0 (fused) | 0 | met |
+| T_exp | ≤ 1.05 × B0 | 10.28 ms | met (fp32 DEST costs nothing in the matmuls) |
+| T_pcr incl. DQ2 | ≤ 1.10 × B0 | 202 µs | met |
+| final / routed PCC drop vs bf16 wire | ≤ 0.005 / ≤ 0.008 | 0.0002 / 0.0010 | met |
+| MoE temp DRAM peak | ≤ 0.75 × B0 | 0.63–0.71 × | met |
+
+Two of the wins also speed up the bf16 path: the `post_combine_reduce` column split and batched reads (B0 PCR
+365 → about 200 µs) put bf16 at 13.66 ms traced. Against that baseline the fp8 wire saves 0.36 ms, which is
+0.21 × (T_disp + T_comb) on LB. LB understates the wire gains, since its dispatch spans one hop.
+
+Findings that changed the plan:
+- fp32 DEST (required by any Fp8 CB on Blackhole) does not slow the expert's matmuls. The +0.3 ms first seen
+  came from SiTU-GLU switching to its accurate fp32 exp/reciprocal under fp32 DEST. The expert now always uses
+  its bf16-precision variant, since the result is packed to Bfp8_b.
+- The fp8 x tilize takes the slow (non-fast) path: about +55 µs per 5k-token expert. Fast tilize does not
+  accept Fp8_e4m3 input (it returns wrong data).
+- Per-row Q1/Q2 split each tile-row across partner cores that exchange partial row maxima. Q1 89 → 51 µs,
+  Q2 275 → 199 µs. The rest is SFPU work (abs-max, RNE) and 128-B row writes.
+- `post_combine_reduce` was latency-bound (one small read + barrier per slot) on 20 cores.
 
 ### 1.4 Memory-footprint targets for MoE temporary buffers (DRAM per chip, 2×4 LB, 640 tokens/chip)
 
