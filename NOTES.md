@@ -8,15 +8,29 @@ channel count, so they are compute-bound in the kernel (tilize -> square -> redu
 HiFi4 + fp32 dest acc, block 4). A better grid/shard config is unlikely to help; compute-config levers are the candidates.
 SiLU SFPU always uses the exact sigmoid (math_approx_mode does not change it).
 
-## Job b (running): micro-benchmark bench_norm.py on blx01, t48 build bf7db12a149 (same norm kernels), full 4x8
-Variants V0 (current HiFi4/fp32acc/SiLU/RM) .. V7; see bench_norm.py header. Output: BENCH lines + BENCH_TOTAL weighted_ms.
-Driver: drv375b (ttp detach --remote g15blx01), marker /var/tmp/fasth3/t375/drv375b.done, log run_b_job<J>.log.
-Check: ttp detach --check --host g15blx01 /home/smarton/.ttp-detach/1439/drv375b
+## Job b result: blx01 broker job 527 (completed 2026-10-10 21:53Z, exit 0), log notes/t375/results/run_b_job527.log
+Weighted decoder total (res128 x9, res256 x12, res512b x8; min of 5 reps, 900 MHz clamp, relative only):
 
-## Next
-If a variant saves >=10 ms weighted with PCC vs fp32 ref ~unchanged: add opt-in LTX_VAE_NORM_FAST in vae_ltx.py for
-norm1/norm2/norm_out, A/B test (real conv VAE weights, 5 seeds, PCC>=0.9999, PSNR>=45 dB incl. luma, 3 timed replays),
-build t48 head + change on blx01 (/var/tmp/fasth3/t375/b), A/B job, then standard e2e. Else consider conv3d fold or fail.
+| variant | weighted ms | saved | quality vs V0 (current) |
+|---|---|---|---|
+| V0 HiFi4 fp32acc SiLU RM (current) | 41.66 | - | - |
+| V2 HiFi2 fp32acc | 40.18 | 1.5 | PCC 0.99983..1.0 |
+| V3 LoFi fp32acc | 39.88 | 1.8 | PCC 0.9985 (res512b), max abs 0.25: degrading |
+| V4 HiFi4 bf16acc | 35.12 | 6.5 | PCC 0.9995..1.0, max abs 0.078 |
+| V5 LoFi bf16acc | 33.00 | 8.7 | PCC 0.9981 (res512b): degrading |
+| V6 TILE input (else V0) | 36.10 | 5.6 | bit-identical, but the decoder's conv3d gives RM: a tilize costs more |
+| V1/V7 no SiLU (reference only) | 38.78/32.71 | - | - |
+
+Verdict for (a): no config lever reaches the 10 ms keep line. The only one near it without quality loss
+(V4, 6.5 ms) is not bit-identical and below the bar; V6's gain needs a TILE conv3d output that does not exist.
+The op is the generic interleaved layer_norm (RMSNORM) program with a default program config; a sharded config
+would need TILE + sharded input, i.e. extra reshard/tilize ops around every norm. No code change made.
+
+(b) fold into conv3d: not started (high-effort C++ in conv3d; needs a stats pass plus scale+SiLU on the vol2col
+patches, which repeat each input stick 27x). Estimated net 10-20 ms. Recommended only as part of PLAN item 5
+(vol2col reuse), where the window is read once and norm+SiLU could be applied once per stick.
+
+Cleanup: removed /var/tmp/fasth3/t375/jit (333 MB) and out_b/generated on blx01; scripts + log kept (small).
 
 ## Drops seen (not ours)
 2026-10-10 21:13Z blx01: chips 24/25 left PCIe during ltx-host job 512 / fabric-check 513; recovered by 21:17Z (hold 520 ended).
