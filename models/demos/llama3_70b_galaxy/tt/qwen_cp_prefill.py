@@ -14,7 +14,7 @@ Layout per device (r, c), S = padded prefill length:
     permuting paged_fill_cache into a scratch buffer, which feeds the KV cache fill and ring SDPA.
 
 Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache), S > 8192,
-S % 1024 == 0, env QWEN_CP_PREFILL=1. Everything else keeps today's path.
+S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default). QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ WEIGHT_AG_KW = dict(num_workers_per_link=6)  # job139: all five 1.201 -> 1.156 m
 
 
 def cp_prefill_enabled() -> bool:
-    return os.environ.get("QWEN_CP_PREFILL", "0") == "1"
+    return os.environ.get("QWEN_CP_PREFILL", "1") == "1"
 
 
 def cp_prefill_applies(args, use_prefetcher, prefetcher_setup, mode, batch_size, start_pos, seq_len) -> bool:
@@ -530,4 +530,45 @@ def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
     out = ttnn.concat(outs, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     for t in outs:
         ttnn.deallocate(t)
+    return out
+
+
+def decoder_prefill(ctx: CPContext, tt_ccl, layer, h, rot_mats, user_id=0, page_table=None, kv_cache=None):
+    """One decoder layer in layout B. h: residual [1, 1, S/32, 5120] bf16 (deallocated). Returns the new residual."""
+    ckc = layer.args.compute_kernel_config_hifi2
+    w = gather_layer_weights(tt_ccl, layer.attention, layer.feed_forward)
+    xn = local_norm(layer.attention_norm, h, ckc)
+    a = attention_prefill(ctx, tt_ccl, layer.attention, xn, rot_mats, w, user_id, page_table, kv_cache)
+    h2 = ttnn.add(h, a, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    ttnn.deallocate(h)
+    ttnn.deallocate(a)
+    xn2 = local_norm(layer.ff_norm, h2, ckc)
+    f = mlp_prefill(ctx, tt_ccl, layer.feed_forward, xn2, w)
+    out = ttnn.add(h2, f, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    ttnn.deallocate(h2)
+    ttnn.deallocate(f)
+    free_weights(w)
+    return out
+
+
+def model_prefill(model, x, rot_mats, user_id=0, page_table=None, kv_cache=None):
+    """llama_model.forward body for the guarded case: natural embedding x [1, 1, S, 1280] -> natural pre-norm
+    output [1, 1, S, 1280] (the same tensor today's prefill forward returns)."""
+    S = int(x.shape[-2])
+    ctx = get_context(model.tt_ccl, model.mesh_device, S)
+    h = entry(ctx, model.tt_ccl, x)
+    x.deallocate(True)
+    for i, layer in enumerate(model.layers):
+        h = decoder_prefill(
+            ctx,
+            model.tt_ccl,
+            layer,
+            h,
+            rot_mats,
+            user_id,
+            page_table,
+            kv_cache[i] if kv_cache is not None else None,
+        )
+    out = exit_natural(ctx, model.tt_ccl, h)
+    ttnn.deallocate(h)
     return out
