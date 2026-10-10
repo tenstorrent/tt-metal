@@ -171,7 +171,9 @@ __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(input), -31));
-        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat>(sign, sfpi::RoundMode::Nearest);
+        // The shift produces only 0 or 1, whose two's-complement and
+        // sign-magnitude encodings are identical.  Avoid a redundant cast.
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sign), sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }
