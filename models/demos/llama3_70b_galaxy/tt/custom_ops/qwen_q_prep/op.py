@@ -116,11 +116,11 @@ class QPrepPlan:
         return h, j, tl
 
 
-def _validate(q, cos, sin, trans_mat, gamma, cols: int) -> tuple[int, int]:
+def _validate(q, cos, sin, trans_mat, gamma, cols: int, split: bool = False) -> tuple[int, int]:
     shape = tuple(q.shape)
     if len(shape) != 4 or shape[0] != 1 or shape[3] != HEAD_DIM:
         raise ValueError(f"q must be [1, H, S, {HEAD_DIM}], got {shape}")
-    n_heads, seq_len = shape[1], shape[2]
+    n_heads, seq_len = shape[1], shape[2] * (2 * cols if split else 1)
     if q.dtype != ttnn.bfloat8_b or q.layout != ttnn.TILE_LAYOUT:
         raise ValueError(f"q must be bfloat8_b TILE, got {q.dtype} {q.layout}")
     mc = q.memory_config()
@@ -158,7 +158,7 @@ def _accessor(t) -> list[int]:
 
 
 def _build_program(
-    device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth, src, src_layout, src_local=False
+    device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth, src, src_layout, src_local=False, q1=None
 ) -> ttnn.ProgramDescriptor:
     n_coords = [n for n, _ in pairs]
     r_coords = [r for _, r in pairs]
@@ -232,7 +232,14 @@ def _build_program(
             )
         )
         r_compute_rt.append((r_xy, [count, h0, plan.n_heads]))
-        r_writer_rt.append((r_xy, [q.buffer_address(), count, h0, j0, tl0] + walk))
+        r_writer_rt.append(
+            (
+                r_xy,
+                [q.buffer_address(), count, h0, j0, tl0]
+                + walk
+                + [int(q1 is not None), (q1 if q1 is not None else q).buffer_address()],
+            )
+        )
 
     kernels = [
         ttnn.KernelDescriptor(
@@ -294,7 +301,7 @@ def _build_program(
             kernel_source=f"{KERNEL_ROOT}/rope_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=r_set,
-            compile_time_args=_accessor(q),
+            compile_time_args=_accessor(q) + _accessor(q1 if q1 is not None else q),
             runtime_args=r_writer_rt,
             config=ttnn.WriterConfigDescriptor(),
         ),
@@ -316,6 +323,7 @@ def qwen_q_prep(
     src: ttnn.Tensor | None = None,
     src_col: int = 0,
     src_local: bool = False,
+    q_out1: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """typecast -> q_norm -> RoPE -> typecast on this column's two ring slices of q, in place.
 
@@ -330,13 +338,27 @@ def qwen_q_prep(
     ([1, 1, S / cols, W] = [slice c ; slice 2 * cols - 1 - c], the context-parallel prefill layout); the source row
     is the local one, while cos/sin and the q rows written stay at the natural positions.
 
+    q_out1 (with src, not all_rows): split output. q and q_out1 are then [1, H, S / (2 * cols), 128] bf8 buffers that
+    receive this column's local slice 0 (ring slice c) and local slice 1 (ring slice 2 * cols - 1 - c), each at its
+    rows within the slice (what ttnn.slice of the natural q at the slice start would give), so no slice op is needed
+    before a per-slice consumer. The computed values are those of the natural-q form.
+
     Returns ``q``. See the module docstring for the tensor contract. Raises ValueError on any
     shape, dtype or layout mismatch; there is no fallback to the stock ops.
     """
     device = q.device()
     mesh_rows, cols = list(device.shape)
     plan_cols = 1 if all_rows else cols
-    n_heads, seq_len = _validate(q, cos, sin, trans_mat, gamma, plan_cols)
+    split = q_out1 is not None
+    if split:
+        if src is None or all_rows:
+            raise ValueError("q_out1 (split output) needs src and is not defined for all_rows")
+        if tuple(q_out1.shape) != tuple(q.shape) or q_out1.dtype != q.dtype or q_out1.layout != q.layout:
+            raise ValueError(f"q_out1 must match q: {tuple(q_out1.shape)} {q_out1.dtype} vs {tuple(q.shape)} {q.dtype}")
+        q1mc = q_out1.memory_config()
+        if q1mc.buffer_type != ttnn.BufferType.DRAM or q1mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            raise ValueError(f"q_out1 must be DRAM interleaved, got {q1mc}")
+    n_heads, seq_len = _validate(q, cos, sin, trans_mat, gamma, plan_cols, split)
     if handoff_depth < 1:
         raise ValueError(f"handoff_depth must be >= 1, got {handoff_depth}")
     if grid is None:
@@ -377,6 +399,7 @@ def qwen_q_prep(
         seq_len,
         _f32_bits(eps),
         q.buffer_address(),
+        q_out1.buffer_address() if split else None,
         cos.buffer_address(),
         sin.buffer_address(),
         trans_mat.buffer_address(),
@@ -387,7 +410,21 @@ def qwen_q_prep(
         mesh_program = ttnn.MeshProgramDescriptor()
         for col in range(cols):
             program = _build_program(
-                device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, handoff_depth, src, src_layout, src_local
+                device,
+                plan,
+                pairs,
+                col,
+                q,
+                cos,
+                sin,
+                trans_mat,
+                gamma,
+                eps,
+                handoff_depth,
+                src,
+                src_layout,
+                src_local,
+                q_out1,
             )
             mesh_range = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, col), ttnn.MeshCoordinate(mesh_rows - 1, col))
             mesh_program[mesh_range] = program
@@ -398,4 +435,7 @@ def qwen_q_prep(
     # io_tensors: inputs, then the output last (q, updated in place).
     if src is q:
         return ttnn.generic_op([cos, sin, trans_mat, gamma, q], mesh_program)
+    if split:
+        ttnn.generic_op([src, cos, sin, trans_mat, gamma, q_out1, q], mesh_program)
+        return q
     return ttnn.generic_op([src, cos, sin, trans_mat, gamma, q], mesh_program)

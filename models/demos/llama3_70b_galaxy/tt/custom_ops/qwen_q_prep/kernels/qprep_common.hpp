@@ -66,6 +66,8 @@ struct RowWalker {
     uint32_t t() const { return (j == 0 ? s0_t : s1_t) + tl; }
     // First q page (tile) of the current row in a [1, H, S, 128] TILE tensor.
     uint32_t q_page() const { return (h * ht + t()) * WT; }
+    // First page of the current row in the [1, H, sl, 128] TILE tensor of local slice j (split output).
+    uint32_t slice_page() const { return (h * sl_t + tl) * WT; }
     // First cos/sin page of the current row in a [1, 1, S_rot, 128] TILE tensor.
     uint32_t rot_page() const { return t() * WT; }
 

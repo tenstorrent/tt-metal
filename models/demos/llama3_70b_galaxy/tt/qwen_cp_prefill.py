@@ -402,10 +402,14 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
     column c. The start is a device tensor (chunk_start_idx_tensor, sharded so device (r, c) holds its own value)
     that the reader / compute / writer read at run time, so one program serves all four columns.
 
-    q_nat: [1, H, S, D] with this column's slices at their natural rows (other rows unused). Returns
-    [1, H, S/4, D] in the column's local order [slice c ; slice 7 - c], as the ring op does."""
+    q_nat: [1, H, S, D] with this column's slices at their natural rows (other rows unused), sliced per call; or a
+    (q0, q1) pair of [1, H, S/8, D] buffers holding local slices 0 / 1 (qwen_q_prep q_out1), read directly (not
+    freed here). Returns [1, H, S/4, D] in the column's local order [slice c ; slice 7 - c], as the ring op does.
+    The output concat stays: a one-copy concat + nlp_concat_heads generic_op measured 0.294 vs 0.278 ms for the two
+    stock ops (batch T, t2_unit.py job245), so it was dropped."""
     lay = ctx.lay
-    H, D = int(q_nat.shape[1]), int(q_nat.shape[-1])
+    split = isinstance(q_nat, (tuple, list))
+    H, D = int(q_nat[0].shape[1] if split else q_nat.shape[1]), int((q_nat[0] if split else q_nat).shape[-1])
     cache = ctx.__dict__.setdefault("_chunked_sdpa", {})
     if (H, D) not in cache:
         tabs = []
@@ -418,8 +422,8 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
         logger.info(f"Qwen CP prefill S={lay.S}: chunked SDPA pair, q{pc.q_chunk_size} k{pc.k_chunk_size}")
     scale32 = float(torch.tensor(scale, dtype=torch.float32))  # the binding takes an exact float32 (noconvert)
     outs = []
-    for st, en, cs in cache[(H, D)]:
-        qs = ttnn.slice(q_nat, starts=st, ends=en, slice_dim=2, num_devices=2 * lay.cols)
+    for j, (st, en, cs) in enumerate(cache[(H, D)]):
+        qs = q_nat[j] if split else ttnn.slice(q_nat, starts=st, ends=en, slice_dim=2, num_devices=2 * lay.cols)
         outs.append(
             ttnn.transformer.chunked_scaled_dot_product_attention(
                 qs,
@@ -432,7 +436,8 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
                 program_config=pc,
             )
         )
-        ttnn.deallocate(qs)
+        if not split:
+            ttnn.deallocate(qs)
     out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     for t in outs:
         ttnn.deallocate(t)
@@ -467,15 +472,35 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     )  # [1, 1, S/4, (H + 2) * D]
     ttnn.deallocate(xa)
 
-    # Q on the owned slices (natural rows of the full Q buffer), K over the local rows, V a column slice.
+    # SDPA config (ring op, or the chunked pair on 16-bit dest).
+    ring_cfg = mc.get("SDPA_RING_PROGCFG", mc["SDPA_PROGCFG"])
+    ckc = attn.compute_kernel_config_hifi4
+    if attn.compute_kernel_config_ring_sdpa_long is not None:
+        ckc = attn.compute_kernel_config_ring_sdpa_long
+        if sdpa_fp16_acc():
+            ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ckc.math_fidelity,
+                math_approx_mode=ckc.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=ckc.packer_l1_acc,
+            )
+    ring_pc = ring_cfg(S, chunk_start_idx=0)
+    use_chunked = chunked_sdpa_enabled() and not ckc.fp32_dest_acc_en
+
+    # Q on the owned slices, K over the local rows, V a column slice. Chunked pair: Q written straight into one
+    # [1, H, S/8, D] buffer per owned slice (what each chunked call reads); ring op: the natural rows of a full Q.
     from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
 
     trans = attn.transformation_mats["prefill"]
-    q_8b = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, H, S, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, attn.mesh_device, ttnn.DRAM_MEMORY_CONFIG
-    )
+    q_rows = ctx.lay.sl if use_chunked else S
+    q_8b = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, H, q_rows, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, attn.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        for _ in range(2 if use_chunked else 1)
+    ]
     qwen_q_prep(
-        q_8b,
+        q_8b[0],
         rot_mats[0],
         rot_mats[1],
         trans,
@@ -484,6 +509,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         src=xqkv,
         src_col=0,
         src_local=True,
+        q_out1=q_8b[1] if use_chunked else None,
     )
     rot_local = attn._qwen_local_q_setup(rot_mats, S)[3]
     k_loc = ttnn.allocate_tensor_on_device(
@@ -523,27 +549,15 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         ttnn.fill_cache(keys, k_fill, user_id % attn.batch_size_per_device_group)
         ttnn.fill_cache(values, v_fill, user_id % attn.batch_size_per_device_group)
 
-    # Ring SDPA, today's call: Q owned slices, natural K / V -> [1, H, S/4, D] in the column's local order.
-    ring_cfg = mc.get("SDPA_RING_PROGCFG", mc["SDPA_PROGCFG"])
-    ckc = attn.compute_kernel_config_hifi4
-    if attn.compute_kernel_config_ring_sdpa_long is not None:
-        ckc = attn.compute_kernel_config_ring_sdpa_long
-        if sdpa_fp16_acc():
-            ckc = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ckc.math_fidelity,
-                math_approx_mode=ckc.math_approx_mode,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=ckc.packer_l1_acc,
-            )
-    ring_pc = ring_cfg(S, chunk_start_idx=0)
-    if chunked_sdpa_enabled() and not ckc.fp32_dest_acc_en:
+    if use_chunked:
         # The scratch buffers [S/64, 1, 64, 128] read as a paged cache through the identity table.
         attn_out = chunked_sdpa_pair(
             ctx, q_8b, ks, vs, ctx.identity_page_table(), attn.scale, ckc, chunked_sdpa_config(ring_pc, ctx.lay.sl)
         )
     else:
+        # Ring SDPA: Q owned slices, natural K / V -> [1, H, S/4, D] in the column's local order.
         attn_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
-            q_8b,
+            q_8b[0],
             k_nat,
             v_nat,
             ring_size=COLS,
@@ -553,7 +567,8 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
             page_table=None,
             chunk_start_idx=None,
         )
-    ttnn.deallocate(q_8b)
+    for t in q_8b:
+        ttnn.deallocate(t)
     cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S/4, H*D]
     ttnn.deallocate(attn_out)
     o = ttnn.experimental.minimal_matmul(

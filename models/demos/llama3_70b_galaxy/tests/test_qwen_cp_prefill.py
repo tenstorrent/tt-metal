@@ -169,7 +169,36 @@ def test_cp_q_prep_local(mesh_device, seq_len):
                 bad.append(f"{tag} device {i} local V differs from today's V rows")
         assert not bad, "\n".join(bad[:16])
         logger.info(f"S={seq_len} {tag}: local-src Q (owned slices), local K, local V == today's on all 32 devices")
-        for t in (q_new, k_loc, v_loc):
+
+        # Split output (q_out1): one [1, H, sl, D] buffer per owned slice == that slice of the natural-row Q.
+        q_split = [
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, H, sl, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for _ in range(2)
+        ]
+        qwen_q_prep(
+            q_split[0],
+            cos,
+            sin,
+            trans_mat,
+            attn.q_norm.weight,
+            eps=attn.q_norm.eps,
+            src=xqkv_local,
+            src_col=0,
+            src_local=True,
+            q_out1=q_split[1],
+        )
+        ttnn.synchronize_device(mesh_device)
+        devs = zip(*(ttnn.get_device_tensors(t) for t in (q_new, q_split[0], q_split[1])))
+        for i, (qn, q0, q1) in enumerate(devs):
+            qn = ttnn.to_torch(qn)
+            for j, (s, qj) in enumerate(zip(column_slices(i % cols, cols), (q0, q1))):
+                if not torch.equal(qn[:, :, s * sl : (s + 1) * sl], ttnn.to_torch(qj)):
+                    bad.append(f"{tag} device {i} split Q local slice {j} (slice {s}) differs")
+        assert not bad, "\n".join(bad[:16])
+        logger.info(f"S={seq_len} {tag}: split-output Q == the natural-row Q slices on all 32 devices")
+        for t in (q_new, k_loc, v_loc, *q_split):
             ttnn.deallocate(t)
 
 
@@ -865,4 +894,13 @@ def test_cp_chunked_sdpa_pair(mesh_device, seq_len):
     rows_eq = all(torch.equal(nd[r * COLS + c], nd[c]) for r in range(ROWS) for c in range(COLS))
     rep_eq = all(torch.equal(a, b) for a, b in zip(nd, nd2))
     logger.info(f"CP_CHUNKED S={seq_len} q{pc.q_chunk_size} k{pc.k_chunk_size}: rows equal {rows_eq}, repeat {rep_eq}")
+
+    # The model's form: Q as one [1, H, S/8, D] buffer per owned slice (qwen_q_prep q_out1) == the natural-Q form,
+    # bit for bit, on all 32 devices.
+    tabs = ctx._chunked_sdpa[(N_LOCAL_HEADS, HEAD_DIM)]
+    q_split = [ttnn.slice(q, starts=st, ends=en, slice_dim=2, num_devices=2 * COLS) for st, en, _ in tabs]
+    out_split = cp.chunked_sdpa_pair(ctx, q_split, kv[0], kv[1], ctx.identity_page_table(), scale, ckc, pc)
+    split_eq = sum(int(torch.equal(ttnn.to_torch(d), r)) for d, r in zip(ttnn.get_device_tensors(out_split), nd))
+    logger.info(f"CP_CHUNKED S={seq_len} split-Q form == natural-Q form on {split_eq}/32 devices")
     assert rows_eq and rep_eq and not bad, bad
+    assert split_eq == ROWS * COLS, split_eq
