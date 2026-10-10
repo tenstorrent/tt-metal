@@ -43,3 +43,24 @@ def test_prefill_contract(device, layer_idx):
     x, out = last
     again = to_host(layer(x, rotary), out.shape)
     assert torch.equal(out, again), "Repeated identical prefill must be bit-identical"
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_prefill_contract_full_attention_chunked(device):
+    """The multi-chunk full-attention path (paged cache + chunked SDPA), which the stage-3B default
+    (the whole request as one chunk) no longer takes for bucket lengths: same request order and
+    checks as above with 2048-token full-attention chunks."""
+    layer = build_tt_layer(device, 3)
+    layer.config.optimizations.prefill_chunk_full_attention = 2048
+    rotary = build_rotary(device)
+    last = None
+    for seq_len in REQUEST_LENGTHS:
+        golden = hf_layer_goldens(3, seq_len)
+        x = to_device(golden["input"], device)
+        out = to_host(layer(x, rotary), golden["layer"].shape)
+        check_pcc(golden["layer"], out, module="contract_full_attention_chunked", layer=3, seq_len=seq_len)
+        last = (x, out)
+    x, out = last
+    again = to_host(layer(x, rotary), out.shape)
+    assert torch.equal(out, again), "Repeated identical prefill must be bit-identical"

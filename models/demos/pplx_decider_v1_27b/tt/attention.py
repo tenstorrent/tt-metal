@@ -7,11 +7,13 @@ head_dim before partial RoPE (first 64 of 256 dims). GQA 24 query / 4 KV heads, 
 then ``attn * sigmoid(gate)`` and o_proj. q|k|v is one matmul and the gate a second one; RoPE is
 one full-width ``rotary_embedding_llama`` per tensor on pre-permuted head dims (see rope.py).
 
-Prefill runs in bounded chunks. Each chunk writes its K/V into a request-local paged cache
-(allocated once at setup, sized for ``max_seq_len``) and runs chunked causal SDPA over the
-accumulated prefix, so any logical length up to ``max_seq_len`` is accepted. Stale cache rows
-from earlier requests are never visible: every query only attends to keys at positions <= its own,
-and those rows are always rewritten by the current request first.
+Prefill runs in chunks (stage 3B default: the whole request is one chunk). The first chunk runs
+plain causal SDPA on its own q/k/v. Each later chunk writes its K/V into a request-local paged
+cache (allocated once at setup, sized for ``max_seq_len``; the first chunk writes it too when a
+later chunk follows) and runs chunked causal SDPA over the accumulated prefix, so any logical
+length up to ``max_seq_len`` is accepted. Stale cache rows from earlier requests are never
+visible: every query only attends to keys at positions <= its own, and those rows are always
+rewritten by the current request first.
 
 Adapted from models/demos/qwen38_27b_qb2/tt/decoder.py (_qkv, _rope, _full_prefill), single device.
 """
@@ -124,10 +126,21 @@ class PplxGatedAttention(LightweightModule):
             compute_kernel_config=self.config.optimizations.attention.rope_compute_kernel_cfg,
         )
 
-    def forward(self, x: ttnn.Tensor, *, start_pos: int, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    def _fill_cache(self, k, v, start_pos: int, t: int) -> None:
+        first, last = start_pos // self.page_size, (start_pos + t + self.page_size - 1) // self.page_size
+        chunk_table = self.page_table[:, first:last]
+        for cache, update in ((self.key_cache, k), (self.value_cache, v)):
+            if update.dtype != cache.dtype:
+                update = ttnn.typecast(update, cache.dtype)
+            ttnn.experimental.paged_fill_cache(cache, update, chunk_table, batch_idx=0)
+
+    def forward(
+        self, x: ttnn.Tensor, *, start_pos: int, cos: ttnn.Tensor, sin: ttnn.Tensor, last_chunk: bool = False
+    ) -> ttnn.Tensor:
         """One prefill chunk. x: [1, t, 5120] (input-normed), positions start_pos..start_pos+t-1.
 
         ``start_pos`` must be a multiple of the page size; chunks of one request arrive in order.
+        ``last_chunk``: no later chunk of this request follows (a single-chunk request skips the cache write).
         """
         self.load_device_weights()
         a, opts = self.config.args, self.config.optimizations
@@ -151,34 +164,51 @@ class PplxGatedAttention(LightweightModule):
         q = self._rope(self._head_norm(q, self.q_norm), cos, sin)
         k = self._rope(self._head_norm(k, self.k_norm), cos, sin)
 
-        # Cache write for this chunk's pages, then causal SDPA over the whole prefix.
         att = opts.attention
-        first, last = start_pos // self.page_size, (start_pos + t + self.page_size - 1) // self.page_size
-        chunk_table = self.page_table[:, first:last]
-        for cache, update in ((self.key_cache, k), (self.value_cache, v)):
-            if update.dtype != cache.dtype:
-                update = ttnn.typecast(update, cache.dtype)
-            ttnn.experimental.paged_fill_cache(cache, update, chunk_table, batch_idx=0)
-        q_chunk = att.sdpa_q_chunk if t >= att.sdpa_q_chunk else 32
-        k_chunk = att.sdpa_k_chunk
-        capacity = self.num_pages * self.page_size
-        while start_pos % q_chunk:
-            q_chunk //= 2
-        while start_pos % k_chunk or ((start_pos + t + k_chunk - 1) // k_chunk) * k_chunk > capacity:
-            k_chunk //= 2
-        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
-            q,
-            self.key_cache,
-            self.value_cache,
-            self.page_table,
-            start_pos,
-            scale=a.head_dim**-0.5,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=att.sdpa_grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
-            ),
-            compute_kernel_config=att.compute_kernel_cfg,
-        )
-        attn = ttnn.transformer.concatenate_heads(attn)
+        sdpa_config = dict(compute_with_storage_grid_size=att.sdpa_grid, exp_approx_mode=att.sdpa_exp_approx)
+        if start_pos == 0 and att.sdpa_plain_first_chunk:
+            # First chunk: causal SDPA on this chunk's own q/k/v, heads written side by side by the op
+            # (no concatenate_heads). The cache is filled only when a later chunk will read it.
+            if not last_chunk:
+                self._fill_cache(k, v, start_pos, t)
+            q_chunk = att.sdpa_plain_q_chunk_long if t >= att.sdpa_plain_long_rows else att.sdpa_plain_q_chunk
+            k_chunk = att.sdpa_plain_k_chunk
+            while q_chunk > 32 and q_chunk > t:
+                q_chunk //= 2
+            while k_chunk > 32 and k_chunk > t:
+                k_chunk //= 2
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=True,
+                scale=a.head_dim**-0.5,
+                program_config=ttnn.SDPAProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, **sdpa_config),
+                compute_kernel_config=att.compute_kernel_cfg,
+                output_concat_heads=True,
+            )
+            attn = ttnn.reshape(attn, [b, t, a.num_attention_heads * a.head_dim])  # [1, 1, t, H*D] -> view
+        else:
+            # Later chunks: cache write for this chunk's pages, then causal SDPA over the whole prefix.
+            self._fill_cache(k, v, start_pos, t)
+            q_chunk = att.sdpa_q_chunk if t >= att.sdpa_q_chunk else 32
+            k_chunk = att.sdpa_k_chunk
+            capacity = self.num_pages * self.page_size
+            while start_pos % q_chunk:
+                q_chunk //= 2
+            while start_pos % k_chunk or ((start_pos + t + k_chunk - 1) // k_chunk) * k_chunk > capacity:
+                k_chunk //= 2
+            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q,
+                self.key_cache,
+                self.value_cache,
+                self.page_table,
+                start_pos,
+                scale=a.head_dim**-0.5,
+                program_config=ttnn.SDPAProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, **sdpa_config),
+                compute_kernel_config=att.compute_kernel_cfg,
+            )
+            attn = ttnn.transformer.concatenate_heads(attn)
         # Sigmoid stays an input activation of the mul: as a minimal_matmul epilogue it measured
         # +145 us on the gate matmul at S=2048 against -5 us on the mul (stage 2, rejected).
         gated = ttnn.mul(attn, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])

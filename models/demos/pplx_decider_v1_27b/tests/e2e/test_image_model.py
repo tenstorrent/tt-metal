@@ -20,7 +20,8 @@ Gates (person-approved, decisions.tsv 2026-10-09):
 Recorded: final-hidden PCC, max |prob diff|, last-token residual PCC after each of the 64 layers
 (rows in ``TRACE_ROWS``). Also: ``TTDecider.predict(..., images=[path])`` on a golden row,
 determinism, and the runtime fallback audit of an image request. Results go to
-``$PPLX_DECIDER_STAGE12B_DIR``.
+``$PPLX_DECIDER_IMAGE_E2E_DIR`` (else ``$PPLX_DECIDER_STAGE12B_DIR``, else
+artifacts/pplx_decider/stage12b/image_e2e/).
 
 Run::
 
@@ -49,8 +50,12 @@ from models.demos.pplx_decider_v1_27b.tt.model import IMAGE_TOKEN_ID, PplxDecide
 GOLDEN_DIR = Path(
     os.environ.get("PPLX_DECIDER_IMAGE_GOLDEN", "/local/ttuser/gtobar/artifacts/pplx_decider/goldens/vision/e2e")
 )
+# Output directory: $PPLX_DECIDER_IMAGE_E2E_DIR (stage-neutral; set it per run so a rerun never
+# overwrites another stage's evidence), else the older $PPLX_DECIDER_STAGE12B_DIR, else the 12B default.
 OUT_DIR = Path(
-    os.environ.get("PPLX_DECIDER_STAGE12B_DIR", "/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e")
+    os.environ.get("PPLX_DECIDER_IMAGE_E2E_DIR")
+    or os.environ.get("PPLX_DECIDER_STAGE12B_DIR")
+    or "/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e"
 )
 MIN_AGREE = 7
 NEAR_TIE_GAP = 0.05

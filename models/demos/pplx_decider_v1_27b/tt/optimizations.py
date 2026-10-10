@@ -150,6 +150,12 @@ class LinearOptimizations:
 class NormOptimizations:
     compute_kernel_cfg: object
     output_memcfg: ttnn.MemoryConfig
+    # Rows up to this count run a block-sharded L1 norm (DRAM -> L1 shards -> norm -> DRAM) on
+    # sharded_grid_x columns x up to sharded_grid_y rows of cores; the interleaved norm uses one core
+    # per 32-row tile row (4 cores at S=128). 0 disables it.
+    sharded_max_rows: int = 0
+    sharded_grid_x: int = 10
+    sharded_grid_y: int = 4
 
 
 @dataclass
@@ -162,6 +168,17 @@ class AttentionOptimizations:
     compute_kernel_cfg: object
     # rotary_embedding_llama rejects fp32 dest accumulation for head_dim > 128.
     rope_compute_kernel_cfg: object
+    sdpa_exp_approx: bool = False
+    # First chunk of a request (start_pos 0): causal SDPA straight on this chunk's q/k/v instead of
+    # chunked SDPA over the paged cache (the cache is still filled for later chunks).
+    sdpa_plain_first_chunk: bool = False
+    # q/k chunk sizes of that plain causal SDPA (halved while larger than the chunk length); chunks of
+    # at least sdpa_plain_long_rows rows use sdpa_plain_q_chunk_long (fewer, larger q blocks pay
+    # only when there are enough of them to fill the grid).
+    sdpa_plain_q_chunk: int = 128
+    sdpa_plain_k_chunk: int = 128
+    sdpa_plain_q_chunk_long: int = 128
+    sdpa_plain_long_rows: int = 2048
 
 
 @dataclass
@@ -171,6 +188,8 @@ class DeltaOptimizations:
     conv_channel_chunk: int
     scan_chunk: int
     elementwise_compute_kernel_cfg: object
+    # chunk_gated_delta_rule program config (None: the op's cost model picks fused or phased).
+    scan_program_config: object | None = None
 
 
 @dataclass
@@ -178,11 +197,21 @@ class Optimizations:
     mesh_device: object
     policy: PrecisionPolicy
     max_seq_len: int
-    prefill_chunk: int  # bounded physical chunk for every layer; logical lengths are arbitrary
+    prefill_chunk: int  # bounded physical chunk (linear-attention layers); logical lengths are arbitrary
     linear: LinearOptimizations
     norm: NormOptimizations
     attention: AttentionOptimizations
     delta: DeltaOptimizations
+    # Physical chunk of the full-attention layers. Stage 3B: the whole request (max_seq_len) by
+    # default; one causal SDPA over the request measured -4.9 ms per layer at S=8192 and -1.2 ms at
+    # 4096 against 2048-token chunks. Linear-attention layers lost with longer chunks (S=8192:
+    # 40.3 -> 74.2 / 71.3 ms at 4096 / 8192) and keep ``prefill_chunk``.
+    prefill_chunk_full_attention: int | None = None
+
+    def chunk_for(self, kind: str) -> int:
+        if kind == "full_attention" and self.prefill_chunk_full_attention:
+            return self.prefill_chunk_full_attention
+        return self.prefill_chunk
 
     @classmethod
     def build(
@@ -192,11 +221,14 @@ class Optimizations:
         policy: PrecisionPolicy | None = None,
         max_seq_len: int = 8192,
         prefill_chunk: int = 2048,
+        prefill_chunk_full_attention: int | None = None,
     ) -> "Optimizations":
         policy = policy or PrecisionPolicy.default()
         grid = mesh_device.compute_with_storage_grid_size()
-        if prefill_chunk % 128:
-            raise ValueError("prefill_chunk must be a multiple of the 128-token SDPA chunk")
+        if prefill_chunk_full_attention is None:
+            prefill_chunk_full_attention = (max_seq_len + 127) // 128 * 128
+        if prefill_chunk % 128 or prefill_chunk_full_attention % 128:
+            raise ValueError("prefill chunks must be multiples of the 128-token SDPA chunk")
         linear = LinearOptimizations(
             compute_kernel_cfg={role: _compute_cfg(policy.fidelities[role]) for role in ROLES},
             output_dtype=getattr(ttnn, policy.activation_dtype),
@@ -217,8 +249,16 @@ class Optimizations:
             short_swiglu_blocks=(4, 32, 8, 1, 4),
         )
         norm = NormOptimizations(
-            compute_kernel_cfg=_compute_cfg(policy.norm_fidelity),
+            # Stage 3B: no fp32 dest accumulation in the RMSNorms (same fidelity): 2048 rows 194 -> 153 us,
+            # 8192 rows 737 -> 482 us per norm; layer PCC stays >= 0.99993 (work_log.md section 9).
+            compute_kernel_cfg=_compute_cfg(policy.norm_fidelity, fp32_dest_acc=False),
             output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+            # Stage 3B: the 128 bucket norms on 8 cores block-sharded (82 -> 23 us + 2 x 5 us reshard,
+            # device). Measured in an 8-layer stack: -81 us per layer; a single synced layer shows no
+            # wall-clock change (host dispatch gaps). Longer rows do not fit L1 (2048) or gain < 20 us (1024).
+            sharded_max_rows=128,
+            sharded_grid_x=8,
+            sharded_grid_y=1,
         )
         attention = AttentionOptimizations(
             kv_cache_dtype=getattr(ttnn, policy.kv_cache_dtype),
@@ -228,13 +268,24 @@ class Optimizations:
             sdpa_grid=(grid.x, grid.y),
             compute_kernel_cfg=_compute_cfg("HiFi4"),
             rope_compute_kernel_cfg=_compute_cfg("HiFi4", fp32_dest_acc=False),
+            # Stage 3B (work_log.md section 9): approximate exp in the softmax (-2.9 ms per full layer
+            # at S=8192, PCC unchanged to 1e-6); plain causal SDPA with heads concatenated by the op for
+            # the first (default: only) chunk; q chunk 256 from 2048 rows (-7.6 ms at 8192, +0.1 ms
+            # at 1024, so 128 below). q 256 / k 256 and larger do not fit L1 (head_dim 256).
+            sdpa_exp_approx=True,
+            sdpa_plain_first_chunk=True,
+            sdpa_plain_q_chunk_long=256,
         )
         delta = DeltaOptimizations(
             recurrent_dtype=getattr(ttnn, policy.recurrent_dtype),
             conv_state_dtype=getattr(ttnn, policy.conv_state_dtype),
-            conv_channel_chunk=256,
+            conv_channel_chunk=512,  # stage 3B: -0.12 ms per layer at S=2048, -0.47 ms at 8192 vs 256
             scan_chunk=32,
             elementwise_compute_kernel_cfg=_compute_cfg("HiFi4"),
+            # Stage 3B: the fused prep->scan program (one producer + one receiver core per head on the
+            # 13x10 grid). The op's cost model picks the phased path here, but fused measured
+            # -0.76 ms per layer at S=2048 and -3.0 ms at 8192, output bit-identical.
+            scan_program_config=ttnn.ChunkGdnFusedProgramConfig(),
         )
         return cls(
             mesh_device=mesh_device,
@@ -245,6 +296,7 @@ class Optimizations:
             norm=norm,
             attention=attention,
             delta=delta,
+            prefill_chunk_full_attention=prefill_chunk_full_attention,
         )
 
 

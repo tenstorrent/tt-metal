@@ -177,6 +177,7 @@ class PplxGatedDeltaNet(LightweightModule):
             output_final_state=True,
             output_head_major=True,
             chunk_size=opts.delta.scan_chunk,
+            program_config=opts.delta.scan_program_config,
             **self.scan_constants,
         )
         z = pad_time(z)

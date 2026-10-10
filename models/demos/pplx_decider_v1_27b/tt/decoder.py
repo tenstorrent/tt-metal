@@ -6,7 +6,8 @@
 attention (layer index 3 mod 4) or Gated DeltaNet (the rest).
 
 Prefill accepts any logical length 1..max_seq_len. It runs bounded physical chunks of
-``Optimizations.prefill_chunk`` tokens (page/SDPA aligned); attention K/V and DeltaNet
+``Optimizations.chunk_for(kind)`` tokens (page/SDPA aligned; full-attention layers default to
+the whole request, linear-attention layers to ``prefill_chunk``); attention K/V and DeltaNet
 state carry across chunks on device. The forward contains only TTNN device ops.
 """
 
@@ -73,7 +74,7 @@ class PplxDecoderLayer(LightweightModule):
             raise ValueError(f"Unknown layer kind {self.kind}")
 
     def _chunks(self, length: int):
-        chunk = self.config.optimizations.prefill_chunk
+        chunk = self.config.optimizations.chunk_for(self.kind)
         if length < 1 or length > self.config.args.max_seq_len:
             raise ValueError(f"Prefill length {length} outside 1..{self.config.args.max_seq_len}")
         return [(start, min(chunk, length - start)) for start in range(0, length, chunk)]
@@ -85,7 +86,8 @@ class PplxDecoderLayer(LightweightModule):
             chunk = x[:, start : start + count, :] if count != x.shape[1] else x
             if self.kind == "full_attention":
                 cos, sin = rotary(start, count)
-                outputs.append(self.mixer(chunk, start_pos=start, cos=cos, sin=sin))
+                last = start + count == x.shape[1]
+                outputs.append(self.mixer(chunk, start_pos=start, cos=cos, sin=sin, last_chunk=last))
             else:
                 out, state = self.mixer(chunk, state)
                 outputs.append(out)
@@ -101,7 +103,8 @@ class PplxDecoderLayer(LightweightModule):
             normed = self.input_norm(chunk)
             if self.kind == "full_attention":
                 cos, sin = rotary(start, count)
-                mixed = self.mixer(normed, start_pos=start, cos=cos, sin=sin)
+                last = start + count == x.shape[1]
+                mixed = self.mixer(normed, start_pos=start, cos=cos, sin=sin, last_chunk=last)
             else:
                 mixed, state = self.mixer(normed, state)
             ttnn.deallocate(normed)

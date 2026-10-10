@@ -124,7 +124,8 @@ def test_layer_and_module_perf(device, layer_name):
     layer_idx = LAYERS[layer_name]
     layer = build_tt_layer(device, layer_idx)
     rotary = build_rotary(device) if layer.kind == "full_attention" else None
-    chunk = layer.config.optimizations.prefill_chunk
+    opts = layer.config.optimizations
+    chunk = opts.chunk_for(layer.kind) if hasattr(opts, "chunk_for") else opts.prefill_chunk
     for seq_len in PERF_SEQ_LENS:
         x = _layer_input(device, layer_idx, seq_len)
         record("layer", layer.kind, layer_idx, seq_len, time_passes(device, lambda: layer(x, rotary)))
