@@ -694,6 +694,11 @@ void call_unary_sfpu_operation_init()
             _init_topk();
         }
     }
+    else if constexpr (OPERATION == SfpuType::negative)
+    {
+        // Negative and NegativeInt share an init: the dispatcher's.
+        llk::sfpu::UnaryDispatch<ckernel::sfpu::Negative>::init().run();
+    }
     else
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
@@ -991,13 +996,16 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
+        // UnaryDispatch covers the whole tile, which is what every caller of this helper asks for.
+        static_assert(ITERATIONS == 32, "negative runs through UnaryDispatch, which covers the whole tile");
+        LLK_ASSERT(vector_mode == VectorMode::None, "negative runs through UnaryDispatch, which covers the whole tile");
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+            llk::sfpu::UnaryDispatch<ckernel::sfpu::NegativeInt>::execute<DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(dst_index, dst_index).run();
         }
         else
         {
-            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+            llk::sfpu::UnaryDispatch<ckernel::sfpu::Negative>::execute<DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(dst_index, dst_index).run();
         }
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
