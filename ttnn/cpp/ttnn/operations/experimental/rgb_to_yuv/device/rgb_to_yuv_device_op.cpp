@@ -53,11 +53,17 @@ void RgbToYuvDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(shape[1] > 0 && shape[2] > 0 && shape[3] > 0, "Patchified input dims must be positive ({})", shape);
     }
 
-    TT_FATAL(
-        in.logical_shape() == in.padded_shape(),
-        "Padded input is not supported (logical {} vs padded {})",
-        in.logical_shape(),
-        in.padded_shape());
+    // Patchified input may pad its channel dim (conv3d rounds C_out up to a tile): the reader reads
+    // each page at the aligned page stride and uses only the first 3*p*p channels.
+    const auto& padded = in.padded_shape();
+    bool padding_ok = in.logical_shape() == padded;
+    if (p != 0 && !padding_ok) {
+        padding_ok = padded[4] >= shape[4];
+        for (int i = 0; i < 4; i++) {
+            padding_ok = padding_ok && padded[i] == shape[i];
+        }
+    }
+    TT_FATAL(padding_ok, "Padded input is not supported (logical {} vs padded {})", in.logical_shape(), padded);
 
     TT_FATAL(
         in.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
