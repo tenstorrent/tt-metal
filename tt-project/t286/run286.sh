@@ -12,10 +12,12 @@ if [ -z "$T286_INNER" ]; then
   wait $PG; exit $?
 fi
 TAG=${1:?tag}; DUR=${2:?duration}
+# T286_ONCE=1: the clip already passed in an earlier job, so a queued repeat exits before the device.
+[ "${T286_ONCE:-0}" = 1 ] && [ -e $T/out_$TAG/PASS ] && { echo "[t286] $TAG already passed"; exit 0; }
 # Stop before any large write if / is too full (blx03 cap 85%, blx01 70%) or our own t286 outputs
-# and caches have grown past 120 GB.
+# and caches have grown past T286_FOOT_MAX GB.
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); [ "$use" -le ${T286_ROOT_MAX:-70} ] || { echo "[t286] / at $use%"; exit 5; }
-gb=$(timeout 60 du -csxBG $T $F/cache/dit-h3hf $F/cache/tt-metal-cache-h3hf 2>/dev/null | tail -1 | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le 120 ] || { echo "[t286] footprint ${gb}G"; exit 5; }
+gb=$(timeout 60 du -csxBG $T $F/cache/dit-h3hf $F/cache/tt-metal-cache-h3hf 2>/dev/null | tail -1 | cut -f1 | tr -dc 0-9); [ "${gb:-0}" -le ${T286_FOOT_MAX:-120} ] || { echo "[t286] footprint ${gb}G"; exit 5; }
 OUT=$T/out_$TAG; mkdir -p $OUT $F/tmp
 export HOME=$F/home XDG_CACHE_HOME=$F/home/.cache TMPDIR=$F/tmp TORCH_HOME=$F/home/.cache/torch HF_HOME=$F/home/.cache/huggingface HF_HUB_OFFLINE=1
 # Weights must be on local disk, checked readable before submit (never /mnt or other network fs).
@@ -41,4 +43,5 @@ eval "$CMD" 2>&1 | tee -a $OUT/run.log; rc=${PIPESTATUS[0]}
 echo "[t286] process wall $(( $(date +%s) - T0 )) s" | tee -a $OUT/run.log
 cp -p $HOME/h3_turbo_artifacts/fl2va_turbo_1344x768_${DUR}s_4fwd.mp4 $OUT/ 2>/dev/null
 echo "T286_EXIT=$rc" | tee -a $OUT/run.log
+[ $rc = 0 ] && touch $OUT/PASS
 exit $rc

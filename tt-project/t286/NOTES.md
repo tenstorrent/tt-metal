@@ -136,3 +136,32 @@ Wait on g14blx03:/var/tmp/fasth3/runner/done/t286-t10-r3.done (probe.sh t286-t10
 markers, grep the log_pipeline_perf table from /var/tmp/fasth3/t286/out_{t5,t10}/run.log, check AICLK
 lines, ffmpeg a still, copy stills+logs to tt-project/baselines/fasth3/. If t5 timed out: read where
 the time went in out_t5/run.log and restructure.
+
+## 2026-10-10 ~04:45 UTC (#314, run 1270): r3 jobs failed, restructured with a warm deadline
+- t5-r3: two broker jobs, both killed at the 600 s cap inside the construction warmup, and the
+  runner counted both as drops (config h3turbo-5s now skipped):
+  - job 807 (03:13): VAE warm 6 s (plugin OK), then audio decode warm cold-compiled at ~60 s/length,
+    9/12 done at the kill. Post-job: fabric UNHEALTHY ("mesh cannot run a program"), broker reset.
+  - job 820 (03:55): audio done, prompt-encoder keyframe layouts 8/28 at ~25 s each (cold JIT) at the
+    kill. Post-job: chip 30 (tray 3) fell off PCIe; broker walked per-tray BMC resets, chips 16-31
+    off the bus at 04:09:47, recovered later (t10-r3 at 04:32 had a healthy post-job gate).
+- t10-r3 = job 834: exit 5 in 5 s on run286.sh's own guard "[t286] footprint 124G" (limit 120:
+  dit-h3hf 115G + JIT cache 9.5G).
+- Cause: the 4x8 preset buckets (26 rungs) and traces audio, so construction warms every served
+  shape (93 VAE canvases, 12 audio lengths, 28 prompt layouts, 26 denoise rungs). Cold JIT does not
+  fit one job; JIT persists in /var/tmp/fasth3/cache/tt-metal-cache-h3hf, so each job gets further.
+  Killing a job at the cap twice left the box unhealthy, so jobs must end before the cap.
+- Fix: t286_skipvaewarm.py adds T286_WARM_DEADLINE_S (stop between warm items past it, RuntimeError
+  -> test fails, mesh closes cleanly) and T286_WARM_LATE_S (fail if warmup ends later than this, so
+  the generation never starts too late). run286.sh: T286_FOOT_MAX (140), T286_ONCE=1 (a clip with
+  out_<tag>/PASS exits before the device). Prompt-encoder/audio/denoise warmups are NOT trimmed:
+  4x8 captures audio traces, and compiling after capture can corrupt a replay.
+- New config keys h3turbo-5s-dl / h3turbo-10s-dl (restructured job, not a retry of the dropped one).
+- blx03 / at 72% (252G free) at 04:45 (someone else freed space).
+- Queued: t286-t5-dl{a,b,c,d} (deadline 400, late 330) then t286-t10-dl{a,b} (400/300).
+## Next step
+Wait on probe.sh t286-t10-dlb. Then: done markers of all six; out_t5/PASS and out_t10/PASS; grep
+log_pipeline_perf table + "[t286] construction warmup done" from out_{t5,t10}/run.log; AICLK lines;
+ffmpeg still; copy stills+logs to tt-project/baselines/fasth3/. If no PASS: read how far warmup got
+in the last job (it should advance each job) and queue more dl jobs, or trim warmups if a fully warm
+warmup alone exceeds ~330 s.

@@ -61,3 +61,16 @@ Same scripts as t301 (t301/run301.sh, env.yaml on blx01 /var/tmp/fasth3/t301), k
   setup first: blx03 has gemma but no ltx-2.3-22b-distilled-1.1 checkpoint and no main/PR builds; needs
   g14blx03-device resource); (c) 2026-10-11 02:00 UTC -> both arms clamped on blx01 (242 + 349 may already serve), relative only.
 - 02:26 UTC: blx03 answers ssh (up 2:20), broker healthy and serving ltx-host 792; no READY marker.
+
+## Run 5 (2026-10-10 04:38 UTC wake) — final
+- Probe passed on (b): g14blx03.READY written 04:36 UTC by #318. blx01 still clamped (jobs 363, 366: 32 AICLK warnings).
+- Job 349 (main 80b1cd689d0, clamped 900 MHz, same as PR job 242) completed exit 0 in 310.8 s, PASSED.
+  Gen #2 table (verbatim, run log results/run_main_job349_aiclk900.log.gz):
+    Encoder 0.25 | Stage 1 2.93 | Upsample 0.14 | Stage 2 3.37 | VAE 0.93 | Audio 0.47 | Total 8.09 s
+  PR job 242 (df9e5ecaac6, same clamp): Encoder 0.26 | S1 2.83 | Up 0.14 | S2 3.20 | VAE 0.92 | Audio 0.47 | Total 7.83 s
+  Clamped pair: -0.26 s total (S1 -0.10, S2 -0.17, rest within 0.01). Relative only.
+- Did NOT start the blx03 arms: this task has no g14blx03-device resource, and blx03 has no LTX-2.3 checkpoint
+  and no main/PR builds (two builds + checkpoint copy on a box with 155 GB free, "keep blx03 footprint small").
+  Proposed as a follow-up instead.
+- Cleanup on blx01: removed t301/pr worktree, t301/jit-{main,pr}, t301/out_*, t305/out_* (147G -> 128G);
+  kept t293/main (other tasks' main build) and small logs. No run30x/pytest processes of ours left.
