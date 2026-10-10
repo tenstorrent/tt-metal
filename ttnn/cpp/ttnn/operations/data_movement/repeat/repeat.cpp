@@ -8,6 +8,8 @@
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
@@ -374,15 +376,37 @@ void validate_optional_output(
     const auto& out = optional_output_tensor.value();
 
     if (memory_config.has_value()) {
+        const auto& out_mc = out.memory_config();
         TT_FATAL(
-            memory_config->buffer_type() == out.memory_config().buffer_type() &&
-                memory_config->memory_layout() == out.memory_config().memory_layout(),
+            memory_config->buffer_type() == out_mc.buffer_type(),
             "repeat: memory_config must match optional_output_tensor memory config");
-        // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
-        if (memory_config->shard_spec().has_value()) {
+        if (memory_config->created_with_nd_shard_spec()) {
+            // A config built from an NdShardSpec is ND_SHARDED, but a tensor allocated from it is normalized to
+            // HEIGHT/WIDTH/BLOCK_SHARDED when the spec fits a 2D shard. Compare the ND spec, not the layout.
+            // created_with_nd_shard_spec() also covers such a config read back from a tensor, which then carries
+            // a legacy shard_spec too.
             TT_FATAL(
-                memory_config->shard_spec() == out.memory_config().shard_spec(),
-                "repeat: memory_config shard_spec must match optional_output_tensor");
+                memory_config->nd_shard_spec() == out_mc.nd_shard_spec(),
+                "repeat: memory_config nd_shard_spec must match optional_output_tensor");
+            // Only the layout is relaxed: the allocation flags change allocator semantics, as in operator==.
+            namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+            namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+            TT_FATAL(
+                per_core_allocation::is_per_core_allocation(*memory_config) ==
+                        per_core_allocation::is_per_core_allocation(out_mc) &&
+                    range_lockstep_allocation::is_range_lockstep_allocation(*memory_config) ==
+                        range_lockstep_allocation::is_range_lockstep_allocation(out_mc),
+                "repeat: memory_config allocation mode must match optional_output_tensor");
+        } else {
+            TT_FATAL(
+                memory_config->memory_layout() == out_mc.memory_layout(),
+                "repeat: memory_config must match optional_output_tensor memory config");
+            // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
+            if (memory_config->shard_spec().has_value()) {
+                TT_FATAL(
+                    memory_config->shard_spec() == out_mc.shard_spec(),
+                    "repeat: memory_config shard_spec must match optional_output_tensor");
+            }
         }
     }
 
@@ -574,7 +598,9 @@ ttnn::Tensor repeat_native(
     // Composite-only re-shard; native path already wrote sharded output.
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
-        if (!final_mc.shard_spec().has_value()) {
+        // Synthesize only for a config with no spec at all. A config built from an NdShardSpec carries
+        // only nd_shard_spec and is placed as requested.
+        if (!final_mc.shard_spec().has_value() && !final_mc.nd_shard_spec().has_value()) {
             auto synth = synthesize_sharded_mem_config(working_tensor, final_mc, input_orientation_hint);
             if (!synth.has_value()) {
                 // No valid spec; keep interleaved.
@@ -583,8 +609,13 @@ ttnn::Tensor repeat_native(
             final_mc = *synth;
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
-        working_tensor = ttnn::interleaved_to_sharded(
-            working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        if (final_mc.shard_spec().has_value()) {
+            working_tensor = ttnn::interleaved_to_sharded(
+                working_tensor, final_mc, /*data_type_arg=*/std::nullopt, /*keep_l1_aligned=*/std::nullopt, i2s_out);
+        } else {
+            // ND-only spec: interleaved_to_sharded rejects distributions the legacy 2D spec can't express.
+            working_tensor = ttnn::to_memory_config(working_tensor, final_mc, std::nullopt, i2s_out);
+        }
     }
 
     return finalize_into_preallocated(working_tensor, optional_output_tensor);
