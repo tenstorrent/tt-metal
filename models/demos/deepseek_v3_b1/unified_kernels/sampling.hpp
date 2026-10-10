@@ -885,7 +885,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
-    // The trailing chunk's top32_rm init changes the face geometry; restore it as phase 1 does.
+    // The trailing chunk's top32_rm init changes the face geometry; restore Tile_x_dim and the canonical Ystride.
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
         FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
     UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
@@ -1143,6 +1143,7 @@ struct TopKSampling {
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
         static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
+        static_assert(EnableMetadata <= 1 && MaskAliasesScaler <= 1, "a compute compile-time argument is out of place");
     };
 
     struct ReaderArgs {
