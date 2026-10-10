@@ -1151,6 +1151,8 @@ class PerfConfig(TestConfig):
                         TestConfig.TENSIX_LOCATION,
                     )
                     init_data.df["run_index"] = 0
+                    if os.environ.get("LLK_EXP_INIT_DUMP"):  # experiment hook (init-opt2): every thread's INIT
+                        _exp_init_dump(self, run_type, init_data)
                     init_stats = Profiler.STATS_FUNCTION[run_type](
                         ProfilerData.concat([init_data])
                     )
@@ -1416,3 +1418,30 @@ def merge_main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(merge_main())
+
+
+def _exp_init_dump(cfg, run_type, init_data):
+    """experiment hook (init-opt2), only with LLK_EXP_INIT_DUMP=<jsonl>: every thread's INIT zone of this INIT launch,
+    the node id and the INIT ELF dir"""
+    import json as _json
+
+    raw = init_data.zones().raw()
+    raw = raw[raw[MARKER] == "INIT"]
+    zones = {}
+    for thread in ("unpack", "math", "pack"):
+        t = raw[raw["thread"] == thread]
+        zones[thread] = [
+            [int(x) for x in t[t["type"] == "ZONE_START"]["timestamp"].to_numpy()],
+            [int(x) for x in t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()],
+        ]
+    rec = {
+        "node": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+        "run_type": run_type.name,
+        "test": str(cfg.test_name),
+        "variant": cfg.variant_id,
+        "init_dir": str(TestConfig.ARTEFACTS_DIR / cfg.test_name / cfg.variant_id / "init_elf"),
+        "bytes": bytes(cfg.runtime_arguments_bytes()).hex(),
+        "zones": zones,
+    }
+    with open(os.environ["LLK_EXP_INIT_DUMP"], "a") as f:
+        f.write(_json.dumps(rec) + "\n")
