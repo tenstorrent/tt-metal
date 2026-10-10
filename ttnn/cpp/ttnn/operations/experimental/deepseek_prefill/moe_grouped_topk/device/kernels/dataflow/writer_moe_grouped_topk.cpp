@@ -6,6 +6,14 @@
 // write_single_scalar, gather<>, and overwrite_index_row_with_sentinel live in the common header.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp"
 
+// Index tiles of uint32 words, or of uint16 words where the factory's index_u16_mask (Blackhole) says so.
+template <uint32_t bytes_per_index>
+struct index_layout {
+    static constexpr uint32_t face_line_bytes = columns_per_face * bytes_per_index;
+    static constexpr uint32_t face_size_bytes = elements_per_face * bytes_per_index;
+    static constexpr uint32_t tile_size_bytes = elements_per_tile * bytes_per_index;
+};
+
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
     CircularBuffer cb(cb_expert_index_template);
@@ -38,30 +46,41 @@ FORCE_INLINE void generate_index_tile(
 }
 
 // Row r holds expert (start + r) in every column, so compute copies the tile into DEST untransposed.
+template <uint32_t bytes_per_index = 4>
 FORCE_INLINE void generate_index_tile_transposed(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
+    using layout = index_layout<bytes_per_index>;
     CircularBuffer cb(cb_expert_index_template);
     cb.reserve_back(1);
     for (uint32_t row_face = 0; row_face < 2; row_face++) {
-        uint32_t face_addr = index_write_addr + (2 * row_face) * index32_tile::face_size_bytes;
+        uint32_t face_addr = index_write_addr + (2 * row_face) * layout::face_size_bytes;
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(face_addr);
         uint32_t v = start_expert_index + row_face * rows_per_face;
         for (uint32_t r = 0; r < rows_per_face; r++, v++) {
+            if constexpr (bytes_per_index == 4) {
 #pragma GCC unroll 16
-            for (uint32_t c = 0; c < columns_per_face; c++) {
-                p[r * columns_per_face + c] = v;
+                for (uint32_t c = 0; c < columns_per_face; c++) {
+                    p[r * columns_per_face + c] = v;
+                }
+            } else {
+#pragma GCC unroll 8
+                for (uint32_t c = 0; c < columns_per_face / 2; c++) {
+                    p[r * (columns_per_face / 2) + c] = v << 16 | v;
+                }
             }
         }
-        noc_async_read(get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
+        noc_async_read(get_noc_addr(face_addr), face_addr + layout::face_size_bytes, layout::face_size_bytes);
     }
     noc_async_read_barrier();
     cb.push_back(1);
 }
 
+template <uint32_t bytes_per_index = 4>
 FORCE_INLINE void generate_index_tiles_transposed(const uint32_t cb_expert_index_template, uint32_t width_tiles) {
     CircularBuffer cb(cb_expert_index_template);
     for (uint32_t i = 0; i < width_tiles; i++) {
-        generate_index_tile_transposed(cb_expert_index_template, cb.get_write_ptr(), columns_per_tile * i);
+        generate_index_tile_transposed<bytes_per_index>(
+            cb_expert_index_template, cb.get_write_ptr(), columns_per_tile * i);
     }
 }
 
@@ -74,32 +93,40 @@ FORCE_INLINE void generate_index_tiles(
 }
 
 // Vertically along each tile, write index 0, ..., n_groups - 1
+template <uint32_t bytes_per_index = 4>
 FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t cb_group_index_template, uint32_t width_tiles, uint32_t n_groups) {
+    using layout = index_layout<bytes_per_index>;
     CircularBuffer cb(cb_group_index_template);
     cb.reserve_back(1);
     uint32_t base_write_addr = cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
     for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
-        for (uint32_t i = 0; i < columns_per_face; i++) {
-            write_ptr[i] = group_index;
+        if constexpr (bytes_per_index == 4) {
+            for (uint32_t i = 0; i < columns_per_face; i++) {
+                write_ptr[i] = group_index;
+            }
+        } else {
+            for (uint32_t i = 0; i < columns_per_face / 2; i++) {
+                write_ptr[i] = group_index << 16 | group_index;
+            }
         }
         if (group_index > rows_per_face - 1) {
-            constexpr uint32_t skip_elements = index32_tile::face_size_bytes / sizeof(uint32_t);
+            constexpr uint32_t skip_elements = layout::face_size_bytes / sizeof(uint32_t);
             write_ptr += skip_elements;
         } else {
-            constexpr uint32_t skip_elements = index32_tile::face_line_bytes / sizeof(uint32_t);
+            constexpr uint32_t skip_elements = layout::face_line_bytes / sizeof(uint32_t);
             write_ptr += skip_elements;
         }
     }
     uint64_t dm_engine_index_write_offset_face_1 = get_noc_addr(base_write_addr);
-    uint64_t dm_engine_index_write_offset_face_3 = get_noc_addr(base_write_addr + 2 * index32_tile::face_size_bytes);
+    uint64_t dm_engine_index_write_offset_face_3 = get_noc_addr(base_write_addr + 2 * layout::face_size_bytes);
 
-    uint32_t face_2_l1_write_addr = base_write_addr + index32_tile::face_size_bytes;
-    uint32_t face_4_l1_write_addr = base_write_addr + 3 * index32_tile::face_size_bytes;
-    noc_async_read(dm_engine_index_write_offset_face_1, face_2_l1_write_addr, index32_tile::face_size_bytes);
-    noc_async_read(dm_engine_index_write_offset_face_3, face_4_l1_write_addr, index32_tile::face_size_bytes);
-    uint32_t tile_write_addr = base_write_addr + index32_tile::tile_size_bytes;
+    uint32_t face_2_l1_write_addr = base_write_addr + layout::face_size_bytes;
+    uint32_t face_4_l1_write_addr = base_write_addr + 3 * layout::face_size_bytes;
+    noc_async_read(dm_engine_index_write_offset_face_1, face_2_l1_write_addr, layout::face_size_bytes);
+    noc_async_read(dm_engine_index_write_offset_face_3, face_4_l1_write_addr, layout::face_size_bytes);
+    uint32_t tile_write_addr = base_write_addr + layout::tile_size_bytes;
     noc_async_read_barrier();
     cb.push_back(1);
 }
@@ -289,6 +316,12 @@ void kernel_main() {
     constexpr bool row_major_weights = get_named_compile_time_arg_val("row_major_weights") != 0;
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
+#if defined(ARCH_BLACKHOLE)
+    // Templates the factory made uint16: bit 0 the one-group expert template, bit 1 the group template.
+    constexpr uint32_t index_u16_mask = get_named_compile_time_arg_val("index_u16_mask");
+#else
+    constexpr uint32_t index_u16_mask = 0;
+#endif
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_group_index_template = get_named_compile_time_arg_val("cb_group_index_template");
     constexpr uint32_t cb_top_experts_per_group = get_named_compile_time_arg_val("cb_top_experts_per_group");
@@ -307,6 +340,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t expert_index_bytes = (n_groups == 1 && (index_u16_mask & 0x1) != 0) ? 2 : 4;
+    constexpr uint32_t group_index_bytes = (index_u16_mask & 0x2) != 0 ? 2 : 4;
     constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
     constexpr uint32_t num_group_tiles = get_named_compile_time_arg_val("num_group_tiles");
     constexpr uint32_t cb_reduce_ones_scalar = get_named_compile_time_arg_val("cb_reduce_ones_scalar");
@@ -373,7 +408,7 @@ void kernel_main() {
     if constexpr (n_groups != 1) {
         // Grouped path reuses these templates across all height tiles (they are never popped).
         generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
-        generate_group_indices_tiles(cb_group_index_template, width_tiles, n_groups);
+        generate_group_indices_tiles<group_index_bytes>(cb_group_index_template, width_tiles, n_groups);
     }
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
@@ -382,7 +417,7 @@ void kernel_main() {
         if constexpr (n_groups == 1) {
             // Single expert group: no grouping. The compute kernel's plain top-k consumes (pops) the
             // expert-index template, so it must be regenerated every iteration.
-            generate_index_tiles_transposed(cb_expert_index_template, width_tiles);
+            generate_index_tiles_transposed<expert_index_bytes>(cb_expert_index_template, width_tiles);
         } else {
             generate_summed_experts_tiles(
                 cb_top_experts_per_group,
