@@ -16,6 +16,7 @@ import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
+from models.demos.qwen38_27b_qb2.tt.prefill_attention import make_batch_indices
 from models.demos.qwen38_27b_qb2.tt.topology import resolve_tp4_topology, validate_tp4_mesh
 
 
@@ -102,6 +103,12 @@ class Qwen38TPDecoder(Qwen38Decoder):
             self.policy["carry_residual"] = False
         self.topology = ttnn.Topology.Ring if self.policy.get("ring", False) else ttnn.Topology.Linear
         self.ccl = ccl if ccl is not None else TT_CCL(mesh_device)
+        if self.kind == "full_attention" and self.policy.get("prefill_batched_attention", False):
+            indices = getattr(self.ccl, "_qwen_prefill_batch_indices", None)
+            if indices is None:
+                indices = make_batch_indices(mesh_device)
+                self.ccl._qwen_prefill_batch_indices = indices
+            self.prefill_batch_indices = indices
         self.config = copy.deepcopy(hf_config)
         for name in (
             "num_attention_heads",

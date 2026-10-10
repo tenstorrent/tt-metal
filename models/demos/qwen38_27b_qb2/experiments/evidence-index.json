@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:16:18.572167+00:00",
+  "generated_at": "2026-10-10T18:29:47.117057+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -168,6 +168,11 @@
       "sha256": "7b3521f0ded6eaf795a0ba38586ac01912307af441ea364ec6dcd8936ba348dc"
     },
     {
+      "path": "demo/run_prefill_attention_batch.py",
+      "bytes": 5524,
+      "sha256": "cace12c7d9be97cb3815db5a3245d6dbbd76b82ecd54f1ad5f8dc45deedebdcf"
+    },
+    {
       "path": "demo/run_projection_sweep.py",
       "bytes": 6612,
       "sha256": "96e8f00e598124fc80e77da072c0cbb90175c4c7b6ccd5a778d1d5b146d7e74c"
@@ -184,8 +189,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 161806,
-      "sha256": "9936387cbfffb1ebad137568e296ecb5925e61a745955e135003186f8ae58bce"
+      "bytes": 164294,
+      "sha256": "8577d5112707db200059ed2fa439ca07550512c44f6a0a6a2024346c5c3dfef8"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -9221,6 +9226,46 @@
       "sha256": "2c81511928937e0c9890fa572bfd1a6345cc739967304d00b9ecd929ac7f840f"
     },
     {
+      "path": "galaxy-evidence/prefill-attention-v1/README.md",
+      "bytes": 2231,
+      "sha256": "fcfa1a5df5f40948bcb913a8291ef30a22aa82c354616edb37509a819ca642b6"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-control-v1/launch-unit.json",
+      "bytes": 180,
+      "sha256": "b7afa364cd1bb401aa3665555603d9248b2f73648ab43bebf77c584804d9e165"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-control-v1/launch.json",
+      "bytes": 2745,
+      "sha256": "41739393bfe9a51d5767b792b4d2352a62798eeefea4659d7c4d729a1af1a974"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-control-v1/preflight.log.gz",
+      "bytes": 389,
+      "sha256": "f7f1cb86921a1642345780d88218c256a1a54c62491973ecb5f2f81cad90da08"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-control-v1/source-manifest.json",
+      "bytes": 27435,
+      "sha256": "fe137d035be02981ae31327d81771e256678f744fbdf127e526c92d7fe92712e"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-control-v1/unit.xml.gz",
+      "bytes": 10528,
+      "sha256": "bd43ecd1141953d9efe9095426e9aa3786fd75a83c7679db25c2036f15c200e2"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/receipts/prefill-attention-v1/queue.json",
+      "bytes": 722,
+      "sha256": "28e8d8fa7febbec865ed5c740f2bd6013f64fe3f08686685609dc839664b2a03"
+    },
+    {
+      "path": "galaxy-evidence/prefill-attention-v1/stage-prefill.py.gz",
+      "bytes": 2348,
+      "sha256": "23fabfa9e53d52d6d2614ee17467d57d3937aedbc4595b961e2753252b7c98c7"
+    },
+    {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",
       "bytes": 3818,
       "sha256": "dd31e9135bd7f9eb5fa4b1372e80f90a1520ddb2e2b3645d7bd4924e691643ed",
@@ -10966,6 +11011,11 @@
       "sha256": "746d9ff7d8240628108d50e00481f5bb4f81369cf4daa209d446fc01091adb67"
     },
     {
+      "path": "tests/prefill_attention_batch.py",
+      "bytes": 3482,
+      "sha256": "59be8fe4341e3ee4c146c2fa566b7f937975867c5d29410fc35dfa01d3378fad"
+    },
+    {
       "path": "tests/projection_sweep.py",
       "bytes": 3214,
       "sha256": "df11e23523bc0f650b563528bb7a49689defee356faf180a1145628fe8b94255"
@@ -11039,6 +11089,11 @@
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1132,
       "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
+    },
+    {
+      "path": "tests/test_prefill_attention_batch.py",
+      "bytes": 9290,
+      "sha256": "0b991db022ea512efa17d8968ffd534914e918e9744e280b6a0ccc54c5a66bd0"
     },
     {
       "path": "tests/test_projection_sweep.py",
@@ -11141,6 +11196,11 @@
       "sha256": "01280e38c5c0bbd6a0e251d1c7de59d48c33ed3edb41d9856031172f2f862c7d"
     },
     {
+      "path": "tests/unit/test_prefill_attention_batch.py",
+      "bytes": 7160,
+      "sha256": "a455dc7b9bf9efa7b8af17b82ad3d6e484b6b2c14d25d25ab5b74bc9325ee412"
+    },
+    {
       "path": "tests/unit/test_projection_sweep.py",
       "bytes": 3091,
       "sha256": "e6817c43fd97ab56a2862b74e80480c85ffe2794efca031bc92c9f8a853f018b"
@@ -11157,8 +11217,13 @@
     },
     {
       "path": "tt/decoder.py",
-      "bytes": 54409,
-      "sha256": "43d72371e6ec74c69876de9e8cde3931cb129e82c794d3e577e4369863e1944b"
+      "bytes": 53925,
+      "sha256": "e75329d642aacf588d5e4d56be50c2b8be0fc97ad65bdc11b8203bde73630894"
+    },
+    {
+      "path": "tt/decoder_tp.py",
+      "bytes": 36795,
+      "sha256": "2733f5481b8d746274ab2d2603a1358b6c83c65eeb07c5bcad8333c7f3773b0b"
     },
     {
       "path": "tt/gdn_epilogue/compute.cpp",
@@ -11201,9 +11266,19 @@
       "sha256": "7d0b35d0ede839d938bcea482619dc8d19997cf41bac9f60a0daa966c9845b17"
     },
     {
+      "path": "tt/model.py",
+      "bytes": 29359,
+      "sha256": "989a6edf72c922be3eb76c5f07a45a8a51c959447fc8c59d00e9de1de2862e3f"
+    },
+    {
       "path": "tt/precision.py",
       "bytes": 5264,
       "sha256": "e0e0b83d544cc4798ea51aab73fdd8aa58cf83b3b7dee23aa82f8d09894b3bab"
+    },
+    {
+      "path": "tt/prefill_attention.py",
+      "bytes": 3141,
+      "sha256": "66884d5326d1920ce3d4504e440aa5c2e2f4b3d0d886405daed21124060f75c2"
     }
   ]
 }

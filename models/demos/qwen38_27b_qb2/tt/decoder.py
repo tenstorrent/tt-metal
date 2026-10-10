@@ -30,6 +30,7 @@ from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
     DecodeWorkspace,
     uses_fused_epilogue,
 )
+from models.demos.qwen38_27b_qb2.tt.prefill_attention import fill_and_attend
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -844,31 +845,26 @@ class Qwen38Decoder(LightweightModule):
             raise ValueError("Page table does not cover the requested prefix and continuation")
         while start_pos % k_chunk or ((start_pos + t + k_chunk - 1) // k_chunk) * k_chunk > capacity:
             k_chunk //= 2
-        outputs = []
-        for user in range(b):
-            table = page_table[user : user + 1, :]
-            chunk_table = table[:, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE]
-            for cache, update in ((state.key, k), (state.value, v)):
-                part = update[user : user + 1, :, :, :]
-                if part.dtype != cache.dtype:
-                    part = ttnn.typecast(part, cache.dtype)
-                ttnn.experimental.paged_fill_cache(cache, part, chunk_table, batch_idx=0)
-            outputs.append(
-                ttnn.transformer.chunked_scaled_dot_product_attention(
-                    q[user : user + 1, :, :, :],
-                    state.key,
-                    state.value,
-                    table,
-                    start_pos,
-                    scale=self.config.head_dim**-0.5,
-                    program_config=ttnn.SDPAProgramConfig(
-                        compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                        q_chunk_size=q_chunk,
-                        k_chunk_size=k_chunk,
-                    ),
-                )
-            )
-        attention = outputs[0] if b == 1 else ttnn.concat(outputs, dim=0)
+        indices = (
+            self.prefill_batch_indices[b] if b > 1 and self.policy.get("prefill_batched_attention", False) else None
+        )
+        attention = fill_and_attend(
+            q,
+            k,
+            v,
+            state.key,
+            state.value,
+            page_table,
+            start_pos,
+            page_size=self.PAGE_SIZE,
+            scale=self.config.head_dim**-0.5,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+            ),
+            batch_indices=indices,
+        )
         return self._attention_output(attention, gate)
 
     def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False, compact_qkv=False):

@@ -120,6 +120,7 @@ class Qwen38Model:
                         "compact_decode_residual": self.compact_decode_residual,
                         "compact_decode_mlp": os.getenv("QWEN_COMPACT_DECODE_MLP", "0") == "1",
                         "batched_decode_rope": os.getenv("QWEN_BATCHED_DECODE_ROPE", "0") == "1",
+                        "prefill_batched_attention": os.getenv("QWEN_PREFILL_BATCHED_ATTENTION", "0") == "1",
                         "compact_decode_attention": os.getenv("QWEN_COMPACT_DECODE_ATTENTION", "0") == "1",
                     },
                 )
