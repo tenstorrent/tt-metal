@@ -40,6 +40,15 @@ BF16_PCC = 0.999
 BFP8_PCC = 0.99
 
 
+# (gate, up, out) dst placements; "production" mirrors the fused call BINARY_ACT_TILE(j, c + j, j).
+# Every index stays under 4: fp32 dest accumulate holds only 4 dst tiles, and both modes run here.
+DST_PLACEMENTS = [
+    pytest.param(0, 1, 0, id="out_aliases_gate"),
+    pytest.param(0, 1, 2, id="out_separate"),
+    pytest.param(1, 3, 1, id="production"),
+]
+
+
 def clamped_silu_glu_reference(gate, up):
     g = gate.to(torch.float32)
     u = up.to(torch.float32)
@@ -152,16 +161,7 @@ def _run(
 @pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-# (gate, up, out) dst placements; "production" mirrors the fused call BINARY_ACT_TILE(j, c + j, j).
-# Every index stays under 4: fp32 dest accumulate holds only 4 dst tiles, and both modes run here.
-@pytest.mark.parametrize(
-    "dst_gate, dst_up, dst_out",
-    [
-        pytest.param(0, 1, 0, id="out_aliases_gate"),
-        pytest.param(0, 1, 2, id="out_separate"),
-        pytest.param(1, 3, 1, id="production"),
-    ],
-)
+@pytest.mark.parametrize("dst_gate, dst_up, dst_out", DST_PLACEMENTS)
 def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst_out):
     in_dtype, page_bytes = IN_DTYPES[in_name]
     num_tiles = 8
@@ -191,14 +191,7 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
 @pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("in_name", list(IN_DTYPES), ids=list(IN_DTYPES))
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-@pytest.mark.parametrize(
-    "dst_gate, dst_up, dst_out",
-    [
-        pytest.param(0, 1, 0, id="out_aliases_gate"),
-        pytest.param(0, 1, 2, id="out_separate"),
-        pytest.param(1, 3, 1, id="production"),
-    ],
-)
+@pytest.mark.parametrize("dst_gate, dst_up, dst_out", DST_PLACEMENTS)
 def test_clamped_silu_glu_sfpu_pack_thread(device, in_name, fp32_dest, dst_gate, dst_up, dst_out):
     """clamped_silu_glu_tile_pack runs the body of clamped_silu_glu_tile on the pack thread: the same bits."""
     in_dtype, page_bytes = IN_DTYPES[in_name]
@@ -206,5 +199,5 @@ def test_clamped_silu_glu_sfpu_pack_thread(device, in_name, fp32_dest, dst_gate,
 
     args = (device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate, dst_up, dst_out)
     on_math = _run(*args)
-    on_pack = _run(*args, "clamped_silu_glu_pack.cpp")
+    on_pack = _run(*args, compute_kernel="clamped_silu_glu_pack.cpp")
     assert torch.equal(on_pack, on_math)
