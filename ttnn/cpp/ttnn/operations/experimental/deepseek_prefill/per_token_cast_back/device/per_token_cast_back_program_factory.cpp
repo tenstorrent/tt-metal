@@ -103,7 +103,13 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t out_block_bytes = block_w * out_elem_bytes;         // one 128-element row of output
     const uint32_t input_e4m3_tile_bytes = tile_h * tile_w;            // cb_input_e4m3 page = one e4m3 tile
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
-    const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
+    // Scale staging: one slot per token. Row-tail scales are read on their own (the tail, at byte H of the
+    // packed row) rather than with the whole row; other sources read their whole (aligned) scale page.
+    const uint32_t scale_aligned_page_bytes =
+        scales_in_row_tail
+            ? tt::round_up((operation_attributes.per_row_scale ? 1u : H / operation_attributes.scale_block_w) * 4u, 64u)
+            : input_scale.buffer()->aligned_page_size();
+    const uint32_t scale_read_offset = scales_in_row_tail ? H : 0u;
 
     // Token-count-aware-only metadata tensors (unset on the plain path).
     const Tensor* expert_region_offsets = token_count_aware ? &tensor_args.expert_region_offsets.value() : nullptr;
@@ -123,8 +129,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t chunk_scale_blocks = operation_attributes.per_row_scale ? 1u : block_w / scale_block_w;
     const uint32_t scales_per_token = operation_attributes.per_row_scale ? 1u : H / scale_block_w;
     const uint32_t scale_entry_length = static_cast<uint32_t>(input_scale.logical_shape()[-1]);
-    // Packed-row scales sit right after the H e4m3 bytes: word offset H/4.
-    const uint32_t scales_start_offset = scales_in_row_tail ? H / 4
+    // Packed-row scales are read from the row tail on their own (byte H), so they start at word 0 of the slot.
+    const uint32_t scales_start_offset = scales_in_row_tail ? 0u
                                          : (token_count_aware && operation_attributes.scales_from_metadata)
                                              ? (scale_entry_length - scales_per_token)
                                              : 0;
@@ -322,6 +328,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
                 if (operation_attributes.per_row_scale) {
                     d["PER_ROW_SCALE"] = "1";
                 }
+                d["SCALE_READ_OFFSET"] = std::to_string(scale_read_offset);
                 return d;
             }()});
 

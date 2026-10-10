@@ -658,6 +658,51 @@ def test_count_aware_packed_quant_expert_buffer(device, counts):
     assert match >= 0.999, f"packed quant/dequant match {match:.4%}"
 
 
+@pytest.mark.parametrize("scale_block_w", [32, 0], ids=["block_w32", "per_row"])
+def test_count_aware_packed_round_trip(device, scale_block_w):
+    """Packed rows [H e4m3 | scales] quantized and dequantized count-aware (the dispatch-side DQ1 path):
+    the dequant reads each row's scales from its own tail and only the valid expert prefix."""
+    torch.manual_seed(5)
+    H, capacity = K3_LATENT, 2048
+    per_row = scale_block_w == 0
+    counts = [23 + (7 * i) % 40 for i in range(20)]
+    epc = len(counts)
+    table = [2 * s + 1 for s in range(epc)]
+    region, tok = [0] * (2 * epc), [0] * (2 * epc)
+    off = 0
+    for slot, c in enumerate(counts):
+        region[table[slot]], tok[table[slot]] = off, c
+        off += _ceil_tile(c)
+    x = torch.randn(capacity, H) * torch.pow(2.0, torch.randint(-4, 4, (capacity, 1)).float())
+    x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    blk = dict(scale_block_w=128 if per_row else scale_block_w, per_row_scale=per_row)
+    packed_tt, _ = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt, round_scale_to_power_of_two=True, pack_scales_in_row=True, **blk
+    )
+    ca = dict(
+        token_count_aware=True,
+        expert_region_offsets=create_u32_tensor(device, region),
+        expert_token_counts=create_u32_tensor(device, tok),
+        global_expert_idx_table=create_u32_tensor(device, table),
+        experts_per_chip=epc,
+    )
+    plain = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            packed_tt, None, output_dtype=ttnn.float32, scales_in_row_tail=True, **blk
+        )
+    ).float()
+    aware = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            packed_tt, None, output_dtype=ttnn.float32, scales_in_row_tail=True, **blk, **ca
+        )
+    ).float()
+    assert tuple(aware.shape) == (capacity, H)
+    assert torch.equal(aware[:off], plain[:off]), "count-aware row-tail dequant differs from the plain path"
+    rel = ((aware[:off] - x[:off]).norm() / x[:off].norm()).item()
+    logger.info(f"count-aware packed round trip ({'per_row' if per_row else scale_block_w}): rel err {rel:.4f}")
+    assert rel < 0.08
+
+
 def _ref_pow2_row_scale(x_fp32):
     amax = x_fp32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-4)
     return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))

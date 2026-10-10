@@ -113,8 +113,9 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
                 "per_token_cast_back: metadata scale source dtype must be FLOAT32/UINT32/INT32, got {}",
                 sdt);
         } else {
+            // Row-tail scales live in the fp8 input rows themselves.
             TT_FATAL(
-                input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+                input_scale.dtype() == tt::tt_metal::DataType::FLOAT32 || attrs.scales_in_row_tail,
                 "per_token_cast_back: input_scale dtype must be FLOAT32, got {}",
                 input_scale.dtype());
         }
@@ -174,7 +175,6 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
     const uint32_t H = attrs.scales_in_row_tail ? (attrs.per_row_scale ? H_in - 64 : H_in * sbw / (sbw + 4)) : H_in;
     if (attrs.scales_in_row_tail) {
-        TT_FATAL(!token_count_aware, "per_token_cast_back: scales_in_row_tail is only supported on the plain path");
         TT_FATAL(
             (attrs.per_row_scale ? H + 64 == H_in : H * (sbw + 4) == H_in * sbw) && H % fp8::BLOCK_W == 0,
             "per_token_cast_back: packed row width {} must be H + 4*H/{} with H % {} == 0",

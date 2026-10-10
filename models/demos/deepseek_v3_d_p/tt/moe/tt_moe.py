@@ -1044,8 +1044,8 @@ class TtMoe(LightweightModule):
             # each token's scale (word 3 of the dispatch metadata) in compute.
             expert_row_scales = metadata
         elif self.dispatch_fp8 and not self.fp8_per_row:
-            # DQ1 (block scales, standalone): unpack [H e4m3 | H/block fp32] rows back to bf16. The row-tail path
-            # has no count-aware mode yet, so this converts the whole buffer.
+            # DQ1 (block scales): unpack the valid prefix of [H e4m3 | H/block fp32] rows back to bf16 rows, reading
+            # each row's scales from its own tail; the routed expert then takes the bf16 fast-tilize path.
             dispatched_fp8 = dispatched_buffer
             dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
                 dispatched_fp8,
@@ -1053,6 +1053,11 @@ class TtMoe(LightweightModule):
                 output_dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 scales_in_row_tail=True,
+                token_count_aware=True,
+                expert_region_offsets=tt_expert_region_offsets,
+                expert_token_counts=tt_expert_token_counts,
+                global_expert_idx_table=self.global_expert_idx_tt,
+                experts_per_chip=self.experts_per_chip,
                 **self._fp8_block_kw,
             )
             mem_mark("after_dq1")

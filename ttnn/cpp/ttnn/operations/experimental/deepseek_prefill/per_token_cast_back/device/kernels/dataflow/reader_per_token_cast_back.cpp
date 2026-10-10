@@ -213,7 +213,7 @@ void kernel_main() {
                 scale,
                 use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
                 scale_aligned_page_bytes,
-                {.page_id = t},
+                {.page_id = t, .offset_bytes = SCALE_READ_OFFSET},
                 {.offset_bytes = (t - block_start_row) * scale_aligned_page_bytes});
         }
         noc.async_read_barrier();
