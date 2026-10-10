@@ -27,18 +27,22 @@ pytestmark = [skip_for_wormhole]
 _BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
-# (op, formats, dest_acc, misc_param, misc_init_per_tile)
+# (op, formats, dest_acc, misc_param, misc_init_per_tile); misc_param as SFPU_MISC_OP describes it
 _ROWS = [
     ("rand", _BF16, DestAccumulation.No, 0, False),
     ("rand", _BF16, DestAccumulation.No, 1, False),
     ("rand", _BF16, DestAccumulation.No, 0, True),
     ("dropout", _BF16, DestAccumulation.No, 0, False),
     ("dropout", _BF16, DestAccumulation.No, 0, True),
+    ("dropout", _BF16, DestAccumulation.No, 1, False),
     ("mask", _BF16, DestAccumulation.No, 0, False),
     ("mask", _BF16, DestAccumulation.Yes, 0, False),
     ("mask_int", _INT32, DestAccumulation.Yes, 0, False),
     ("copy_dest_values", _BF16, DestAccumulation.No, 0, False),
     ("copy_dest_values", _INT32, DestAccumulation.Yes, 0, False),
+    ("copy_dest_values", _BF16, DestAccumulation.No, 1, False),
+    ("copy_dest_values", _INT32, DestAccumulation.Yes, 1, False),
+    ("copy_dest_values", _BF16, DestAccumulation.No, 2, False),
     ("reshuffle_rows", _BF16, DestAccumulation.No, 0, False),
     ("reshuffle_rows", _BF16, DestAccumulation.No, 1, False),
     ("reshuffle_rows", _BF16, DestAccumulation.No, 2, False),
@@ -47,8 +51,12 @@ _ROWS = [
     ("softcap", _BF16, DestAccumulation.No, 0, True),
     ("situ_glu", _BF16, DestAccumulation.No, 0, False),
     ("situ_glu", _BF16, DestAccumulation.Yes, 0, False),
+    ("situ_glu", _BF16, DestAccumulation.No, 1, False),
+    ("situ_glu", _BF16, DestAccumulation.Yes, 1, False),
     ("clamped_silu_glu", _BF16, DestAccumulation.No, 0, False),
     ("clamped_silu_glu", _BF16, DestAccumulation.Yes, 0, False),
+    ("clamped_silu_glu", _BF16, DestAccumulation.No, 1, False),
+    ("clamped_silu_glu", _BF16, DestAccumulation.Yes, 1, False),
 ]
 
 

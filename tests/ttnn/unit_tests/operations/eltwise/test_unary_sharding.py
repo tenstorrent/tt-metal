@@ -644,3 +644,122 @@ def test_unary_specless_sharded_output_grid_shrinks_block(device):
     expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
     assert torch.equal(ttnn.to_torch(result), torch.abs(x))
+
+
+# Block-sharded [64, 64] with shard [32, 64] on a 2x2 grid occupies 1 x 2 cores, (0,0) and (0,1). Viewed
+# as [32, 128] the same shard spec resolves to 2 x 1 cores, (0,0) and (1,0). The squeezed shapes
+# agree. Only the bank list differs.
+def _skip_if_grid_below_2x2(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 2 or grid.y < 2:
+        pytest.skip("Device grid too small for a 2x2 shard grid")
+
+
+@pytest.mark.parametrize("program_cache", ["miss", "hit", "disabled"])
+@pytest.mark.parametrize("out_memory_config", [ttnn.DRAM_MEMORY_CONFIG, None], ids=["accessor_path", "native_path"])
+def test_unary_sharded_view_with_divergent_buffer_geometry_rejected(
+    device, program_cache, out_memory_config, expect_error
+):
+    """A sharded input view whose buffer geometry differs from its spec is rejected on the accessor path
+    (interleaved output) and the native-sharded path (sharded output), on a cache miss, a cache hit and with
+    the program cache disabled. The cache-hit case first populates the entry with a valid tensor that has the
+    same spec, then checks that the cached program is still correct after the rejection."""
+    _skip_if_grid_below_2x2(device)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch.manual_seed(0)
+    valid = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
+    valid_tt = ttnn.from_torch(
+        valid,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+    )
+    parent = ttnn.from_torch(
+        torch.randn(1, 1, 64, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+    )
+    view = ttnn.experimental.view(parent, [1, 1, 32, 128])
+    assert view.spec == valid_tt.spec
+
+    if program_cache == "disabled":
+        device.disable_and_clear_program_cache()
+    try:
+        if program_cache == "hit":
+            out = ttnn.relu(valid_tt, memory_config=out_memory_config)
+            assert torch.equal(ttnn.to_torch(out), torch.relu(valid))
+        with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+            ttnn.relu(view, memory_config=out_memory_config)
+        out = ttnn.relu(valid_tt, memory_config=out_memory_config)
+        assert torch.equal(ttnn.to_torch(out), torch.relu(valid))
+    finally:
+        if program_cache == "disabled":
+            device.enable_program_cache()
+
+
+@pytest.mark.parametrize("input_kind", ["interleaved", "sharded", "in_place"])
+def test_unary_preallocated_sharded_output_view_with_divergent_buffer_geometry_rejected(
+    device, input_kind, expect_error
+):
+    """A preallocated sharded output view whose buffer geometry differs from its spec would be written at the
+    wrong pages, so it is rejected. An interleaved input writes it through the accessor; a sharded input with
+    the view's spec, or the view itself (in place), writes it on the native-sharded path."""
+    _skip_if_grid_below_2x2(device)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch.manual_seed(0)
+    out_parent = ttnn.from_torch(
+        torch.zeros(1, 1, 64, 64, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+    )
+    out_view = ttnn.experimental.view(out_parent, [1, 1, 32, 128])
+    if input_kind == "in_place":
+        inp = out_view
+    else:
+        inp = ttnn.from_torch(
+            torch.randn(1, 1, 32, 128, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem if input_kind == "sharded" else ttnn.DRAM_MEMORY_CONFIG,
+        )
+    with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+        ttnn.relu(inp, output_tensor=out_view)
+
+
+@pytest.mark.parametrize(
+    "strategy, shard_shape, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, [32, 64], ttnn.CoreGrid(y=1, x=4)),
+        (ttnn.ShardStrategy.BLOCK, [64, 32], ttnn.CoreGrid(y=2, x=2)),
+    ],
+)
+def test_unary_sharded_reshape_view_on_accessor_path(device, strategy, shard_shape, core_grid):
+    torch.manual_seed(0)
+    base = torch.randn(1, 1, 128, 64, dtype=torch.bfloat16)
+    mem = ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=core_grid,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    t = ttnn.from_torch(base, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    view = ttnn.reshape(t, [1, 4, 32, 64])
+    assert view.memory_config().is_sharded()
+    out = ttnn.relu(view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert torch.equal(ttnn.to_torch(out), torch.relu(base.reshape(1, 4, 32, 64)))

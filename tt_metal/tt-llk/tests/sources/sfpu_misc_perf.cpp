@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if (!unpack_to_dest)
+            if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
@@ -104,15 +104,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "llk_sfpu/ckernel_sfpu_rand.h"
 #include "llk_sfpu/ckernel_sfpu_dropout.h"
-#include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_reshuffle_rows.h"
 #include "llk_sfpu/ckernel_sfpu_softcap.h"
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"
 #include "llk_sfpu/ckernel_sfpu_clamped_silu_glu.h"
 
-// The bodies that read two DEST tiles (0 and 1) and write tile 0.
-static constexpr bool MISC_BINARY = (SFPU_MISC_OPERATION == 2 || SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7 || SFPU_MISC_OPERATION == 8);
+// The bodies that use DEST tiles 0 and 1 run on that pair for every tile; reshuffle_rows writes the tile after its input.
+static constexpr bool MISC_BINARY = (SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 4 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7);
+// SFPU_MISC_PARAM 1 of dropout, copy_dest_values and the GLU ops (2: the deprecated copy_dest_value overload) issues one
+// 32-row call per tile with VectorMode::None, the form their Blackhole compute API issues; otherwise four 8-row calls.
+static constexpr bool MISC_ONE_CALL = SFPU_MISC_PARAM != 0 && (SFPU_MISC_OPERATION == 1 || SFPU_MISC_OPERATION == 3 || SFPU_MISC_OPERATION == 6 || SFPU_MISC_OPERATION == 7);
+static constexpr int MISC_ITERATIONS          = MISC_ONE_CALL ? 32 : 8;
+static constexpr VectorMode MISC_VECTOR_MODE  = MISC_ONE_CALL ? VectorMode::None : VectorMode::RC;
+static constexpr std::uint32_t PRNG_SEED      = 0x12345678u;
 // rand: from 0.0f; scale 1.0f or, with SFPU_MISC_PARAM 1, 2^-100 (the per-row normalise form)
 static constexpr std::uint32_t RAND_FROM    = 0x00000000u;
 static constexpr std::uint32_t RAND_SCALE   = (SFPU_MISC_PARAM == 1) ? 0x0D800000u : 0x3F800000u;
@@ -120,27 +125,29 @@ static constexpr std::uint32_t DROPOUT_PROBABILITY    = 0x3FFFFFFFu; // 0.5 of I
 static constexpr std::uint32_t DROPOUT_SCALE   = 0x40000000u; // 2.0f
 static constexpr std::uint32_t SOFTCAP_BETA = 0x40800000u; // 4.0f
 static constexpr std::uint32_t SOFTCAP_BETA_RECIP  = 0x3E800000u; // 0.25f
-static constexpr std::uint32_t RESHUFFLE_INDEX_L1     = PERF_INPUT_C; // the reshuffle index array in the unused input ring C; the body reads idx_addr + 16
+static constexpr std::uint32_t RESHUFFLE_INDEX_L1     = PERF_INPUT_C; // the reshuffle index array in the unused input ring C
+static constexpr std::uint32_t RESHUFFLE_HEADER_BYTES = 16;           // the body reads the indices at idx_addr + 16
+static constexpr std::uint32_t RESHUFFLE_TILE_ROWS    = 32;
+static constexpr std::uint8_t RESHUFFLE_SKIP_ROW      = 255;
 static constexpr DataFormat MISC_MATH_FORMAT_RAW    = static_cast<DataFormat>(formats.math);
 static constexpr DataFormat MISC_MATH_FORMAT        = (MISC_MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MISC_MATH_FORMAT_RAW;
 
 inline void write_reshuffle_index()
 {
-    volatile std::uint8_t* p = reinterpret_cast<volatile std::uint8_t*>(RESHUFFLE_INDEX_L1 + 16);
-    for (std::uint32_t r = 0; r < 32; ++r)
+    volatile std::uint8_t* p = reinterpret_cast<volatile std::uint8_t*>(RESHUFFLE_INDEX_L1 + RESHUFFLE_HEADER_BYTES);
+    for (std::uint32_t r = 0; r < RESHUFFLE_TILE_ROWS; ++r)
     {
         std::uint8_t v = static_cast<std::uint8_t>(r); // SFPU_MISC_PARAM 0: the identity permutation
-        if constexpr (SFPU_MISC_PARAM == 1) { v = static_cast<std::uint8_t>(31 - r); }        // reversed
-        if constexpr (SFPU_MISC_PARAM == 2) { v = (r & 1) ? 255 : static_cast<std::uint8_t>(r); } // every second row skipped
+        if constexpr (SFPU_MISC_PARAM == 1) { v = static_cast<std::uint8_t>(RESHUFFLE_TILE_ROWS - 1 - r); } // reversed
+        if constexpr (SFPU_MISC_PARAM == 2) { v = (r & 1) ? RESHUFFLE_SKIP_ROW : static_cast<std::uint8_t>(r); } // every second row skipped
         p[r] = v;
     }
 }
 
 inline void misc_op_init()
 {
-    if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>(); ckernel::sfpu::rand_init<false>(0x12345678u); }
-    else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::dropout>(); ckernel::sfpu::dropout_init<false>(0x12345678u); }
-    else if constexpr (SFPU_MISC_OPERATION == 2 || SFPU_MISC_OPERATION == 8) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::mask>(); ckernel::sfpu::mask_init(); }
+    if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>(); ckernel::sfpu::rand_init<false>(PRNG_SEED); }
+    else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::dropout>(); ckernel::sfpu::dropout_init<false>(PRNG_SEED); }
     else if constexpr (SFPU_MISC_OPERATION == 3) { _llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>(); }
     else if constexpr (SFPU_MISC_OPERATION == 4) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::reshuffle_rows>(); ckernel::sfpu::reshuffle_rows_init(); }
     else if constexpr (SFPU_MISC_OPERATION == 5) { _llk_math_eltwise_unary_sfpu_init_<SfpuType::softcap>(); ckernel::sfpu::softcap_init(); }
@@ -152,14 +159,15 @@ inline void misc_op_body(std::uint32_t tile)
 {
     if constexpr (SFPU_MISC_INIT_PER_TILE) { misc_op_init(); }
     if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<false>, tile, VectorMode::RC, RAND_FROM, RAND_SCALE); }
-    else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_dropout<false, 8>, tile, VectorMode::RC, DROPOUT_PROBABILITY, DROPOUT_SCALE); }
+    else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_dropout<false, MISC_ITERATIONS>, tile, MISC_VECTOR_MODE, DROPOUT_PROBABILITY, DROPOUT_SCALE); }
     else if constexpr (SFPU_MISC_OPERATION == 2) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_mask<true, 8>, 0, 1, 0, VectorMode::RC); }
     else if constexpr (SFPU_MISC_OPERATION == 8) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_int_mask<true, 8>, 0, 1, 0, VectorMode::RC); }
-    else if constexpr (SFPU_MISC_OPERATION == 3) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<MISC_MATH_FORMAT, false, 8>, 0, 1, 0, VectorMode::RC); }
+    else if constexpr (SFPU_MISC_OPERATION == 3 && SFPU_MISC_PARAM == 2) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<false, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
+    else if constexpr (SFPU_MISC_OPERATION == 3) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<MISC_MATH_FORMAT, false, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
     else if constexpr (SFPU_MISC_OPERATION == 4) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_reshuffle_rows<false>, tile, VectorMode::RC_custom, RESHUFFLE_INDEX_L1); }
-    else if constexpr (SFPU_MISC_OPERATION == 5) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_softcap<false, is_fp32_dest_acc_en, 8>, tile, VectorMode::RC, SOFTCAP_BETA, SOFTCAP_BETA_RECIP); }
-    else if constexpr (SFPU_MISC_OPERATION == 6) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_situ_glu<is_fp32_dest_acc_en, 8>, 0, 1, 0, VectorMode::RC); }
-    else if constexpr (SFPU_MISC_OPERATION == 7) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_clamped_silu_glu<is_fp32_dest_acc_en, 8>, 0, 1, 0, VectorMode::RC); }
+    else if constexpr (SFPU_MISC_OPERATION == 5) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_softcap<false, is_fp32_dest_acc_en, MISC_ITERATIONS>, tile, MISC_VECTOR_MODE, SOFTCAP_BETA, SOFTCAP_BETA_RECIP); }
+    else if constexpr (SFPU_MISC_OPERATION == 6) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_situ_glu<is_fp32_dest_acc_en, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
+    else if constexpr (SFPU_MISC_OPERATION == 7) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::calculate_clamped_silu_glu<is_fp32_dest_acc_en, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)

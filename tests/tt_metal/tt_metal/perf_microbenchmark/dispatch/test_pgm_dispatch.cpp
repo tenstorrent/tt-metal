@@ -85,8 +85,6 @@ struct TestInfo {
     bool brisc_enabled{true};
     bool ncrisc_enabled{true};
     bool trisc_enabled{true};
-    bool erisc_enabled{false};
-    uint32_t erisc_count{1};
     bool time_just_finish{false};
     bool use_global{false};
     bool use_trace{false};
@@ -147,8 +145,6 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
-        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
-        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
         log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
         log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
@@ -214,8 +210,6 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.brisc_enabled = !test_args::has_command_option(input_args, "-b");
     info.ncrisc_enabled = !test_args::has_command_option(input_args, "-n");
     info.trisc_enabled = !test_args::has_command_option(input_args, "-t");
-    info.erisc_enabled = test_args::has_command_option(input_args, "+e");
-    info.erisc_count = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     info.workers = CoreRange({0, 0}, {core_x, core_y});
 
@@ -279,9 +273,6 @@ uint32_t get_num_kernels(const TestInfo& info) {
     }
     if (info.trisc_enabled) {
         num_kernels += 3;  // 3 compute kernels when enabled
-    }
-    if (info.erisc_enabled) {
-        num_kernels++;
     }
     return num_kernels;
 }
@@ -373,31 +364,6 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
-        if (info.erisc_count > erisc_cores.size()) {
-            log_fatal(
-                tt::LogTest,
-                "Requested number of erisc cores {} exceeds actual erisc core count {}",
-                info.erisc_count,
-                erisc_cores.size());
-            return false;
-        }
-        auto erisc_core = erisc_cores.begin();
-        for (uint32_t i = 0; i < info.erisc_count; i++, erisc_core++) {
-            auto eth_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-                *erisc_core,
-                tt::tt_metal::EthernetConfig{
-                    .eth_mode = Eth::RECEIVER,
-                    .noc = NOC::NOC_0,
-                    .defines = defines,
-                });
-            tt_metal::SetRuntimeArgs(program, eth_kernel, *erisc_core, args);
-            tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
-        }
-    }
     return true;
 }
 
@@ -559,7 +525,6 @@ void set_benchmark_counters(
             state.counters["brisc_enabled"] = benchmark::Counter(info.brisc_enabled, benchmark::Counter::kDefaults);
             state.counters["ncrisc_enabled"] = benchmark::Counter(info.ncrisc_enabled, benchmark::Counter::kDefaults);
             state.counters["trisc_enabled"] = benchmark::Counter(info.trisc_enabled, benchmark::Counter::kDefaults);
-            state.counters["erisc_enabled"] = benchmark::Counter(info.erisc_enabled, benchmark::Counter::kDefaults);
             state.counters["cb_gs"] = benchmark::Counter(info.n_cb_gs, benchmark::Counter::kDefaults);
 
             // Add extra counters
@@ -1250,7 +1215,6 @@ int main(int argc, char** argv) {
                 .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = false,
                 .use_trace = true,
                 .dispatch_from_eth = true})
             ->Apply(Max8192Args)
