@@ -53,12 +53,14 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (2048, 4096, 8192, 40960),
+    (2048, 4096, 8192, 16384, 32768, 40960),
     ids=[
         # "128",
         "2048",
         "4096",
         "8192",
+        "16k",  # 16384: context-parallel prefill bucket check (seq_len > 8192)
+        "32k",  # 32768: context-parallel prefill bucket check
         "40k",  # 40960; id avoids matching -k 4096
         # "32k",
         # "64k",
