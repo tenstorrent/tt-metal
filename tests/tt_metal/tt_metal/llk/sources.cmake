@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_LLK_SRC
+    test_block_max8.cpp
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
