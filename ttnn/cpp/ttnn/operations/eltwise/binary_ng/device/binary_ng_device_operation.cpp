@@ -185,7 +185,10 @@ CoreRangeSet get_worker_grid(
         return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
     }
 
-    if (is_native_L1_sharding(
+    // is_native_L1_sharding() is false for an interleaved output config; testing that first skips copying
+    // b's TensorSpec into an optional on the all-interleaved path.
+    if (memory_config_actual.is_sharded() &&
+        is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
             memory_config_actual)) {
@@ -729,19 +732,26 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
-    const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
-    const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
-        input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
-    if (shard_volumes.has_value()) {
-        operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
-        operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
-        operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
-    } else {
-        // Accessor regime: the output is reached through the writer's TensorAccessor, so its shape in
-        // pages must enter the key -- attributes.memory_config carries the shard spec but not the shape.
-        operation_attributes.c_tensor_shape_in_pages =
-            output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
-                                      : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
+    // Skip the output-spec computation on the interleaved fast path, as the scalar overload below does:
+    // with no sharded operand and an interleaved output, get_shard_volumes() and the output's shape in
+    // pages are both nullopt, so the attributes would be left as initialized anyway. The output tensor is
+    // tested separately for the same reason as there.
+    if (input_tensor_a.memory_config().is_sharded() || input_tensor_b.memory_config().is_sharded() ||
+        mem_config_actual.is_sharded() || (output_tensor.has_value() && output_tensor->memory_config().is_sharded())) {
+        const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
+        const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
+            input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
+        if (shard_volumes.has_value()) {
+            operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
+            operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
+            operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+        } else {
+            // Accessor regime: the output is reached through the writer's TensorAccessor, so its shape in
+            // pages must enter the key -- attributes.memory_config carries the shard spec but not the shape.
+            operation_attributes.c_tensor_shape_in_pages =
+                output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
+                                          : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
+        }
     }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
