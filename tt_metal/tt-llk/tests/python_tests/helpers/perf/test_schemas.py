@@ -40,6 +40,26 @@ PERF_TEST_SCHEMAS = {
             "perf_eltwise_bcast_col_custom": "perf_eltwise_bcast_col_custom"
         },
     },
+    "perf_compute_semaphore": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "ring_depth",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_compute_semaphore": "perf_compute_semaphore"},
+    },
     "perf_eltwise_binary": {
         "version": 8,
         "columns": [
