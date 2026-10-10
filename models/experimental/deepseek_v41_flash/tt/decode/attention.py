@@ -102,13 +102,20 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
     ``weights`` comes from :func:`~..config.attention_weights`. Weights the checkpoint keeps
     in bf16 (compressor, index ``wk`` / ``weights_proj``) stay bf16; the rest use
     ``weight_dtype``.
+
+    ``tp_size > 1`` splits the query heads and output groups over a 1xTP ``device`` as V4
+    does (see :class:`~models.experimental.deepseek_v4_flash.tt.decode.attention.DeepSeekV4Attention`).
+    The compressor and indexer are replicated, so every rank writes the same caches and selects
+    the same rows.
     """
 
     decode_layouts = DECODE_LAYOUTS
     q_head_norm = False
 
-    def __init__(self, config, layer_idx: int, weights: dict, device, cache=None, weight_dtype=ttnn.bfloat16):
-        super().__init__(config, layer_idx, weights, device, cache=cache, weight_dtype=weight_dtype)
+    def __init__(
+        self, config, layer_idx: int, weights: dict, device, cache=None, weight_dtype=ttnn.bfloat16, tp_size: int = 1
+    ):
+        super().__init__(config, layer_idx, weights, device, cache=cache, weight_dtype=weight_dtype, tp_size=tp_size)
         cache = _as_cache(cache)
         self.window = config.sliding_window
         self.index_topk = config.index_topk
