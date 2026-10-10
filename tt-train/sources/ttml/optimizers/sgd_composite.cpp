@@ -49,6 +49,9 @@ void SGDComposite::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
                 ttnn::multiply(
@@ -99,6 +102,7 @@ void SGDComposite::step() {
                 gradients,
                 m_config.lr,
                 /* fast_and_approximate_mode*/ true)));
+        restore_topology({tensor_ptr, theta_ptr}, topology);
     }
     m_steps++;
 }

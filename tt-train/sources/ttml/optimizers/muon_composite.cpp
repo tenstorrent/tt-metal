@@ -9,6 +9,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/newton_schulz_op.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 
 namespace ttml::optimizers {
 
@@ -74,11 +75,20 @@ void MuonComposite::step() {
 
         const auto gradients = tensor_ptr->get_grad();
 
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         if (m_steps > 0 && m_config.momentum != 0.0F) {
             buffer = ttnn::multiply(buffer, m_config.momentum);
             buffer = ttnn::add(buffer, gradients);
         } else {
-            buffer = gradients;
+            // A copy rather than the gradient itself: Tensor copies share their attributes, so restoring the
+            // buffer's label below would otherwise relabel the caller's gradient as well.
+            buffer = ttnn::clone(
+                gradients,
+                /* dtype */ std::nullopt,
+                /* memory_config */ std::nullopt,
+                /* compute_kernel_config */ std::nullopt);
         }
 
         buffer_ptr->set_value(buffer);
@@ -87,6 +97,7 @@ void MuonComposite::step() {
 
         tensor_ptr->set_value(ttnn::subtract(
             tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
+        restore_topology({tensor_ptr, buffer_ptr}, topology);
     }
     m_steps++;
 }
