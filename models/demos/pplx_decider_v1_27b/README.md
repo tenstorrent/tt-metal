@@ -14,11 +14,13 @@ every row. Warmed request latency at batch 1 runs from 148 ms (128 bucket) to 3.
 for an isolated request, and is 1.25-1.36x higher under sustained back-to-back load. Details:
 [`doc/full_model/README.md`](doc/full_model/README.md).
 
-Stage 3A (prefill matmul configs, same weights and precision) brings the isolated-request latency
-to 126 / 339 / 619 / 1366 / 3267 ms at the 128 / 1024 / 2048 / 4096 / 8192 buckets (from 149 /
-366 / 665 / 1481 / 3498 ms in the same run, -15 % at 128 and -7 % to -8 % above). Per-layer warmed
-prefill: linear_attention 2.03 / 5.60 / 9.94 / 20.28 / 41.95 ms, full_attention 1.82 / 4.55 / 8.49 /
-19.54 / 51.21 ms. Decisions stay 25/25 (text) and 8/8 (image). Details:
+Stage 3 (optimized decoder; same weights and precision): 3A tuned the prefill matmul configs, 3B
+the non-matmul ops (one causal SDPA per request with approximate exp and q chunk 256, the fused
+Gated DeltaNet scan program, conv and norm configs, sharded norms at the 128 bucket). Isolated-request
+latency is now 115 / 315 / 564 / 1228 / 2895 ms at the 128 / 1024 / 2048 / 4096 / 8192 buckets
+(3A: 126 / 339 / 619 / 1370 / 3256 ms in the same run; stage 6: 149 / 366 / 665 / 1481 / 3498 ms).
+Per-layer warmed prefill: linear_attention 1.89 / 5.15 / 9.01 / 18.43 / 39.27 ms, full_attention
+1.78 / 4.45 / 7.84 / 16.69 / 36.72 ms. Decisions stay 25/25 (text) and 8/8 (image). Details:
 [`doc/optimized_decoder/README.md`](doc/optimized_decoder/README.md).
 
 Stage 8 (datatype sweep, short) kept the all-BFP8 HiFi2 policy (person decision) and stage 6's numbers stand.
@@ -92,7 +94,7 @@ Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details ar
 | `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
 | `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
 | `doc/fused_decoder/` | Stage-2 (graph fusing) README, work log and `perf/` (tt-perf-report at S=128/2048/8192). |
-| `doc/optimized_decoder/` | Stage-3A (prefill matmul configs) README, work log (topology audit, sweep, A/B) and `perf/` (tt-perf-report with advice at S=128/2048/8192). |
+| `doc/optimized_decoder/` | Stage-3A (prefill matmul configs) and 3B (SDPA, Gated DeltaNet, norms, chunking) README, work log (topology audits, sweeps, A/B, gates) and `perf/` (tt-perf-report with advice at S=128/2048/8192; `opt_*` = 3A, `opt3b_*` = 3B). |
 | `doc/full_model/` | Stage-6 README (latency, agreement table, layer trace), work log, `perf/` (tt-perf-report summary of one 2048 forward). |
 
 ## Setup
@@ -122,6 +124,7 @@ Environment variables read by this model directory:
 | `PPLX_DECIDER_PRECISION_CONFIG` | `doc/datatype_sweep/selected_precision_config.json` | Precision policy JSON read by `PrecisionPolicy.default()`; set it to a file in `doc/datatype_sweep/candidates/` to run another policy. |
 | `PPLX_DECIDER_DECISION_GOLDEN` | `/local/ttuser/gtobar/artifacts/pplx_decider/goldens/decisions` | Stage-6 decision golden (`reference/hf_decision_golden.py`). |
 | `PPLX_DECIDER_STAGE6_DIR` | `/local/ttuser/gtobar/artifacts/pplx_decider/stage6` | JSON results of the e2e and full-model perf tests. |
+| `PPLX_DECIDER_IMAGE_E2E_DIR` | `$PPLX_DECIDER_STAGE12B_DIR`, else `/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/image_e2e` | JSON and safetensors results of `tests/e2e/test_image_model.py`; set it per run so a rerun does not overwrite another stage's evidence. |
 
 Generate the goldens once (CPU only, about 10 minutes, about 800 MB):
 

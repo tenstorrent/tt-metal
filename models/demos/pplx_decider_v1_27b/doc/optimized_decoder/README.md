@@ -1,4 +1,67 @@
-# Stage 3A: optimized decoder layers, part 1 (prefill matmuls)
+# Stage 3: optimized decoder layers (3A prefill matmuls, 3B non-matmul ops and chunking)
+
+Stage 3B is described first; the stage-3A text follows unchanged from "Stage 3A" below.
+
+## Stage 3B: non-matmul ops, SDPA, Gated DeltaNet, norms, chunking
+
+Baseline `57f76869913` (stage 3A). Precision is unchanged (C0): BF16 activations, BFP8 weights,
+HiFi2 + fp32 accumulation for every matmul, fp32 DeltaNet state; no weight, dtype or matmul config
+changed and the C0 weight cache is reused as is. Labels as below; numbers are **measured** unless
+marked. Full log, audit and every rejected candidate: [`work_log.md`](work_log.md#stage-3b-work-log-non-matmul-ops-chunking)
+(sections 9-15).
+
+### What changed (kept, one change per measurement)
+
+| # | change | where | evidence (layer median, ms, interleaved bench) |
+|---|---|---|---|
+| 1 | SDPA `exp_approx_mode=True` | `optimizations.py` | full S=8192 50.47 -> 47.57; 2048 8.65 -> 8.53; PCC unchanged to 1e-6 |
+| 2 | full-attention layers prefill the whole request as one chunk (`prefill_chunk_full_attention`, default `max_seq_len`; linear layers keep 2048) | `optimizations.py`, `decoder.py` | full 8192 47.58 -> 42.65, 4096 19.49 -> 18.31 |
+| 3 | first chunk: plain causal SDPA on the chunk's own q/k/v with `output_concat_heads=True` (drops `concatenate_heads`), no paged-cache write when no later chunk follows | `attention.py` | full 8192 42.64 -> 42.09, 2048 8.47 -> 8.32, 128 1.80 -> 1.77 |
+| 4 | plain SDPA q chunk 256 for >= 2048 rows (k 128; 128/128 below) | `optimizations.py`, `attention.py` | full 8192 42.08 -> 34.50, 4096 18.00 -> 16.76, 2048 8.31 -> 7.86 |
+| 5 | GDN `chunk_gated_delta_rule` with `ChunkGdnFusedProgramConfig()` (the op's cost model picks the phased path on this grid) | `optimizations.py`, `gated_deltanet.py` | linear 8192 40.36 -> 37.41, 2048 9.94 -> 9.20, 128 2.03 -> 1.96; output bit-identical |
+| 6 | causal conv `channel_chunk_size` 256 -> 512 | `optimizations.py` | linear 8192 37.45 -> 36.97, 2048 9.21 -> 9.09 |
+| 7 | RMSNorm at <= 128 rows block-sharded in L1 on 8 cores (82 -> 23 us + 2 x 5 us reshards) | `norm.py`, `optimizations.py` | 8 L0 layers back to back at S=128: 15.42 -> 14.77 (-81 us per layer); flat for a single synced layer (host dispatch gaps) |
+| 8 | RMSNorm compute config without fp32 dest accumulation (HiFi4 kept) | `optimizations.py` | linear 8192 37.00 -> 36.62, full 8192 34.56 -> 34.10; norm op 8192 rows 737 -> 482 us; layer PCC >= 0.99993 |
+
+Also: `tests/e2e/test_image_model.py` reads `$PPLX_DECIDER_IMAGE_E2E_DIR` (default unchanged) so
+reruns do not overwrite stage-12B evidence; `tests/pcc/test_prefill_contract.py` gains a test of the
+multi-chunk full-attention path (paged cache + chunked SDPA), which the new default no longer uses
+for bucket lengths; the perf harness times the MLP target with each kind's chunk.
+
+### Result: per-layer warmed prefill latency (measured)
+
+Harness `tests/perf/test_prefill_perf.py::test_layer_and_module_perf` (2 warm-ups, median of 7),
+A1 B1 A2 B2, A = worktree of `57f76869913`, B = stage 3B; mean of the two run medians, ms. Logs:
+`artifacts/pplx_decider/stage3b/ab/perf_ab_*.{jsonl,log}`.
+
+| target | kind | S=128 | S=1024 | S=2048 | S=4096 | S=8192 |
+|---|---|---|---|---|---|---|
+| decoder layer | linear_attention | 2.04 -> 1.89 (-7.5 %) | 5.60 -> 5.15 (-8.0 %) | 9.95 -> 9.01 (-9.4 %) | 20.21 -> 18.43 (-8.8 %) | 41.74 -> 39.27 (-5.9 %) |
+| decoder layer | full_attention | 1.81 -> 1.78 (-1.3 %) | 4.56 -> 4.45 (-2.3 %) | 8.50 -> 7.84 (-7.7 %) | 19.54 -> 16.69 (-14.6 %) | 49.68 -> 36.72 (-26.1 %) |
+| GDN mixer | linear_attention | 0.83 -> 0.76 | 2.92 -> 2.57 | 5.35 -> 4.56 | 11.09 -> 9.50 | 22.83 -> 20.56 |
+| attention mixer | full_attention | 0.66 -> 0.63 | 2.00 -> 1.90 | 4.04 -> 3.47 | 10.48 -> 8.00 | 31.68 -> 20.03 |
+| MLP (code unchanged) | linear / full | 1.08 / 1.08 -> 1.08 / 1.08 | 2.31 / 2.36 -> 2.36 / 2.36 | 3.98 / 3.98 -> 4.00 / 4.01 | 8.04 / 8.00 -> 8.10 / 8.00 | 17.46 / 17.68 -> 18.28 / 17.18 |
+
+Per-run medians (A1, A2 | B1, B2): linear 2.05, 2.04 | 1.89, 1.89; 5.59, 5.60 | 5.14, 5.16; 9.95,
+9.94 | 9.00, 9.02; 20.20, 20.22 | 18.43, 18.42; 41.07, 42.41 | 39.31, 39.23. Full 1.80, 1.81 | 1.78,
+1.78; 4.54, 4.57 | 4.44, 4.46; 8.48, 8.52 | 7.85, 7.84; 19.51, 19.58 | 16.69, 16.68; 47.56, 51.79 |
+36.53, 36.91. **Both kinds beat 3A at every bucket**, beyond the run-to-run spread (largest B-side
+spread 0.38 ms at full 8192; the A side spreads 4.2 ms there, the throttling drift of section 9).
+The MLP module has no code change; its +/- 0.05 ms rows at S <= 4096 are run-to-run variation and
+the 8192 rows follow the A-side drift. The full-attention S=128 gain is small because S=128 changes
+(sharded norm, no `concatenate_heads`) are hidden by host dispatch gaps in a single synced layer.
+
+Stage history, decoder layer ms (stage 1 -> stage 2 -> 3A -> 3B; stage 1 / 2 from their READMEs, 3A
+and 3B from this A/B):
+
+| kind | S=128 | S=1024 | S=2048 | S=4096 | S=8192 |
+|---|---|---|---|---|---|
+| linear_attention | 2.11 -> 2.37 -> 2.04 -> **1.89** | 6.16 -> 6.03 -> 5.60 -> **5.15** | 10.98 -> 10.64 -> 9.95 -> **9.01** | 22.47 -> 21.67 -> 20.21 -> **18.43** | 46.95 -> 45.23 -> 41.74 -> **39.27** |
+| full_attention | 1.96 -> 2.18 -> 1.81 -> **1.78** | 5.47 -> 5.03 -> 4.56 -> **4.45** | 10.07 -> 9.26 -> 8.50 -> **7.84** | 22.70 -> 21.09 -> 19.54 -> **16.69** | 58.84 -> 55.20 -> 49.68 -> **36.72** |
+
+Projected 64 layers (48 linear + 16 full, ms): 3A -> 3B 126.9 -> 119.2 (128), 341.8 -> 318.4
+(1024), 613.6 -> 557.9 (2048), 1282.7 -> 1151.7 (4096), 2798.4 -> 2472.5 (8192).
+
 
 Model `perplexity-ai/pplx-decider-v1-27b`, one Blackhole p150a (13x10 compute grid). Branch
 `gtobarTT/pplx-decider-bringup`. Baseline: `78e35968f19` (the stage-2 matmul path; later stages did
@@ -8,7 +71,68 @@ HiFi2 matmuls with fp32 accumulation, fp32 DeltaNet state. Length contract: buck
 command and its output are recorded here or in [`work_log.md`](work_log.md); **inferred** means it
 follows from code or arithmetic.
 
-## What changed
+### Full-model request latency (measured)
+
+Stage-6 harness `tests/perf/test_model_perf.py::test_model_perf`, A (`57f76869913`, worktree) vs B
+(stage 3B), same session and weight cache, ms. Burst = median of 5 passes, each after 10 s idle.
+
+| bucket | projected 64 layers (3A -> 3B) | device forward, burst | request, burst | request, sustained |
+|---:|---|---|---|---|
+| 128 | 126.9 -> 119.2 | 124.7 -> 113.2 (-9.2 %) | 126.3 -> 114.8 (-9.1 %) | 125.4 -> 114.0 (-9.1 %) |
+| 1024 | 341.8 -> 318.4 | 336.5 -> 313.0 (-7.0 %) | 338.6 -> 315.2 (-6.9 %) | 436.8 -> 419.9 (-3.9 %) |
+| 2048 | 613.6 -> 557.9 | 610.1 -> 555.0 (-9.0 %) | 619.3 -> 563.9 (-8.9 %) | 861.6 -> 828.9 (-3.8 %) |
+| 4096 | 1282.7 -> 1151.7 | 1352.9 -> 1212.9 (-10.3 %) | 1370.0 -> 1228.4 (-10.3 %) | 1790.4 -> 1702.2 (-4.9 %) |
+| 8192 | 2798.4 -> 2472.5 | 3238.6 -> 2856.5 (-11.8 %) | 3255.8 -> 2894.6 (-11.1 %) | 3751.9 -> 3518.6 (-6.2 %) |
+
+The A side reproduces the 3A review (burst request 126.3 / 338.8 / 619.7 / 1368.0 / 3272.7 ms).
+Against stage 6 (149 / 366 / 665 / 1481 / 3498 ms burst request) the optimized decoder is -23 %,
+-14 %, -15 %, -17 % and -17 %. Decisions/s at batch 1 (sustained): 8.77 / 2.38 / 1.21 / 0.59 / 0.28.
+
+### Device time (Tracy, one warmed layer, `perf/opt3b_*`)
+
+3A -> 3B, us: linear 1968 -> 1791 (S=128), 9773 -> 8923 (2048), 39894 -> 36442 (8192); full 1758 ->
+1625, 8399 -> 7706, 47337 -> 33871. At 8192 the full layer's SDPA is 18023 -> 8653 us (one causal
+SDPA, q chunk 256, approximate exp) and its MLP runs once at M=8192 (gate|up 87 % of the HiFi2 FLOP
+peak). Every matmul row still reads `HiFi2 BF16 x BFP8 => BF16`. 0 host ops.
+
+### Rejected in 3B (measured; full list with numbers in the work log, section 11)
+
+| option | result |
+|---|---|
+| SDPA q/k 256/256, 256/512, 512/512 (chunked) and 512/x, 1024/x (plain) | L1 overflow (head_dim 256) |
+| SDPA q/k 128/256, 128/64, 64/128, 256/64, 64/256 (chunked); 256/64, 256/32 (plain) | slower than 128/128 resp. 256/128 |
+| plain SDPA q 256 at 1024 rows | +0.1 ms (q 128 kept below 2048 rows) |
+| SDPA HiFi2 / HiFi3 / LoFi, fp32 dest acc off | no gain over exp approx alone (LoFi also lowers mixer PCC to 0.99966) |
+| SDPA max cores per head batch 8 / 32 | flat |
+| full-attention chunks of 4096 | 45.2 vs 42.6 ms (whole request) at 8192 |
+| linear-attention chunks of 4096 / 8192 | 74.2 / 71.3 vs 40.3 ms at 8192 |
+| GDN phased without multicast; fused `row_local=False`, hand-off depth 1 / 4, posted, multicast hand-off | slower or flat |
+| conv channel chunk 128 / 1024 | slower / smaller gain than 512 |
+| z and b\|a as two matmuls (weight cut at load, same bytes) | +0.10 ms at 128, -0.03 at 2048, -0.2 at 8192 |
+| residual adds in place | flat (adds run at ~88 % of DRAM peak) |
+| sharded RMSNorm at 1024 / 2048 rows | 1024: -17 us per norm (op); 2048: L1 overflow |
+| RMSNorm HiFi2 / LoFi, legacy reduction / rsqrt | no gain (Welford: LayerNorm only) |
+
+### Gates (measured, final code)
+
+- **PCC suite** `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q`: **143 passed**, exit 0; all
+  128 records >= 0.995, min **0.999535** (`rmsnorm_input_norm` L0 S1024; the norm accumulation
+  change moves norm / layer PCC by at most -4.6e-4; GDN, MLP, readout identical to 3A).
+- **Chunked full-attention path** (new contract test, 2048-token chunks, stale-page order): PCC
+  0.999987-0.999988, repeat bit-identical. **Non-bucket lengths** S = 100 / 1000 / 2100 / 4100:
+  layer PCC >= 0.999927.
+- **Runtime audit** 0 host calls (suite, e2e text and image); **determinism** bit-identical.
+- **e2e text** 7 passed: **25/25**, readout-logit PCC min 0.99721 (bar 0.99). **e2e image** 7 passed:
+  **8/8**, min 0.99923 (written to `stage3b/e2e_image/` via `$PPLX_DECIDER_IMAGE_E2E_DIR`).
+- **Watcher** (`TT_METAL_WATCHER=10`, `test_decoder_layer.py` at S128 / S2048 / S8192, one run per
+  kind): 3 + 3 passed, no disabled features, 0 error / assert / sanitize / hang lines.
+
+Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage3b/` (`bench/`, `ab/`, `tracy/`, `logs/`,
+`model_perf_{A,B}/`, `e2e/`, `e2e_image/`, `watcher/`, `scripts/`).
+
+## Stage 3A
+
+### What changed
 
 Only matmul program configs. The stored weights, their layout, dtype and memory config are the
 same, so the C0 weight cache stays valid (no new cache files). Files: `tt/optimizations.py` (the
@@ -24,7 +148,7 @@ config tables) and `tt/common.py` (`prefill_linear` picks the config).
 The decision-head readout (weight 5120x256) is not in the tables and keeps the stage-2 path; vision
 is untouched.
 
-## Result: per-layer warmed prefill latency (measured)
+### Result: per-layer warmed prefill latency (measured)
 
 Harness `tests/perf/test_prefill_perf.py::test_layer_and_module_perf` (2 warm-ups, median of 7),
 run interleaved A1 B1 A2 B2 (A = `78e35968f19`, B = stage 3A); each cell is the mean of two run
@@ -55,7 +179,7 @@ Device time (Tracy, one warmed layer, `perf/`): linear 2269 -> 1968 us at S=128 
 8399 (-8.4 %), 50370 -> 47337 (-6.0 %). Matmuls are now 58 % (linear) / 66 % (full) of the 2048
 layer, at 71-79 % of the HiFi2 FLOP peak.
 
-## Why it is faster
+### Why it is faster
 
 - **S >= 1024.** `minimal_matmul` gives each core ceil(N_tiles / 13) N tiles. The stage-2 N block of
   16 left a ragged last block on every core for the 5120-wide outputs (13 tiles per core) and the
@@ -70,7 +194,7 @@ layer, at 71-79 % of the HiFi2 FLOP peak.
   projections more than recover the rest. Removing the 13-reader limit needs an op change; all
   model-side routes were measured or ruled out (work log, section 2).
 
-## Rejected (measured)
+### Rejected (measured)
 
 | option | result | why rejected |
 |---|---|---|
@@ -82,7 +206,7 @@ layer, at 71-79 % of the HiFi2 FLOP peak.
 | 13x8 grid at M=1024 (no M padding) | gate\|up 1493 vs 1495, down 798 vs 804 us | flat |
 | 2x2 / 4x1 subblocks for gate\|up at 2048 | 2953 / 3037 vs 2577 us | slower |
 
-## Gates (measured)
+### Gates (measured)
 
 - **PCC suite** `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q`: 142 passed, exit 0. All 124
   PCC records >= 0.995; minimum 0.999897 (GDN L61 S8192, the same case as stage 2). Against stage 2
@@ -94,7 +218,7 @@ layer, at 71-79 % of the HiFi2 FLOP peak.
 - **Watcher** (`TT_METAL_WATCHER=10`, `test_decoder_layer.py` at S128 and S2048), one run per layer
   kind: L0 2 passed, L3 2 passed, no error / assert / sanitize / hang entries.
 
-## Full-model request latency (measured)
+### Full-model request latency (measured)
 
 Stage-6 harness `tests/perf/test_model_perf.py::test_model_perf`, A (`78e35968f19` configs) vs B
 (stage 3A), ms. Burst = median of 5 passes, each after 10 s idle.
@@ -110,7 +234,7 @@ Stage-6 harness `tests/perf/test_model_perf.py::test_model_perf`, A (`78e35968f1
 Decisions/s at batch 1 (burst request): 6.73 -> 7.91 (128), 2.73 -> 2.95 (1024), 1.50 -> 1.62
 (2048), 0.29 -> 0.31 (8192).
 
-## Remaining candidates for stage 3B
+### Remaining candidates for stage 3B (taken up above)
 
 See [`work_log.md`](work_log.md#8-remaining-candidates-for-stage-3b): S=128 norms (2 x 82 us on 4
 cores), the S=128 gate|up op limit, GDN chunk prep/scan and conv, SDPA at long S, residual adds.
@@ -127,6 +251,9 @@ Environment: `source python_env/bin/activate; export TT_METAL_HOME=$PWD PYTHONPA
 | device profile | `python -m tracy -r -p -v --no-web-server -o <dir> -m pytest "models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py::test_profile_layer[L0_linear-S2048-device_params0]"` |
 | perf report | `tt-perf-report <ops_perf_results.csv> --start-signpost PREFILL_START --end-signpost PREFILL_END [--csv out.csv]` (advice on) |
 | full-model latency | `PPLX_DECIDER_STAGE6_DIR=<dir> pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py::test_model_perf -q -s` |
+| 3B candidate bench | `BENCH_OUT=<jsonl> python /local/ttuser/gtobar/artifacts/pplx_decider/stage3b/scripts/bench3b.py <layer> <S,S,..> base,<cand>,.. <rounds>` (`BENCH_STACK=8` for back-to-back layers) |
+| 3B A/B | `/local/ttuser/gtobar/artifacts/pplx_decider/stage3b/scripts/ab.sh` (A = `git worktree add --detach <dir> 57f76869913`) |
+| image e2e to its own dir | `PPLX_DECIDER_IMAGE_E2E_DIR=<dir> pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q -s` |
 | watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=<dir> pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "S2048 and (L0 or L3)"` |
 
 Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage3a/` (`micro/`, `ab/`, `tracy/`,
