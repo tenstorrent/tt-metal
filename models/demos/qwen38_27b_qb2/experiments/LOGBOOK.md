@@ -1986,3 +1986,25 @@ No session connection is needed for that queue to continue.
   receipts; terminal service observations supersede them. Hardware full-model
   comparison and the B16 follower are both still active with their original
   identities. B32/32K candidate completed its first two measured repeats.
+
+## Oct 10, 06:10 UTC: B16/32K fusion measurements and full operator roadmap
+
+- Candidate B16/32K cell completed all three measured repeats: 16.5502 output
+  tokens/s/user, 264.803 aggregate tokens/s per TP4, 60.4222 ms/token. Decode
+  durations were 7.67362/7.67346/7.67391 s for 127 steady steps; output hashes
+  matched across repeats. This is about 11.3% above the qualified 14.871 baseline.
+- Prefill is 5,323.47 input tokens/s, TTFT 98.631 s, and all-in aggregate output
+  throughput 19.265 tokens/s for 32K input / 128 output. Warm model-harness
+  timing excludes loading/compilation and HTTP. One TP4, not measured Galaxy DP8.
+- Persistent fusion service remained active in the candidate sweep. The final
+  after-control and full GPQA are still pending; no serving promotion occurred.
+  Retained source/config hashes, raw three-repeat results and snapshot scope.
+- Scoped all 38 profiled operation types, reconciled 260 matmul calls against
+  all 12 rank/replay records, and generated a reproducible inventory. Encoded
+  padded weight bandwidth averages 73.5% of assumed peak; output projections
+  are 57%, MLP down 68%, gate/up 83%. These are modeled bytes, not counters.
+- Added OPERATOR-ROADMAP.md: finish current qualification, compact GDN layouts,
+  retune weak matmuls, then SDPA delivery, recurrence, residual/norm and CCL.
+  Prefill budget comparison stays queued; prefill stage profiling precedes
+  broader prefill rewrites. Targets are estimates with overlapping ownership,
+  accuracy gates and explicit limits; 70% full-model utilization is not proven.

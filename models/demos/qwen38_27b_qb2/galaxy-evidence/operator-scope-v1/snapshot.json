@@ -1,0 +1,30 @@
+{
+  "observed_at": "2026-10-10T06:12:32.923856+00:00",
+  "source_host": "10.228.203.98",
+  "source_directory": "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/shared-qk",
+  "source_sweep_updated_at": "2026-10-10T06:09:50.012627+00:00",
+  "service": "qwen38-gdn-fusion-full-v2-20261010.service",
+  "service_active": true,
+  "completed_cell": [
+    32768,
+    16
+  ],
+  "completed_repeats": 3,
+  "after_control_pending": true,
+  "gpqa_pending": true,
+  "promoted_to_serving": false,
+  "summary": {
+    "tokens_per_second_per_user": 16.550202588729288,
+    "aggregate_decode_tokens_per_second": 264.8032414196686,
+    "aggregate_e2e_tokens_per_second": 19.26535658250054,
+    "tpot_ms": 60.422221096012535,
+    "ttft_p50_s": 98.63118181703612,
+    "ttft_p90_s": 98.6351407901384,
+    "decode_s": 7.673622079193592,
+    "elapsed_s": 106.30480631021783,
+    "samples": 3,
+    "prefill_s": 98.48620239412412,
+    "aggregate_input_tokens_per_second": 5323.466508556127,
+    "aggregate_e2e_input_tokens_per_second": 4931.931285120138
+  }
+}

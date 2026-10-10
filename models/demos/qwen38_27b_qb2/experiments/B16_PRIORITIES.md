@@ -5,6 +5,9 @@ Updated October 10, 2026 UTC. Primary target: one TP4 replica at batch 16,
 concurrency. B32 is a secondary regression screen. Keep BFP8 weights/KV and
 FP32 recurrent state. Prefill and decode share the Galaxy.
 
+The [complete operator roadmap](OPERATOR-ROADMAP.md) ranks all measured
+operator families, separates overlapping savings, and includes prefill priorities.
+
 ## Measured baseline and proposed gains
 
 The completed shared-QK full-model sweep measured 14.871 decode tokens/s/user
@@ -16,7 +19,7 @@ not an HTTP serving benchmark. Eightfold scaling is not implied.
 | Change | Expected B16 benefit | Evidence and qualification |
 |---|---|---|
 | Prefill token budget 32K to 64K | About 10% input throughput; roughly 99 to 90 seconds TTFT at 32K/B16; about 9% all-in output throughput for 128 output tokens | Earlier budget experiment measured 5,321 to 5,870 input tokens/s at B16. B32 failed allocation. Queue a fresh matched B16-only control/candidate/control comparison. Changed chunk boundaries require accuracy requalification. |
-| Direct preparation plus fused GDN epilogue | Projected 14.87 to 16.54 decode tokens/s/user at 32K, about 11%; 16.34 to 18.38 at 16K, about 12.5% | Real-layer comparison saves 6.80 ms over 48 layers. Full-model comparison and GPQA are running. About 1% all-in benefit for the prefill-dominated 32K/128-output batch. |
+| Direct preparation plus fused GDN epilogue | Measured 14.87 to 16.55 decode tokens/s/user at 32K, about 11.3%; projected 16.34 to 18.38 at 16K, about 12.5% | Three full-model B16/32K repeats completed at 60.422 ms/token. After-control comparison and GPQA remain pending. About 1% all-in benefit for the prefill-dominated 32K/128-output batch. |
 | Broader compact GDN front end | Engineering target: another 10-20% decode throughput on the combined-fusion candidate | Not measured. Targets convolution, history, preparation and projection-layout work. The first prototype implements only convolution/history and compact preparation; do not assign it the entire broader-front-end gain. |
 | Scheduler chunked prefill | Reduce decode pauses under arriving prompts; no raw compute-throughput gain assumed | Workload-dependent benefit is unquantified. Older BFP4 adapter state test passed. Current BFP8 scheduler, device sampler and mixed-load serving tests are still needed. |
 

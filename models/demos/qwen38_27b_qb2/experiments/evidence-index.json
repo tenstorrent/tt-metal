@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T05:58:05.755142+00:00",
+  "generated_at": "2026-10-10T06:12:32.928962+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -159,13 +159,18 @@
     },
     {
       "path": "experiments/B16_PRIORITIES.md",
-      "bytes": 16502,
-      "sha256": "eec24708585f59085aa875234843074fd1a767cdc7c23498dea4f39fcbbbd0f1"
+      "bytes": 16686,
+      "sha256": "640fcc94a8dbd3a8f46ac51bf85dc144d016bb97eb1b30c02985239e800067a9"
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 146225,
-      "sha256": "276cde8cd577743d1481f125b273af1846503b78e830257d5253d38131a74f5f"
+      "bytes": 147797,
+      "sha256": "f9296ab7eae20f7a5c73abd44b6ba29a6b7ef11b35485a71c4a6523cba25ebb0"
+    },
+    {
+      "path": "experiments/OPERATOR-ROADMAP.md",
+      "bytes": 16707,
+      "sha256": "1c256b22dee10a8dc88cde19ee5716492eaf3ada9fca32bfc6ecf0dea2038a99"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -7375,6 +7380,36 @@
       "path": "galaxy-evidence/native-http-sweep-v2/sweep.svg",
       "bytes": 96344,
       "sha256": "0cf2e8558dd1296f1c3ddc6ba193c9222f01ed46ad5770e44038fecf2f15d2cb"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/INVENTORY.md",
+      "bytes": 4012,
+      "sha256": "e376a41c72225fe207aecf143c06939dfb3679afee7ddba02e3fe217c5bfc323"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/analysis.json",
+      "bytes": 18402,
+      "sha256": "4b67b79f14d5e9b291229c85765532d28504cc486265e2ba580994d1546b5c92"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/analyze.py",
+      "bytes": 9007,
+      "sha256": "d9c3e050d3457996f62a6bc6461918f1c317f3238a077d8368846816f0403fda"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/candidate-sweep.csv",
+      "bytes": 569,
+      "sha256": "4d8bcba4acae8cabcec7eb80ddad10565bd9b92fa43df37547ba0758f182d3f4"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/candidate-sweep.json",
+      "bytes": 31246,
+      "sha256": "b51a6281048312bfd4351504d1980e3881e5f5bfc7c2968f2635483ecf76e3d4"
+    },
+    {
+      "path": "galaxy-evidence/operator-scope-v1/snapshot.json",
+      "bytes": 1043,
+      "sha256": "e1d82e0b5b039295ca80e8157aff0c574f506d1ccf13b3388439541786ebd506"
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/README.md",
