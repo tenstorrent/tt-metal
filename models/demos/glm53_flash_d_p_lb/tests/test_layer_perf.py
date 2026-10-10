@@ -16,7 +16,7 @@ Builds take seconds per layer (KDA / MLA / dense weights are random host tensors
 Numerics are meaningless (random weights). Routing is near-uniform; GLM_FAKE_HOT=n makes experts 0 .. n-1 hot.
 GLM_LP_REAL=1 loads the real checkpoint instead (spec paths.hf / BRINGUP_HF; the flat expert cache is used).
 
-Knobs: GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
+Knobs: GLM_LP_CALLS=<prefix> (dump every call per layer), GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
 layer, default 12), GLM_LP_JSON (write the rows there). The spec's device settings (experts dtype / fidelity, links)
 apply as in the model. Mesh and fabric come from the spec (BRINGUP_SPEC).
 
@@ -109,6 +109,9 @@ def test_layer_perf(mesh_device):
                 calls = profiler.finish_rt()
             finally:
                 profiler.disable()
+            if os.environ.get("GLM_LP_CALLS"):  # every call in order: step, op, per-chip ms, tensor shapes
+                with open(f"{os.environ['GLM_LP_CALLS']}.L{i}.json", "w") as f:
+                    json.dump(calls, f, default=str)
             chip_ns, step_ns, op_ns = defaultdict(float), defaultdict(lambda: defaultdict(float)), defaultdict(float)
             step_op = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))  # step -> op -> [ms on the busiest chip, calls]
             for c in calls:
