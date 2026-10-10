@@ -30,6 +30,7 @@ vocab-sharded LM head, so logits come back as D vocab shards.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -356,7 +357,12 @@ class DFlashTTProposalCache:
             raise ValueError(f"DFlash TT proposal cache requires tile/block size 32, got {block_size}")
         self.core = core
         self.block_size = block_size
-        self.max_context_rows = core.config.sliding_window - 1
+        # target rows the draft sees (its window: sliding_window - 1 = 511); TT_LAGUNA_DFLASH_CONTEXT_ROWS keeps fewer,
+        # which shrinks every proposal (draft layers run over context + 16 query rows)
+        self.max_context_rows = min(
+            core.config.sliding_window - 1,
+            int(os.environ.get("TT_LAGUNA_DFLASH_CONTEXT_ROWS", core.config.sliding_window - 1)),
+        )
         self.query_rows = core.config.block_size
         self.capacity = math.ceil((self.max_context_rows + self.query_rows) / block_size) * block_size
         self.kv_cache = {
