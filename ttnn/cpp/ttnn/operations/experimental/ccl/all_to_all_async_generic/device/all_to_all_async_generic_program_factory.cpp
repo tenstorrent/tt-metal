@@ -916,6 +916,18 @@ AllToAllAsyncGenericProgram::create_at(
         return operation_attributes.drain_virtual_cores[target_index];
     };
     bool use_multicast_initialization = is_fabric_2d && routing.axis_is_straight;
+    if (use_multicast_initialization && operation_attributes.num_devices > 1) {
+        // The kernel's multicast routes the logical axis as the fabric's: axis 1 +1 = East, axis 0 +1 = South. A view
+        // whose axis is straight but runs the other way (e.g. a 4x2 view of a 2x4 fabric mesh) takes the unicasts.
+        MeshCoordinate first = mesh_coordinate, second = mesh_coordinate;
+        first[cluster_axis] = 0;
+        second[cluster_axis] = 1;
+        const auto hop = tt::tt_fabric::get_neighbor_eth_directions(
+            device->get_fabric_node_id(first), device->get_fabric_node_id(second));
+        const auto expected = cluster_axis == 1 ? tt::tt_fabric::eth_chan_directions::EAST
+                                                : tt::tt_fabric::eth_chan_directions::SOUTH;
+        use_multicast_initialization = !hop.empty() && hop.front() == expected;
+    }
     if (use_multicast_initialization) {
         // Multicast is valid only on a physically straight axis and when every destination maps the drain semaphore
         // to the same harvested worker. Bent axes and heterogeneous harvesting use destination-specific unicasts.
