@@ -1,0 +1,68 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-compact-gdn-v3-20261010",
+    "--property=RuntimeMaxSec=38h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=192G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_compact_gdn",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-v3",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-control-v3/source-manifest.json",
+    "--after-unit",
+    "qwen38-b16-priority-v2-20261010.service",
+    "--after-invocation",
+    "f5b0da5649614052ba7b8ddf37b466d5",
+    "--after-receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/b16-priority-v2/queue.json"
+  ],
+  "source_parent": "cf181d0f1cd",
+  "created_at": 1791657160.516704,
+  "physical_stages": [
+    "26 compact epilogue cases",
+    "real-weight GDN B16/B32/B8/B1 + changing inputs",
+    "B16 32K/16K control/compact/control full-model sweeps"
+  ],
+  "primary_target_tsu": 30,
+  "speculative_decoding": false,
+  "estimated_incremental_step_saving_ms": [
+    4,
+    6
+  ],
+  "expected_gain_is_estimate": true,
+  "estimated_physical_minutes": [
+    90,
+    180
+  ],
+  "full_gpqa_qualified": false,
+  "source_manifest_sha256": "ca5fb807ce7c370967f882c85c7632a9976af8f0c55921b46f1a1db4bb589465",
+  "changed_files": [
+    "models/demos/qwen38_27b_qb2/tt/decoder.py",
+    "models/demos/qwen38_27b_qb2/tt/decoder_tp.py",
+    "models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py"
+  ],
+  "reason": "Share only compact transient L1 operands across serialized CQ0 layers; all state remains private",
+  "kernel_code_changed": false,
+  "root_cause_proven": false,
+  "native_install_changed": false,
+  "prefill_batched_attention_enabled": false,
+  "expected_full_model_tsu": 20
+}

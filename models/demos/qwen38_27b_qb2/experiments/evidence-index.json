@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T18:29:47.117057+00:00",
+  "generated_at": "2026-10-10T18:35:02.090469+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -189,8 +189,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 164294,
-      "sha256": "8577d5112707db200059ed2fa439ca07550512c44f6a0a6a2024346c5c3dfef8"
+      "bytes": 166883,
+      "sha256": "ee36efa7a213c2d7a7d1aaedf87603706db6da06af224572c89457814e8e5d10"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
@@ -2140,6 +2140,121 @@
       "path": "galaxy-evidence/compact-gdn-launch-v1/stage-launch.py.gz",
       "bytes": 2964,
       "sha256": "a3428d425773a6f48301b4e50bacb29445d8a0acec2a099680592703216816c4"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/README.md",
+      "bytes": 3432,
+      "sha256": "8ba8a46595729901799209399f87b49da14561669033d4b726e89264d37f326c"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-followup-control-v3/launch-unit.json",
+      "bytes": 155,
+      "sha256": "7f461fd0974b70d16e1fb7e4dcc4f25fa33c1383aaf3d3c87d9118ba3773fba7"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-followup-control-v3/launch.before-manifest-correction.json",
+      "bytes": 3338,
+      "sha256": "cdd835d7131d2fc651985b65bf48e7dd38b5e0c658a7c22703809e9be5970b2e"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-followup-control-v3/launch.json",
+      "bytes": 2826,
+      "sha256": "377e82a69a65747f79f6f92f631aeaf4348df0edca24b786ca371f67f2926f77"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-followup-v3/queue.json",
+      "bytes": 689,
+      "sha256": "72298ed42a94be1b206b2656dc3503e9d2962d27694aaa758cf18b41e723fc60"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/launch-unit.json",
+      "bytes": 155,
+      "sha256": "f016eb5410fdab8da54dc5d5c5df843de3d5e1364452ac406d335e3986e41033"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/launch.json",
+      "bytes": 2674,
+      "sha256": "47e74ca0ae7d0ba7099853f5344abd411b29f7c75a3bf7df4b26e52cd4afed9b"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/preflight.log.gz",
+      "bytes": 408,
+      "sha256": "a6c59eabb84f19a82946cba39ba529c60e97e31db2c5a6f0b8bd4d50cdc14ad2"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/recovery-audit.json",
+      "bytes": 1221,
+      "sha256": "c34b78de8090799dbaf8eb81b59b12585f3f3e04d16e9df08fe80dc4961f871e"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/source-manifest.json",
+      "bytes": 27435,
+      "sha256": "ca5fb807ce7c370967f882c85c7632a9976af8f0c55921b46f1a1db4bb589465"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-control-v3/unit.xml.gz",
+      "bytes": 10578,
+      "sha256": "0371a061e221b4c6c56eee7ac446734ccdccfb616e0f328c8967bc0cd1954111"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-v2/compact/sweep.json",
+      "bytes": 54433,
+      "sha256": "edfcc0bab97f356525978ce45f43cc99eb29de86bbf9ecce1219ce6fe8f5004c"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-v2/queue.json",
+      "bytes": 4590,
+      "sha256": "a42b6093ad3df85454cd4109fc76942af7d3a94551763b723760d2c43f6f2753"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-v3/epilogue/epilogue.json",
+      "bytes": 96929,
+      "sha256": "56e1a0fc7c6d469f6d5e19646e75e3b46621b6578fa3a75c5d059fbe7490c9dc"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-v3/layer/layer.json",
+      "bytes": 159546,
+      "sha256": "90b02ad28fd6b3990e041f26f92f985eb7e3f7b6d6a089764e173ece96b883a2"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/compact-gdn-v3/queue.json",
+      "bytes": 3059,
+      "sha256": "dc8871e530eccef7d30756cf688dfaa94368c9bce8693a44bf57fe54ed01f9c6"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/prefill-attention-control-v2/launch-unit.json",
+      "bytes": 155,
+      "sha256": "550d075384149415981f9a06f436d1d175df7e176f7beecdcd1964b9e864a36e"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/prefill-attention-control-v2/launch.json",
+      "bytes": 2746,
+      "sha256": "3c6f217e3282982961ca78172ac16b442a7e1fa9a7b7b0b0debb708a53177f37"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/prefill-attention-v2/queue.json",
+      "bytes": 615,
+      "sha256": "8ceaa2f6c0fba80ea8226c256b79a52e90955ca061ab5696e6c338dda61b91de"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/projection-sweep-control-v5/launch-unit.json",
+      "bytes": 155,
+      "sha256": "a1b7d5a41bb3659ee18da1472132c755789d5bc6401c3557d527365adb4b65e3"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/projection-sweep-control-v5/launch.json",
+      "bytes": 1727,
+      "sha256": "7136cc8ee33e8dee51513bd8f76c964394cd607cad40a2da0bf9170de4999031"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/receipts/projection-sweep-v5/queue.json",
+      "bytes": 616,
+      "sha256": "4fbb82093ef297e23ed1b6bb47da7c6c5cf96dc1ad6cfed1281c9c1260a6f5a3"
+    },
+    {
+      "path": "galaxy-evidence/compact-pool-recovery-v1/recover-pool.py.gz",
+      "bytes": 3004,
+      "sha256": "d3f52ac8e16b4e47c6fe30525baa94c9e2db071cfd3bec322c23278efdb3ae5a"
     },
     {
       "path": "galaxy-evidence/compact-recovery-v2/README.md",
@@ -11147,8 +11262,8 @@
     },
     {
       "path": "tests/unit/test_gdn_decode_integration.py",
-      "bytes": 13774,
-      "sha256": "591a14bf651e49ee856eb79e56660dfbab7baff32b202780088f62ceea761a99"
+      "bytes": 15454,
+      "sha256": "ef1cc7e6b27252b351abf2a61b8cb45d1726344d7d5a1944a213bbff7ffa21e3"
     },
     {
       "path": "tests/unit/test_gdn_epilogue.py",
@@ -11217,13 +11332,13 @@
     },
     {
       "path": "tt/decoder.py",
-      "bytes": 53925,
-      "sha256": "e75329d642aacf588d5e4d56be50c2b8be0fc97ad65bdc11b8203bde73630894"
+      "bytes": 53999,
+      "sha256": "0d8dc58bcafa75eb860fabf8e5406b2db981bef965b928f2662b86e1f1ae7e11"
     },
     {
       "path": "tt/decoder_tp.py",
-      "bytes": 36795,
-      "sha256": "2733f5481b8d746274ab2d2603a1358b6c83c65eeb07c5bcad8333c7f3773b0b"
+      "bytes": 37231,
+      "sha256": "84ae837b67fd4114750769b4990d7fdcbe9872c6b66cc0b37e6040a29a65c51a"
     },
     {
       "path": "tt/gdn_epilogue/compute.cpp",
@@ -11262,8 +11377,8 @@
     },
     {
       "path": "tt/gdn_step/workspace.py",
-      "bytes": 6536,
-      "sha256": "7d0b35d0ede839d938bcea482619dc8d19997cf41bac9f60a0daa966c9845b17"
+      "bytes": 7304,
+      "sha256": "44575d2557636b92670b11578a9391c9ccaeaa140b0255eb34e6de5999fca3aa"
     },
     {
       "path": "tt/model.py",

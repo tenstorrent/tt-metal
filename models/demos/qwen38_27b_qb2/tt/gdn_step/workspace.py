@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Persistent scratch owned by one layer/replica, independent of request state."""
+"""Persistent scratch independent of request state; compact L1 can be replica-shared."""
 
 SINGLE_STEP_POLICIES = (
     "single_step",
@@ -19,6 +19,20 @@ def uses_fused_epilogue(recurrence, batch):
     return recurrence in EPILOGUE_POLICIES and batch in EPILOGUE_BATCHES
 
 
+class CompactScratch:
+    """Transient compact operands for one serialized CQ0 layer stack.
+
+    Every layer consumes these tensors before the next layer overwrites them.
+    Request history, recurrent state and each layer's other workspace remain
+    private. Independent replicas or concurrently submitted stacks need their
+    own pool. Allocate all batch shapes before capturing traces.
+    """
+
+    def __init__(self, mesh):
+        self.mesh = mesh
+        self.outputs = {}
+
+
 class DecodeWorkspace:
     def __init__(
         self,
@@ -29,9 +43,12 @@ class DecodeWorkspace:
         fused_epilogue=False,
         flat_prepare=False,
         compact_frontend=False,
+        compact_pool=None,
     ):
         if compact_frontend and (shared_qk_heads != 4 or value_heads != 12 or not fused_epilogue or not flat_prepare):
             raise ValueError("Compact GDN needs TP4 heads, shared Q/K, flat preparation and fused epilogue")
+        if compact_pool is not None and (not compact_frontend or compact_pool.mesh is not mesh):
+            raise ValueError("Compact scratch pool must belong to the same mesh and compact policy")
         self.mesh = mesh
         self.value_heads = value_heads
         self.outputs = {}
@@ -42,7 +59,7 @@ class DecodeWorkspace:
         self.flat_prepare = flat_prepare
         self.prepared_outputs = {}
         self.compact_frontend = compact_frontend
-        self.compact_outputs = {}
+        self.compact_outputs = compact_pool.outputs if compact_pool is not None else {}
 
     def prepare(self, batch):
         """Setup boundary only; never replace buffers referenced by existing traces."""

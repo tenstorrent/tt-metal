@@ -287,6 +287,7 @@ class Qwen38Decoder(LightweightModule):
                     fused_epilogue=uses_fused_epilogue(recurrence, 16),
                     flat_prepare=recurrence in ("single_step_flat_prepare_epilogue", "single_step_compact_gdn"),
                     compact_frontend=recurrence == "single_step_compact_gdn",
+                    compact_pool=getattr(self, "compact_gdn_pool", None),
                 )
             self.gdn_decode_workspace.prepare(batch_size)
         return DecoderState(

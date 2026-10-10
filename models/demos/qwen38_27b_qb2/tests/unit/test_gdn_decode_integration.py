@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import decoder
-from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import DecodeWorkspace
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import CompactScratch, DecodeWorkspace
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 
@@ -99,6 +99,39 @@ def test_shared_workspace_is_persistent_disjoint_and_skips_small_batches(monkeyp
     assert len({id(tensor) for tensor in allocations}) == 10
     assert all(workspace.shared_qk(batch) is pair for batch, pair in original.items())
     assert DecodeWorkspace(object(), 12).shared_qk(16) is None
+
+
+def test_compact_l1_pool_is_shared_only_within_one_serialized_stack(monkeypatch, expect_error):
+    allocated = []
+
+    def allocate(shape, dtype, layout, mesh, memory):
+        tensor = SimpleNamespace(shape=tuple(shape), serial=len(allocated), mesh=mesh, memory=memory)
+        allocated.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", allocate)
+    mesh = object()
+    pool = CompactScratch(mesh)
+    options = dict(shared_qk_heads=4, fused_epilogue=True, flat_prepare=True, compact_frontend=True)
+    layers = [DecodeWorkspace(mesh, 12, compact_pool=pool, **options) for _ in range(48)]
+    for layer in layers:
+        layer.prepare(16)
+    original = layers[0].compact_buffers(16)
+    assert all(layer.compact_buffers(16) is original for layer in layers)
+    assert len([t for t in allocated if t.memory == ttnn.L1_MEMORY_CONFIG]) == 4
+    assert len({id(layer.output(16)) for layer in layers}) == 48
+    assert len({id(layer.flat_outputs(16)[0]) for layer in layers}) == 48
+    for layer in layers:
+        layer.prepare(32)
+    assert len([t for t in allocated if t.memory == ttnn.L1_MEMORY_CONFIG]) == 8
+    assert all(layer.compact_buffers(16) is original for layer in layers)
+    independent = DecodeWorkspace(mesh, 12, compact_pool=CompactScratch(mesh), **options)
+    independent.prepare(16)
+    assert all(a is not b for a, b in zip(original, independent.compact_buffers(16)))
+    with expect_error(ValueError, "same mesh"):
+        DecodeWorkspace(object(), 12, compact_pool=pool, **options)
+    with expect_error(ValueError, "compact policy"):
+        DecodeWorkspace(mesh, 12, compact_pool=pool)
 
 
 @pytest.mark.parametrize(

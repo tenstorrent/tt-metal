@@ -1,0 +1,34 @@
+{
+  "units": {
+    "compact-gdn-v2": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "43f1990817724573a9b130ed61f3ff0e"
+    },
+    "compact-followup-v2": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "1a140fb3cc4e4aea92234ad4d38de9d6"
+    },
+    "projection-sweep-v4": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "dd0ad89df8004f78aa4270a047e35f91"
+    },
+    "prefill-attention-v1": {
+      "MainPID": "0",
+      "Result": "exit-code",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "InvocationID": "9df6962d09c44beabf1037326bb33f2e"
+    }
+  },
+  "failed_hardware_cleanup": true,
+  "error": "TT_THROW @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:2691: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 756 clash with L1 buffers on core range [0-0 - 11-9]. L1 buffer allocated at 825088 and static dataflow buffer region ends at 850944\n"
+}
