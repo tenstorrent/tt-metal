@@ -17,13 +17,13 @@
 // Set shift_mask to false when mask bits are already aligned (pre-shifted for upper CBs)
 template <bool read, bool write, bool init_wr_tile_ptr, bool shift_mask = true>
 FORCE_INLINE void setup_local_cb_read_write_interfaces(
-    uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint32_t local_cb_mask) {
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr =
+    std::uint32_t tt_l1_ptr* cb_l1_base, std::uint32_t start_cb_index, std::uint32_t local_cb_mask) {
+    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr =
         cb_l1_base + start_cb_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
     if constexpr (shift_mask) {
         local_cb_mask >>= start_cb_index;
     }
-    uint32_t cb_id = start_cb_index;
+    std::uint32_t cb_id = start_cb_index;
     LocalCBInterface* local_interface_ptr = &get_local_cb_interface(cb_id);
 
 // The following code is a C++ version of the assembly loop. It performs the same operations as the assembly, but
@@ -39,11 +39,11 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
         // TODO: Blackhole supports zbb, so use __builtin_ctz there.
         if (next_cb_exists) {
             // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-            uint32_t fifo_size = circular_buffer_config_addr[1] >> cb_addr_shift;
-            uint32_t fifo_addr = circular_buffer_config_addr[0] >> cb_addr_shift;
-            uint32_t fifo_num_pages = write ? circular_buffer_config_addr[2] : 0;
-            uint32_t fifo_page_size = circular_buffer_config_addr[3] >> cb_addr_shift;
-            uint32_t fifo_limit = fifo_addr + fifo_size;
+            std::uint32_t fifo_size = circular_buffer_config_addr[1] >> cb_addr_shift;
+            std::uint32_t fifo_addr = circular_buffer_config_addr[0] >> cb_addr_shift;
+            std::uint32_t fifo_num_pages = write ? circular_buffer_config_addr[2] : 0;
+            std::uint32_t fifo_page_size = circular_buffer_config_addr[3] >> cb_addr_shift;
+            std::uint32_t fifo_limit = fifo_addr + fifo_size;
             local_cb_mask >>= 1;
             next_cb_exists = local_cb_mask & 1;
 
@@ -156,7 +156,7 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
           [off_tiles_acked] "i"(offsetof(LocalCBInterface, tiles_acked_received_init)),
           [off_fifo_tile_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_tile_ptr)),
           [local_cb_interface_size] "i"(sizeof(CBInterface)),
-          [circular_buffer_byte_size] "i"(UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t)),
+          [circular_buffer_byte_size] "i"(UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(std::uint32_t)),
           [read] "i"(read ? 1 : 0),
           [write] "i"(write ? 1 : 0),
           [init_wr_tile_ptr] "i"(init_wr_tile_ptr ? 1 : 0),
@@ -169,12 +169,17 @@ namespace experimental {
 
 template <bool update_remote_over_noc = false>
 inline void setup_remote_cb_interfaces(
-    uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint8_t noc, uint8_t nm, bool posted, uint8_t cmd_buf) {
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = cb_l1_base;
+    std::uint32_t tt_l1_ptr* cb_l1_base,
+    std::uint32_t start_cb_index,
+    std::uint8_t noc,
+    std::uint8_t nm,
+    bool posted,
+    std::uint8_t cmd_buf) {
+    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = cb_l1_base;
 
-    for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
-        uint32_t config_addr = circular_buffer_config_addr[0];
-        uint32_t page_size = circular_buffer_config_addr[1];
+    for (std::uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
+        std::uint32_t config_addr = circular_buffer_config_addr[0];
+        std::uint32_t page_size = circular_buffer_config_addr[1];
         circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
         // Unconfigured remote CB at this index on this core (config_addr == 0). Zero the interface's
         // fifo_start_addr so a stale value from a prior program can't be picked up: the align define is
@@ -185,19 +190,19 @@ inline void setup_remote_cb_interfaces(
             get_remote_receiver_cb_interface(cb_id).fifo_start_addr = 0;
             continue;
         }
-        volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
+        volatile tt_l1_ptr std::uint32_t* l1_remote_cb_config_addr =
+            reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(config_addr);
         const bool is_sender = l1_remote_cb_config_addr[0];
-        uint32_t num_receivers = l1_remote_cb_config_addr[1];
-        uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
-        uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
-        uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
-        uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
+        std::uint32_t num_receivers = l1_remote_cb_config_addr[1];
+        std::uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
+        std::uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
+        std::uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
+        std::uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
         // Canonical NoC target for the sender's pages_sent inc (on the receiver) or the
         // receiver's pages_acked inc (on the sender). For a sharded GCB host writes the same
         // L1 offset as slot 6; for a DRAM-sender GCB it points at the worker- or DRISC-side
         // counter, since sender and receiver live in different L1 address spaces.
-        uint32_t remote_pages_addr_override = l1_remote_cb_config_addr[7];
+        std::uint32_t remote_pages_addr_override = l1_remote_cb_config_addr[7];
         if (is_sender) {
             RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);
             sender_cb_interface.config_ptr = config_addr;
@@ -210,15 +215,15 @@ inline void setup_remote_cb_interfaces(
             // Using posted semaphore inc
             resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         } else {
-            uint32_t aligned_pages_acked_addr = aligned_pages_sent_addr + L1_ALIGNMENT;
-            uint32_t sender_noc_x = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr)[0];
-            uint32_t sender_noc_y = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr)[1];
+            std::uint32_t aligned_pages_acked_addr = aligned_pages_sent_addr + L1_ALIGNMENT;
+            std::uint32_t sender_noc_x = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(remote_noc_xy_addr)[0];
+            std::uint32_t sender_noc_y = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(remote_noc_xy_addr)[1];
             RemoteReceiverCBInterface& receiver_cb_interface = get_remote_receiver_cb_interface(cb_id);
             receiver_cb_interface.config_ptr = config_addr;
             receiver_cb_interface.fifo_start_addr = fifo_start_addr;
             receiver_cb_interface.fifo_rd_ptr = fifo_ptr;
-            receiver_cb_interface.sender_noc_x = static_cast<uint16_t>(sender_noc_x);
-            receiver_cb_interface.sender_noc_y = static_cast<uint16_t>(sender_noc_y);
+            receiver_cb_interface.sender_noc_x = static_cast<std::uint16_t>(sender_noc_x);
+            receiver_cb_interface.sender_noc_y = static_cast<std::uint16_t>(sender_noc_y);
             receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr;
             receiver_cb_interface.remote_pages_acked_ptr = remote_pages_addr_override;
             // Using posted semaphore inc
