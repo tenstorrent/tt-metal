@@ -1532,3 +1532,48 @@ def test_reduce_scatter_async_ring_intermediate_staging(
         use_persistent_buffers=use_persistent_buffers,
         contiguous_staging=contiguous_staging,
     )
+
+
+# Linear needs a 2x intermediate: the backward half is pages [P, 2P). It was sized from the logical shape,
+# so [7, 7168] doubled to [14, 7168] and padded back to one tile row: 1x. A free hole is left that fits the
+# output plus a 1x intermediate, with a sentinel right after it. A 1x buffer lands in the hole and its
+# backward half overwrites the sentinel; a 2x one does not fit there.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[7, 7168], [16, 7168]])
+def test_reduce_scatter_linear_rank2_intermediate_size(mesh_device, input_shape):
+    torch.manual_seed(0)
+    num_devices = mesh_device.shape[1]
+    output_shape = [input_shape[0], input_shape[1] // num_devices]
+
+    def to_mesh(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            device=mesh_device,
+        )
+
+    torch_inputs = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(num_devices)]
+    tt_input = to_mesh(torch.cat(torch_inputs, dim=0))
+
+    # Hole = output + 1x intermediate (same spec as the input), then the sentinel.
+    hole_output = to_mesh(torch.zeros([num_devices * output_shape[0], output_shape[1]], dtype=torch.bfloat16))
+    hole_intermediate = to_mesh(torch.zeros([num_devices * input_shape[0], input_shape[1]], dtype=torch.bfloat16))
+    torch_sentinel = torch.full([num_devices * input_shape[0], input_shape[1]], 7.0, dtype=torch.bfloat16)
+    tt_sentinel = to_mesh(torch_sentinel)
+    ttnn.deallocate(hole_output)
+    ttnn.deallocate(hole_intermediate)
+
+    tt_output = ttnn.reduce_scatter(tt_input, dim=-1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
+
+    torch_reference = torch.sum(torch.stack(torch_inputs), dim=0)
+    torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+    sentinel_after = ttnn.to_torch(tt_sentinel, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    assert torch.equal(sentinel_after, torch_sentinel), "reduce_scatter wrote past its intermediate buffer"
+    eq, mess = comp_pcc(torch_reference, torch_output)
+    assert eq, mess
