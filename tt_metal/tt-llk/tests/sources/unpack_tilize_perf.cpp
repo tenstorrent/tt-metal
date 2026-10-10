@@ -257,13 +257,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                if constexpr (PERF_PACK_SECTION_RELEASE)
                 {
-                    const std::uint32_t tile_index = i % MAX_TILES_DEST;
-                    LLK_ASSERT(
-                        (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    // Wormhole: L1_TO_L1's sections, each released as production's tile_regs_release does
+                    std::uint32_t remaining_tiles = TILE_CNT;
+                    while (remaining_tiles > 0)
+                    {
+                        std::uint32_t num_tiles = std::min(remaining_tiles, MAX_TILES_DEST);
+                        for (std::uint32_t i = 0; i < num_tiles; ++i)
+                        {
+                            const std::uint32_t tile_index = i % MAX_TILES_DEST;
+                            LLK_ASSERT(
+                                (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "Block tile index exceeds maximum destination tiles");
+                            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                        }
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        remaining_tiles -= num_tiles;
+                    }
+                }
+                else
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    {
+                        const std::uint32_t tile_index = i % MAX_TILES_DEST;
+                        LLK_ASSERT(
+                            (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    }
                 }
             }
             PROFILER_SYNC();
