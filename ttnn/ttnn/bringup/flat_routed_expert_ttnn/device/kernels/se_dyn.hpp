@@ -100,6 +100,20 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
         b = d.subs[a] > d.subs[b] ? a : b;
     }
     const uint32_t sb = d.subs[b];
+#if defined(SE_PIN_RATIO) && SE_PIN_RATIO > 0
+    // Pin only a dominant expert: at least SE_PIN_RATIO x the mean of the others' sub-blocks. Below that the plain
+    // order is faster (no re-read of B's down weights per chunk; LoudBox 8x1 Kimi K2.7 balanced, max ~2.8x the mean:
+    // pinning cost its flat expert ~52 us) while a hot expert (~27x) needs pinning to hide the small experts' weights.
+    {
+        uint32_t rest = 0;
+        for (uint32_t a = 0; a < d.n_act; ++a) {
+            rest += a == b ? 0 : d.subs[a];
+        }
+        if (sb * (d.n_act - 1) < static_cast<uint32_t>(SE_PIN_RATIO) * rest) {
+            return;
+        }
+    }
+#endif
     // the others in schedule order: the small (weight-bound) ones first, they are interleaved with B's chunks; the
     // larger ones (compute-bound themselves) after B
     uint8_t order[SE_MAX_E];
@@ -258,6 +272,69 @@ inline void se_dyn_subgrid(SeDyn& d, uint32_t sg) {
 }
 #endif
 
+// The schedule from the local experts' token counts alone (count_of(e) / region_of(e): local expert e's count and
+// region row offset), before subgrids / pinning: what se_dyn_load builds from its DRAM rows, and what another op
+// that knows the counts (combine overlapped with this expert) rebuilds to know the order experts finish in.
+template <typename CountOf, typename RegionOf>
+inline void se_dyn_build(
+    SeDyn& d, uint32_t num_e, uint32_t rows_per_sub, uint32_t lo, uint32_t hi, CountOf count_of, RegionOf region_of) {
+    d.n_act = 0;
+    d.num_v = 0;
+    d.max_cnt = 0;
+    d.rps = rows_per_sub;
+    for (uint32_t e = 0; e < num_e; ++e) {
+        const uint32_t c = count_of(e);
+        if (c == 0 || c < lo || c > hi) {
+            continue;
+        }
+        const uint32_t a = d.n_act++;
+        d.eid[a] = e;
+        d.cnt[a] = c;
+        d.off[a] = region_of(e);
+        d.subs[a] = (c + rows_per_sub - 1) / rows_per_sub;
+        d.ld[a] = a;
+        d.last[a] = 1;
+        d.load_eid[a] = e;
+        d.num_v += d.subs[a];
+        d.max_cnt = c > d.max_cnt ? c : d.max_cnt;
+    }
+    d.n_load = d.n_act;
+}
+
+// The order the local experts finish in (order[0..num_e)): experts with no entry first (they are done at once), in
+// slot order, then by the position of each expert's last entry (a pinned expert finishes at its last chunk).
+inline void se_dyn_completion_order(const SeDyn& d, uint32_t num_e, uint8_t* order) {
+    uint8_t last[SE_MAX_E];
+    for (uint32_t e = 0; e < num_e; ++e) {
+        last[e] = 0xFF;
+    }
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        last[d.eid[a]] = static_cast<uint8_t>(a);
+    }
+    uint32_t n = 0;
+    for (uint32_t e = 0; e < num_e; ++e) {
+        if (last[e] == 0xFF) {
+            order[n++] = static_cast<uint8_t>(e);
+        }
+    }
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        if (last[d.eid[a]] == a) {
+            order[n++] = d.eid[a];
+        }
+    }
+}
+
+// The full schedule from the counts (se_dyn_build + pinning + ring regions, as se_dyn_load), for a kernel of another
+// op: no subgrids, no small-M role split (the overlapped plans have neither).
+template <typename CountOf>
+inline void se_dyn_from_counts(SeDyn& d, uint32_t num_e, uint32_t rows_per_sub, CountOf count_of) {
+    se_dyn_build(d, num_e, rows_per_sub, 1, 1000000000, count_of, [](uint32_t) { return 0u; });
+#ifdef SE_PIN_MIN
+    se_dyn_pin(d, rows_per_sub);
+#endif
+    se_dyn_regions(d);
+}
+
 // Reads the counts / regions rows and the global expert id table into SCRATCH (two SE_DYN_HALF halves of L1 this RISC
 // owns: counts then the ids, regions) and fills d. The sub-block size is SE_RPS rows when defined (every kernel must
 // build the same schedule), else ROWS_PER_SUB. The subgrid id (SE_SG) is the runtime arg after the dynamic args.
@@ -283,27 +360,10 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SE_DYN_HALF);
     volatile tt_l1_ptr uint32_t* ids = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
-    d.n_act = 0;
-    d.num_v = 0;
-    d.rps = rows_per_sub;
-    for (uint32_t e = 0; e < num_e; ++e) {
-        const uint32_t g = ids[e];
-        const uint32_t c = counts[g];
-        if (c == 0 || c < lo || c > hi) {
-            continue;
-        }
-        const uint32_t a = d.n_act++;
-        d.eid[a] = e;
-        d.cnt[a] = c;
-        d.off[a] = regions[g];
-        d.subs[a] = (c + rows_per_sub - 1) / rows_per_sub;
-        d.ld[a] = a;
-        d.last[a] = 1;
-        d.load_eid[a] = e;
-        d.num_v += d.subs[a];
-        d.max_cnt = c > d.max_cnt ? c : d.max_cnt;
-    }
-    d.n_load = d.n_act;
+    se_dyn_build(
+        d, num_e, rows_per_sub, lo, hi, [&](uint32_t e) { return counts[ids[e]]; }, [&](uint32_t e) {
+            return regions[ids[e]];
+        });
 #ifdef SE_SG
     se_dyn_subgrid(d, get_arg_val<uint32_t>(dyn0 + SE_DYN_NARGS));
 #endif
