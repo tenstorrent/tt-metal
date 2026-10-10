@@ -16,7 +16,7 @@ Builds take seconds per layer (KDA / MLA / dense weights are random host tensors
 Numerics are meaningless (random weights). Routing is near-uniform; GLM_FAKE_HOT=n makes experts 0 .. n-1 hot.
 GLM_LP_REAL=1 loads the real checkpoint instead (spec paths.hf / BRINGUP_HF; the flat expert cache is used).
 
-Knobs: GLM_LP_SAVE=<prefix> (save each block's output: A/B accuracy), GLM_LP_CALLS=<prefix> (dump every call per layer), GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
+Knobs: GLM_LP_TRACE=1 (+ BRINGUP_TRACE_REGION_BYTES) times a traced replay of the block, GLM_LP_SAVE=<prefix> (save each block's output: A/B accuracy), GLM_LP_CALLS=<prefix> (dump every call per layer), GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
 layer, default 12), GLM_LP_JSON (write the rows there). The spec's device settings (experts dtype / fidelity, links)
 apply as in the model. Mesh and fabric come from the spec (BRINGUP_SPEC).
 
@@ -106,6 +106,19 @@ def test_layer_perf(mesh_device):
             walls.append((time.perf_counter() - t0) * 1e3)
         row = {"layer": i, "kind": kind, "build_s": round(build_s, 1), "compile_s": round(compile_s, 1)}
         row["wall_ms"] = round(statistics.median(walls), 3)
+        if os.environ.get("GLM_LP_TRACE") == "1":  # the block as one trace: replay wall per call (no host dispatch)
+            tr = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            yt = blk(x, start)
+            ttnn.end_trace_capture(mesh_device, tr, cq_id=0)
+            ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=True)
+            t0 = time.perf_counter()
+            for _ in range(iters):
+                ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            row["trace_ms"] = round((time.perf_counter() - t0) / iters * 1e3, 3)
+            ttnn.release_trace(mesh_device, tr)
+            ttnn.deallocate(yt)
+            print(f"[lp] L{i} traced replay {row['trace_ms']:.2f} ms per call (eager wall {row['wall_ms']:.2f})", flush=True)
         if rt:
             profiler.enable(mesh_device, ops=True, calls=True, rt=True)
             try:
@@ -172,3 +185,117 @@ def test_layer_perf(mesh_device):
     if os.environ.get("GLM_LP_JSON"):
         with open(os.environ["GLM_LP_JSON"], "w") as f:
             json.dump({"mesh": list(mesh_shape), "chunk": chunk, "start": start, "rows": rows}, f, indent=1)
+
+
+@mesh_parametrize
+def test_chunk_perf(mesh_device):
+    """One chunk through a chain of layers (GLM_LP_CHAIN, default all of the spec's), fake weights by default: eager
+    wall with one sync per chunk (host dispatch overlapping the device, as the model runs) vs a traced replay of the
+    whole chain (needs BRINGUP_TRACE_REGION_BYTES). Checks the traced output equals the eager one."""
+    from models.demos.common.bringup.core.spec import parse_layers
+    from models.demos.glm53_flash_d_p.tt.common import replicate, residual_layout, split_from_host
+    from models.demos.glm53_flash_d_p.tt.model import TtGlmBlock
+
+    hooks = S.hooks()
+    hooks.apply_device_settings(S)
+    if os.environ.get("GLM_LP_REAL") == "1":
+        loader, cfg = hooks._loader_cfg(S)
+    else:
+        from models.demos.glm53_flash_d_p.reference.fake_weights import FakeLoader
+
+        loader = FakeLoader()
+        cfg = loader.cfg
+    layers = parse_layers(os.environ.get("GLM_LP_CHAIN", "all"), S.num_layers)
+    seq = int(S.get("target.seq"))
+    chunk = int(os.environ.get("GLM_LP_CHUNK", S.get("target.chunk")))
+    start = int(os.environ.get("GLM_LP_START", seq - chunk))
+    iters = int(os.environ.get("GLM_LP_ITERS", "3"))
+    layout = residual_layout()
+    t0 = time.time()
+    blocks = [
+        TtGlmBlock(
+            mesh_device, cfg, loader, i, start + chunk, [chunk], layout=layout, experts_dtype=hooks.experts_dtype(S)
+        )
+        for i in layers
+    ]
+    print(f"[cp] {len(blocks)} layers built in {time.time() - t0:.0f} s", flush=True)
+    torch.manual_seed(0)
+    x_host = torch.randn(1, 1, chunk, cfg.hc_mult * cfg.hidden_size) * 0.5
+    x = split_from_host(mesh_device, x_host) if layout == "split" else replicate(mesh_device, x_host)
+
+    def run():
+        h = x
+        for b in blocks:
+            h2 = b(h, start)
+            if h is not x:
+                ttnn.deallocate(h)
+            h = h2
+        return h
+
+    host = lambda t: torch.cat([ttnn.to_torch(p).reshape(-1, p.shape[-1]) for p in ttnn.get_device_tensors(t)])  # noqa
+    ttnn.deallocate(run())  # compile
+    ttnn.synchronize_device(mesh_device)
+    walls = []
+    for _ in range(iters):
+        t0 = time.perf_counter()
+        y = run()
+        ttnn.synchronize_device(mesh_device)
+        walls.append((time.perf_counter() - t0) * 1e3)
+        ttnn.deallocate(y)
+    y_eager = run()
+    ttnn.synchronize_device(mesh_device)
+    ref = host(y_eager)
+    ttnn.deallocate(y_eager)
+    eager = statistics.median(walls)
+    print(f"[cp] eager chunk wall {eager:.1f} ms ({len(blocks)} layers, chunk {chunk} at {start})", flush=True)
+    if ttnn.device.IsProgramRealtimeProfilerActive():  # device time per layer and step in the chain
+        profiler.enable(mesh_device, ops=True, calls=True, rt=True)
+        try:
+            h = x
+            for b in blocks:
+                profiler.set_layer(b.i)
+                h2 = b(h, start)
+                if h is not x:
+                    ttnn.deallocate(h)
+                h = h2
+            profiler.set_layer(None)
+            ttnn.deallocate(h)
+            calls = profiler.finish_rt()
+        finally:
+            profiler.disable()
+        per = defaultdict(lambda: defaultdict(float))  # (layer, step) -> chip -> ns
+        for c in calls:
+            for chip, ns in c["ns_dev"].items():
+                per[(c["layer"], c["key"].split(".", 1)[-1])][chip] += ns
+        lay = defaultdict(lambda: defaultdict(float))
+        for (li, st), v in per.items():
+            for chip, ns in v.items():
+                lay[li][chip] += ns
+        tot = sum(max(v.values()) for v in lay.values()) / 1e6
+        print(f"[cp] device sum of per-layer busiest chips {tot:.1f} ms", flush=True)
+        for li in sorted(lay):
+            steps = {st: max(v.values()) / 1e6 for (l2, st), v in per.items() if l2 == li}
+            top = sorted(steps.items(), key=lambda kv: -kv[1])[:4]
+            print(
+                f"[cp]   L{li}: {max(lay[li].values()) / 1e6:6.2f} ms  "
+                + "  ".join(f"{k} {v:.2f}" for k, v in top),
+                flush=True,
+            )
+    if os.environ.get("BRINGUP_TRACE_REGION_BYTES"):
+        tr = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        yt = run()
+        ttnn.end_trace_capture(mesh_device, tr, cq_id=0)
+        ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=True)
+        same = torch.equal(host(yt), ref)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            ttnn.execute_trace(mesh_device, tr, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        traced = (time.perf_counter() - t0) / iters * 1e3
+        ttnn.release_trace(mesh_device, tr)
+        ttnn.deallocate(yt)
+        print(
+            f"[cp] traced chunk replay {traced:.1f} ms (eager {eager:.1f}, -{eager - traced:.1f} ms); "
+            f"traced output {'identical to' if same else 'DIFFERS from'} eager",
+            flush=True,
+        )
