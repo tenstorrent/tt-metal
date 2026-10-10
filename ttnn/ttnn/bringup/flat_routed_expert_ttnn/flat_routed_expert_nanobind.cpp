@@ -74,6 +74,7 @@ nb::dict plan_dict(
     d["banks"] = p->banks;
     d["x_slots"] = p->x_slots;
     d["hbuf"] = p->hbuf;
+    d["hu"] = p->hu;
     d["gu_rp"] = p->gu_rp;
     d["gu_l1acc"] = p->gu_l1acc;
     d["arena_tiles"] = p->arena_tiles;
