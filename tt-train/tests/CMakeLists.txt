@@ -61,6 +61,7 @@ set(SOURCES
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
+    ops/reshape_op_test.cpp
     ops/rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp

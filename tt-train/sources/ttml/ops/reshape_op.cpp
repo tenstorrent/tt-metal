@@ -4,6 +4,8 @@
 
 #include "reshape_op.hpp"
 
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
@@ -11,14 +13,18 @@
 namespace ttml::ops {
 
 autograd::TensorPtr reshape(const autograd::TensorPtr& tensor, std::span<uint32_t> shape) {
-    auto out = autograd::create_tensor();
-
     // Convert span to SmallVector for ttnn::Shape construction
     // ttnn::Shape expects SmallVector<uint32_t> (which is the Container type)
     ttsl::SmallVector<uint32_t> shape_vec(shape.begin(), shape.end());
 
     // Construct ttnn::Shape from SmallVector
     ttnn::Shape ttnn_shape(shape_vec);
+
+    if (ttnn_shape.volume() != tensor->get_value().logical_volume()) {
+        throw std::logic_error("reshape requires input and output shapes to have the same volume");
+    }
+
+    auto out = autograd::create_tensor();
 
     // Capture original shape at forward time for backward pass
     auto original_shape = tensor->get_value().logical_shape();
