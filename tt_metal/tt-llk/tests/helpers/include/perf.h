@@ -46,6 +46,15 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// Experiment (pkfast): the PACK_ISOLATE (1) or PACK_ISOLATE and L1_CONGESTION (2) pack loops end every dest section as
+// production does (tile_regs_release: _llk_pack_dest_section_done_), at the test's L1_TO_L1 section boundaries; 0 = off.
+#ifndef LLK_EXP_PKSEC
+#define LLK_EXP_PKSEC 0
+#endif
+#define PERF_PACK_SECTIONS                                                                                                  \
+    ((LLK_EXP_PKSEC == 2 && (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)) || \
+     (LLK_EXP_PKSEC == 1 && PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE))
+
 // LLK_PERF_OOL threads run INIT and the code after the loop out of line at the end of the kernel code (sections.ld), by
 // value and noipa, so changes to them cannot move the loop. The other threads keep INIT inline.
 #if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY) // INIT measurement build: INIT's body out of line, timed by counters.h init_zone
