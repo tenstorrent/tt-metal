@@ -311,6 +311,14 @@ def ccl_partition_rows(tensor, mesh_config):
     return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
 
 
+# Tallest reduce-scatter input (rows per device) on the tuned transport: chunk 4096 at CP8.
+_MAX_TUNED_REDUCE_SCATTER_IN_ROWS = 512
+# Four workers per link with short syncs suit short slabs; the automatic choice is better for taller ones.
+_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT = dict(num_workers_per_link=4, chunks_per_sync=2, num_buffers_per_channel=2)
+# Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4).
+_MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
+
+
 def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
     """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
 
@@ -319,7 +327,13 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     """
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
-    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if memory_config is None:
+        # The norm after it reads the result straight from L1. Taller outputs stay in DRAM, where they cannot clash
+        # with the next matmul's circular buffers.
+        out_rows = tensor.padded_shape[-2] // mesh_config.tp_degree
+        memory_config = (
+            ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_OUT_ROWS else ttnn.DRAM_MEMORY_CONFIG
+        )
     if ccl_async_enabled():
         result = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -337,6 +351,11 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
             num_buffers_per_channel=ccl_num_buffers_per_channel(),
         )
     else:
-        result = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+        transport = {}
+        if tensor.padded_shape[-2] <= _MAX_TUNED_REDUCE_SCATTER_IN_ROWS:
+            transport = dict(num_links=ccl_manager.num_links, **_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT)
+        result = ttnn.reduce_scatter(
+            tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config, **transport
+        )
     tensor.deallocate(True)
     return result
