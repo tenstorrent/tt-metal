@@ -45,6 +45,18 @@
 
 #include "ckernel_include.h"
 
+// Experiment hook (init-opt2): LLK_EXP_NOP_UNPACK_INIT NOPs at the top of the unpack init functions (unpack thread only)
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+#define LLK_EXP_STR2_(x)            #x
+#define LLK_EXP_STR_(x)             LLK_EXP_STR2_(x)
+#define LLK_EXP_NOP_UNPACK_INIT_AT() __asm__ __volatile__(".rept " LLK_EXP_STR_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr")
+#else
+#define LLK_EXP_NOP_UNPACK_INIT_AT() \
+    do                               \
+    {                                \
+    } while (0)
+#endif
+
 namespace ckernel
 {
 
@@ -545,6 +557,57 @@ inline void cfg_reg_rmw_tensix(std::uint32_t val)
         TT_RMWCIB3(mask_b3, data_b3, CfgAddr32);
     }
 }
+
+// TRISC instruction cache stream prefetch (RISC_PREFETCH_CTRL, off from reset). While it is on for a TRISC, a demand
+// miss of that TRISC's icache also requests the next ICACHE_PREFETCH_LINES 16 B lines, so straight-line code such as a
+// kernel's init does not wait for each cold line in turn.
+constexpr std::uint32_t ICACHE_PREFETCH_LINES = 5;
+static_assert(ICACHE_PREFETCH_LINES >= 1 && ICACHE_PREFETCH_LINES <= 7, "Wormhole reads only bits [2:0] of Max_Req_Count");
+
+#if defined(COMPILE_FOR_TRISC)
+namespace detail
+{
+// The three TRISCs share the register (an enable bit each and one line count), so this is one Tensix RMWCIB0: the shared
+// config arbiter grants one client a cycle and applies the byte read-modify-write in that cycle, so it cannot lose another
+// thread's update the way a RISC load and store (cfg_rmw) can. It writes only this thread's enable bit and the count,
+// which every thread sets to the same value. The RMWCIB runs after this thread's earlier Tensix instructions, so the call
+// waits until the register shows the change: the code after it runs with the new setting.
+template <bool enable>
+inline void set_icache_prefetch()
+{
+    static_assert(COMPILE_FOR_TRISC >= 0 && COMPILE_FOR_TRISC <= 2, "one enable bit per TRISC");
+    constexpr std::uint32_t thread_bit = 1u << (RISC_PREFETCH_CTRL_Enable_Trisc_SHAMT + COMPILE_FOR_TRISC);
+    constexpr std::uint32_t count_mask = RISC_PREFETCH_CTRL_Max_Req_Count_MASK & 0xff;
+    constexpr std::uint32_t count_bits = (ICACHE_PREFETCH_LINES << RISC_PREFETCH_CTRL_Max_Req_Count_SHAMT) & count_mask;
+    static_assert(RISC_PREFETCH_CTRL_Max_Req_Count_ADDR32 == RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32, "one register");
+    if constexpr (enable)
+    {
+        TTI_RMWCIB0(thread_bit | count_mask, thread_bit | count_bits, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
+    }
+    else
+    {
+        TTI_RMWCIB0(thread_bit, 0, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
+    }
+    volatile std::uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+    while (((cfg_regs[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] & thread_bit) != 0) != enable)
+    {
+    }
+}
+} // namespace detail
+
+// Turns the calling TRISC's icache stream prefetch on, ICACHE_PREFETCH_LINES lines ahead. Meant for a kernel's init only:
+// a measured loop runs with it off (icache_prefetch_off), since prefetching changes the loops' fetch timing both ways.
+inline void icache_prefetch_on()
+{
+    detail::set_icache_prefetch<true>();
+}
+
+// Turns the calling TRISC's icache stream prefetch off (the reset state).
+inline void icache_prefetch_off()
+{
+    detail::set_icache_prefetch<false>();
+}
+#endif
 
 inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
 {
