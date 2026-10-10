@@ -85,8 +85,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else if constexpr (int_mask)
     {
+        // MASK_ONE_CALL: one 32-row call per tile, as the Blackhole Int32 mask_tile issues it.
+        constexpr int MASK_ITERATIONS         = MASK_ONE_CALL ? 32 : 8;
+        constexpr VectorMode MASK_VECTOR_MODE = MASK_ONE_CALL ? VectorMode::None : VectorMode::RC;
         _llk_math_eltwise_binary_sfpu_params_(
-            sfpu::calculate_int_mask<true, 8>, MASK_DATA_DST_INDEX, MASK_MASK_DST_INDEX, MASK_DATA_DST_INDEX, VectorMode::RC);
+            sfpu::calculate_int_mask<true, MASK_ITERATIONS>, MASK_DATA_DST_INDEX, MASK_MASK_DST_INDEX, MASK_DATA_DST_INDEX, MASK_VECTOR_MODE);
     }
     else
     {
