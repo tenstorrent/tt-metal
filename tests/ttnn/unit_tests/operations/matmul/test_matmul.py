@@ -4893,3 +4893,54 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
         check_frobenius=True,
         check_ulp=False,
     )
+
+
+# Broadcast-A batched matmul ([1, 1, M, K] x [1, B, K, N]) on the 1D mcast_in1 path keeps A in L1 and
+# reuses it for every weight batch. Covers every outer-block shape: replay when one of the h/w block
+# counts is 1, re-read from DRAM when both are > 1. Used to hang whenever h * w > 1.
+# See https://github.com/tenstorrent/tt-metal/issues/57183.
+@pytest.mark.parametrize(
+    "per_core_M, out_block_h, per_core_N, out_block_w",
+    [
+        (2, 2, 4, 4),  # h=1, w=1
+        (2, 2, 4, 2),  # h=1, w=2
+        (4, 2, 4, 4),  # h=2, w=1
+        (4, 2, 4, 2),  # h=2, w=2
+        (4, 2, 6, 2),  # h=2, w=3
+    ],
+)
+@pytest.mark.parametrize("k_tiles", [2, 4, 8], ids=["inner1", "inner2", "inner4"])
+@pytest.mark.parametrize("in1_B", [2, 3])
+def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, per_core_N, out_block_w, k_tiles, in1_B):
+    torch.manual_seed(0)
+    num_cores, in0_block_w = 4, 2
+    M, K, N = num_cores * per_core_M * 32, k_tiles * 32, per_core_N * 32
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_cores, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    # Run twice with fresh data: the second run reuses the cached program with new buffer addresses.
+    with device.cache_entries_counter.measure():
+        for _ in range(2):
+            in0 = torch.randn(1, 1, M, K).bfloat16()
+            in1 = torch.randn(1, in1_B, K, N).bfloat16()
+            in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+            in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+            output = ttnn.to_torch(ttnn.matmul(in0_t, in1_t, program_config=program_config))
+
+            expected = in0.float() @ in1.float()
+            # Check each weight batch separately: a stale in0 buffer only corrupts batches after the first.
+            for b in range(in1_B):
+                assert_with_pcc(expected[0, b], output[0, b], 0.999)
+    assert device.cache_entries_counter.total == 1
