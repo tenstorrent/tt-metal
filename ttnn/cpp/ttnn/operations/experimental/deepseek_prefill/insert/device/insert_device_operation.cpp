@@ -26,7 +26,10 @@ void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) 
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
     TT_FATAL(
-        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout, got {}", name, tensor.layout());
+        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "{} must be ROW_MAJOR layout, got {}",
+        name,
+        tensor.layout());
     TT_FATAL(is_dram_interleaved(tensor), "{} must be DRAM interleaved", name);
 
     const auto& shape = tensor.logical_shape();
@@ -43,8 +46,7 @@ void validate_data_tensor(const ttnn::Tensor& tensor, const std::string& name) {
     // tile-copy (no math on the data), so the kernels work for either dtype as long as global
     // and local agree (checked separately at the call site).
     TT_FATAL(
-        tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B || tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "{} must be BFLOAT8_B or BFLOAT16, got {}",
         name,
         tensor.dtype());
@@ -164,6 +166,15 @@ InsertDeviceOperation::tensor_return_value_t InsertDeviceOperation::create_outpu
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place: reuse global_tensor. No new DRAM allocation.
     return tensor_args.global_tensor;
+}
+
+InsertDeviceOperation::topology_return_value_t InsertDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: the returned handle IS the caller's global_tensor, so it keeps the caller's declared
+    // distribution. The generic output-topology inference would otherwise relabel it with the union of
+    // every input's placements (local_tensor, start, counts, global_expert_idx_table), same contract as
+    // update_padded_kv_cache.
+    return {tensor_args.global_tensor.tensor_topology()};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert

@@ -246,6 +246,14 @@ ZeroPaddedKvCacheDeviceOperation::tensor_return_value_t ZeroPaddedKvCacheDeviceO
     return tensor_args.cache;  // in-place
 }
 
+ZeroPaddedKvCacheDeviceOperation::topology_return_value_t ZeroPaddedKvCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: the returned handle IS the caller's cache, so it keeps the caller's declared distribution. The
+    // generic output-topology inference would otherwise relabel it with the union of every input's placements
+    // (here the optional slot_idx/valid_global metadata tensors), same contract as update_padded_kv_cache.
+    return {tensor_args.cache.tensor_topology()};
+}
+
 ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // slot_idx and valid_global are per-call scalars (patched, NOT hashed). layer_idx, num_layers,
