@@ -939,7 +939,42 @@ def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     return torch.special.logit(input_tensor_a, eps=eps)
 
 
-ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)
+def _golden_function_logit_torch(input_tensor_a, *args, eps=None, **kwargs):
+    """Generated from activations/logit.json and torch 2.11's recorded results.
+
+    ``_golden_function_logit`` disagrees with torch on 59 of the 65,536 BF16 inputs. For BF16 at
+    the parameters the spec covers, this returns torch's result: its own at its special inputs and the exact
+    log(x / (1 - x)) elsewhere, in float64, rounded once to BF16, with NaN as the BF16 pack stores it (+Inf).
+    Every other call keeps ``_golden_function_logit``.
+    """
+    import math
+
+    import torch
+
+    if not (input_tensor_a.dtype == torch.bfloat16 and eps is None and not args):
+        return _golden_function_logit(input_tensor_a, *args, eps=eps, **kwargs)
+    x = input_tensor_a.detach().to(torch.float64)
+    with torch.no_grad():
+        result = torch.log(x / (1 - x))
+    result = torch.where(x == 0.0, -math.inf, result)
+    result = torch.where(x == 1.0, math.inf, result)
+    result = torch.where(x < 0.0, math.nan, result)
+    result = torch.where(x > 1.0, math.nan, result)
+    result = torch.where(x == math.inf, math.nan, result)
+    result = torch.where(x == -math.inf, math.nan, result)
+    result = torch.where((x == 0) & ~torch.signbit(x), -math.inf, result)
+    result = torch.where((x == 0) & torch.signbit(x), -math.inf, result)
+    result = torch.where(torch.isnan(x), math.nan, result)
+    # float64 to BF16 in one rounding: to float32 by round-to-odd, then to nearest even.
+    f32 = result.to(torch.float32)
+    inexact = torch.isfinite(result) & (f32.to(torch.float64) != result)
+    bits = f32.view(torch.int32) - (inexact & (f32.to(torch.float64).abs() > result.abs())).to(torch.int32)
+    rounded = (bits | inexact.to(torch.int32)).view(torch.float32).to(torch.bfloat16)
+    rounded = torch.where(torch.isnan(rounded), torch.full_like(rounded, math.inf), rounded)
+    return rounded
+
+
+ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit_torch)
 
 
 def _golden_function_celu(input_tensor_a, *args, alpha=1.0, **kwargs):
