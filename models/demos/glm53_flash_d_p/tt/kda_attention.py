@@ -26,6 +26,7 @@ scaled by the -5 bound; GLM_KDA_DECAY=kernel keeps the kernel's own term). The c
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import replace
 
@@ -46,7 +47,12 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.glm53_flash_d_p.tt import mm_configs
 
 SP_AXIS, TP_AXIS = 0, 1
-PRECISE_DECAY = os.environ.get("GLM_KDA_DECAY", "precise") == "precise"  # "kernel": prepare's own k_dec_t
+# GLM_KDA_DECAY: "fork" (default) ttnn.bringup.prepare_chunk_recurrence(precise_gate_factors=True), the anchored gate
+# exponents formed exactly inside chunk preparation; "precise" k_dec_t recomputed by ttnn ops after the source op
+# (_PreciseDecayRecurrence, +1.4 ms per layer); "kernel" the source op's own terms (TF32-biased near the -5 bound)
+KDA_DECAY = os.environ.get("GLM_KDA_DECAY", "fork")
+assert KDA_DECAY in ("fork", "precise", "kernel"), KDA_DECAY
+PRECISE_DECAY = KDA_DECAY == "precise"
 
 
 def kda_fidelity():
@@ -171,12 +177,40 @@ class _PreciseDecayRecurrence(KDARecurrence):
         return replace(prepared, k_dec_t=k_dec_t), state, geometry
 
 
+class _ForkPrepRecurrence(KDARecurrence):
+    """KDARecurrence whose chunk preparation runs the bring-up fork with precise_gate_factors: the anchored exponents
+    G - G_last/2 and G_last/2 come from exact mask matmuls exponentiated in DST, so k_dec_t, q_decay, kd and intra all
+    lose the source op's TF32 bias, at the source op's cost (ttnn/ttnn/bringup/prepare_chunk_recurrence)."""
+
+    def _prepare(self, **kwargs):
+        kda = ttnn.experimental.kda
+        orig = kda.prepare_chunk_recurrence
+        kda.prepare_chunk_recurrence = functools.partial(
+            ttnn.bringup.prepare_chunk_recurrence, precise_gate_factors=True
+        )
+        try:
+            return super()._prepare(**kwargs)
+        finally:
+            kda.prepare_chunk_recurrence = orig
+
+
 class _GlmKDA(ttKDA):
     """ttKDA with GLM's projection matmul configs, its fidelity override and the row-partial output path."""
 
     def __init__(self, *args, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
-        if PRECISE_DECAY:
+        if KDA_DECAY == "fork":
+            self.recurrence = _ForkPrepRecurrence(
+                self.device,
+                program_config.recurrence,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+                local_rows=self.active_seq_len_local,
+                heads=self.config.num_heads,
+                key_dim=self.config.head_k_dim,
+                value_dim=self.config.head_v_dim,
+                gate_scale=self.config.gate_lower_bound,
+            )
+        elif PRECISE_DECAY:
             self.recurrence = _PreciseDecayRecurrence(
                 self.device,
                 program_config.recurrence,
