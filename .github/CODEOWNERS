@@ -393,7 +393,7 @@ ttnn/cpp/ttnn/operations/embedding/ @tenstorrent/metalium-developers-ops-data-mo
 ttnn/cpp/ttnn/operations/embedding/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/embedding_backward/ @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/cse-developer-ttnn
+ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-transformer-ops @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @jonathansuTT
@@ -410,8 +410,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cs
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metalium-transformer-ops
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/**/CMakeLists.txt @tenstorrent/metalium-transformer-ops @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/indexer_score/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/isin/ @tenstorrent/metalium-developers-external-experience
@@ -426,8 +426,8 @@ ttnn/cpp/ttnn/operations/experimental/minimal_matmul/ @cglagovichTT @jonathansuT
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
 ttnn/cpp/ttnn/operations/experimental/padded_slice/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metalium-transformer-ops
+ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metalium-transformer-ops @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/experimental/quasar/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -437,12 +437,12 @@ ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/**/CMakeLists.txt @cglagovichTT
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
 ttnn/cpp/ttnn/operations/experimental/slice_write/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/topk_large_indices/ @tenstorrent/metalium-developers-sdpa
-ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/ @tenstorrent/metalium-dit-ops
+ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/ @tenstorrent/metalium-dit-ops
+ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tenstorrent/metalium-transformer-ops
+ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metalium-transformer-ops
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metalium-transformer-ops
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metalium-transformer-ops
 ttnn/cpp/ttnn/operations/normalization/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -472,7 +472,7 @@ tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py @tenstorrent
 tests/tt_eager/python_api_testing/unit_testing/misc/test_tilize_test.py @tenstorrent/metalium-developers-ops-data-movement
 tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py @tenstorrent/metalium-developers-ops-data-movement
 tests/tt_eager/python_api_testing/unit_testing/misc/test_untilize_test.py @tenstorrent/metalium-developers-ops-data-movement
-tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tenstorrent/metallium-maintainers-llama-models
+tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tenstorrent/metalium-transformer-ops
 
 
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -541,8 +541,8 @@ tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developer
 tests/ttnn/nightly/unit_tests/operations/moreh/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
-tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models
-tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
+tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metalium-transformer-ops
+tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metalium-transformer-ops
 tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
