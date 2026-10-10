@@ -2008,3 +2008,28 @@ No session connection is needed for that queue to continue.
   Prefill budget comparison stays queued; prefill stage profiling precedes
   broader prefill rewrites. Targets are estimates with overlapping ownership,
   accuracy gates and explicit limits; 70% full-model utilization is not proven.
+
+## Oct 10, 06:23 UTC: complete candidate sweep and queue weak-projection tuning
+
+- Fusion candidate completed all four cells and clean device closure. B16/16K
+  is 18.3693 TSU; B16/32K remains 16.5502. The live controller moved to the
+  final native-after comparison; GPQA is still pending. No serving promotion.
+- Implemented 44 bounded real-weight TP4 output/down projection cases across
+  B16/B32, including reader counts, storage placement and larger K blocks.
+  Pinned native source confirms 1-3 readers and multi-shard block support.
+  Preserved weight values, per-user/all-rank dense checks, input-changing trace
+  replay and control drift gates; timing includes layouts and collectives.
+- Six local contract tests and 16 host preflight tests passed; physical test
+  collected. No accelerator was opened by preflight. Created new isolated
+  projection-sweep source/control/output directories on task-owned host disk.
+- Persistent qwen38-projection-sweep-v1-20261010.service verified active with
+  PID3671135, invocation998fcce35571487c9eac759638d71013, waiting on exact
+  B16-priority invocation f5b0da5649614052ba7b8ddf37b466d5. Hardware remains
+  behind current fusion/GPQA, prefill-budget and compact-front-end qualification.
+  Runtime/source installation and all existing in-flight sources unchanged.
+- Local SSH staging initially hit the sandbox; explicit escalated retry
+  succeeded. Preserved launch, source hashes, preflight output and helper.
+- User emphasized 30 TSU. Recorded the 33.33-ms target and 27.09-ms remaining
+  gap, useful-byte bandwidth assumptions, larger compact-decoder scope and
+  a separate one-draft MTP sensitivity at unchanged B16. Neither the new
+  sweep nor incremental savings establish 30 TSU. MTP stays unselected.

@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-10-10T06:28:18.186108+00:00",
+  "service": "qwen38-projection-sweep-v1-20261010.service",
+  "MainPID": 3671135,
+  "InvocationID": "998fcce35571487c9eac759638d71013",
+  "ActiveState": "active",
+  "SubState": "running",
+  "state": "waiting",
+  "hardware_started": false,
+  "predecessor": "qwen38-b16-priority-v2-20261010.service",
+  "predecessor_pid": 3565241,
+  "promoted_to_serving": false
+}

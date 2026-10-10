@@ -166,3 +166,47 @@ requires the appropriate long-horizon/dense reference and unchanged full GPQA
 protocol before serving promotion. Run a full Galaxy scaling/HTTP measurement
 after selecting the winning TP4 candidate. Packaging/Shield CI and agentic-eval
 qualification remain separate release gates.
+
+## What reaching 30 TSU at B16/32K would require
+
+The measured 60.4222-ms candidate must reach 33.3333 ms: another 27.0889 ms
+removed, or 44.83% less step time / 81.27% more output throughput. Native
+20 TSU requires 50 ms, still 10.4222 ms below the candidate. Small independent
+knob changes do not establish either target.
+
+The current useful-byte model is about 12.883 GB/chip/step: 7.112 GB encoded
+weights, 4.563 GB KV reads and 1.208 GB recurrent-state traffic. At an assumed
+512 GB/s, 30 TSU requires 75.5% useful-byte bandwidth; 70% yields 27.8 TSU
+before accounting for omitted traffic, dependencies and compute. This is a
+necessary traffic budget under those assumptions, not a sufficiency proof or
+a measured physical utilization target.
+
+The largest fixed-precision native opportunity is a compact decoder pipeline:
+packed projection directly into GDN operands/history, compact recurrence and
+epilogue, then compatible projection/collective/residual/norm/MLP layouts.
+The baseline layout family was 22.58 ms in the instrumented profile; some
+of this has already been removed by the current candidate. It cannot all be
+counted again. The queued compact-convolution prototype is only the first
+piece (combined front-end target 4-6 ms), not the complete fused decoder.
+A broader 10-15 ms reduction is an ambitious engineering target for combined
+layout/fusion work, not demonstrated savings; alone it gives about 19.8-22.0
+TSU from this candidate. Native 30 therefore also needs substantial improvements
+to matmul, SDPA delivery and remaining recurrence/collective costs.
+
+One-draft-token MTP is a separate possible multiplier at B16: two verification
+positions per user fit 32 projection rows, avoiding the four-position B32
+problem in the earlier scope. The checkpoint contains MTP weights. It still
+needs a correct two-position attention/GDN verifier, per-user commit/rollback,
+sampling semantics and measured acceptance/cycle cost. For one draft,
+`speedup = (1 + acceptance) / (cycle_time / ordinary_step_time)`. An illustrative
+20-TSU native backend, 80% acceptance and a cycle costing 1.2 ordinary steps
+would yield 30 TSU at unchanged B16. Those inputs are unmeasured. From today's
+16.55 TSU the same assumptions yield only 24.83 TSU. Preserve the user rule:
+no speculative default unless aggregate committed throughput improves at the
+same concurrency and model quality passes. This report queues no MTP hardware
+job and changes no precision or serving default.
+
+The [projection sweep](../galaxy-evidence/projection-sweep-launch-v1/README.md)
+is now a persistent follower behind fusion/GPQA and the original B16 priority
+queue. The larger compact-pipeline work remains the primary native opportunity;
+projection tuning is a bounded supporting experiment, not a promised path to 30.

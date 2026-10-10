@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T06:12:32.928962+00:00",
+  "generated_at": "2026-10-10T06:28:58.893280+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -153,6 +153,11 @@
       "sha256": "7b3521f0ded6eaf795a0ba38586ac01912307af441ea364ec6dcd8936ba348dc"
     },
     {
+      "path": "demo/run_projection_sweep.py",
+      "bytes": 6612,
+      "sha256": "96e8f00e598124fc80e77da072c0cbb90175c4c7b6ccd5a778d1d5b146d7e74c"
+    },
+    {
       "path": "experiments/ACCURACY-ABLATIONS.md",
       "bytes": 2764,
       "sha256": "2c5c9643b8029a7d006e589f63917f0315a3c416f80854bca8e477ddb59fc241"
@@ -164,13 +169,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 147797,
-      "sha256": "f9296ab7eae20f7a5c73abd44b6ba29a6b7ef11b35485a71c4a6523cba25ebb0"
+      "bytes": 149555,
+      "sha256": "051e38bcc8372576dbe445af0a2c024a71ba4ba214738e7f7d918b96f6026d33"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 16707,
-      "sha256": "1c256b22dee10a8dc88cde19ee5716492eaf3ada9fca32bfc6ecf0dea2038a99"
+      "bytes": 19506,
+      "sha256": "67573d2f0f8d13adf29afd0b452ea7a545f949fac4808cc8b6428e4a7c4b2170"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -9171,6 +9176,51 @@
       "scope": "Do not publish stage timings from this incomplete capture"
     },
     {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/README.md",
+      "bytes": 2310,
+      "sha256": "4e7d8d6459c1926146be80ba6739c0b9cc48de5d7282d538107ad04bb21217a3"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/candidate-completed/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "fbb407626629d8a9323a9dbb9dd19d72d155daec51d17ecc4cac7844be1aecc3"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/candidate-completed/sweep.json",
+      "bytes": 44110,
+      "sha256": "dc0289eeee91dd4e6567ae8d55b1930331a9edc457f5b6f6968a0f40d5519048"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "2843a2eedf72c2781f5351140e79ed6a16d927edc6b837d68b37587444168832"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/launch.json",
+      "bytes": 2025,
+      "sha256": "9d287240bd6b1059f418075b44fcd1f248adb4eb6ae2b48fe7226e74288da7e0"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/observation.json",
+      "bytes": 417,
+      "sha256": "59140873d747dbe0b3bd6012ee868704156d22bf0379c12e32213880c8be670c"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/source-manifest.json",
+      "bytes": 25269,
+      "sha256": "6ccc14fb77784a158e8e1b8c841a44cf0a208ce753a2ab034598e6181d322251"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/stage-launch.py.gz",
+      "bytes": 2308,
+      "sha256": "066c53092babe38ad7e9fdbf92917eb75653a9a30a489aa5fa1992dda4aeab91"
+    },
+    {
+      "path": "galaxy-evidence/projection-sweep-launch-v1/unit.xml.gz",
+      "bytes": 617,
+      "sha256": "b7b7b19b136feaa8547f18f559f896dae1bfc23f35c76eec3695e8cf0efed8eb"
+    },
+    {
       "path": "galaxy-evidence/qualification-overnight-v1/deployment-after-stop.json",
       "bytes": 24050,
       "sha256": "e77ee6c5a485b0eebac994ca037de7b9ab68786aef0c40ec93d96f30d9f355f7",
@@ -10581,6 +10631,11 @@
       "sha256": "746d9ff7d8240628108d50e00481f5bb4f81369cf4daa209d446fc01091adb67"
     },
     {
+      "path": "tests/projection_sweep.py",
+      "bytes": 3214,
+      "sha256": "df11e23523bc0f650b563528bb7a49689defee356faf180a1145628fe8b94255"
+    },
+    {
       "path": "tests/reference_comparison.py",
       "bytes": 2934,
       "sha256": "bdf7923c362c6fb3c607b74da3d22eb022c149067e8b546a6a8da25870470589"
@@ -10639,6 +10694,11 @@
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1132,
       "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
+    },
+    {
+      "path": "tests/test_projection_sweep.py",
+      "bytes": 11991,
+      "sha256": "493ccf7c5ea6a57211f948bc5991ba4c137ead08fa1defece0aa44db614210f3"
     },
     {
       "path": "tests/unit/test_accuracy_followup.py",
@@ -10719,6 +10779,11 @@
       "path": "tests/unit/test_overnight_plan.py",
       "bytes": 3332,
       "sha256": "01280e38c5c0bbd6a0e251d1c7de59d48c33ed3edb41d9856031172f2f862c7d"
+    },
+    {
+      "path": "tests/unit/test_projection_sweep.py",
+      "bytes": 3091,
+      "sha256": "e6817c43fd97ab56a2862b74e80480c85ffe2794efca031bc92c9f8a853f018b"
     },
     {
       "path": "tests/unit/test_reference_comparison.py",

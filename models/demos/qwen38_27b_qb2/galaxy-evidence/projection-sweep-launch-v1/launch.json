@@ -1,0 +1,49 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-projection-sweep-v1-20261010",
+    "--property=RuntimeMaxSec=28h",
+    "--property=TimeoutStopSec=210",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v1/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v1/run.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v1",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v1",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_projection_sweep",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-v1",
+    "--manifest",
+    "/home/ttuser/qwen38-artifacts-20261007/projection-sweep-control-v1/source-manifest.json",
+    "--after-unit",
+    "qwen38-b16-priority-v2-20261010.service",
+    "--after-invocation",
+    "f5b0da5649614052ba7b8ddf37b466d5",
+    "--after-receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/b16-priority-v2/queue.json"
+  ],
+  "created_at": 1791613371.7082207,
+  "scope": "44 B16/B32 TP4 projection cases: output/down BFP8, reader/core/block sweep, all-reduce and layouts included",
+  "expected_full_step_saving_ms": [
+    1.5,
+    3.5
+  ],
+  "expected_gain_is_estimate": true,
+  "physical_runtime_budget_seconds": 5400,
+  "estimated_physical_minutes": [
+    30,
+    90
+  ],
+  "source_manifest_sha256": "6ccc14fb77784a158e8e1b8c841a44cf0a208ce753a2ab034598e6181d322251"
+}
