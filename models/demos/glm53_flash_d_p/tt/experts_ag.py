@@ -258,7 +258,8 @@ class TtExpertsAg:
         self.gathered_x = None
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         prefix = None
-        if cache:
+        fake = isinstance(torch_weights, str)  # "fake": uninitialised weights (perf runs, reference/fake_weights.py)
+        if cache and not fake:
             d = flat_cache_dir(mesh)
             d.mkdir(parents=True, exist_ok=True)
             prefix = str(d / f"layer_{layer}")
@@ -277,7 +278,7 @@ class TtExpertsAg:
         # m: the per-expert token cap = the whole chunk (a hot expert takes most of the tokens: test_c_*_experts)
         self.flat = FlatRoutedExpert(
             mesh,
-            weights,
+            torch_weights if fake else weights,
             m=max_seq_len,
             H=emb_dim,
             I=hidden_dim,
@@ -387,7 +388,7 @@ def build_experts_ag(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtyp
     return TtExpertsAg(
         mesh,
         layer,
-        LazyExpertWeights(loader, layer, cfg.n_routed_experts),
+        "fake" if getattr(loader, "fake", False) else LazyExpertWeights(loader, layer, cfg.n_routed_experts),
         num_experts=cfg.n_routed_experts,
         emb_dim=cfg.hidden_size,
         hidden_dim=cfg.moe_intermediate_size,
