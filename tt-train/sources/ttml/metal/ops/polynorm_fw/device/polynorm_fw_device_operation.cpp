@@ -5,46 +5,108 @@
 #include "polynorm_fw_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <string_view>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::polynorm3_fw::device {
 
-void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
-    const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "PolyNorm3Forward operation requires {} to be on Device. Input storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to PolyNorm3Forward need to be allocated in buffers on the device. Buffer is null. Tensor name "
-            "{}",
-            name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "PolyNorm3Forward operation requires tensor to be in Tile layout. {} tensor layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "PolyNorm3Forward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "PolyNorm3Forward operation requires Interleaved memory layout. {} memory layout: `{}`",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
+namespace {
 
-    check_tensor(tensor_args.input, "Input");
-    check_tensor(tensor_args.weight, "weight");
-    check_tensor(tensor_args.bias, "bias");
+void validate_tensor(
+    const ttnn::Tensor& tensor,
+    std::string_view name,
+    tt::tt_metal::DataType expected_dtype,
+    const ttnn::Tensor& input) {
+    TT_FATAL(
+        tensor.storage_type() == ttnn::StorageType::DEVICE,
+        "PolyNorm3Forward: {} must be on Device. Storage type: {}",
+        name,
+        enchantum::to_string(tensor.storage_type()));
+    TT_FATAL(tensor.buffer() != nullptr, "PolyNorm3Forward: {} must have an allocated device buffer", name);
+    TT_FATAL(tensor.device() == input.device(), "PolyNorm3Forward: {} must be on the same device as input", name);
+    TT_FATAL(
+        tensor.layout() == tt::tt_metal::Layout::TILE,
+        "PolyNorm3Forward: {} must use TILE layout. Layout: {}",
+        name,
+        enchantum::to_string(tensor.layout()));
+    TT_FATAL(
+        tensor.dtype() == expected_dtype,
+        "PolyNorm3Forward: {} must use {}. Data type: {}",
+        name,
+        enchantum::to_string(expected_dtype),
+        enchantum::to_string(tensor.dtype()));
+    TT_FATAL(
+        tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+        "PolyNorm3Forward: {} must use INTERLEAVED memory layout. Memory layout: {}",
+        name,
+        enchantum::to_string(tensor.memory_config().memory_layout()));
+    TT_FATAL(
+        tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM,
+        "PolyNorm3Forward: {} must be in DRAM. Buffer type: {}",
+        name,
+        enchantum::to_string(tensor.buffer()->buffer_type()));
+
+    const auto tile = tensor.tensor_spec().tile();
+    const auto face_shape = tile.get_face_shape();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+            face_shape[0] == tt::constants::FACE_HEIGHT && face_shape[1] == tt::constants::FACE_WIDTH &&
+            tile.get_num_faces() == tt::constants::TILE_HW / tt::constants::FACE_HW &&
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "PolyNorm3Forward: {} must use the canonical untransposed 32x32 tile with 16x16 faces",
+        name);
+}
+
+tt::tt_metal::TensorSpec canonical_output_spec(const ttnn::Tensor& input) {
+    return {
+        input.logical_shape(),
+        tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::Layout::TILE, input.memory_config())};
+}
+
+}  // namespace
+
+void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
+    const PolyNorm3FWAttributes&, const PolyNorm3FWTensorArgs& tensor_args) {
+    const auto& input = tensor_args.input;
+    validate_tensor(input, "input", ttnn::DataType::BFLOAT16, input);
+    TT_FATAL(input.logical_shape().rank() == 4U, "PolyNorm3Forward: input must have rank 4");
+    const auto input_shape = input.logical_shape().to_array_4D();
+    TT_FATAL(
+        input_shape[0] > 0U && input_shape[1] > 0U && input_shape[2] > 0U && input_shape[3] > 0U,
+        "PolyNorm3Forward: all input dimensions must be positive. Shape: {}",
+        input.logical_shape());
+    TT_FATAL(
+        input_shape[3] % tt::constants::TILE_WIDTH == 0U,
+        "PolyNorm3Forward: input channels must be divisible by {}. Shape: {}",
+        tt::constants::TILE_WIDTH,
+        input.logical_shape());
+
+    const auto expected_output_spec = canonical_output_spec(input);
+    TT_FATAL(
+        input.padded_shape() == expected_output_spec.padded_shape(),
+        "PolyNorm3Forward: input padded shape {} must use canonical tile padding {}",
+        input.padded_shape(),
+        expected_output_spec.padded_shape());
+
+    validate_tensor(tensor_args.weight, "weight", ttnn::DataType::BFLOAT16, input);
+    TT_FATAL(
+        tensor_args.weight.logical_shape() == ttnn::Shape({1U, 1U, 1U, 3U}),
+        "PolyNorm3Forward: weight must have shape [1, 1, 1, 3]. Shape: {}",
+        tensor_args.weight.logical_shape());
+    validate_tensor(tensor_args.bias, "bias", ttnn::DataType::BFLOAT16, input);
+    TT_FATAL(
+        tensor_args.bias.logical_shape() == ttnn::Shape({1U, 1U, 1U, 1U}),
+        "PolyNorm3Forward: bias must have shape [1, 1, 1, 1]. Shape: {}",
+        tensor_args.bias.logical_shape());
+
     if (tensor_args.preallocated_output.has_value()) {
-        check_tensor(tensor_args.preallocated_output.value(), "Preallocated output");
+        const auto& output = tensor_args.preallocated_output.value();
+        validate_tensor(output, "preallocated output", ttnn::DataType::BFLOAT16, input);
+        TT_FATAL(
+            output.tensor_spec() == expected_output_spec,
+            "PolyNorm3Forward: preallocated output spec must exactly match the canonical input-derived output spec");
     }
 }
 

@@ -14,15 +14,21 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/polynorm_bw/device/polynorm_bw_device_operation.hpp"
 #include "metal/ops/polynorm_bw/polynorm_bw.hpp"
+#include "metal/ops/polynorm_fw/device/polynorm_fw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class PolyNormOpTest : public ::testing::Test {
 protected:
@@ -41,6 +47,32 @@ constexpr float kForwardRtol = 2.0e-2F;
 constexpr float kForwardAtol = 2.0e-2F;
 constexpr float kBackwardRtol = 1.0e-2F;
 constexpr float kBackwardAtol = 1.0e-2F;
+
+using PolyNormForwardOperation = ttml::metal::ops::polynorm3_fw::device::PolyNorm3ForwardDeviceOperation;
+using PolyNormBackwardOperation = ttml::metal::ops::polynorm3_bw::device::PolyNorm3BackwardDeviceOperation;
+
+template <typename Operation>
+void expect_validation_error_on_miss_and_hit(
+    const typename Operation::operation_attributes_t& attributes,
+    const typename Operation::tensor_args_t& tensor_args,
+    std::string_view expected_message) {
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+
+    auto expect_error = [&](auto&& validate, std::string_view path) {
+        try {
+            validate();
+            ADD_FAILURE() << path << " validation unexpectedly accepted an unsafe PolyNorm contract";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string_view(error.what()).find(expected_message), std::string_view::npos)
+                << path << " validation raised the wrong diagnostic: " << error.what();
+        } catch (...) {
+            ADD_FAILURE() << path << " validation raised a non-runtime_error exception";
+        }
+    };
+
+    expect_error([&] { Adapter::validate_on_program_cache_miss(attributes, tensor_args); }, "program-cache miss");
+    expect_error([&] { Adapter::validate_on_program_cache_hit(attributes, tensor_args); }, "program-cache hit");
+}
 
 struct PolyNormCaseData {
     xt::xarray<float> input;
@@ -396,6 +428,196 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
         },
         std::runtime_error);
     autograd::ctx().reset_graph();
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsUndersizedForwardOutput) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 64, 32});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    const auto bias = core::from_xtensor(data.bias, device);
+
+    const auto undersized_output = core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), device);
+    const PolyNormForwardOperation::operation_attributes_t attributes{.epsilon = 1e-5F};
+    const PolyNormForwardOperation::tensor_args_t tensor_args{
+        .input = input,
+        .weight = weight,
+        .bias = bias,
+        .preallocated_output = undersized_output,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormForwardOperation>(
+        attributes, tensor_args, "PolyNorm3Forward: preallocated output spec must exactly match");
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsNonTileAlignedChannels) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 2, 100});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    const auto bias = core::from_xtensor(data.bias, device);
+
+    const PolyNormForwardOperation::operation_attributes_t attributes{.epsilon = 1e-5F};
+    const PolyNormForwardOperation::tensor_args_t tensor_args{
+        .input = input,
+        .weight = weight,
+        .bias = bias,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormForwardOperation>(
+        attributes, tensor_args, "PolyNorm3Forward: input channels must be divisible");
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsMismatchedBackwardGradient) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 32, 64});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+
+    const auto undersized_dL_dout = core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), device);
+    const PolyNormBackwardOperation::operation_attributes_t attributes{.epsilon = 1e-5F};
+    const PolyNormBackwardOperation::tensor_args_t tensor_args{
+        .input = input,
+        .dL_dout = undersized_dL_dout,
+        .weight = weight,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormBackwardOperation>(
+        attributes, tensor_args, "PolyNorm3Backward: dL_dout spec must exactly match input spec");
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsUndersizedPackedPartials) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 32, 64});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+
+    const auto dL_dout = core::zeros(input.logical_shape(), device);
+    const auto dL_dx = core::zeros(input.logical_shape(), device);
+    const auto undersized_partials = core::zeros(ttnn::Shape({1U, 1U, 32U, 96U}), device, ttnn::DataType::FLOAT32);
+    const PolyNormBackwardOperation::operation_attributes_t attributes{.epsilon = 1e-5F};
+    const PolyNormBackwardOperation::tensor_args_t tensor_args{
+        .input = input,
+        .dL_dout = dL_dout,
+        .weight = weight,
+        .preallocated_dL_dx = dL_dx,
+        .preallocated_packed_partials = undersized_partials,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormBackwardOperation>(
+        attributes, tensor_args, "PolyNorm3Backward: preallocated packed partials spec must exactly match");
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsL1Operands) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 32, 32});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    const auto bias = core::from_xtensor(data.bias, device);
+    const auto l1_weight = ttnn_fixed::to_l1_interleaved(weight);
+
+    const PolyNormForwardOperation::operation_attributes_t fw_attributes{.epsilon = 1e-5F};
+    const PolyNormForwardOperation::tensor_args_t fw_tensor_args{
+        .input = input,
+        .weight = l1_weight,
+        .bias = bias,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormForwardOperation>(
+        fw_attributes, fw_tensor_args, "PolyNorm3Forward: weight must be in DRAM");
+
+    const auto dL_dout = core::zeros(input.logical_shape(), device);
+    const PolyNormBackwardOperation::operation_attributes_t bw_attributes{.epsilon = 1e-5F};
+    const PolyNormBackwardOperation::tensor_args_t bw_tensor_args{
+        .input = input,
+        .dL_dout = dL_dout,
+        .weight = l1_weight,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormBackwardOperation>(
+        bw_attributes, bw_tensor_args, "PolyNorm3Backward: weight must be in DRAM");
+}
+
+TEST_F(PolyNormOpTest, PolyNorm_RawValidatorRejectsNonCanonicalTiles) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto data = make_case_data({1, 1, 32, 32});
+    const auto input = core::from_xtensor(data.input, device);
+    const auto weight = core::from_xtensor(data.weight, device);
+    const auto bias = core::from_xtensor(data.bias, device);
+
+    const auto narrow_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1U, 1U, 32U, 32U}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tt::tt_metal::Tile({16U, 32U})),
+            ttnn::DRAM_MEMORY_CONFIG));
+    const auto narrow_tensor = ttnn::create_device_tensor(narrow_spec, device);
+
+    const PolyNormForwardOperation::operation_attributes_t fw_attributes{.epsilon = 1e-5F};
+    const PolyNormForwardOperation::tensor_args_t fw_tensor_args{
+        .input = input,
+        .weight = weight,
+        .bias = bias,
+        .preallocated_output = narrow_tensor,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormForwardOperation>(
+        fw_attributes,
+        fw_tensor_args,
+        "PolyNorm3Forward: preallocated output must use the canonical untransposed 32x32 tile");
+
+    const PolyNormBackwardOperation::operation_attributes_t bw_attributes{.epsilon = 1e-5F};
+    const PolyNormBackwardOperation::tensor_args_t bw_tensor_args{
+        .input = input,
+        .dL_dout = narrow_tensor,
+        .weight = weight,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormBackwardOperation>(
+        bw_attributes, bw_tensor_args, "PolyNorm3Backward: dL_dout must use the canonical untransposed 32x32 tile");
+}
+
+class PolyNormMultiDeviceContractTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(PolyNormMultiDeviceContractTest, PolyNorm_RawValidatorRejectsForeignDeviceOperands) {
+    using namespace ttml;
+    auto& parent_mesh = autograd::ctx().get_device();
+    const auto input_mesh = parent_mesh.create_submesh(
+        tt::tt_metal::distributed::MeshShape(1, 1), tt::tt_metal::distributed::MeshCoordinate(0, 0));
+    const auto other_mesh = parent_mesh.create_submesh(
+        tt::tt_metal::distributed::MeshShape(1, 1), tt::tt_metal::distributed::MeshCoordinate(0, 1));
+
+    const auto data = make_case_data({1, 1, 32, 32});
+    const auto input = core::from_xtensor(data.input, input_mesh.get());
+    const auto weight = core::from_xtensor(data.weight, input_mesh.get());
+    const auto bias = core::from_xtensor(data.bias, input_mesh.get());
+    const auto foreign_bias = core::from_xtensor(data.bias, other_mesh.get());
+
+    const PolyNormForwardOperation::operation_attributes_t fw_attributes{.epsilon = 1e-5F};
+    const PolyNormForwardOperation::tensor_args_t fw_tensor_args{
+        .input = input,
+        .weight = weight,
+        .bias = foreign_bias,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormForwardOperation>(
+        fw_attributes, fw_tensor_args, "PolyNorm3Forward: bias must be on the same device as input");
+
+    const auto foreign_dL_dout = core::from_xtensor(data.input, other_mesh.get());
+    const PolyNormBackwardOperation::operation_attributes_t bw_attributes{.epsilon = 1e-5F};
+    const PolyNormBackwardOperation::tensor_args_t bw_tensor_args{
+        .input = input,
+        .dL_dout = foreign_dL_dout,
+        .weight = weight,
+    };
+    expect_validation_error_on_miss_and_hit<PolyNormBackwardOperation>(
+        bw_attributes, bw_tensor_args, "PolyNorm3Backward: dL_dout must be on the same device as input");
 }
 
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_NanoLlama3LikeChannelShape) {
