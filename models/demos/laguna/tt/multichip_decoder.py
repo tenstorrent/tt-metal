@@ -1736,6 +1736,85 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, seq, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
+    def dflash_query_forward(self, x_all, x_q, take, rope, rope_q, mask):
+        """One DFlash draft layer computing only what the 32 query rows need (no KV-cache write).
+
+        x_all [1, S, H]: context rows then the query rows (prefill_forward's input); x_q [1, 32, H]: the query rows
+        (``take @ x_all``); take [1, 32, S] 0/1 row picker; rope / rope_q: (cos, sin) for the S rows / the 32 query
+        rows; mask [1, 1, 32, S]: 0 where query row i may see key j (causal sliding window), -1e9 elsewhere.
+        Keys/values come from every row; Q, attention, gate, O projection, all-reduce and MLP run on 32 rows instead
+        of S. Returns the 32 query rows of prefill_forward's output."""
+        cfg = self.cfg
+        S = x_all.shape[-2]
+        ln = self._rms(x_all, self.w["input_ln"])
+        qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)  # [1, S, qkv_w]
+        _, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, S, self.meta["qkv_w"])), num_heads=cfg.num_heads, num_kv_heads=cfg.num_kv_heads,
+            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope)
+        ck = self._ck_hifi4  # 0/1 row selection: exact with fp32 accumulation
+        qkv_q = ttnn.matmul(take, qkv, compute_kernel_config=ck)  # [1, 32, qkv_w]
+        ln_q = ttnn.matmul(take, ln, compute_kernel_config=ck)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv_q, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
+
+    def dflash_kv_rows(self, x, rope):
+        """Keys and values [1, nkv, R, hd] (k-norm and RoPE applied) of rows x [1, R, H]: the K/V prefill_forward
+        computes for them, which the cached DFlash draft keeps per context row (dflash_tt.DFlashTTProposalCache)."""
+        cfg = self.cfg
+        R = x.shape[-2]
+        ln = self._rms(x, self.w["input_ln"])
+        qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)
+        _, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, R, self.meta["qkv_w"])), num_heads=cfg.num_heads, num_kv_heads=cfg.num_kv_heads,
+            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        return self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope), v
+
+    def dflash_query_forward_cached(self, x_q, k_ctx, v_ctx, rope_q, mask):
+        """dflash_query_forward over cached context keys/values: x_q [1, 32, H] query rows; k_ctx / v_ctx
+        [1, nkv, C, hd] (dflash_kv_rows of the context rows); rope_q (cos, sin) [1, 1, 32, hd]; mask [1, 1, 32, C + 32]
+        over the context slots then the 32 query rows. Every op runs on the 32 query rows; attention reads C + 32 keys."""
+        cfg = self.cfg
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+        k = ttnn.concat([k_ctx, k], dim=2)
+        v = ttnn.concat([v_ctx, v], dim=2)
+        return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
+
+    def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask):
+        """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP."""
+        cfg = self.cfg
+        S = k.shape[-2]
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        if getattr(self, "_dflash_q_pc", {}).get(kc) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[kc] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=TILE, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, scale=cfg.scaling, program_config=self._dflash_q_pc[kc],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = self._gate(ttnn.reshape(attn, (1, TILE, cfg.num_heads * cfg.head_dim)), ln_q)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))
+
     def _sp_gather(self, x):
         return ttnn.all_gather(
             x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links

@@ -287,6 +287,7 @@ def run_dflash(lens, tokens_out, prompt="text"):
                                            reset_batch=(i == 0))  # fmt: skip
                 tok, pos = first_token(out), pos + 1
                 generated.append(tok)
+            ttnn.synchronize_device(mesh)  # the last round's queued context update
             seconds = time.perf_counter() - start
             rounds = model._dflash_controller.rounds[rounds_before:]
             full = [r for r in rounds if not r.target_only]

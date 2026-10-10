@@ -389,6 +389,14 @@ class DFlashTTProposalCache:
         # allocated while a trace is resident (a later replay may overwrite such a buffer), and the combine
         # kernels see at most 16 new rows per round instead of every retained row.
         self._fixed = None
+        # Cached context keys/values (enable_kv_ring): per draft layer a [1, nkv, RING, hd] K and V ring holding
+        # dflash_kv_rows of the last RING target positions (slot of position p: (p - _ring_base) % RING); the draft
+        # then runs only its 32 query rows (MultichipDecoder.dflash_query_forward_cached) and a round's committed
+        # rows are the only context rows projected.
+        self._ring = None
+        self._slot_pos = None
+        self._ring_base = 0
+        self._fixed_stale = False
 
     @property
     def fixed_combined(self) -> bool:
@@ -412,6 +420,147 @@ class DFlashTTProposalCache:
             device=self.core.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device),
+        )
+
+    RING = 512  # >= max_context_rows (511) + the oldest slot a round overwrites
+
+    @property
+    def kv_ring(self) -> bool:
+        return getattr(self, "_ring", None) is not None
+
+    def enable_kv_ring(self) -> None:
+        """Allocate the per-layer context K/V rings (fixed mode only). Call before capturing any trace."""
+
+        self._require_open()
+        if not self.fixed_combined:
+            raise RuntimeError("enable_kv_ring requires enable_fixed_context")
+        if self._ring is not None:
+            return
+        cfg = next(iter(self.core.layers.values())).cfg
+        zeros = torch.zeros((1, cfg.num_kv_heads, self.RING, cfg.head_dim), dtype=torch.bfloat16)
+
+        def dev():
+            return ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.core.mesh_device,
+                                   memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                   mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device))  # fmt: skip
+
+        self._ring = {index: (dev(), dev()) for index in self.core.layers}
+        self._slot_pos = [-1] * self.RING
+
+    def ring_kv(self, layer_idx: int):
+        return self._ring[layer_idx]
+
+    def _ring_fill(self) -> None:
+        """Rebuild every ring from the fixed combined context (after a replace): slot j = position start + j."""
+
+        core = self.core
+        start, rows = int(self._context_start), int(self._context_rows)
+        src = self._fixed_rows(self.RING)  # context rows, then zeros
+        cos, sin = core.rope_window(start, self.RING)
+        for index, layer in core.layers.items():
+            k, v = layer.dflash_kv_rows(src, (cos, sin))
+            ttnn.copy(k, self._ring[index][0])
+            ttnn.copy(v, self._ring[index][1])
+            _deallocate_owned(k)
+            _deallocate_owned(v)
+        for tensor in (src, cos, sin):
+            _deallocate_owned(tensor)
+        self._ring_base = start
+        self._slot_pos = [start + j if j < rows else -1 for j in range(self.RING)]
+        self._fixed_stale = False
+
+    def ring_append_inputs(self, start_pos: int, count: int):
+        """Host tensors writing ``count`` rows at positions start_pos.. into the rings: place [1, nkv, RING, 32]
+        (place[s_i, i] = 1 for row i's slot s_i), keep [1, 1, RING, 1] (0 at those slots, else 1) and the rows'
+        RoPE (cos, sin) [1, 1, 32, head_dim]. ring = ring * keep + place @ kv_rows(new rows)."""
+
+        start_pos, count = int(start_pos), int(count)
+        if not 1 <= count <= 32:
+            raise ValueError(f"a DFlash ring append takes 1..32 rows, got {count}")
+        cfg = next(iter(self.core.layers.values())).cfg
+        place = torch.zeros((self.RING, 32), dtype=torch.bfloat16)
+        keep = torch.ones((self.RING, 1), dtype=torch.bfloat16)
+        for i in range(count):
+            slot = (start_pos + i - self._ring_base) % self.RING
+            place[slot, i] = 1.0
+            keep[slot, 0] = 0.0
+        phase = torch.outer(torch.arange(start_pos, start_pos + 32, dtype=torch.float32), self.core._rope_inv_freq)
+        phase = torch.cat((phase, phase), dim=-1)
+        hd = int(self.core.config.head_dim)
+        return (
+            place.reshape(1, 1, self.RING, 32).expand(1, cfg.num_kv_heads, self.RING, 32).contiguous(),
+            keep.reshape(1, 1, self.RING, 1),
+            phase.cos().to(torch.bfloat16).reshape(1, 1, 32, hd),
+            phase.sin().to(torch.bfloat16).reshape(1, 1, 32, hd),
+        )
+
+    def ring_update(self, index: int, k, v, place, keep) -> None:
+        """ring = ring * keep + place @ (k | v) for draft layer ``index`` (k, v: [1, nkv, 32, hd] new rows)."""
+
+        ck = self.core.layers[index]._ck_hifi4  # 0/1 placement: exact with fp32 accumulation
+        for ring, new in zip(self._ring[index], (k, v)):
+            updated = ttnn.add(ttnn.mul(ring, keep), ttnn.matmul(place, new, compute_kernel_config=ck))
+            ttnn.copy(updated, ring)
+            _deallocate_owned(updated)
+
+    def ring_commit(self, start_pos: int, count: int) -> None:
+        """Bookkeeping after ``count`` rows at positions start_pos.. were written into the rings."""
+
+        start_pos, count = int(start_pos), int(count)
+        expected = int(self._context_start) + int(self._context_rows)
+        if start_pos != expected:
+            raise ValueError(f"DFlash target capture is not adjacent: expected start {expected}, got {start_pos}")
+        for i in range(count):
+            self._slot_pos[(start_pos + i - self._ring_base) % self.RING] = start_pos + i
+        rows = min(int(self.max_context_rows), int(self._context_rows) + count)
+        self._context_start = start_pos + count - rows
+        self._context_rows = rows
+        self._fixed_stale = True  # the combined buffer is no longer appended to
+
+    def _ring_append_capture(self, capture: DFlashTargetAuxCapture) -> None:
+        count = int(capture.row_count)
+        new_rows = self.core.combine_aux_hidden_states(capture.hidden_states)
+        padded = ttnn.pad(new_rows, [(0, 0), (0, 32 - count), (0, 0)], value=0.0) if count < 32 else new_rows
+        host = self.ring_append_inputs(capture.start_position, count)
+        place, keep, cos, sin = (
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.core.mesh_device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.core.mesh_device))
+            for t in host
+        )  # fmt: skip
+        for index, layer in self.core.layers.items():
+            k, v = layer.dflash_kv_rows(padded, (cos, sin))
+            self.ring_update(index, k, v, place, keep)
+            _deallocate_owned(k)
+            _deallocate_owned(v)
+        for tensor in {id(t): t for t in (new_rows, padded, place, keep, cos, sin)}.values():
+            _deallocate_owned(tensor)
+        self.ring_commit(capture.start_position, count)
+
+    def ring_query_inputs(self, query_rows: int):
+        """Host (cos, sin) [1, 1, 32, head_dim] at the query positions P0 + i (P0 = the position after the context)
+        and the mask [1, 1, 32, RING + 32] over the ring slots then the 32 query rows: query row i (position
+        P0 + i) sees a slot holding position p when start <= p, P0 + i - (sliding_window - 1) <= p < P0 + i, and query
+        rows i' <= i -- the causal sliding window of prefill_forward over context + query. Rows past the query copy
+        the last query row's mask."""
+
+        start, rows = self.context_bounds()
+        p0 = start + rows
+        phase = torch.outer(torch.arange(p0, p0 + 32, dtype=torch.float32), self.core._rope_inv_freq)
+        phase = torch.cat((phase, phase), dim=-1)
+        hd = int(self.core.config.head_dim)
+        qi = torch.arange(32).clamp(max=int(query_rows) - 1)
+        qpos = p0 + qi
+        pos = torch.tensor(self._slot_pos, dtype=torch.int64)
+        window = int(self.core.config.sliding_window) - 1
+        ctx_ok = (pos[None, :] >= start) & (pos[None, :] < qpos[:, None]) & (pos[None, :] >= qpos[:, None] - window)
+        q_ok = torch.arange(32)[None, :] <= qi[:, None]
+        allowed = torch.cat((ctx_ok, q_ok), dim=1)
+        mask = torch.where(allowed, 0.0, -1e9).reshape(1, 1, 32, self.RING + 32)
+        return (
+            phase.cos().to(torch.bfloat16).reshape(1, 1, 32, hd),
+            phase.sin().to(torch.bfloat16).reshape(1, 1, 32, hd),
+            mask.to(torch.bfloat16),
         )
 
     def _fixed_rows(self, rows: int):
@@ -497,9 +646,14 @@ class DFlashTTProposalCache:
         self._context_rows = kept + count
 
     def _update_fixed(self, capture: DFlashTargetAuxCapture, replace: bool) -> None:
+        if self.kv_ring and not replace and self._context_rows > 0 and int(capture.row_count) <= 32:
+            self._ring_append_capture(capture)
+            return
         if not replace and self._context_rows > 0 and int(capture.row_count) <= 32:
             self._append_fixed(capture)
             return
+        if self.kv_ring and not replace and self._context_rows > 0 and self._fixed_stale:
+            raise RuntimeError("a long DFlash append after ring-only appends: the combined buffer is stale")
         width = self.core.config.hidden_size
         new_rows = self.core.combine_aux_hidden_states(capture.hidden_states)
         temporaries = [new_rows]
@@ -546,6 +700,8 @@ class DFlashTTProposalCache:
                 _deallocate_owned(tensor)
         self._context_start = start
         self._context_rows = rows
+        if self.kv_ring:
+            self._ring_fill()
 
     @property
     def active_request_id(self):
@@ -563,6 +719,9 @@ class DFlashTTProposalCache:
         if getattr(self, "_fixed", None) is not None:
             self._context_start = None
             self._context_rows = 0
+            if self.kv_ring:
+                self._slot_pos = [-1] * self.RING
+                self._fixed_stale = False
             return
         if self._context_owned:
             _deallocate_owned(self._context)
@@ -658,6 +817,10 @@ class DFlashTTProposalCache:
         self._release_context()
         _deallocate_owned(getattr(self, "_fixed", None))
         self._fixed = None
+        for pair in (getattr(self, "_ring", None) or {}).values():
+            for tensor in pair:
+                _deallocate_owned(tensor)
+        self._ring = None
         for kv in self.kv_cache.values():
             _deallocate_owned(kv["k"])
             _deallocate_owned(kv["v"])
@@ -1080,6 +1243,8 @@ class DFlashTTCore:
                 f"the core horizon {self.max_seq_len}"
             )
 
+        if cache.kv_ring:
+            return self._proposal_round_ring(cache, target_model, block, logical_query_rows)
         if cache.fixed_combined:
             return self._proposal_round_fixed(
                 cache, target_model, block, context_start, context_rows, logical_query_rows, padded_total
@@ -1170,10 +1335,55 @@ class DFlashTTCore:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def query_inputs(self, start: int, rows: int, query_rows: int, padded: int):
+        """Host (cos, sin) ``[1, 1, 32, head_dim]`` at the query positions ``start + rows + i`` and the attention
+        mask ``[1, 1, 32, padded]`` for MultichipDecoder.dflash_query_forward: query row i (local row rows + i) sees
+        keys j with rows + i - (sliding_window - 1) <= j <= rows + i, as the causal sliding-window prefill does;
+        rows past the query copy the last query row's mask."""
+
+        start, rows, query_rows, padded = int(start), int(rows), int(query_rows), int(padded)
+        phase = torch.outer(torch.arange(start + rows, start + rows + 32, dtype=torch.float32), self._rope_inv_freq)
+        phase = torch.cat((phase, phase), dim=-1)
+        hd = int(self.config.head_dim)
+        local = rows + torch.arange(32).clamp(max=query_rows - 1)
+        keys = torch.arange(padded)
+        allowed = (keys[None, :] <= local[:, None]) & (keys[None, :] >= local[:, None] - (self.config.sliding_window - 1))
+        mask = torch.where(allowed, 0.0, -1e9).reshape(1, 1, 32, padded)
+        return (
+            phase.cos().to(torch.bfloat16).reshape(1, 1, 32, hd),
+            phase.sin().to(torch.bfloat16).reshape(1, 1, 32, hd),
+            mask.to(torch.bfloat16),
+        )
+
     def exact_matmul(self, a, b):
         """Row-selection matmul (one 1.0 per output row): HiFi4 with fp32 accumulation reproduces bf16 exactly."""
 
         return ttnn.matmul(a, b, compute_kernel_config=next(iter(self.layers.values()))._ck_hifi4)
+
+    def _proposal_round_ring(self, cache, target_model, block, query_rows):
+        """proposal_round over the cached context K/V rings: only the 32 query rows run through the draft layers."""
+
+        width = self.config.hidden_size
+        token_ids = torch.full((1, 32), self.config.mask_token_id, dtype=torch.int32)
+        token_ids[0, :query_rows] = block.input_ids.to(dtype=torch.int32)
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        token_ids_tt = ttnn.from_torch(token_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
+                                       device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                       mesh_mapper=replicate)  # fmt: skip
+        cos, sin, mask = (
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=replicate)
+            for t in cache.ring_query_inputs(query_rows)
+        )  # fmt: skip
+        query_hidden = target_model.embed_prefill(token_ids_tt)  # [1, 32, width]
+        for layer_idx in range(self.config.num_hidden_layers):
+            query_hidden = self.layers[layer_idx].dflash_query_forward_cached(
+                query_hidden, *cache.ring_kv(layer_idx), (cos, sin), mask
+            )
+        query_hidden = self.apply_final_norm(query_hidden)
+        sampled_hidden = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + self.config.max_speculative_tokens, width])
+        logits_shards = target_model.lm_head_shards_dflash(sampled_hidden, enable_experimental=True)
+        return DFlashTTProposalRound(block=block, logits_shards=logits_shards, sampled_hidden_states=sampled_hidden)
 
     def _proposal_round_fixed(self, cache, target_model, block, context_start, context_rows, query_rows, padded_total):
         """proposal_round over the fixed context buffer with shapes that depend only on ``padded_total``.
@@ -1201,8 +1411,20 @@ class DFlashTTCore:
         place = self.placement(padded_total, context_rows, query_rows)
         take = self.placement(padded_total, context_rows, query_rows, transpose=True)
         rope_mats = self.rope_window(context_start, padded_total)
+        query_only = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_QUERY", "1") == "1"  # see dflash_query_forward
+        if query_only:
+            rope_q = tuple(
+                ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device))
+                for t in self.query_inputs(context_start, context_rows, query_rows, padded_total)
+            )  # fmt: skip
         for layer_idx in range(self.config.num_hidden_layers):
             layer_input = ttnn.add(context_hidden, self.exact_matmul(place, query_hidden))
+            if query_only:
+                query_hidden = self.layers[layer_idx].dflash_query_forward(
+                    layer_input, query_hidden, take, rope_mats, rope_q[:2], rope_q[2]
+                )
+                continue
             layer_output = self.layers[layer_idx].prefill_forward(
                 layer_input,
                 cache.kv_cache[layer_idx],

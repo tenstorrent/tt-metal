@@ -187,6 +187,13 @@ class LagunaForCausalLM:
     _DFLASH_DRAFT_TRACE = (
         _DFLASH_VERIFY_TRACE and _DFLASH_DEVICE_ARGMAX and os.environ.get("TT_LAGUNA_DFLASH_DRAFT_TRACE", "1") == "1"
     )
+    # each draft layer computes keys/values for every row but Q, attention, O projection, all-reduce and MLP only for
+    # the 32 query rows (MultichipDecoder.dflash_query_forward); 0 keeps prefill_forward over every row
+    _DFLASH_DRAFT_QUERY = os.environ.get("TT_LAGUNA_DFLASH_DRAFT_QUERY", "1") == "1"
+    # cached draft context: per draft layer a K/V ring over the retained target rows (DFlashTTProposalCache
+    # .enable_kv_ring); a round projects only its committed rows (one traced update after the verify) and the draft
+    # runs only its 32 query rows (one trace for every context size). 0 keeps the fixed combined context.
+    _DFLASH_KV_RING = _DFLASH_VERIFY_TRACE and os.environ.get("TT_LAGUNA_DFLASH_KV_RING", "1") == "1"
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -370,6 +377,8 @@ class LagunaForCausalLM:
             # The traced verify keeps one trace resident for the whole server; the rolling target context
             # must then live at a fixed address allocated before capture (dflash_tt.enable_fixed_context).
             cache.enable_fixed_context()
+            if self._DFLASH_KV_RING:
+                cache.enable_kv_ring()
         self._dflash_core = core
         self._dflash_cache = cache
         try:
@@ -449,8 +458,55 @@ class LagunaForCausalLM:
             "cos": dev(torch.zeros((1, 1, padded, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "sin": dev(torch.zeros((1, 1, padded, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "tok32": dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "cos_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "sin_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "mask": dev(torch.zeros((1, 1, 32, padded)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             "tid": None,
         }
+
+    def _dflash_draft_alloc_ring(self):
+        """Persistent inputs of the traced ring-mode proposal (one trace for every context size)."""
+        core, cache = self._dflash_core, self._dflash_cache
+        hd = int(core.config.head_dim)
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.mesh_device,
+                                   memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+
+        return {
+            "ring": True,
+            "tok": dev(torch.zeros((1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "cos_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "sin_q": dev(torch.zeros((1, 1, 32, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "mask": dev(torch.zeros((1, 1, 32, cache.RING + 32)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "tok32": dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "tid": None,
+        }
+
+    def _dflash_draft_body_ring(self, st):
+        """DFlashTTCore._proposal_round_ring over the persistent inputs, ending in the on-device greedy pick."""
+        core, cache = self._dflash_core, self._dflash_cache
+        width = int(core.config.hidden_size)
+        n = int(core.config.max_speculative_tokens)
+        query_hidden = self.model.embed_prefill(st["tok"])  # [1, 32, width]
+        for index in range(int(core.config.num_hidden_layers)):
+            query_hidden = core.layers[index].dflash_query_forward_cached(
+                query_hidden, *cache.ring_kv(index), (st["cos_q"], st["sin_q"]), st["mask"]
+            )
+        query_hidden = core.apply_final_norm(query_hidden)
+        sampled = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + n, width])
+        shards = self.model.lm_head_shards_dflash(sampled, enable_experimental=True)
+        padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
+        self.gen._greedy_sample(padded, 32, st["tok32"])
+
+    def _dflash_draft_refresh_ring(self, st, block, q):
+        core, cache = self._dflash_core, self._dflash_cache
+        tok = torch.full((1, 32), int(core.config.mask_token_id), dtype=torch.int32)
+        tok[0, :q] = block.input_ids.to(torch.int32).reshape(-1)
+        ttnn.copy_host_to_device_tensor(self.gen._host(tok, ttnn.uint32), st["tok"])
+        for key, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs(q)):
+            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            ttnn.copy_host_to_device_tensor(host, st[key])
 
     def _dflash_draft_body(self, st):
         """DFlashTTCore._proposal_round_fixed over the persistent inputs, ending in the on-device greedy pick."""
@@ -461,6 +517,11 @@ class LagunaForCausalLM:
         context_hidden = cache.buffer_rows(st["padded"])
         for index in range(int(core.config.num_hidden_layers)):
             layer_input = ttnn.add(context_hidden, core.exact_matmul(st["place"], query_hidden))
+            if self._DFLASH_DRAFT_QUERY:
+                query_hidden = core.layers[index].dflash_query_forward(
+                    layer_input, query_hidden, st["take"], (st["cos"], st["sin"]), (st["cos_q"], st["sin_q"]), st["mask"]
+                )
+                continue
             out = core.layers[index].prefill_forward(
                 layer_input, cache.kv_cache[index], cache.page_tables[index], user_id=0, start_pos=0,
                 rope_mats=(st["cos"], st["sin"]),
@@ -487,15 +548,48 @@ class LagunaForCausalLM:
         hd = int(core.config.head_dim)
         for key, t in (("place", place.unsqueeze(0)), ("take", place.t().contiguous().unsqueeze(0)),
                        ("cos", phase.cos().to(torch.bfloat16).reshape(1, 1, padded, hd)),
-                       ("sin", phase.sin().to(torch.bfloat16).reshape(1, 1, padded, hd))):  # fmt: skip
+                       ("sin", phase.sin().to(torch.bfloat16).reshape(1, 1, padded, hd)),
+                       *zip(("cos_q", "sin_q", "mask"), core.query_inputs(start, rows, q, padded))):  # fmt: skip
             host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
             ttnn.copy_host_to_device_tensor(host, st[key])
 
     def _dflash_draft_prepare(self):
         """Allocate, compile and capture the proposal trace of every padded size a round can reach (32 .. the
-        cache capacity). Runs during warmup before the verify trace is captured."""
+        cache capacity) -- one trace in ring mode. Runs during warmup before the verify trace is captured."""
         cache = self._dflash_cache
         q = int(cache.query_rows)
+        if cache.kv_ring:
+            from .dflash_reference import build_proposal_block
+
+            st = self._dflash_draft_alloc_ring()
+            # the ring-update trace's persistent inputs too: every long-lived buffer precedes the first capture
+            self._dflash_update_state = self._dflash_update_alloc()
+            core = self._dflash_core
+            width = int(core.config.num_aux_hidden_states) * int(core.config.hidden_size)
+            hidden = ttnn.from_torch(torch.zeros((1, 1, width), dtype=torch.bfloat16), dtype=ttnn.bfloat16,
+                                     layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                                     memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+            cache.begin_request("laguna-dflash-draft-warmup")
+            try:
+                cache.update_target_capture(
+                    DFlashTargetAuxCapture(hidden_states=hidden, start_position=0, row_count=1), replace=True
+                )
+                block = build_proposal_block(core.config, bonus_token_id=0, last_valid_position=0,
+                                             num_speculative_tokens=int(core.config.max_speculative_tokens))  # fmt: skip
+                self._dflash_draft_refresh_ring(st, block, q)
+                self._dflash_draft_body_ring(st)  # compile
+                ttnn.synchronize_device(self.mesh_device)
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                self._dflash_draft_body_ring(st)
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                st["tid"] = tid
+                ttnn.synchronize_device(self.mesh_device)
+            finally:
+                cache.end_request("laguna-dflash-draft-warmup")
+            ttnn.deallocate(hidden)
+            self._dflash_draft_traces = {"ring": st}
+            print("[laguna dflash] warmup: draft proposal traced once over the cached context K/V rings", flush=True)
+            return
         states = {}
         for padded in range(32, int(cache.capacity) + 1, 32):
             states[padded] = self._dflash_draft_alloc(padded)
@@ -526,6 +620,19 @@ class LagunaForCausalLM:
         states = getattr(self, "_dflash_draft_traces", None)
         if not states:
             return None
+        if "ring" in states:
+            from .dflash_reference import build_proposal_block
+
+            st = states["ring"]
+            if st.get("tid") is None:
+                return None
+            start, rows = cache.context_bounds()
+            block = build_proposal_block(self._dflash_core.config, bonus_token_id=int(bonus_token_id),
+                                         last_valid_position=int(start) + int(rows) - 1,
+                                         num_speculative_tokens=int(self._dflash_core.config.max_speculative_tokens))  # fmt: skip
+            self._dflash_draft_refresh_ring(st, block, int(block.input_ids.numel()))
+            ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+            return [int(t) for t in self.gen._read_token(st["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
         block, start, rows, q, padded = self._dflash_draft_shape(cache, bonus_token_id)
         st = states.get(padded)
         if st is None or st.get("tid") is None:
@@ -533,6 +640,69 @@ class LagunaForCausalLM:
         self._dflash_draft_refresh(st, block, start, rows, q)
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         return [int(t) for t in self.gen._read_token(st["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
+
+    def _dflash_update_alloc(self):
+        """Persistent inputs of the traced ring update (see DFlashTTProposalCache.ring_append_inputs)."""
+        core, cache = self._dflash_core, self._dflash_cache
+        cfg = next(iter(core.layers.values())).cfg
+        hd = int(core.config.head_dim)
+
+        def dev(t):
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                                   memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+
+        return {
+            "place": dev(torch.zeros((1, cfg.num_kv_heads, cache.RING, 32))),
+            "keep": dev(torch.ones((1, 1, cache.RING, 1))),
+            "cos": dev(torch.zeros((1, 1, 32, hd))),
+            "sin": dev(torch.zeros((1, 1, 32, hd))),
+            "tid": None,
+        }
+
+    def _dflash_update_body(self, st, aux):
+        """The verify's auxiliary rows -> combined draft context rows -> each draft layer's K/V -> written into the
+        ring slots of the committed rows (place / keep select them; the other rows are not written)."""
+        core, cache = self._dflash_core, self._dflash_cache
+        rows = int(aux.shape[-2])
+        new_rows = core.combine_aux_hidden_states(aux)
+        padded = ttnn.pad(new_rows, [(0, 0), (0, 32 - rows), (0, 0)], value=0.0) if rows < 32 else new_rows
+        for index, layer in core.layers.items():
+            k, v = layer.dflash_kv_rows(padded, (st["cos"], st["sin"]))
+            cache.ring_update(index, k, v, st["place"], st["keep"])
+
+    def _dflash_update_capture(self):
+        """Compile and capture the ring update over the resident verify trace's auxiliary output buffer (after the
+        verify capture: that buffer is the trace's own output)."""
+        st = getattr(self, "_dflash_update_state", None)
+        stv = getattr(self, "_verify_dec", {}).get("dflash")
+        if st is None or stv is None or stv.get("aux") is None:
+            return
+        if os.environ.get("TT_LAGUNA_DFLASH_UPDATE_TRACE", "1") != "1":  # eager ring appends (A/B)
+            return
+        self._dflash_update_body(st, stv["aux"])  # compile (place = 0, keep = 1: the rings are unchanged)
+        ttnn.synchronize_device(self.mesh_device)
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._dflash_update_body(st, stv["aux"])
+        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        st["tid"] = tid
+        self._dflash_controller.update_context = self._dflash_update_context
+        print("[laguna dflash] warmup: context K/V ring update traced", flush=True)
+
+    def _dflash_update_context(self, verify_capture, committed):
+        """Controller hook after a verify: write the ``committed`` rows' K/V into the rings by replaying the update
+        trace. False (the controller then runs the eager update) unless the capture is the traced verify's buffer."""
+        st = getattr(self, "_dflash_update_state", None)
+        stv = getattr(self, "_verify_dec", {}).get("dflash")
+        if st is None or st.get("tid") is None or stv is None or verify_capture.hidden_states is not stv.get("aux"):
+            return False
+        cache = self._dflash_cache
+        for key, t in zip(("place", "keep", "cos", "sin"), cache.ring_append_inputs(verify_capture.start_position, committed)):
+            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            ttnn.copy_host_to_device_tensor(host, st[key])
+        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        cache.ring_commit(verify_capture.start_position, committed)
+        return True
 
     def close_dflash(self):
         """Explicitly release request state and draft-owned KV allocations."""
@@ -2629,12 +2799,14 @@ class LagunaForCausalLM:
             position=position,
             verify_kwargs=verify_kwargs,
         )
+        if read_from_device:
+            # the committed token is already on the host: no device write + read back (a device round trip that also
+            # waits for the queued context update)
+            return torch.tensor([token_id], dtype=torch.int32)
         ttnn.copy_host_to_device_tensor(
             self._host_rank4_tok_batch(torch.tensor([[token_id]], dtype=torch.int64), 1),
             self._dflash_tok,
         )
-        if read_from_device:
-            return self._read_tokens_host(self._dflash_tok, 1)
         return [self._dflash_tok]
 
     @staticmethod
@@ -2936,6 +3108,8 @@ class LagunaForCausalLM:
             if rows == max_rows or padded > cache.capacity:
                 break
             padded += 32
+        if cache.kv_ring:
+            sizes = sizes[-1:]  # every context size runs the same ring-mode programs
         for rows in sizes:
             hidden = ttnn.from_torch(
                 torch.zeros((1, rows, width), dtype=torch.bfloat16),
@@ -3939,6 +4113,8 @@ class LagunaForCausalLM:
                     self._dflash_draft_prepare()
                     self._dflash_controller.draft_tokens = self._dflash_draft_tokens
                 self._dflash_verify_capture(staged)
+                if self._DFLASH_DRAFT_TRACE and self._dflash_cache.kv_ring:
+                    self._dflash_update_capture()
             print(
                 "[laguna dflash] warmup: normal decode trace OMITTED; "
                 f"batch-1 eager {DFLASH_SPEC.num_draft_layers}-layer proposal + "

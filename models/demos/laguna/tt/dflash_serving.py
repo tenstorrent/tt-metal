@@ -354,8 +354,11 @@ class DFlashServedController:
         # known bonus + accepted drafts.  The trailing target bonus has not been
         # executed yet and becomes the known bonus of the next round.
         update_start = time.perf_counter()
-        committed_capture = self.core.capture_prefix(verify_capture, 1 + accepted)
-        self.cache.update_target_capture(committed_capture)
+        # a traced context update (the serving adapter's update_context hook) when one applies, else eager
+        update_context = getattr(self, "update_context", None)
+        if update_context is None or not update_context(verify_capture, 1 + accepted):
+            committed_capture = self.core.capture_prefix(verify_capture, 1 + accepted)
+            self.cache.update_target_capture(committed_capture)
         if self._stats_sync:
             import ttnn
 
