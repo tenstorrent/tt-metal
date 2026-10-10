@@ -648,7 +648,7 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
     // eltwise-binary init never sets it, so re-establish the operand-driven DEFAULT here — otherwise a preceding
     // copy_init/datacopy op that left PRESERVE leaks into the MOP (denormal Src results differ). Also
     // covers bcast add/sub/mul, which route through this init. Mirrors reduce/transpose/datacopy.
-    math::_configure_default_zero_flag_state_();
+    math::_configure_default_zero_flag_state_<true>();
 }
 
 /**
@@ -841,7 +841,7 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
 
     // SDPA SrcA-broadcast binary path also consumes the Src zero flag —
     // re-establish the operand-driven DEFAULT so a preceding copy_init/unary leak can't reach the MOP.
-    math::_configure_default_zero_flag_state_();
+    math::_configure_default_zero_flag_state_<true>();
 }
 
 /**
