@@ -59,6 +59,30 @@ tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::Da
 using namespace factory_detail;
 constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile, RM_CHUNKS = kRmChunks;
 
+uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip) {
+    const uint32_t se_max_e = experts_per_chip <= 16 ? 16 : (experts_per_chip <= 32 ? 32 : 64);
+    TT_FATAL(2 * experts_per_chip <= 2 * se_max_e, "flat_combine_overlap: more schedule entries than SE_MAX_V");
+    return 2 * experts_per_chip;  // a schedule has at most E + (pinned chunks - 1) <= 2 E entries (se_dyn_pin)
+}
+
+std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
+    const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p) {
+    TT_FATAL(p.nsg == 1, "flat_schedule_defines: one subgrid only (the overlapped plans)");
+    const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
+    std::vector<std::pair<std::string, std::string>> d{
+        {"SE_RPS", std::to_string(p.mt * 32)},
+        {"SE_MAX_E", std::to_string(se_max_e)},
+        {"SE_GU_NREG", std::to_string(p.ring_g / p.nk_gu)}};
+    if (cfg.pin) {
+        d.emplace_back("SE_PIN_MIN", std::to_string(cfg.pin));
+        d.emplace_back("SE_PIN_SMALL", "2");
+        // pin only a dominant expert (se_dyn_pin); MIMO_FL_PIN_RATIO (read at program build; 0: always pin)
+        const char* r = std::getenv("MIMO_FL_PIN_RATIO");
+        d.emplace_back("SE_PIN_RATIO", r != nullptr ? std::string(r) : std::string("8"));
+    }
+    return d;
+}
+
 FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory::create(
     const FlatRoutedExpertParams& cfg, const FlatRoutedExpertInputs& t, Tensor& output) {
     using namespace tt::tt_metal;
@@ -118,18 +142,21 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     }
     dn_reg = dn_reg && (!p.rdown || p.ring_dr == nreg_gu * p.nblk_r);
     Defines dyn_def = {
-        {"SE_DYN", "1"},
-        {"SE_DYN_HALF", std::to_string(dyn_half)},
-        {"SE_RPS", std::to_string(MT * 32)},
-        {"SE_MAX_E", std::to_string(se_max_e)},
-        {"SE_META_BYTES", std::to_string(meta_bytes)},
-        {"SE_GU_NREG", std::to_string(nreg_gu)}};
+        {"SE_DYN", "1"}, {"SE_DYN_HALF", std::to_string(dyn_half)}, {"SE_META_BYTES", std::to_string(meta_bytes)}};
+    for (const auto& [k, v] : flat_schedule_defines(cfg, p)) {  // (SE_RPS, SE_MAX_E, SE_GU_NREG, pinning)
+        dyn_def[k] = v;
+    }
+    TT_FATAL(
+        dyn_def.at("SE_MAX_E") == std::to_string(se_max_e) && dyn_def.at("SE_GU_NREG") == std::to_string(nreg_gu) &&
+            dyn_def.at("SE_RPS") == std::to_string(MT * 32),
+        "flat_routed_expert: schedule defines out of step");
     if (p.nsg > 1) {
         dyn_def["SE_SG"] = std::to_string(p.nsg);
     }
-    if (PIN) {
-        dyn_def["SE_PIN_MIN"] = std::to_string(PIN);
-        dyn_def["SE_PIN_SMALL"] = "2";
+    // perf probe (read at program build): MIMO_FL_W_NOREAD=1 - the weight readers skip their DRAM reads (garbage
+    // weights), every other transfer stays: the flat expert's NoC pattern without most of its DRAM traffic
+    if (std::getenv("MIMO_FL_W_NOREAD")) {
+        dyn_def["SE_W_NOREAD"] = "1";
     }
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
@@ -177,6 +204,30 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const std::string sbt = std::to_string(p.sbt);
 
     // ---- kernels + runtime args ----
+    // combine overlap (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the overlap fills
+    auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args) {
+        if (cfg.cmb_rt) {
+            TT_FATAL(
+                args.v.size() <= cfg.cmb_rt,
+                "flat_routed_expert: {} writer args > cmb_rt {}",
+                args.v.size(),
+                cfg.cmb_rt);
+            args.v.resize(cfg.cmb_rt + 4, 0);
+            sv.cmb_writers.emplace_back(k, c);
+        }
+        return args;
+    };
+    Defines cmb_def = cfg.cmb_rt ? Defines{{"SE_CMB_DONE_RT", std::to_string(cfg.cmb_rt)}} : Defines{};
+    if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
+        cmb_def["SE_CMB_EARLY"] = "1";
+    }
+    // the steps the writers report must be the order combine walks: flat_combine_overlap's completion order with
+    // row-major y, slot order with bfp8 tiles (combine's untilizers) or the MIMO_FL_CMB_SLOT_ORDER probe
+    if (cfg.cmb_rt && (!cfg.y_row_major || std::getenv("MIMO_FL_CMB_SLOT_ORDER"))) {
+        cmb_def["SE_CMB_SLOT_ORDER"] = "1";
+    } else if (cfg.cmb_rt) {  // steps = schedule entries, at most 2 E (flat_combine_overlap_walk_steps)
+        cmb_def["SE_CMB_STEPS"] = std::to_string(flat_combine_overlap_walk_steps(E));
+    }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);
         for (const auto& [i, s, off] : args.addr) {
@@ -268,7 +319,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return d;
     };
     if (p.rdown) {
-        const Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+        Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+        rdn_def.insert(cmb_def.begin(), cmb_def.end());
         const auto k =
             dm("se9_rdown.cpp",
                rdn_cores,
@@ -302,7 +354,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
                 .cat(dyn)
                 .lits(sgx(p.sg_rd(r)));
-            add_rt(k, p.readers[r], a);
+            add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
             SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
         }
     }
@@ -568,14 +620,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,   S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MTD, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync));
+               plus(plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync), y_nc ? Defines{} : cmb_def));
         const auto kw =
             dm("se6_dw.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E, 0, 0, 0, MTD, pw, Ht},
-               y_nc ? plus(yrm_def(dyn_def, pw), ync) : dyn_def);
+               y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def);
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,
@@ -603,13 +655,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lits(gu_xy_sg[sg])
                 .cat(dyn)
                 .lits(sgx(sg));
-            add_rt(kr, dc, a);
+            add_rt(kr, dc, y_nc ? a : add_writer_rt(kr, dc, a));
             Args w;
             w.a(AddrSrc::Down).lit(d % banks).lit((d / banks) * p.wd_region).cat(dyn).lits(sgx(sg));
             if (y_nc) {
                 w.a(AddrSrc::Y).lit(p.col0s[d]);
             }
-            add_rt(kw, dc, w);
+            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w) : w);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
     }
