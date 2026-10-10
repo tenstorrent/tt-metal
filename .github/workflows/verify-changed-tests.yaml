@@ -120,6 +120,19 @@ env:
   WATCHER_YAMLS: >-
     models_unit_tests.yaml
 
+  # Yamls whose cmds run from tt_metal/tt-llk, matching the working-directory their
+  # pipelines set (llk-smoke/e2e/perf/bit-exact-impl, via LLK_PATH). Their entries
+  # open with `cd tests/python_tests`, which from the gate's /work would otherwise
+  # land in tt-metal's own tests/.
+  #
+  # llk_unit_tests.yaml and llk_merge_gate_tests.yaml are absent on purpose: they run
+  # gtest binaries from build/test and their impl works out of /work.
+  LLK_WORKDIR_YAMLS: >-
+    llk_pr_gate_tests.yaml
+    llk_e2e_tests.yaml
+    llk_perf_tests.yaml
+    llk_bit_exact_tests.yaml
+
 jobs:
   scope:
     name: Scope changed tests
@@ -423,6 +436,11 @@ jobs:
             if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1
             fi
+            # gate_workdir mirrors the owning pipeline's working-directory; empty for
+            # everything that runs from /work.
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+            fi
             eval "$CMD"
 
       - name: ${{ matrix.leg.name }} (simulator)
@@ -444,6 +462,9 @@ jobs:
             ${{ matrix.leg.cmd }}
             GATE_CMD_EOF
             )
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+            fi
             eval "$CMD"
 
       - uses: ./docker-job/.github/actions/upload-artifact-with-job-uuid

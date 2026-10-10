@@ -8,6 +8,7 @@ run green, and nothing more. One invocation does three things:
   1. Diffs the changed yamls at test-entry level, working out which entries were
      added or behaviourally changed, which legs (entry x SKU) must run, which are
      blocked behind an owner review, and which build flavours those legs need.
+     Also scopes entries whose cmd names an edited file (see "Source references").
 
   2. Runs prepare_test_matrix.py over the changed yamls and narrows its output to
      exactly those legs, so the dispatched matrix is the touched work and nothing
@@ -31,13 +32,21 @@ prepare_test_matrix.py and verify_time_budget.py both reject a yaml that reuses 
 Edits that cannot change how a test executes do not need hardware:
 
   * owner_id / team    Ownership metadata.
-  * timeout            The ceiling is already enforced statically by
-                       verify_time_budget.py inside every pipeline's own
-                       load-test-matrix step, so a hardware run here proves
-                       nothing a static check has not already proven.
 
-Anything else -- cmd, adding or removing a SKU, arch, dispatch_mode, tier, shard
-layout, model fields -- is treated as behaviour-affecting.
+Anything else -- cmd, timeout, adding or removing a SKU, arch, dispatch_mode,
+tier, shard layout, model fields -- is treated as behaviour-affecting.
+
+`timeout` counts: verify_time_budget.py only proves it fits the team's budget, not
+that the test still finishes inside it. Lowering one is how a leg starts timing out.
+
+Source references
+-----------------
+An entry is also scoped when its cmd names a file the PR changed. A token counts
+only if it resolves to a tracked path -- a file, or a directory pytest is pointed
+at; filters and flags are ignored.
+
+Not transitive, and `./build/test/...` is untracked build output, so gtest legs are
+reached only through their yaml.
 
 Time budgets are deliberately not checked here. The budget key for a yaml is not
 derivable from it (the filename convention breaks on nine files, and tiered keys
@@ -74,9 +83,6 @@ TESTS_DIR = "tests/pipeline_reorg"
 # Top-level entry fields that cannot change how a test executes.
 METADATA_FIELDS = {"owner_id", "team"}
 
-# Per-SKU sub-keys that cannot change how a test executes.
-METADATA_SKU_FIELDS = {"timeout"}
-
 # A pytest per-test timeout, which is stripped from simulator legs: ttsim is
 # 10-50x slower than hardware, so a limit sized for silicon kills slow-but-correct
 # tests. The job's own timeout-minutes stays as the backstop. ttnn-sanity-tests-impl
@@ -86,6 +92,11 @@ PYTEST_TIMEOUT_FLAG = re.compile(r"\s+--timeout\s+\d+")
 # Paths only the installed tt-metalium debs provide; a cmd touching one needs the
 # packages artifact rather than a build tree.
 PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium")
+
+# Where the LLK pipelines run their cmds from (their LLK_PATH). Their entries open
+# with `cd tests/python_tests`, which from the gate's /work would otherwise land in
+# tt-metal's own tests/.
+LLK_WORKDIR = "tt_metal/tt-llk"
 
 DEFAULT_CODEOWNERS = ".github/CODEOWNERS"
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
@@ -165,6 +176,82 @@ def changed_files(base):
 
     names = set(diff.stdout.splitlines()) | set(untracked.stdout.splitlines())
     return sorted(name for name in names if name.strip().endswith((".yaml", ".yml")))
+
+
+def all_test_yamls():
+    """Every tests yaml at HEAD; the source pass needs all of them, not just edited ones."""
+    return sorted(str(p) for p in Path(TESTS_DIR).glob("*.yaml")) if os.path.isdir(TESTS_DIR) else []
+
+
+def tracked_paths(base):
+    """Files git tracks at `base` or at HEAD.
+
+    Both revisions: a cmd can name a file the PR deletes or renames away, and
+    resolving against HEAD alone would reject the token and drop the leg. Build
+    output is tracked in neither, so generated paths still never match.
+    """
+    paths = set()
+    tree = subprocess.run(["git", "ls-tree", "-r", "--name-only", base], capture_output=True, text=True)
+    if tree.returncode != 0:
+        raise GateError(f"git ls-tree at {base} failed: {tree.stderr.strip()}")
+    paths |= set(tree.stdout.splitlines())
+
+    # The index rather than ls-tree HEAD, so staged files resolve when run locally.
+    index = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    if index.returncode != 0:
+        raise GateError(f"git ls-files failed: {index.stderr.strip()}")
+    paths |= set(index.stdout.splitlines())
+    return paths
+
+
+def changed_sources(base):
+    """Changed files outside the tests yamls, i.e. the code a cmd might name.
+
+    The yamls are excluded because scope_file already diffs them at entry level.
+
+    --no-renames because detection (on by default) reports only a rename's new path,
+    so a cmd naming the old one would match nothing. Unlike rename_sources(), which
+    wants the pairing, both sides matter here: the cmd is broken either way.
+    """
+    diff = subprocess.run(["git", "diff", "--name-only", "--no-renames", base], capture_output=True, text=True)
+    if diff.returncode != 0:
+        raise GateError(f"git diff against {base} failed: {diff.stderr.strip()}")
+    return {name for name in diff.stdout.splitlines() if name and not name.startswith(TESTS_DIR + "/")}
+
+
+# Shell punctuation and pytest/CLI decorations wrapped around a path. `::` splits a
+# pytest node id off its file, `=` an --deselect=<path> style flag from its value.
+CMD_TOKEN_SPLIT = re.compile(r"[\s;|&()<>{}\"'`=]+")
+
+
+def cmd_referenced_paths(cmd, tracked):
+    """Repo paths a cmd names outright.
+
+    A token counts only if it is a tracked file or a directory tracked files sit
+    under, so `-k some_filter` and untracked `./build/test/...` never match.
+    """
+    paths = set()
+    for raw in CMD_TOKEN_SPLIT.split(cmd or ""):
+        token = raw.split("::", 1)[0].strip().lstrip("./").rstrip("/")
+        # A bare word cannot be a repo path.
+        if not token or "/" not in token:
+            continue
+        if token in tracked:
+            paths.add(token)
+        elif any(entry.startswith(token + "/") for entry in tracked):
+            paths.add(token + "/")
+    return paths
+
+
+def sources_touching(cmd, tracked, changed):
+    """The changed files a cmd names, directly or via a directory it points at."""
+    hits = set()
+    for path in cmd_referenced_paths(cmd, tracked):
+        if path.endswith("/"):
+            hits |= {name for name in changed if name.startswith(path)}
+        elif path in changed:
+            hits.add(path)
+    return sorted(hits)
 
 
 def rename_sources(base):
@@ -383,19 +470,11 @@ def index_entries(entries, path, strict=True):
 
 
 def behavioural_view(entry):
-    """The parts of an entry that can change how a test executes."""
-    view = {k: copy.deepcopy(v) for k, v in entry.items() if k not in METADATA_FIELDS}
-    skus = view.get("skus")
-    if isinstance(skus, dict):
-        view["skus"] = {
-            name: (
-                {k: v for k, v in config.items() if k not in METADATA_SKU_FIELDS}
-                if isinstance(config, dict)
-                else config
-            )
-            for name, config in skus.items()
-        }
-    return view
+    """The parts of an entry that can change how a test executes.
+
+    Everything under `skus` counts, `timeout` included.
+    """
+    return {k: copy.deepcopy(v) for k, v in entry.items() if k not in METADATA_FIELDS}
 
 
 def resolve_profile(path, tracy_files):
@@ -432,12 +511,39 @@ def needs_packages(entry):
     return any(prefix in cmd for prefix in PACKAGE_INSTALL_PREFIXES)
 
 
-def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files, base_path=None):
+def resolve_workdir(path, llk_workdir_files):
+    """The directory a leg's cmd runs from, relative to the checkout root.
+
+    Empty except for the LLK yamls. Told rather than derived: `cd tests/python_tests`
+    says nothing about which tree it is relative to.
+    """
+    return LLK_WORKDIR if os.path.basename(path) in llk_workdir_files else ""
+
+
+def scope_file(
+    path,
+    base,
+    review_only,
+    tracy_files,
+    non_matrix_files,
+    unsupported_files,
+    llk_workdir_files,
+    base_path=None,
+    tracked=None,
+    changed_src=None,
+    edited=True,
+):
     """Diff one tests yaml and return its scoping result.
 
     base_path is where the file lived at `base` when it has since been renamed;
     the base matrix is read from there so a rename is not mistaken for a file
     full of new entries.
+
+    tracked/changed_src drive the source pass: an entry is scoped when its cmd names
+    an edited file, even if its own yaml is untouched.
+
+    edited says whether the PR touched this yaml. The source pass reads every yaml,
+    so an unedited malformed one is skipped rather than failing the gate.
     """
     if os.path.basename(path) in non_matrix_files:
         # Declared as holding no test matrix (e.g. ttsim-skip-list.yaml, a per-arch
@@ -449,6 +555,10 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
     old_path = base_path or path
     old_entries = parse_entries(git_show(base, old_path))
     new_entries = parse_entries(open(path).read() if os.path.exists(path) else None)
+
+    if not edited and (new_entries is None or old_entries is None):
+        # Read only because the source pass sweeps the directory; not this PR's problem.
+        return {"no_entries": True, "run_legs": [], "review_legs": [], "metadata_only": []}
 
     # Reaching here with a non-list means a real test matrix was reshaped into
     # something else. prepare_test_matrix.py errors on that shape, and so does the
@@ -475,6 +585,17 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
             metadata_only.append(key_str(key))
     # Removed entries are intentionally ignored: there is no test left to prove.
 
+    # Entries already touched above keep their reason and are not added twice.
+    if changed_src:
+        already = {key for key, _, _ in touched}
+        for key, entry in new_index.items():
+            if key in already:
+                continue
+            hits = sources_touching(entry.get("cmd") or "", tracked or set(), changed_src)
+            if hits:
+                touched.append((key, entry, "source:" + ",".join(hits)))
+                metadata_only[:] = [name for name in metadata_only if name != key_str(key)]
+
     run_legs, review_legs = [], []
     for key, entry, reason in touched:
         skus = entry.get("skus")
@@ -491,6 +612,7 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
                 "reason": reason,
                 "profile": resolve_profile(path, tracy_files),
                 "packages": needs_packages(entry),
+                "workdir": resolve_workdir(path, llk_workdir_files),
             }
             if unsupported:
                 # The gate cannot build a runnable matrix for this pipeline, so the
@@ -511,11 +633,25 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
     }
 
 
-def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=None):
+def build_scope(
+    base,
+    files,
+    review_only,
+    tracy_files,
+    non_matrix_files,
+    unsupported_files,
+    llk_workdir_files,
+    renames=None,
+    changed_src=None,
+):
     run_legs, review_legs, metadata_only, skipped = [], [], [], []
     renames = renames or {}
 
-    for path in sorted(files):
+    # The source pass must read every yaml; without it the scan is just the diff.
+    tracked = tracked_paths(base) if changed_src else set()
+    scanned = sorted(set(files) | (set(all_test_yamls()) if changed_src else set()))
+
+    for path in scanned:
         scoped = scope_file(
             path,
             base,
@@ -523,10 +659,16 @@ def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsuppo
             tracy_files,
             non_matrix_files,
             unsupported_files,
+            llk_workdir_files,
             base_path=renames.get(path),
+            tracked=tracked,
+            changed_src=changed_src,
+            edited=path in files,
         )
         if scoped["no_entries"]:
-            skipped.append(path)
+            # Only a yaml the PR edited is worth reporting as skipped.
+            if path in files:
+                skipped.append(path)
             continue
         run_legs.extend(scoped["run_legs"])
         review_legs.extend(scoped["review_legs"])
@@ -550,6 +692,7 @@ def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsuppo
     return {
         "status": status,
         "changed_files": sorted(files),
+        "changed_sources": sorted(changed_src or []),
         "skipped_files": skipped,
         "run_legs": run_legs,
         "review_legs": review_legs,
@@ -631,15 +774,13 @@ def build_matrices(scope, prepare_script, sku_config, work_dir):
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Only yamls a run leg came from. A fully blocked one has no row to resolve, and
-    # building it anyway fails the gate -- vllm entries carry no `cmd`.
-    needed = {Path(leg["file"]).stem for leg in scope["run_legs"]}
+    # Off the legs, not the changed files: a source-scoped leg can come from a yaml
+    # the PR never touched. A fully blocked yaml has no row and would fail the gate.
+    needed = sorted({leg["file"] for leg in scope["run_legs"]})
 
     matrices = {}
-    for path in scope["changed_files"]:
+    for path in needed:
         stem = Path(path).stem
-        if stem not in needed:
-            continue
         capture = work_dir / f"{stem}.github-output"
         capture.write_text("")
 
@@ -711,6 +852,7 @@ def filter_matrix(scope, matrices, skips):
             # build artifact without re-deriving it.
             row["gate_profile"] = leg["profile"]
             row["gate_packages"] = leg["packages"]
+            row["gate_workdir"] = leg["workdir"]
             if str(row.get("sku", "")).startswith("sim_"):
                 stripped = PYTEST_TIMEOUT_FLAG.sub("", row.get("cmd") or "")
                 if stripped != row.get("cmd"):
@@ -923,6 +1065,7 @@ def run(args):
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
     unsupported_files = set(split_list(args.unsupported_files))
+    llk_workdir_files = set(split_list(args.llk_workdir_files))
     base = merge_base(args.base)
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
@@ -934,7 +1077,22 @@ def run(args):
         for new_path, old_path in sorted(renames.items()):
             print(f"Renamed: {old_path} -> {new_path} (diffed against its old path)")
 
-    scope = build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=renames)
+    # Opt-out exists because the scan reads every tests yaml, not just --files.
+    changed_src = set() if args.no_source_scope else changed_sources(base)
+    if changed_src:
+        print(f"{len(changed_src)} changed source file(s) outside {TESTS_DIR}/")
+
+    scope = build_scope(
+        base,
+        files,
+        review_only,
+        tracy_files,
+        non_matrix_files,
+        unsupported_files,
+        llk_workdir_files,
+        renames=renames,
+        changed_src=changed_src,
+    )
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
     # to build and no review to re-check -- only the scope needs to resolve.
@@ -1029,6 +1187,22 @@ def main(argv=None):
             "Yaml basenames the gate cannot dispatch, e.g. vllm_model_tests.yaml whose "
             "entries carry no cmd (default: $UNSUPPORTED_YAMLS). Edits to these are routed "
             "to their code owners for review instead of being run."
+        ),
+    )
+    parser.add_argument(
+        "--llk-workdir-files",
+        default=os.environ.get("LLK_WORKDIR_YAMLS", ""),
+        help=(
+            f"Yaml basenames whose cmds run from {LLK_WORKDIR} rather than the checkout root, "
+            "matching their pipelines' working-directory (default: $LLK_WORKDIR_YAMLS)."
+        ),
+    )
+    parser.add_argument(
+        "--no-source-scope",
+        action="store_true",
+        help=(
+            "Skip the source pass, scoping only from edits to the tests yamls themselves. "
+            "Without it an entry is also scoped when its cmd names a file the PR changed."
         ),
     )
     parser.add_argument("--codeowners", default=DEFAULT_CODEOWNERS)
