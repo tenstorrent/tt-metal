@@ -125,6 +125,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args = {{"sub_block_tiles", 1}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}},
         // Implicit sync: the kernel issues TXN_ID reads instead of reserve_back / push_back.
         .hw_config = ttnn::create_reader_datamovement_config(),
