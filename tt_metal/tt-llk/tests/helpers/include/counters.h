@@ -748,6 +748,9 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     {
         llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
     }
+#if defined(LLK_TRISC_UNPACK) || defined(LLK_TRISC_PACK)
+    ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
+#endif
 }
 } // namespace llk_perf
 
