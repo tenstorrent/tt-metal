@@ -58,8 +58,10 @@ void bind_conv2d(nb::module_& mod) {
             compute_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for compute kernel. Default: None
             memory_config (ttnn.MemoryConfig, optional): Output Tensor's Memory Configuration. Default: None.
             slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing input & output tensors in DRAM. If set to None and input is in DRAM, DRAM slicing is automatically enabled. Default: None.
+                L1_FULL normally keeps the output in L1. A grouped conv whose single L1_FULL call cannot fit L1 is rerouted to the DRAM channel-chunk path; that output is DRAM interleaved, not L1. BFloat8_B / BFloat4_B outputs cannot be stitched on that path and are not rerouted.
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
+                Exception: when the DRAM channel-chunk path engages with host weights, each chunk prepares its own channel slice, so the original host weight/bias are returned instead.
 
         Returns:
             The output tensor, output height and width, and the preprocessed weights and bias.

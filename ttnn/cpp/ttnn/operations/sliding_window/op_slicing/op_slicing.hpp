@@ -18,8 +18,9 @@ struct Op2DSliceConfig {
     enum class SliceType : uint8_t {
         DRAM_HEIGHT,
         DRAM_WIDTH,
-        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
-                 // L1.
+        L1_FULL  // Force conv2d with a DRAM input into L1; output is in L1. Exception: a grouped conv whose
+                 // single L1_FULL call cannot fit L1 is rerouted to the DRAM channel-chunk path, and that
+                 // output is DRAM interleaved rather than L1.
     };
     SliceType slice_type = SliceType::DRAM_WIDTH;
 
@@ -52,6 +53,17 @@ public:
 };
 
 Op2DSliceConfig determine_slice_config(
+    OpSliceAttr* op_slice_attr,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    std::optional<Op2DSliceConfig> slice_config_,
+    tt::tt_metal::Layout output_layout,
+    tt::tt_metal::distributed::MeshDevice* device);
+
+// Non-throwing probe: nullopt means no valid spatial slice configuration exists
+// (capacity). Config errors from get_L1_usage still propagate; this is not a
+// catch-all handler.
+std::optional<Op2DSliceConfig> try_determine_slice_config(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
