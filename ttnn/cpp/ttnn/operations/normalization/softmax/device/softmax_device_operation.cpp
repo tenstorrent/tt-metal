@@ -424,11 +424,16 @@ static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     const auto default_fidelity =
         (is_wormhole && default_fp32_acc) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
+    // Float32 inputs default the exp approximation off, matching ttnn.exp's own default
+    // (fast_and_approximate_mode=False). Other dtypes keep the approximate default so existing model perf is
+    // unaffected. Callers who explicitly pass a compute_kernel_config are unaffected -- this only changes the
+    // default when none is supplied.
+    const auto default_approx_mode = !is_fp32_input;
     return init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
         default_fidelity,
-        /*default_approx_mode=*/true,
+        /*default_approx_mode=*/default_approx_mode,
         /*default_fp32_acc=*/default_fp32_acc,
         /*default_l1_acc=*/false);
 }
@@ -443,8 +448,11 @@ Tensor softmax(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
-    const auto compute_kernel_config_val =
-        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+    const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        SoftmaxDefaultProgramConfig{},
+        input_tensor.dtype() == DataType::FLOAT32);
 
     const auto rank = input_tensor.logical_shape().size();
     const auto dim_calculated = dim < 0 ? rank + dim : dim;
@@ -519,8 +527,11 @@ Tensor scale_mask_softmax(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
-    const auto compute_kernel_config_val =
-        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+    const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        SoftmaxDefaultProgramConfig{},
+        input_tensor.dtype() == DataType::FLOAT32);
 
     // Input tensor formatting
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
