@@ -218,6 +218,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
+                    // release the dest section as production's tile_regs_release does: every section starts with drained packers
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
         }
