@@ -55,8 +55,8 @@ One resolution function, `tt/spec_policy.py::resolve(batch, mesh_rows, max_seq_l
 
 | batch (U = users/mesh row) | default mode (no `DSV41_SPEC*` set) | max_seq_len with spec by default |
 |---|---|---|
-| 4 (U=1) | adaptive {3,5} | 70000 (fits; measured only for B=8/16 at 60k, B=4 has the smaller pool; indexer cap 131072) |
-| 8 (U=2), 16 (U=4) | adaptive {1,3,5} | 70000 (measured: ISL 60453, 239 / 159 MiB/bank left after runners + traces) |
+| 4 (U=1) | adaptive {3,5} | 131072 (bounded by the B=16 measurement below, B=4 has the smaller pool; the indexer backend cap) |
+| 8 (U=2), 16 (U=4) | adaptive {1,3,5} | 131072 (measured B=16 fp8 pool, ISL 126000: 345 free before the runner, 219 after runner + trace; vLLM server 391 free after warm-up; before the rope-table sharing the runner cost 273 and the trace capture ran out of DRAM) |
 | 32 (U=8) | adaptive {0,1,3} (0 = plain rounds: spec loses at low acceptance, see isl32k below) | 40000 (measured ISL 30059: 527 free before, 247 after; ISL 60k OOMs the runner build) |
 | 64, 128 | plain (`plain (B>=64 default; opt in ...)` / `plain (B>=128)`), no spec runner, `DSV41_RING_ROWS` untouched | opt-in only |
 | any, `DSV41_SPEC=0` | plain (`plain (explicit DSV41_SPEC=0)`), no runner, ring rows untouched | - |

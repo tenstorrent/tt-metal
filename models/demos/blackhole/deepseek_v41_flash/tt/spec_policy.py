@@ -21,15 +21,19 @@ MAX_ROWS_DEFAULT_B = 32  # largest batch with default (adaptive) spec decode
 B_PLAIN_DEFAULT = 64  # B >= 64: plain by default (opt-in only)
 B_PLAIN_FORCE = 128  # B >= 128: plain unless DSV41_SPEC_B128=1
 
-# Longest ``max_seq_len`` (the build / pool context, prompt + generated) the spec runners are expected to fit in DRAM per users-per-mesh-row U. Measured MEMLOG (40 layers, bf16 pool, this
-# package's notes): after the prefills the free DRAM must cover the first runner (+111 MiB/bank, +0.7 per extra runner) and its trace capture (+31 MiB/bank) plus headroom (SPEC_NEED_FREE_MIB).
-# B=8/16 at ISL 60453 (max_seq_len 70000): 239 / 159 MiB/bank left AFTER the runners: fits. B=32 at ISL 60k (max_seq_len 70000): 172 MiB free before the runner build -> OOM in the runner build
-# (log spec_adapt_g32_isl64k_h33); B=32 at ISL 30059 (max_seq_len 40000): 527 free before, 247 after runners + traces (spec ran, log pf_spec_int_specdef_isl32k_b32). Linear in max_seq_len
-# (11.8 MiB/1k) the B=32 requirement (~320) is met up to max_seq_len ~57k; 40000 is the largest measured one.
-SPEC_MAX_CTX = {1: 70000, 2: 70000, 4: 70000, 8: 40000}
+# Longest ``max_seq_len`` (the build / pool context, prompt + generated) the spec runners are expected to fit in DRAM per users-per-mesh-row U. Measured MEMLOG (40 layers, 4 x 8 mesh, DSV41_TRACE_REGION
+# 1.6e9, ring rows 288, k=5; MiB/bank of 3883 total):
+#   B=16 (U=4), max_seq_len 131072, fp8 KV pool (pool 83 MiB/bank; bf16 would be 166), demo ISL 126000: model built 520 free; after the prefill chunk trace + dynamic prefill buffers 345 free (the runners are
+#   built here); the spec runner costs 113 (views / rope tables are SHARED with the decode model, drafter weights + state 113), its trace capture 13: 219 free at the end, decode and spec ran (log mem2_fp8_k5_131072).
+#   Before the rope tables were shared (a second copy of two [max_pos, 512] bf16 tables per layer kind plus the drafter's three) the runner cost 273 at this context (161 of it linear in the context: 1.2 MiB/1k
+#   tokens of 2 KiB x 3 kinds + 3 KiB drafter per position) and the trace capture ran out of DRAM (71 free before it): that was the real boundary, not the dtype (earlier numbers: 111 at 70000).
+#   The vLLM server (warm-up at S_pad 131072 holds the prefill chunk trace + decode + spec traces, nothing released) at B=16, k=5, max_model_len 131072, fp8: 391 MiB/bank free after all traces captured.
+# U <= 4 is bounded by that measurement (a smaller U has a smaller pool, index keys and runner state; a bf16 pool adds 83 MiB at U=4: 345 -> 262 free before the runner, still above SPEC_NEED_FREE_MIB).
+# B=32 (U=8) was measured only to max_seq_len 40000 (527 free before the runner, 247 after runner + traces, log pf_spec_int_specdef_isl32k_b32; 70000 ran out of DRAM before the sharing; its pool doubles): kept.
+SPEC_MAX_CTX = {1: 131072, 2: 131072, 4: 131072, 8: 40000}
 SPEC_MAX_CTX_BACKEND = 131072  # beyond this the indexer is not the matmul backend (n_entries = ctx / ratio 2 > 65536, tt/indexer.py default_backend): 'spec verify needs the matmul indexer backend'
 # Runtime guard (free DRAM / bank right before the runners are built, after the prefills; the second prefill does not change it: measured 526.7 MiB before the build at B=32 ISL 30k,
-# identical to the plain pass). Measured cost of the runners + their trace capture: B=16 first runner +111, each further +0.7, trace +31 (needs ~142); B=32 (U=8) with the default set {0,1,3}:
+# identical to the plain pass). Measured cost of the runners + their trace capture: B=16 at 131072 first runner +113, trace +13 (126; at 70000 before the table sharing: +111 and +31), each further +0.7; B=32 (U=8) with the default set {0,1,3}:
 # +157 first, +34.5 each further runner, trace +19 = 280 MiB (527 -> 247 free). Need = measured cost + ~40 MiB headroom.
 SPEC_NEED_FREE_MIB = {1: 190, 2: 190, 4: 190, 8: 320}
 SPEC_NEED_LARGEST_MIB = 40

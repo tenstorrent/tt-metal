@@ -79,6 +79,10 @@ def test_b128():
 def test_context_fallback():
     assert R(16, ctx=70000).on and R(8, ctx=70000).on and R(4, ctx=70000).on
     assert R(32, ctx=40000).on
+    # measured at B=16 (U=4): spec runner + trace fit at max_seq_len 131072 with the fp8 pool (mem2_fp8_k5_131072), U <= 4 bounded by it; the matmul indexer backend ends at 131072
+    assert R(16, ctx=131072).on and R(8, ctx=131072).on and R(4, ctx=131072).on and R(1, ctx=131072).on
+    assert R(16, ctx=131073).mode == "plain" and R(16, ctx=135000).mode == "plain"
+    assert max(sp.SPEC_MAX_CTX.values()) <= sp.SPEC_MAX_CTX_BACKEND
     c = R(32, ctx=70000)
     assert (
         c.mode == "plain"
