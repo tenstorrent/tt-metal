@@ -8,7 +8,7 @@ return.
                                                         # short prompts, and a 64k prompt with short ones behind it
     python batching_client.py compare 32k 2k 2k 4k      # your own prompts
     python batching_client.py fire 2k 2k 32k 2k         # just fire them (--gap seconds apart, default 0)
-    python batching_client.py mode batched|8k|4k|2k     # continuous batching, or serial at that chunk size
+    python batching_client.py mode batched|wide|8k|4k|2k  # batching (wide: + 8k lane), or serial chunks
 
 Sizes take a k suffix (tokens, rounded up to whole 2k chunks).
 """
@@ -51,7 +51,15 @@ BASELINES = ("serial 8k", "serial 4k", "serial 2k")  # one request at a time at 
 
 
 def set_mode(url, mode):
-    return _post(url, "/mode", {"mode": mode})["mode"]
+    reply = _post(url, "/mode", {"mode": mode})
+    if "error" in reply:
+        raise SystemExit(reply["error"])
+    return reply["mode"]
+
+
+def batched_modes(url):
+    """The server's continuous-batching modes ("batched + 8k lane" too when it runs with DEMO_WIDE_LANE=1)."""
+    return _post(url, "/mode", {})["batched_modes"]
 
 
 def fire(url, sizes, gap):
@@ -113,24 +121,26 @@ def latency_change(off, on, short):
 
 
 def compare(url, sizes, gap):
-    """The same prompts serial at each baseline chunk size, then batched; returns one summary line per baseline."""
-    runs = {}
-    for mode in (*BASELINES, "batched"):
+    """The same prompts serial at each baseline chunk size, then in each batched mode; returns one summary line per
+    (batched mode, baseline)."""
+    runs, batched = {}, batched_modes(url)
+    for mode in (*BASELINES, *batched):
         set_mode(url, mode)
         console.print(f"[bold]{mode}[/]: firing {' '.join(sizes)}")
         runs[mode] = fire(url, sizes, gap)
         show(mode, *runs[mode])
-    on, on_wall = runs["batched"]
-    tokens = sum(r["tokens"] for r in on)
     lines = []
-    for mode in BASELINES:
-        off, off_wall = runs[mode]
-        line = f"vs {mode}: whole mix {off_wall:.2f}s -> {on_wall:.2f}s ({off_wall / on_wall:.2f}x, "
-        line += f"{tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f} tok/s)"
-        for short, name in ((True, "short (<= 4k)"), (False, "long")):
-            if change := latency_change(off, on, short):
-                line += f"; {name} mean latency {change}"
-        lines.append(line)
+    for on_mode in batched:
+        on, on_wall = runs[on_mode]
+        tokens = sum(r["tokens"] for r in on)
+        for mode in BASELINES:
+            off, off_wall = runs[mode]
+            line = f"{on_mode} vs {mode}: whole mix {off_wall:.2f}s -> {on_wall:.2f}s ({off_wall / on_wall:.2f}x, "
+            line += f"{tokens / off_wall:,.0f} -> {tokens / on_wall:,.0f} tok/s)"
+            for short, name in ((True, "short (<= 4k)"), (False, "long")):
+                if change := latency_change(off, on, short):
+                    line += f"; {name} mean latency {change}"
+            lines.append(line)
     return lines
 
 
@@ -142,11 +152,18 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fire").add_argument("sizes", nargs="+")
     sub.add_parser("compare").add_argument("sizes", nargs="*")
-    sub.add_parser("mode").add_argument("state", choices=["batched", "8k", "4k", "2k"])
+    sub.add_parser("mode").add_argument("state", choices=["batched", "wide", "8k", "4k", "2k"])
     args = parser.parse_args()
 
     if args.cmd == "mode":
-        console.print("mode:", set_mode(args.url, args.state if args.state == "batched" else f"serial {args.state}"))
+        if args.state in ("batched", "wide"):
+            batched = batched_modes(args.url)  # [batched] or [batched, batched + 8k lane]
+            mode = batched[0] if args.state == "batched" else batched[-1]
+            if args.state == "wide" and len(batched) == 1:
+                raise SystemExit("the server has no 8k-lane mode (start it with DEMO_WIDE_LANE=1)")
+        else:
+            mode = f"serial {args.state}"
+        console.print("mode:", set_mode(args.url, mode))
     elif args.cmd == "fire":
         show("results", *fire(args.url, args.sizes, args.gap))
     else:
@@ -154,7 +171,7 @@ def main():
         summary = {name: compare(args.url, sizes, args.gap) for name, sizes in scenarios.items()}
         console.print()
         for name, lines in summary.items():
-            console.print(f"[bold]{name}[/] (batched):")
+            console.print(f"[bold]{name}[/]:")
             for line in lines:
                 console.print(f"  {line}")
 
