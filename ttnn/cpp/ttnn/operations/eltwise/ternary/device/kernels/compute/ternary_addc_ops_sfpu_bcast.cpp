@@ -11,10 +11,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
 
-// The op init runs once: the copy inits and copies leave the SFPU address modes, programmable constants and replay
-// buffer as the init set them.
+// With the three operands in c_0's formats the inits run once: c_0's copy init serves all three, and the copies leave
+// the SFPU address modes, programmable constants and replay buffer as the op init set them.
 #if defined(ARCH_BLACKHOLE)
-constexpr bool init_once = !DST_ACCUM_MODE;
+constexpr bool init_once =
+    !DST_ACCUM_MODE && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
 #else
 constexpr bool init_once = false;
 #endif
@@ -29,12 +30,6 @@ ALWI void process_tile(
     uint32_t num_tiles_per_cycle,
     uint32_t scalar_arg) {
     using namespace ckernel;
-#if defined(ARCH_BLACKHOLE)
-    constexpr bool shared_copy_init =
-        init_once && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
-#else
-    constexpr bool shared_copy_init = false;
-#endif
 
     DataflowBuffer dfb_in0(cb_in0_id);
     DataflowBuffer dfb_in1(cb_in1_id);
@@ -69,17 +64,17 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(dfb_in0.get_id());
         }
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(dfb_in1.get_id());
         }
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(dfb_in2.get_id());
         }
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);

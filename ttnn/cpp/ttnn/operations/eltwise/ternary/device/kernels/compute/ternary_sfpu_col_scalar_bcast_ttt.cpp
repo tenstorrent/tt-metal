@@ -13,10 +13,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
 
-// The op init runs once: the copy inits and copies leave the SFPU address modes, programmable constants and replay
-// buffer as the init set them.
+// With the three operands in c_0's formats the inits run once: c_0's copy init serves all three, and the copies leave
+// the SFPU address modes, programmable constants and replay buffer as the op init set them.
 #if defined(ARCH_BLACKHOLE) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<std::uint32_t>(DataFormat::Float16_b);
+constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<std::uint32_t>(DataFormat::Float16_b) &&
+                           copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
 #else
 constexpr bool init_once = false;
 #endif
@@ -30,12 +31,6 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-#if defined(ARCH_BLACKHOLE)
-    constexpr bool shared_copy_init =
-        init_once && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
-#else
-    constexpr bool shared_copy_init = false;
-#endif
 
     DataflowBuffer predicate_dfb(predicate_cb_id);
     DataflowBuffer true_dfb(true_cb_id);
@@ -70,17 +65,17 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(predicate_dfb.get_id());
         }
         copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(true_dfb.get_id());
         }
         copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        if constexpr (!shared_copy_init) {
+        if constexpr (!init_once) {
             copy_init(false_dfb.get_id());
         }
         copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
