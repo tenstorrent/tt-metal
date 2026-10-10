@@ -4,7 +4,7 @@
 
 /* generalized_moe_gate LLK test. GATE mirrors the call sequence in
    api/compute/experimental/generalized_moe_gate.h; BINARY drives its FPU front-end alone; MOVE and
-   RUN work on a DEST image the test writes itself, one FPU MOP or SFPU op at a time or as the
+   RUN work on a DEST image the test writes itself, one FPU step or SFPU op at a time or as the
    multi-block combine tail, so a contract can be checked without standing up the rest of the gate. */
 
 #include <cstdint>
@@ -20,7 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr int MODE_GATE   = 0; // Full gate, grouped or ungrouped.
 constexpr int MODE_BINARY = 1; // The FPU binary front-end on its own.
-constexpr int MODE_MOVE   = 2; // One transpose-dest / copy4rows MOP on a known DEST image.
+constexpr int MODE_MOVE   = 2; // One transpose-dest / copy4rows FPU step on a known DEST image.
 constexpr int MODE_RUN    = 3; // SFPU run merges and placements on a known DEST image.
 
 constexpr int MOVE_STEP0     = 0;
@@ -193,11 +193,11 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
 #define GMG_SFPU_PASS(FN, TEMPLATES, ...) \
     GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
-// The MOP runners take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
+// The FPU steps take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
 // In the op that is tile 0, because the eltwise binary ahead of them runs at dst_index 0 and leaves
-// it there, which is why run_gate does not call this. MOVE and RUN skip the binary and reach the MOPs
+// it there, which is why run_gate does not call this. MOVE and RUN skip the binary and reach the steps
 // straight out of datacopies that walk all four tiles, so the offset would sit at tile 3. Put it back
-// so those modes exercise the MOPs under the offset the op actually gives them.
+// so those modes exercise the steps under the offset the op actually gives them.
 static inline void mop_dest_reset()
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
@@ -421,8 +421,8 @@ static inline void run_placement()
 {
     if constexpr (GMG_PRE_COPY4ROWS)
     {
-        // An FPU MOP leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
-        // on entry; without a MOP in front of them that reset is never needed and never tested.
+        // An FPU step leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
+        // on entry; without a step in front of them that reset is never needed and never tested.
         gmg_copy4rows<GMG_ROW_SRC, GMG_ROW_DST, GMG_SRCB, true>();
     }
 
