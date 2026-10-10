@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -51,31 +52,30 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
     static_assert(
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
         "pack_untilize_init: full_ct_dim must be a positive multiple of block_ct_dim.");
-    // UNPACK + MATH: configure the CB -> DEST datacopy (input format drives the SrcA/Dest register format).
+    constexpr auto in_desc = LLKOperand<InFormat, InShape>::descriptor;
+    constexpr auto out_desc = LLKOperand<OutFormat, OutShape>::descriptor;
+    // UNPACK + MATH: formats, then the CB -> DEST datacopy.
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, in_desc, in_desc>()));
     UNPACK((llk_unpack_A_init<
-            LLKOperand<InFormat, InShape>::descriptor,
+            in_desc,
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             UnpackToDestEn>(0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/)));
+    MATH((llk_math_config<is_fp32_dest_acc_en, in_desc, in_desc, true /*datacopy_zero_flag*/>()));
     MATH((llk_math_eltwise_unary_datacopy_init<
-          LLKOperand<InFormat, InShape>::descriptor,
+          in_desc,
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
           BroadcastType::NONE,
           false /*is_int_en*/,
           PackMode::Default>()));
 
-    // PACK: (re)configure BH DEST remap, program the packer output formats, then the untilize MOP/strides
-    // and the untilize dest-offset registers.
+    // PACK: clear the reduce mask and program formats, then DEST remap and untilize strides.
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
-    PACK((llk_pack_untilize_init<
-          LLKOperand<OutFormat, OutShape>::descriptor,
-          is_fp32_dest_acc_en,
-          block_ct_dim,
-          full_ct_dim>()));
+    PACK((llk_pack_config<is_fp32_dest_acc_en, out_desc>()));
+    PACK((llk_pack_untilize_init<out_desc, is_fp32_dest_acc_en, block_ct_dim, full_ct_dim>()));
     PACK((_llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>()));
 }
 
@@ -186,7 +186,7 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
         "pack_untilize_dest_init: full_ct_dim must be a positive multiple of block_ct_dim.");
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
+    PACK((llk_pack_config<is_fp32_dest_acc_en, LLKOperand<OutFormat, OutShape>::descriptor>()));
     PACK((llk_pack_untilize_init<
           LLKOperand<OutFormat, OutShape>::descriptor,
           is_fp32_dest_acc_en,

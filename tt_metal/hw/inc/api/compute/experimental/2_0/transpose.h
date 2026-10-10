@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -55,17 +56,21 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
     // 0xE): both 8-bit integer formats need the int-FPU (ELWADD) A2D reconstruct path.
     constexpr bool is_8bit_int =
         (static_cast<std::uint8_t>(Format) & 0xf) == static_cast<std::uint8_t>(DataFormat::Int8);
+    constexpr auto desc = LLKOperand<Format, Shape>::descriptor;
+    // Non-dest transpose never set the zero flag. Dest transpose_init overwrites it with preserve.
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, desc, desc>()));
+    MATH((llk_math_config<is_fp32_dest_acc_en, desc, desc, true /*datacopy_zero_flag*/>()));
 
     if constexpr (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<
-                LLKOperand<Format, Shape>::descriptor,
+                desc,
                 is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE,
                 UnpackToDestEn>(true /*transpose_of_faces*/, false /*within_face_16x16_transpose*/)));
         MATH((llk_math_eltwise_unary_datacopy_init<
-              LLKOperand<Format, Shape>::descriptor,
+              desc,
               DataCopyType::A2D,
               is_fp32_dest_acc_en,
               BroadcastType::NONE>()));
@@ -74,13 +79,13 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
         // Non-unpack-to-dest path (default + 8-bit integer). Unpack init is identical for both; only the
         // datacopy init's is_int_fpu_en NTTP differs (true for 8-bit integer, false for default).
         UNPACK((llk_unpack_A_init<
-                LLKOperand<Format, Shape>::descriptor,
+                desc,
                 is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 true /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/)));
         MATH((llk_math_eltwise_unary_datacopy_init<
-              LLKOperand<Format, Shape>::descriptor,
+              desc,
               DataCopyType::A2D,
               is_fp32_dest_acc_en,
               BroadcastType::NONE,

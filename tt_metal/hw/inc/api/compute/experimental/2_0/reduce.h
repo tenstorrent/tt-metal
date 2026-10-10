@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 #include "sanitizer/api.h"
 
 #ifdef TRISC_MATH
@@ -55,8 +56,15 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
     static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
+    // Scaler is not a parameter yet. SrcB is programmed from the data operand until PR B.
+    constexpr auto data = LLKOperand<DF, DS>::descriptor;
+    constexpr auto out = LLKOperand<OF, OS>::descriptor;
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, data, data>()));
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
+    MATH((llk_math_config<is_fp32_dest_acc_en, data, data>()));
     MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
+    // Mask after pack_config so the clear inside pack_config does not stick.
+    PACK((llk_pack_config<is_fp32_dest_acc_en, out>()));
     PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS.face_r_dim)));
 }
 
