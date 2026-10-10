@@ -488,7 +488,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    math::_configure_default_zero_flag_state_<true>();
 }
 
 /**

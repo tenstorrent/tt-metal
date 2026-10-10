@@ -37,4 +37,9 @@ fields:
 # its function and field under either policy, so a tracked write whose invalidate lives in another
 # file goes here too. restored_by must name a function defined in that arch's headers.
 # Keys: path (repo-relative), function, field, restored_by, reason.
-sites: []
+sites:
+  - path: tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/cmath_common.h
+    function: _write_src_zero_flag_
+    field: ALU_ACC_CTRL_Zero_Flag_disabled_src
+    restored_by: _write_src_zero_flag_
+    reason: Wormhole's writer behind _apply_src_zero_flag_ (inlined into the op inits); it sets src_zero_flag_hw itself.
