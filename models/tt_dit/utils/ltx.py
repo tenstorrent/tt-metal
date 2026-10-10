@@ -200,6 +200,8 @@ LTX25_VIDEO_VAE_DIFF = "vae/ltx-2.5-video-vae-bf16.safetensors"
 LTX25_VIDEO_VAE = LTX25_VIDEO_VAE_CONV  # alias used by the distilled pipeline
 LTX25_AUDIO_VAE = "vae/ltx-2.5-audio-vae-bf16.safetensors"
 LTX25_SPATIAL_UPSAMPLER = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+# Last place the 2.5 conv VAE is looked for when neither LTX25_VIDEO_VAE nor the root has it.
+LTX25_VIDEO_VAE_CONV_DEFAULT = "/var/tmp/fasth3/models/ltx-2.5/" + LTX25_VIDEO_VAE_CONV
 
 _MLPERF_LTX25_HUB = "/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5"
 
@@ -237,20 +239,31 @@ def default_ltx25_path(rel: str) -> str | None:
 
 
 def default_ltx25_video_vae(*, diffusion: bool = False) -> str | None:
-    """Video VAE for 2.5 decode.
+    """Video VAE for 2.5 decode, or ``None`` if it is not on disk.
 
     With ``diffusion``, resolve the DiffVAE file and nothing else: its decoder weights exist in no
     other checkpoint, so falling back would silently decode with a different model.
 
-    Otherwise prefer the split ``*-video-vae-conv-bf16`` file. If it is not on disk yet (gated HF /
-    incomplete MLPerf mirror), fall back to a local 2.3 monolith — PORT notes the conv VAE
-    arch is identical, so this unblocks generate until the 2.5 conv file is available.
+    Otherwise resolve the split ``*-video-vae-conv-bf16`` file: ``LTX25_VIDEO_VAE`` (which must
+    exist), then the checkpoint root, then ``LTX25_VIDEO_VAE_CONV_DEFAULT``. A 2.3 monolith is used
+    only when ``LTX25_VAE_FALLBACK_23=1`` asks for it, so a missing 2.5 file fails loudly instead of
+    decoding with other weights.
     """
     if diffusion:
         return default_ltx25_path(LTX25_VIDEO_VAE_DIFF)
+    explicit = os.environ.get("LTX25_VIDEO_VAE")
+    if explicit:
+        explicit = os.path.expanduser(explicit)
+        if not os.path.isfile(explicit):
+            raise FileNotFoundError(f"LTX25_VIDEO_VAE={explicit} does not exist")
+        return explicit
     conv = default_ltx25_path(LTX25_VIDEO_VAE_CONV)
     if conv:
         return conv
+    if os.path.isfile(LTX25_VIDEO_VAE_CONV_DEFAULT):
+        return LTX25_VIDEO_VAE_CONV_DEFAULT
+    if os.environ.get("LTX25_VAE_FALLBACK_23") != "1":
+        return None
     for name in ("ltx-2.3-22b-distilled-1.1.safetensors", "ltx-2.3-22b-dev.safetensors"):
         local = os.path.expanduser(f"~/.cache/ltx-checkpoints/{name}")
         if os.path.exists(local):
