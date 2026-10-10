@@ -301,6 +301,15 @@
   budget_type: sanity
   owner_id: U0BCCPS862F # Milan Alimpic
 
+- name: "kv chunk table cache"
+  cmd: pytest --timeout 120 tests/ttnn/unit_tests/disaggregation -xv
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U0ALAR9B78T # Brayden Zhang
+
 - name: "core ttnn unit test group"
   # The allocator suites run as their own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
   # once when MetalContext is first constructed, so it must be set before this process opens a
