@@ -37,3 +37,14 @@ in-bounds gathers skip the per-stick padding check. Kernel-only change: no rebui
 Old outputs: t374/drv374.{done,log}.job537, detach/old537/.
 check: ttp detach --check --host g15blx01 /var/tmp/fasth3/t374/detach/drv374
 Next: same as above. speedup >= 1.15 -> s2_res, then module A/B, land. Else record, stop, clean up blx01.
+
+## Result 2 (job 545, blx01, 900 MHz clamp, relative) — REJECTED
+s3_res: off 6378.0 us, on 6120.1 us -> 1.042x, identical=False (max_abs_diff 498.75, PCC 0.380).
+Iteration 2 has an indexing bug (per-w_block column fill), and even its buggy (possibly work-skipping) time is
+only 1.04x, far below the 15% bar for step 3. The correct version (iteration 1) is 0.911x.
+Decision (15:40 PDT): reject the row ring prototype; no landing, no step 3. The flag stays opt-in on this branch only.
+Why it does not pay: conv3d's reader already overlaps the full-volume gather with compute across w_blocks; the
+L1 row ring saves DRAM/NoC reads but moves the gather into a serial stall at each h_block start, and the
+remaining gain (<5%) cannot reach 15% without restructuring compute (e.g. folding norm+SiLU, PLAN item 5 note
+from #375), which is a larger change than this task.
+blx01 cleaned: t374/b worktree removed from /var/tmp/fasth3/t48, /var/tmp/fasth3/t374 deleted. No drops.
