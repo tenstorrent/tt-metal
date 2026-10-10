@@ -193,6 +193,32 @@ python models/tt_transformers/tests/generate_reference_hf.py --model Qwen/Qwen3.
     --output_file models/tt_transformers/tests/reference_outputs/Qwen3.6-27B.refpt
 ```
 
+## Automatic prefix caching (vLLM serving, batched TP path)
+
+vLLM's APC reuses the paged attention KV blocks; the 48 Gated-DeltaNet layers carry a non-paged recurrent state, so the
+model keeps its own LRU of GDN-state snapshots (`tt/prefix_cache.py`, `GdnPrefixStateCache`: `rec_state` + `conv_carry`
+of every GDN layer, device-to-device copies of the B=1 prefill scratch). Serve with `--enable-prefix-caching
+--block-size 64`. On a hit vLLM passes the full prompt, the full page-table row and `start_pos` (cached tokens, a
+multiple of 64); `prefill_paged_slots` resumes at the largest snapshot position `s <= floor(start_pos/128)*128` whose
+token digest matches, restores the GDN state, and prefills only `[s, L)` at absolute positions (chunk trace with an
+absolute chunk start, then the short bucket trace with `chunk_start`). Without a matching snapshot the prompt is
+recomputed from 0 (correct, slower).
+
+Snapshot points (all multiples of 128, because the SDPA chunk offset uses q_chunk=128, and always `<= L-3` so every
+segment keeps >= 3 tokens for the conv new-state selection): the vLLM-hit position when we have no snapshot there
+("learn"), the end of long prompts (`((L-3)//128)*128`, prompts >= `QWEN36_PREFIX_SNAPSHOT_MIN_LEN`), and every
+`QWEN36_PREFIX_SNAPSHOT_STRIDE` tokens after the resume point. With the cache off, or no hit and no snapshot to take,
+the prefill is the unchanged path. Only the batched slot path (`max_num_seqs > 1`, text) uses snapshots; the B=1 TP and
+single-device paths ignore `start_pos` and recompute from 0.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
+| `QWEN36_PREFIX_CACHE_SLOTS` | `64` | snapshot slots (about 19 MB of DRAM per device per slot, allocated before trace capture) |
+| `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `2048` | minimum prompt length for the end-of-prompt snapshot |
+| `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
+| `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
+
 ## Tests
 
 There are two tiers of tests under `tests/`.

@@ -430,6 +430,10 @@ class TPGatedDeltaNet:
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
+        # Persistent init buffers the SHORT prefill trace copies into rec_state/conv_carry (zeros, or a carried/restored
+        # state for a resumed prefill; see model._prepare_short_trace_gdn_init). Allocated before any trace capture.
+        self._prefill_init_rec = None
+        self._prefill_init_conv_carry = None
         self._zero_rec = None
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
         # Fused decode (QWEN36_GDN_FUSED_DECODE, default on). Decided here, once, so the state format is fixed for
