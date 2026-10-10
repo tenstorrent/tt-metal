@@ -21,7 +21,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t NUM_DEST_TILES = 4;
 constexpr std::uint32_t SCORES_TILE    = 0;
 constexpr std::uint32_t IDS_TILE       = 1;
-constexpr std::uint32_t KEYS_TILE      = 2;
 constexpr std::uint32_t ID_FORMAT      = ckernel::to_underlying(DataFormat::UInt16);
 constexpr bool STEP2_RUNS              = (PERF_STAGE == 2);
 
@@ -38,12 +37,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const auto tensor_shape         = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_faces          = params.num_faces;
+    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const auto& buffer_A                   = params.buffer_A;
+    const auto& buffer_B                   = params.buffer_B;
+#endif
+    const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
         PROFILER_SYNC();
     }
     {
@@ -52,15 +57,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-                    ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
-                _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, tensor_shape, ID_FORMAT, ID_FORMAT);
-                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    L1_ADDRESS(params.buffer_A[1]), ID_FORMAT, ID_FORMAT);
-                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-                    formats.unpack_A_src, formats.unpack_A_dst, params.TILE_SIZE_UNPACK_A);
+                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
+                    ID_FORMAT, ID_FORMAT, TILE_SIZE_UNPACK_A);
+                _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
+                _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(buffer_A[IDS_TILE]), ID_FORMAT, ID_FORMAT);
+                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
+                    formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A);
                 _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
-                _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+                _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[SCORES_TILE]), L1_ADDRESS(buffer_B[0]));
                 _llk_unpack_set_srcb_dummy_valid_();
             }
         }
@@ -86,15 +92,12 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
     GMG_RELOAD ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
 
 // The gate's own passes, issued as generalized_moe_gate.h issues them.
-#ifndef GMG_SFPU_UNARY_CALL
-#define GMG_SFPU_UNARY_CALL SFPU_UNARY_CALL
-#endif
-#define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
+#define GMG_SFPU_PASS(FN, TEMPLATES, ...) \
     GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 static inline void run_gate()
 {
-    GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+    GMG_SFPU_PASS(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_<is_fp32_dest_acc_en>();
 
@@ -105,30 +108,30 @@ static inline void run_gate()
 
     if constexpr (GMG_GROUPED)
     {
-        GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+        GMG_SFPU_PASS(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_<is_fp32_dest_acc_en>();
-        GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        GMG_SFPU_PASS(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
     }
     else
     {
-        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 4, 8, 16>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 4 /* src */, 8 /* dst */, 16 /* srcb */>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 0, 0>();
-        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2));
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 0 /* d2b_dst */, 0 /* b2d_base */>();
+        GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 0 /* store_lo */, 2 /* store_hi */));
 
-        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 0, 12, 20>();
-        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 8, 4, 24>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 0 /* src */, 12 /* dst */, 20 /* srcb */>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 8 /* src */, 4 /* dst */, 24 /* srcb */>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 4, 0>();
-        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 4, 6));
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 4 /* d2b_dst */, 0 /* b2d_base */>();
+        GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 4 /* store_lo */, 6 /* store_hi */));
 
-        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 12, 0, 28>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 12 /* src */, 0 /* dst */, 28 /* srcb */>();
 
-        GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+        GMG_SFPU_PASS(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
     }
 
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false, GMG_OUTPUT_TILES>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
 }
 
 static inline void token_math(RUNTIME_PARAMETERS params)
@@ -136,17 +139,20 @@ static inline void token_math(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(ID_FORMAT);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
-        params.num_faces, ID_FORMAT);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t num_faces = params.num_faces;
+#endif
+    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(ID_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+        num_faces, ID_FORMAT);
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         IDS_TILE, ID_FORMAT, ID_FORMAT);
-    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(formats.math);
+    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
 
-    _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(params.num_faces, ACC_TO_DEST);
-    _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(params.num_faces, 0);
+    _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(num_faces, ACC_TO_DEST);
+    _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(num_faces, SCORES_TILE);
 
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
     SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
 
     if constexpr (PERF_STAGE >= 1)
@@ -165,7 +171,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -207,12 +215,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t num_faces      = params.num_faces;
+    const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
+    const auto& buffer_Res             = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            ID_FORMAT, ID_FORMAT, params.TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-        _llk_pack_init_wrapper_<PackMode::Default, false>(ID_FORMAT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(ID_FORMAT, ID_FORMAT, TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(ID_FORMAT, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
@@ -225,7 +237,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
                 {
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
