@@ -3562,9 +3562,12 @@ SfpuLerp:
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3380}  # max 3072 ULP, wormhole, 2026-09-21
+# logsigmoid was re-measured for the fixed kernel over its test's [-30, 30] sweep; Float32 input
+# reaches 2 steps. The pre-fix kernel measures 131072 on a Float32 output (128325 from a Float32
+# input) and 2 on Float16_b, which keeps 2: one step above the simulator measurement, for silicon.
 SfpuLogsigmoid:
-  - {out: Float32, max_ulp: 163840}  # max 131072 ULP, 3 variants / 81920 lanes, 2026-09-18
-  - {out: Float16_b, max_ulp: 2}     # max 2 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 3 variants, [-30, 30] sweep, ttsim WH + BH, 2026-10-07
+  - {out: Float16_b, max_ulp: 2}     # max 1 ULP, 3 variants, [-30, 30] sweep, ttsim WH + BH, 2026-10-07
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2}  # max 2 ULP, wormhole, 2026-09-21; budget kept at the 2 the same measurement carried before
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 2}  # max 2 ULP, wormhole, 2026-09-21; budget kept at the 2 the same measurement carried before
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 144180}  # max 131072 ULP, wormhole, 2026-09-21

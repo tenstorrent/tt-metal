@@ -331,11 +331,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_REMAINDER_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "remainder_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "remainder_binary_tile(0, 1, 0);"}}},
-    // RHS carries exp(-x), computed on the host.
+    // Unary in place on DST 0: the kernel computes exp(-|x|) itself, so the RHS tile is unused.
     {"logsigmoid",
      {{"SFPU_OP_LOGSIGMOID_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "logsigmoid_tile_init();"},
-      {"SFPU_OP_CHAIN_0", "logsigmoid_tile(0, 1, 0);"}}},
+      {"SFPU_OP_CHAIN_0", "logsigmoid_tile(0);"}}},
     // torch defaults: rtol 1e-5, atol 1e-8
     {"isclose",
      {{"SFPU_OP_BINARY_ISCLOSE_INCLUDE", "1"},
@@ -1333,8 +1333,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         return {uniform(-8.0f, 8.0f, seed), rhs};
     }
     if (op_name == "logsigmoid") {
+        // The RHS is unused: logsigmoid_tile(0) works in place on the LHS.
         auto lhs = uniform(-6.0f, 6.0f, seed);
-        return {lhs, map_lhs(lhs, [](float f) { return std::exp(-f); })};
+        return {lhs, lhs};
     }
     if (op_name == "isclose") {
         // Half the lanes equal, half one bf16 step or more apart.

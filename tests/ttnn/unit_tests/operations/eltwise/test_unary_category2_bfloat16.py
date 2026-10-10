@@ -41,8 +41,8 @@ Accuracy criteria
                               verified explicitly; see test_silu_swish_ops)
   softsign       : ULP ≤ 2  (near-bf16_max FTZ band verified explicitly;
                               see test_softsign)
-  log_sigmoid    : ULP ≤ 2 for x <= 0; PCC ≥ 0.999 for 0 < x <= 170; see
-                              test_log_sigmoid for a known kernel bug above 170
+  log_sigmoid    : ULP ≤ 2 over the full domain (positive-tail FTZ band
+                              verified explicitly; see test_log_sigmoid)
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
                               test_tanhshrink
 """
@@ -267,26 +267,25 @@ def test_softsign(device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# log_sigmoid — log(sigmoid(x)), PCC, restricted domain
+# log_sigmoid — log(sigmoid(x)), ULP, full domain
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_log_sigmoid(device):
     """Exhaustive normal bfloat16 coverage for log_sigmoid = log(sigmoid(x)).
 
-    For x <= -4 the kernel uses the stable identity log_sigmoid(x) ≈ x
-    directly; exact for every negative value, so checked with ULP ≤ 2 over
-    the full negative domain. For 0 < x <= 170 a polynomial/exp approximation
-    is used; PCC ≥ 0.999 covers its compound approximation error (max abs
-    diff stays ~0.004 throughout this range).
+    The kernel evaluates min(x, 0) - log1p(exp(-|x|)) in a single pass, with no
+    range split, so the whole domain is held to ULP ≤ 2, both signs. That
+    includes x > 170, where an earlier kernel diverged to -inf
+    (tenstorrent/tt-metal#55457).
 
-    Known kernel bug (tenstorrent/tt-metal#55457): for x > ~172 the
-    large-positive branch diverges and eventually returns -inf (e.g. x=266
-    -> -inf) instead of ~0. 170 is excluded as the tested upper bound since
-    it's the last point before that divergence begins.
+    For x above about 87.3, exp(-x) falls below the smallest normal float and
+    the kernel returns 0, while torch returns a negative subnormal. That band is
+    asserted non-empty and exactly zero on device before the golden is flushed,
+    so the ULP check cannot absorb a wrong tail.
     """
     negative_domain = generate_bfloat16_bits_in_range(-torch.finfo(torch.bfloat16).max, 0.0)
-    positive_domain = generate_bfloat16_bits_in_range(0.0, 170.0)
+    positive_domain = generate_bfloat16_bits_in_range(0.0, torch.finfo(torch.bfloat16).max)
 
     tt_neg = to_tt_tensor(negative_domain, device)
     tt_pos = to_tt_tensor(positive_domain, device)
@@ -298,8 +297,13 @@ def test_log_sigmoid(device):
     result_neg = ttnn.to_torch(ttnn.log_sigmoid(tt_neg))
     result_pos = ttnn.to_torch(ttnn.log_sigmoid(tt_pos))
 
+    ftz_band = (golden_pos != 0) & (golden_pos.abs().float() < SMALLEST_NORMAL_BF16)
+    assert ftz_band.any(), "expected the positive-tail subnormal band to be non-empty for this exhaustive sweep"
+    assert (result_pos[ftz_band] == 0).all(), "the positive-tail subnormal band must be flushed to zero"
+    golden_pos = torch.where(ftz_band, torch.zeros_like(golden_pos), golden_pos)
+
     assert_with_ulp(expected_result=golden_neg, actual_result=result_neg, ulp_threshold=2)
-    assert_with_pcc(golden_pos, result_pos, pcc=0.999)
+    assert_with_ulp(expected_result=golden_pos, actual_result=result_pos, ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

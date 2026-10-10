@@ -418,13 +418,98 @@ def _comparison_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
-def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 is only read in the x > 4 branch, so x is restricted
-    # to [-8, 3.9], which sweeps the passthrough and polynomial branches without it.
-    def dist(size, dtype, generator):
-        return torch.linspace(-8.0, 3.9, size).to(dtype)
+# The bfloat16 logsigmoid sweep: every representable value in [-30, 30] whose magnitude is
+# at least 2**-14, plus zero. That is 4835 of the 33761 bfloat16 values the range holds.
+# [-30, 30] covers the linear asymptote on one side and the small-residual tail on the
+# other. The magnitude cut is not cosmetic: the 28926 values it drops do not fit in the
+# operand-A half of the buffer. They were swept separately, in two halves, and are the easy
+# end of the domain -- 0.45 bfloat16 ULP at worst, against 1.43 over the range that ships,
+# because every one of them has exp(-|x|) round to the same handful of values near 1.
+_LOGSIGMOID_SWEEP_RANGE = (-30.0, 30.0)
+_LOGSIGMOID_SWEEP_MIN_MAGNITUDE = 2.0**-14
 
-    return StimuliSpec(distribution=dist, seed=0)
+
+def _logsigmoid_sweep_values():
+    """Every bfloat16 value in the swept range, above the magnitude cut, plus zero.
+
+    Enumerated from the bit patterns, the way StimuliSpec.ulp_sweep does. ulp_sweep
+    itself is not usable here: it is a tensor-level strategy that auto-sizes
+    input_dimensions to a three-tile layout, and the two-tile operand-A/operand-B
+    pairing this harness runs on needs a whole number of tile pairs.
+    """
+    low, high = _LOGSIGMOID_SWEEP_RANGE
+    values = (
+        torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16).view(torch.bfloat16)
+    )
+    values = values.to(torch.float32)
+    values = values[torch.isfinite(values) & (values >= low) & (values <= high)]
+    keep = (values.abs() >= _LOGSIGMOID_SWEEP_MIN_MAGNITUDE) | (values == 0.0)
+    return torch.unique(values[keep])
+
+
+def _logsigmoid_stimuli_spec(input_format, input_dimensions):
+    """Stimuli for logsigmoid, which is unary despite living in the binary harness.
+
+    Consecutive faces take consecutive slices of one sweep rather than repeating the same
+    points, so the operand-A half of the buffer holds distinct values throughout: 256
+    linearly spaced points per face miss the worst point of both this kernel and the
+    pre-fix one, which understates each and understates the distance between them. For a
+    bfloat16 operand the sweep is the enumeration above; for a Float32 operand, whose
+    domain cannot be enumerated, it is a linspace sized to the buffer -- 8192 distinct
+    points rather than 256.
+
+    Operand B is unread by the unary adapter and carries exp(-|x|), which is what the
+    pre-fix kernel read there. Starving operand B would make this test reject that kernel
+    on a missing input rather than on its arithmetic.
+
+    *input_dimensions* is required, and must be the dimensions the driver will run on:
+    face_specs is applied positionally and is never cycled, so a list built for a different
+    buffer would silently leave later faces on the base distribution. The check below turns
+    that coupling into an error instead of a coverage hole.
+    """
+    low, high = _LOGSIGMOID_SWEEP_RANGE
+
+    tiles = (input_dimensions[0] * input_dimensions[1]) // _ELEMENTS_PER_TILE
+    if tiles % 2:
+        raise ValueError(
+            f"SFPU binary needs a whole number of tile pairs, got {tiles} tiles "
+            f"from input_dimensions={input_dimensions}"
+        )
+    face_elements = _ELEMENTS_PER_TILE // _FACES_PER_TILE
+    operand_a_lanes = (tiles // 2) * _FACES_PER_TILE * face_elements
+
+    values = (
+        _logsigmoid_sweep_values()
+        if input_format == DataFormat.Float16_b
+        else torch.linspace(low, high, operand_a_lanes)
+    )
+    if operand_a_lanes < values.numel():
+        raise ValueError(
+            f"the sweep holds {values.numel()} values but input_dimensions="
+            f"{input_dimensions} leaves only {operand_a_lanes} operand-A lanes, so the "
+            "sweep would not be covered"
+        )
+
+    def slice_dist(ordinal, of_x):
+        def dist(size, dtype, generator):
+            index = (torch.arange(size) + ordinal * size) % values.numel()
+            return of_x(values[index]).to(dtype)
+
+        return dist
+
+    def identity(v):
+        return v
+
+    def exp_neg_abs(v):
+        return torch.exp(-v.abs())
+
+    face_specs = []
+    for pair in range(tiles // 2):
+        ordinals = [pair * _FACES_PER_TILE + face for face in range(_FACES_PER_TILE)]
+        face_specs.extend(_face_spec(slice_dist(o, identity)) for o in ordinals)
+        face_specs.extend(_face_spec(slice_dist(o, exp_neg_abs)) for o in ordinals)
+
+    return replace(_face_spec(slice_dist(0, identity)), face_specs=face_specs)
 
 
 # =============================================================================
@@ -435,6 +520,12 @@ def _logsigmoid_stimuli_spec():
 # per tile-pair, and drives sources/sfpu_binary_test.cpp. Perf counterparts
 # call the same helper with is_perf=True.
 # =============================================================================
+
+
+def _default_input_dimensions(input_format):
+    # FP32 destination tiles occupy twice the register space. Keep four full destination
+    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    return [128, 128] if input_format.is_32_bit() else [256, 128]
 
 
 def sfpu_binary(
@@ -468,12 +559,8 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # FP32 destination tiles occupy twice the register space. Keep four full destination
-    # blocks for those formats and four blocks of eight tiles for the remaining formats.
     if input_dimensions is None:
-        input_dimensions = (
-            [128, 128] if formats.input_format.is_32_bit() else [256, 128]
-        )
+        input_dimensions = _default_input_dimensions(formats.input_format)
 
     # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
     # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
@@ -932,17 +1019,22 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
 
 @parametrize(**LOGSIGMOID_SWEEP)
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
-    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
-    # The x > 4 (-exp(-x)) branch needs a device-computed
-    # exp(-x) operand the shared harness can't provide, left to a future driver.
+    # logsigmoid(x) over [-30, 30], so both tails are exercised rather than only the old
+    # polynomial mid-range. Operand B is ignored by the unary adapter. Gated by its step
+    # budget on Wormhole and by tolerance + PCC elsewhere.
     _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    # The dimensions sfpu_binary would pick by default, named here because
+    # _logsigmoid_stimuli_spec has to build a face_specs list that covers this exact
+    # buffer. Leaving it implicit would couple the two through nothing at all.
+    input_dimensions = _default_input_dimensions(formats.input_format)
 
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
-        spec_A=_logsigmoid_stimuli_spec(),
+        spec_A=_logsigmoid_stimuli_spec(formats.input_format, input_dimensions),
+        input_dimensions=input_dimensions,
         **run_kwargs,
     )
 
