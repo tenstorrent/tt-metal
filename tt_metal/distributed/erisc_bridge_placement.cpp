@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -18,6 +19,13 @@ namespace tt::tt_fabric::erisc_bridge {
 
 const FabricEriscDatamoverConfig& router_config(const ControlPlane& cp) {
     return cp.get_fabric_context().get_builder_context().get_fabric_router_config();
+}
+
+std::uint32_t receiver_pkts_sent_stream(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t channel) {
+    return cp.get_fabric_context()
+        .get_builder_context()
+        .get_stream_assignment(MeshId{mesh_id})
+        .id(StreamRole::RECEIVER_PKTS_SENT, channel, 0);
 }
 
 BridgePlacement EriscBridgePlacement::place(std::uint32_t want_bytes) const {

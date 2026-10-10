@@ -209,4 +209,28 @@ if(TARGET OpenMPI::MPI)
     )
 endif()
 
+# H2E leg benchmark: one device, no MPI. Carries its own main(), so no benchmark_main.
+add_executable(erisc_h2e_benchmark)
+target_sources(erisc_h2e_benchmark PRIVATE benchmark_erisc_h2e_leg.cpp)
+target_link_libraries(
+    erisc_h2e_benchmark
+    PRIVATE
+        tt_metal
+        test_common_libs
+        benchmark::benchmark
+)
+target_include_directories(
+    erisc_h2e_benchmark
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+)
+set_target_properties(
+    erisc_h2e_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
 add_subdirectory(multiprocess)
