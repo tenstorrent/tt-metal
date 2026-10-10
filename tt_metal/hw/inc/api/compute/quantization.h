@@ -416,8 +416,10 @@ ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
 #if defined(ARCH_BLACKHOLE)
 // clang-format off
 /**
- * Per-tensor (scalar scale) forms of the quantization ops: the scale is given at init, together with the zero point,
- * so the tile call has one DEST operand and no scale tile. Dest must be in 32 bit mode, as for the tile forms.
+ * Blackhole only. Per-tensor form of quant_tile: the scale comes from quant_scalar_tile_init or
+ * quant_uint8_scalar_tile_init instead of a second DEST tile, so the call has one operand. Dest must be in 32 bit mode.
+ *
+ * Return value: None
  *
  * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -430,101 +432,197 @@ ALWI void quant_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_quant_int32,
-        (APPROX, 32, false, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of quant_int8_tile: the scale comes from quant_int8_scalar_tile_init instead of a
+ * second DEST tile, so the call has one operand. Dest must be in 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void quant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_quant_int32_int8_pack,
-        (APPROX, 32, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of requant_tile: the scale comes from requant_scalar_tile_init or
+ * requant_uint8_scalar_tile_init instead of a second DEST tile, so the call has one operand. Dest must be in 32 bit
+ * mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void requant_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32,
-        (APPROX, 32, false, false, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, false, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of requant_int8_tile: the scale comes from requant_int8_scalar_tile_init instead of a
+ * second DEST tile, so the call has one operand. Dest must be in 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void requant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX, 32, false, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of requant_int8_in_tile: the scale comes from requant_int8_in_scalar_tile_init or
+ * requant_int8_in_uint8_out_scalar_tile_init instead of a second DEST tile, so the call has one operand. Dest must be
+ * in 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void requant_int8_in_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32,
-        (APPROX, 32, false, true, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, true, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of requant_int8_in_int8_out_tile: the scale comes from
+ * requant_int8_in_int8_out_scalar_tile_init instead of a second DEST tile, so the call has one operand. Dest must be in
+ * 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void requant_int8_in_int8_out_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX, 32, true, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, true, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of dequant_tile: the scale comes from dequant_scalar_tile_init instead of a second
+ * DEST tile, so the call has one operand. Dest must be in 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void dequant_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_dequant_int32,
-        (APPROX, 32, false, false, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, false, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Per-tensor form of dequant_int8_tile: the scale comes from dequant_int8_scalar_tile_init instead of a
+ * second DEST tile, so the call has one operand. Dest must be in 32 bit mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to use as the operand    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
 ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_dequant_int32,
-        (APPROX, 32, false, true, true /* SCALAR_SCALE */),
+        (APPROX, detail::quant_iterations, false, true, true /*SCALAR_SCALE*/),
         idst,
-        idst,
+        idst /*dst_index_in1, unused*/,
         odst,
-        VectorMode::None)));
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
 /**
- * Inits of the per-tensor forms: the zero point and the scale of the Op, both as fp32 bits. The scale stays in an
- * SFPU register, so no other SFPU op may run between the init and the tile calls of the same name.
+ * Blackhole only. Initializes the SFPU for quant_scalar_tile with the zero point and the per-tensor scale of the Op.
+ * The scale stays in an SFPU register, so no other SFPU op may run between this init and the quant_scalar_tile calls.
+ *
+ * Return value: None
  *
  * | Argument   | Description                                   | Data type | Valid range | Required |
  * |------------|-----------------------------------------------|-----------|-------------|----------|
@@ -536,49 +634,187 @@ ALWI void quant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale
     MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init_scalar_scale, (APPROX), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for quant_scalar_tile with the zero point and the per-tensor scale of the Op,
+ * rounding into the unsigned uint8 range [0, 255]. The scale stays in an SFPU register, so no other SFPU op may run
+ * between this init and the quant_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void quant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         quant_int32, sfpu::quant_init_scalar_scale, (APPROX, false, DataFormat::UInt8), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for quant_int8_scalar_tile with the zero point and the per-tensor scale of the
+ * Op. The scale stays in an SFPU register, so no other SFPU op may run between this init and the quant_int8_scalar_tile
+ * calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void quant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         quant_int32, sfpu::quant_init_scalar_scale, (APPROX, false, DataFormat::Int8), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_scalar_tile with the zero point and the per-tensor scale of the Op.
+ * The scale stays in an SFPU register, so no other SFPU op may run between this init and the requant_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init_scalar_scale, (APPROX), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_scalar_tile with the zero point and the per-tensor scale of the Op,
+ * rounding into the unsigned uint8 range [0, 255]. The scale stays in an SFPU register, so no other SFPU op may run
+ * between this init and the requant_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_uint8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::UInt8), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_int8_scalar_tile with the zero point and the per-tensor scale of the
+ * Op. The scale stays in an SFPU register, so no other SFPU op may run between this init and the
+ * requant_int8_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int8), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_int8_in_scalar_tile with the zero point and the per-tensor scale of
+ * the Op. The scale stays in an SFPU register, so no other SFPU op may run between this init and the
+ * requant_int8_in_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_in_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int32, true), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_int8_in_scalar_tile with the zero point and the per-tensor scale of
+ * the Op, rounding into the unsigned uint8 range [0, 255]. The scale stays in an SFPU register, so no other SFPU op may
+ * run between this init and the requant_int8_in_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_in_uint8_out_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::UInt8, true), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for requant_int8_in_int8_out_scalar_tile with the zero point and the per-tensor
+ * scale of the Op. The scale stays in an SFPU register, so no other SFPU op may run between this init and the
+ * requant_int8_in_int8_out_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void requant_int8_in_int8_out_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init_scalar_scale, (APPROX, false, DataFormat::Int8, true), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for dequant_scalar_tile with the zero point and the per-tensor scale of the Op.
+ * The scale stays in an SFPU register, so no other SFPU op may run between this init and the dequant_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void dequant_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init_scalar_scale, (APPROX), zero_point, scale)));
 }
 
+// clang-format off
+/**
+ * Blackhole only. Initializes the SFPU for dequant_int8_scalar_tile with the zero point and the per-tensor scale of the
+ * Op. The scale stays in an SFPU register, so no other SFPU op may run between this init and the
+ * dequant_int8_scalar_tile calls.
+ *
+ * Return value: None
+ *
+ * | Argument   | Description                                   | Data type | Valid range | Required |
+ * |------------|-----------------------------------------------|-----------|-------------|----------|
+ * | zero_point | The zero point of the Op (fp32 bits)          | uint32_t  | Any number  | Yes      |
+ * | scale      | The per-tensor scale of the Op (fp32 bits)    | uint32_t  | Any number  | Yes      |
+ * */
+// clang-format on
 ALWI void dequant_int8_scalar_tile_init(const uint32_t zero_point, const uint32_t scale) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         dequant_int32, sfpu::dequant_init_scalar_scale, (APPROX, false, true), zero_point, scale)));
