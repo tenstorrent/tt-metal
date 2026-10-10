@@ -191,7 +191,8 @@ inline void pack_tiles(const std::uint32_t output_tile_cnt, const std::uint32_t 
         {
             _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[block_start + tile]));
         }
-        if constexpr (sync_with_math)
+        // Wormhole: the pack isolate loops release the dest section too, as production's tile_regs_release does
+        if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
         {
             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
