@@ -3,7 +3,7 @@
 # blx01 4x8, LTX_VERSION=2.5 (2.5 distilled transformer, Gemma-4 TE, 2.5 spatial upsampler, from a local copy of the
 # MLPerf HF snapshot), conv VAE decode (LTX25_DIFFVAE=0). Defaults otherwise: 8+3, 1088x1920, 24 fps, seed 10, the
 # test's own prompt, bh_4x8sp1tp0_ring, traced. Usage: run333.sh <tag> [num_frames]  (145 = 6 s, 241 = 10 s).
-# Conv VAE: the HF 2.5 conv file if present under LTX25_ROOT, else the LTX-2.3 monolith (the t48/#207 swap).
+# Conv VAE: the LTX-2.3 monolith (the t48/#207 swap).
 # TT_DIT_CACHE_DIR unset (no DiT cache written). Own JIT cache t333/jit. Broker: -e env333.yaml -t 600.
 if [ -z "$INNER" ]; then
   INNER=1 setsid bash "$0" "$@" & PG=$!
@@ -23,8 +23,9 @@ export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools PYTHONDONTWRITEBYTECODE=1
 export LTX_CHECKPOINT=$F/models/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors
 export GEMMA_PATH=$F/models/gemma-3-12b-it-qat-q4_0-unquantized
 export LTX_VERSION=2.5 LTX25_ROOT=$M LTX25_DIFFVAE=0
-if [ -f $M/vae/ltx-2.5-video-vae-conv-bf16.safetensors ]; then unset LTX25_VIDEO_VAE; VAE=conv25
-else export LTX25_VIDEO_VAE=$LTX_CHECKPOINT; VAE=conv23; fi
+# Always the 2.3 swap: the standalone HF 2.5 conv file (decoder.*/per_channel_statistics.* keys) loads as an empty
+# state dict on f6547442b30 (jobs 375/378/380); wiring it in is the #235 fetch task's job.
+export LTX25_VIDEO_VAE=$LTX_CHECKPOINT; VAE=conv23
 export RUN_VBENCH=0 RUN_CLIP=0 LTX_OUT_DIR=$OUT
 unset TT_DIT_CACHE_DIR LTX_FUSE_GATE_ON_DEVICE LTX_FUSE_NORM_ADALN LTX_QUANT LTX_QUANT_ACTIVATIONS LTX_QUALITY LTX_FAST \
   LTX_S1_SIGMAS LTX_S2_SIGMAS LTX_TRACED LTX_ITER_ENV NO_PROMPT SEED RUN_WARMUP PROMPT OUTPUT_PATH LTX25_TEXT_STACK \

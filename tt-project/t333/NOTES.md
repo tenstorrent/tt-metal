@@ -23,3 +23,14 @@ quote the test's timing table from run_c6_job*.log verbatim (box blx01, job id, 
 VAE decode stage vs DiffVAE 2.313 s (t48 @a5a774ea17f); copy the mp4 and still to tt-project/t333/; then clean up blx01
 (t333/jit, t333/b worktree via `git -C /var/tmp/fasth3/t48 worktree remove`, out_* videos after copying; decide on the
 72 GB models/ltx-2.5 copy: keep only if the conv VAE optimization follow-up runs on blx01 soon, and say so).
+
+State at 2026-10-10 06:45 UTC (run 1317):
+- First pass failed fast (jobs 375 c6a, 378 c6, 380 c10, all exit 1 in ~20-30 s, no drop). First error:
+  `ValueError: missing Torch state keys: conv_in.weight, ... per_channel_mean, per_channel_std` (state_dict = {}).
+  Cause: the real HF 2.5 conv VAE (1,452,269,922 B) landed in models/ltx-2.5/vae at 06:29 (the #235 fetch task), so
+  run333.sh picked it (vae=conv25). Its keys are `decoder.*`, `encoder.*`, `per_channel_statistics.*` (170 keys, no
+  `vae.` prefix); f6547442b30's loader finds none of them. Wiring that file in is the fetch task's job (follow-up).
+- Fix: run333.sh now always uses the 2.3 swap (LTX25_VIDEO_VAE = 2.3 monolith, vae=conv23). Re-linted on blx01: rc 0.
+- Old logs moved to t333/fail_vae25/. drv333.sh relaunched (pgid 2945444) at 06:44 UTC; it waits for the t337 job now
+  on the blx01 broker (the driver skips while any smarton job runs or queues). Same marker drv333.done.
+- AICLK: all first-pass jobs logged 32 "AICLK failed to settle" warnings -> blx01 is clamped; label results relative only.
