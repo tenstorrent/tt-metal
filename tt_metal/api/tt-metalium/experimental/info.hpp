@@ -26,7 +26,8 @@
  * uint32_t alignment = get_info<info::l1_alignment>(*mesh_device);
  * @endcode
  *
- * To add a property, declare it with METALIUM_INFO here and implement it for each object that supports it.
+ * To add a property, declare it with METALIUM_INFO here, add it to `all_tags`, and implement it for each object that
+ * supports it.
  */
 
 // Variadic so return types containing commas can be passed directly.
@@ -63,6 +64,17 @@ METALIUM_INFO(architecture, tt::ARCH);
  * @brief Lowercase name of the architecture of the device (e.g. `"wormhole_b0"`).
  */
 METALIUM_INFO(architecture_name, std::string);
+
+/**
+ * @brief A list of tags, so that bindings and generic tooling can visit every property.
+ */
+template <class... Tags>
+struct tag_list {};
+
+/**
+ * @brief Every tag declared above. Add each new tag here as well as declaring it.
+ */
+using all_tags = tag_list<l1_alignment, dram_alignment, architecture, architecture_name>;
 
 }  // namespace tt::tt_metal::experimental::info
 
