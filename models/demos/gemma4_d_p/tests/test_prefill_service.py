@@ -24,7 +24,7 @@ def read_slot_samples(runtime, kv_cache, slot):
     for row, column in ((0, 0), (0, 3), (7, 0), (7, 3)):
         fabric_node = runtime.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, column))
         device_id = ttnn.cluster.get_chip_unique_id_from_fabric_node_id(
-            int(fabric_node.mesh_id), int(fabric_node.chip_id)
+            runtime.mesh_device, int(fabric_node.mesh_id), int(fabric_node.chip_id)
         )
         for layer_idx, cache in enumerate(kv_cache.layers):
             tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)
