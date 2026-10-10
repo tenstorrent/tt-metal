@@ -891,3 +891,46 @@ def test_broadcast_nd_along_one_axis_keeps_the_other(mesh_device, cluster_axis, 
     assert _placements(tt_output) == expected
     assert _dist_shape(tt_output) == line_shape
     assert torch.equal(_compose_by_label(tt_output), _pieces(full, axis_size)[axis_size - 1])
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_broadcast_misaligned_nd_label_is_refused(mesh_device, strict_ccl_topology, expect_error):
+    """An N-D label whose axes are not the mesh's: `ShardTensor2dMesh(mesh_shape=(C, 1))` on an RxC mesh with C > R
+    does not fit, so the mapper lays the C chunks out row-major over row 0 -- physically the (1, C) row the previous
+    test broadcasts along, but labelled (C, 1), [Shard(3), Replicate]. A per-axis edit of that label keeps the Shard,
+    claiming C distinct pieces where every device holds the sender's; the helper refuses it instead ("does not align
+    with the axes"), an error under strict mode before any device work. Negative control: the hook used to edit the
+    placements by index and returned this label unchanged."""
+    rows, cols, _ = _mesh(mesh_device)
+    if cols <= rows:
+        pytest.skip("needs more columns than rows so that a (cols, 1) mapper does not fit the mesh")
+    full = _integers([1, 1, 32, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(cols, 1), dims=(3, None)))
+    assert _placements(tt_input) == [SHARD(3), REPLICATE]
+    assert _dist_shape(tt_input) == (cols, 1)
+
+    with expect_error(RuntimeError, "does not align with the axes"):
+        _broadcast(tt_input, (0, cols - 1), cluster_axis=1)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_broadcast_misaligned_nd_label_warn_only_keeps_input_label(mesh_device, warn_only_ccl_topology):
+    """The default (warn-only) mode for the label above: the refused broadcast still runs (its devices are row 0, a
+    line), logs, and the output keeps the input's (C, 1), [Shard(3), Replicate] -- the hook's explicit fallback, not
+    the framework's union. That label under-claims (every device holds the sender's piece), so the per-device bytes
+    are checked directly rather than composed by it."""
+    rows, cols, _ = _mesh(mesh_device)
+    if cols <= rows:
+        pytest.skip("needs more columns than rows so that a (cols, 1) mapper does not fit the mesh")
+    full = _integers([1, 1, 32, 32 * cols])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(cols, 1), dims=(3, None)))
+
+    tt_output = _broadcast(tt_input, (0, cols - 1), cluster_axis=1)
+
+    assert _placements(tt_output) == [SHARD(3), REPLICATE]
+    assert _dist_shape(tt_output) == (cols, 1)
+    sender_piece = _pieces(full, cols)[cols - 1]
+    for shard in _shards(tt_output):
+        assert torch.equal(shard, sender_piece)

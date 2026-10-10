@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::prim {
 void BroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -57,30 +58,22 @@ BroadcastDeviceOperation::topology_return_value_t BroadcastDeviceOperation::comp
     // Every device along the broadcast line ends up holding the sender's bytes. The op only ever runs on a tensor
     // that spans the sender's line: every non-sender's link-0 worker waits on the semaphore the sender's line
     // multicast raises (BroadcastProgramFactory::create_at, `wait_output_semaphore = (link == 0) && !is_sender`), so
-    // a device off that line would never be signalled. The label is therefore the input's with Replicate on the
-    // broadcast axis (`cluster_axis`) and the other axes kept, or Replicate on every axis when the whole (1-D)
-    // distribution is the line. Stated directly rather than through the helper: uncollapse_placements reads a label's
-    // coordinates to decide whether axis i of the label is axis i of the mesh, and the labels broadcast runs on do
-    // not pass that test although the op is fine with them -- a 1-D sub-range such as `MeshMapperConfig([Shard(3)],
-    // MeshShape(4))` on a 2x4 mesh ("does not cover the mesh"), and the N-D `(1, C)` / `(R, 1)` sub-range labels
-    // from_torch produces for `ShardTensor2dMesh(mesh_shape=(1, C))` on the parent mesh, whose mesh_coords list every
-    // device of the mesh ("does not align with the axes"; test_broadcast_nd_along_one_axis_keeps_the_other). Known
-    // limit of the direct edit: an N-D label whose axes are not the mesh axes (`MeshMapperConfig([Shard(3),
-    // Replicate], MeshShape(4, 1))` on a 2x4 mesh does not fit and distributes row-major over row 0) keeps its
-    // `Shard(3)` on the non-broadcast axis and claims four distinct pieces where every device holds the sender's;
-    // labelling it honestly needs the helper to accept these labels first (follow-up in ccl_topology_utils).
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto placements = input_topology.placements();
-    const auto& cluster_axis = operation_attributes.cluster_axis;
-    if (cluster_axis.has_value() && *cluster_axis < placements.size()) {
-        placements[*cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    } else {
-        for (auto& placement : placements) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    }
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(placements), input_topology.mesh_coords())};
+    // a device off that line would never be signalled. The label is therefore the all_broadcast label: Replicate on
+    // the broadcast axis (`cluster_axis`) with the other axes kept, or Replicate on every axis for the whole-mesh
+    // call. The helper computes it -- it expands a collapsed `{N},[p]` label to one placement per mesh axis first and
+    // edits by axis index only when axis i of the label is axis i of the mesh -- and the inputs broadcast runs on pass
+    // that test: a collapsed label covering a line mesh, and the N-D `(1, C)` / `(R, 1)` sub-range labels from_torch
+    // produces for `ShardTensor2dMesh(mesh_shape=(1, C))` on the parent mesh, judged by their shape since a device
+    // tensor's label lists every device of the mesh (test_broadcast_nd_along_one_axis_keeps_the_other). A label whose
+    // axes are not the mesh's is refused: `ShardTensor2dMesh(mesh_shape=(C, 1))` on an RxC mesh with C > R does not
+    // fit, distributes row-major over row 0 and would keep a Shard claiming C distinct pieces where every device
+    // holds the sender's (test_broadcast_misaligned_nd_label_is_refused). A refusal (nullopt, already reported by the
+    // helper; an error under strict mode) keeps the input's label, stated explicitly: `{}` would hand the framework
+    // the union over every tensor argument.
+    const auto& input_tensor = tensor_args.input_tensor;
+    return {
+        ttnn::operations::ccl::common::all_broadcast_output_topology(input_tensor, operation_attributes.cluster_axis)
+            .value_or(input_tensor.tensor_topology())};
 }
 
 Tensor broadcast(
