@@ -57,6 +57,16 @@ def read_into_memory(path, offset: int, shape, dtype: torch.dtype, threads: int 
     return buf.view(dtype).reshape(shape)
 
 
+def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
+    """Bytes of layer ``layer_idx``'s n-gram table as stored (fp8 weight plus E8M0 scales, one byte each)."""
+    total = 0
+    for part in ("weight", "scale"):
+        name = f"layers.{layer_idx}.engram.embed.{part}"
+        _, shape = tensor_region(loader.shard_of(name, translate=False), name)
+        total += math.prod(shape)
+    return total
+
+
 def load_engram_table(loader: DeepseekV4WeightLoader, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Layer ``layer_idx``'s table in host RAM, as stored: ``weight`` ``[rows, head_dim]`` fp8 E4M3 and
     ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together)."""
