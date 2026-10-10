@@ -9,25 +9,26 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
 namespace {
 
-// Pages a reader/writer moves per turn of its loop. kCbDepth lives in the header
-// as kRepeatCbDepth since repeat_codegen_supported.cpp's L1-capacity gate needs
-// the same value.
+// Pages a reader/writer moves per turn of its loop. The staging-buffer depth lives in the
+// header as kRepeatCbDepth since repeat_codegen_supported.cpp's L1-capacity gate needs the
+// same value.
 constexpr uint32_t kReadBatch = 4;
 constexpr uint32_t kWriteBatch = 4;
 
@@ -77,7 +78,7 @@ uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
 
 }  // namespace
 
-ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RepeatCodegenProgramFactory::create_program_artifacts(
     const RepeatCodegenParams& operation_attributes,
     const RepeatCodegenInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -92,185 +93,231 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const bool is_last_dim_rm = is_row_major && operation_attributes.rep_dim == 3;
 
     const CoreSplit split = split_work(input, operation_attributes.total_out_pages);
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    ProgramDescriptor desc;
+    // Metal 2.0 named resource ids. Declared function-local so the unity build (this file shares a
+    // translation unit with the repeat_interleave codegen factory) sees no duplicate
+    // anonymous-namespace symbols.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    // The one staging buffer every branch moves its pages through: the reader fills it (dfb::in on
+    // the kernel side), the writer drains it (dfb::out). kRepeatCbDepth entries of one aligned page.
+    const DFBSpecName PAGES{"pages"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+
+    // Each branch binds its own kernel pair; the staging DFB, tensor parameters and work unit are
+    // common and assembled once below.
+    KernelSpec reader_spec;
+    KernelSpec writer_spec;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    // Staging DFB entry size for the selected branch (the branch's aligned page).
+    uint32_t page_size = 0;
 
     if (!is_row_major) {
         // TILE-interleaved path: shared pluggable sequencer reader (seq_id=1 == SEQ_REPEAT)
-        // + interleaved writer.
-        const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+        // + interleaved writer, both bound through their Metal 2.0 forks in common/kernels/codegen.
+        page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kRepeatCbDepth * page_size,
-            .core_ranges = split.all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = 0,
-                .data_format = cb_data_format,
-                .page_size = page_size,
-            }}},
-        });
-
-        std::vector<uint32_t> reader_ct_args;
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
-        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc.core_ranges = split.all_cores;
-        reader_desc.compile_time_args = std::move(reader_ct_args);
-        reader_desc.named_compile_time_args = {
-            {"seq_id", kSeqRepeat},
-            {"cb_id", 0},
-            {"batch", kReadBatch},
-            // reader_tile_interleaved_unified.cpp unconditionally reads this named
-            // arg in kernel_main() (not gated by SEQ_ID), falling back to the
-            // TensorAccessorArgs page size when 0. It must be supplied even though
-            // the repeat sequencer never consults it.
-            {"src_page_pitch", 0},
+        reader_spec = KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/"
+                "reader_tile_interleaved_unified_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {{"seq_id", kSeqRepeat},
+                 {"batch", kReadBatch},
+                 // reader_tile_interleaved_unified_metal2.cpp reads this named arg unconditionally
+                 // (not gated by seq_id): a non-zero value overrides the source page size used to
+                 // bound each page transfer; 0 defers to the source binding's aligned page size.
+                 // The repeat sequencer never needs the override, so it is supplied as 0.
+                 {"src_page_pitch", 0u}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"num_pages", "start_id", "num_repeats", "lower_pages", "rep_dim_pages"}},
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
-        reader_desc.config = ReaderConfigDescriptor{};
 
-        std::vector<uint32_t> writer_ct_args = {0, page_size};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-        writer_ct_args.push_back(kWriteBatch);
-
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
-        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer_desc.core_ranges = split.all_cores;
-        writer_desc.compile_time_args = std::move(writer_ct_args);
-        writer_desc.config = WriterConfigDescriptor{};
+        writer_spec = KernelSpec{
+            .unique_id = WRITER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .compile_time_args = {{"requested_write_size", page_size}, {"batch", kWriteBatch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
 
         uint32_t start = 0;
         for (const auto& core : split.cores_in_order) {
             const uint32_t n = work_for_core(split, core);
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
                 core,
-                {src_buffer,
-                 n,
-                 start,
-                 operation_attributes.num_repeats,
-                 operation_attributes.lower_pages,
-                 operation_attributes.rep_dim_pages});
-            writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
+                {{"num_pages", n},
+                 {"start_id", start},
+                 {"num_repeats", operation_attributes.num_repeats},
+                 {"lower_pages", operation_attributes.lower_pages},
+                 {"rep_dim_pages", operation_attributes.rep_dim_pages}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_tiles", n}, {"start_id", start}});
             start += n;
         }
-
-        desc.kernels.push_back(std::move(reader_desc));
-        desc.kernels.push_back(std::move(writer_desc));
-        return desc;
-    }
-
-    if (is_last_dim_rm) {
+    } else if (is_last_dim_rm) {
         // ROW_MAJOR last-dim (within-stick) path.
         const uint32_t in_stick_size = operation_attributes.stick_size;
         const uint32_t in_aligned = static_cast<uint32_t>(src_buffer->aligned_page_size());
         const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+        page_size = out_aligned;
 
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kRepeatCbDepth * out_aligned,
-            .core_ranges = split.all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = 0,
-                .data_format = cb_data_format,
-                .page_size = out_aligned,
-            }}},
-        });
+        reader_spec = KernelSpec{
+            .unique_id = READER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {{"stick_size", in_stick_size},
+                 {"in_read_size", in_aligned},
+                 {"out_l1_stride", out_aligned},
+                 {"num_repeats", operation_attributes.num_repeats},
+                 {"batch", kReadBatch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_page"}},
+            .hw_config = ttnn::create_reader_datamovement_config(),
+        };
 
-        std::vector<uint32_t> reader_ct_args = {in_stick_size, in_aligned, out_aligned};
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_ct_args.push_back(0);  // cb_id
-        reader_ct_args.push_back(operation_attributes.num_repeats);
-        reader_ct_args.push_back(kReadBatch);
-
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
-        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc.core_ranges = split.all_cores;
-        reader_desc.compile_time_args = std::move(reader_ct_args);
-        reader_desc.config = ReaderConfigDescriptor{};
-
-        std::vector<uint32_t> writer_ct_args = {0, out_aligned, out_aligned};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-        writer_ct_args.push_back(kWriteBatch);
-
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_repeat_rm.cpp";
-        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer_desc.core_ranges = split.all_cores;
-        writer_desc.compile_time_args = std::move(writer_ct_args);
-        writer_desc.config = WriterConfigDescriptor{};
+        writer_spec = KernelSpec{
+            .unique_id = WRITER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_repeat_rm.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .compile_time_args = {{"xfer_size", out_aligned}, {"l1_stride", out_aligned}, {"batch", kWriteBatch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
 
         uint32_t start = 0;
         for (const auto& core : split.cores_in_order) {
             const uint32_t n = work_for_core(split, core);
-            reader_desc.emplace_runtime_args(core, {src_buffer, n, start});
-            writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"num_pages", n}, {"start_page", start}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_pages", n}, {"start_id", start}});
             start += n;
         }
+    } else {
+        // ROW_MAJOR higher-dim path. Input and output share the same last-dim width on this branch (only a
+        // non-last dim is repeated), so one aligned page pitch serves reader, writer, and the staging DFB.
+        const uint32_t aligned_page_size = static_cast<uint32_t>(src_buffer->aligned_page_size());
+        page_size = aligned_page_size;
 
-        desc.kernels.push_back(std::move(reader_desc));
-        desc.kernels.push_back(std::move(writer_desc));
-        return desc;
+        reader_spec = KernelSpec{
+            .unique_id = READER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {{"xfer_size", aligned_page_size},
+                 {"l1_stride", aligned_page_size},
+                 {"num_repeats", operation_attributes.num_repeats},
+                 {"lower_pages", operation_attributes.lower_pages},
+                 {"rep_dim_pages", operation_attributes.rep_dim_pages},
+                 {"batch", kReadBatch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_out_pages", "out_start_page"}},
+            .hw_config = ttnn::create_reader_datamovement_config(),
+        };
+
+        writer_spec = KernelSpec{
+            .unique_id = WRITER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_repeat_rm.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = PAGES,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .compile_time_args =
+                {{"xfer_size", aligned_page_size}, {"l1_stride", aligned_page_size}, {"batch", kWriteBatch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
+
+        uint32_t start = 0;
+        for (const auto& core : split.cores_in_order) {
+            const uint32_t n = work_for_core(split, core);
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"num_out_pages", n}, {"out_start_page", start}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_pages", n}, {"start_id", start}});
+            start += n;
+        }
     }
 
-    // ROW_MAJOR higher-dim path. Input and output share the same last-dim width on this branch (only a non-last
-    // dim is repeated), so one aligned page pitch serves reader, writer, and CB.
-    const uint32_t aligned_page_size = static_cast<uint32_t>(src_buffer->aligned_page_size());
+    ProgramSpec spec{
+        .name = "repeat_codegen",
+        .kernels = {std::move(reader_spec), std::move(writer_spec)},
+        .dataflow_buffers = {DataflowBufferSpec{
+            .unique_id = PAGES,
+            .entry_size = page_size,
+            .num_entries = kRepeatCbDepth,
+            .data_format_metadata = data_format,
+        }},
+        .tensor_parameters =
+            {TensorParameter{
+                 .unique_id = INPUT,
+                 .spec = input.tensor_spec(),
+             },
+             TensorParameter{
+                 .unique_id = OUTPUT,
+                 .spec = output.tensor_spec(),
+             }},
+        .work_units = {WorkUnitSpec{
+            .name = "repeat_codegen",
+            .kernels = {READER, WRITER},
+            .target_nodes = split.all_cores,
+        }},
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = kRepeatCbDepth * aligned_page_size,
-        .core_ranges = split.all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = 0,
-            .data_format = cb_data_format,
-            .page_size = aligned_page_size,
-        }}},
-    });
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
 
-    std::vector<uint32_t> reader_ct_args = {aligned_page_size, aligned_page_size};
-    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-    reader_ct_args.push_back(0);  // cb_id
-    reader_ct_args.push_back(operation_attributes.num_repeats);
-    reader_ct_args.push_back(operation_attributes.lower_pages);
-    reader_ct_args.push_back(operation_attributes.rep_dim_pages);
-    reader_ct_args.push_back(kReadBatch);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = split.all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_ct_args = {0, aligned_page_size, aligned_page_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    writer_ct_args.push_back(kWriteBatch);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_repeat_rm.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = split.all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    uint32_t start = 0;
-    for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
-        reader_desc.emplace_runtime_args(core, {src_buffer, n, start});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
-        start += n;
-    }
-
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

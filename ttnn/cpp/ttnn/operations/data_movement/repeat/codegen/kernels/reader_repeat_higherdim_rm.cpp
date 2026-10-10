@@ -9,31 +9,30 @@
 // broadcast a singleton dim; avoiding the full generic div/mod map keeps those
 // cases from losing to TTNN's collapsed RM path.
 //
-// CT args: xfer_size, l1_stride, TensorAccessorArgs(in_t),
-//          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
-// RT args: src_addr, num_out_pages, out_start_page
+// Named CT args: xfer_size, l1_stride, num_repeats, lower_pages, rep_dim_pages, batch
+// Bindings:      tensor::src (input tensor), dfb::in (staging buffer this reader fills)
+// Named RT args: num_out_pages, out_start_page
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_out_pages = get_arg_val<uint32_t>(1);
-    uint32_t out_start_page = get_arg_val<uint32_t>(2);
+    uint32_t num_out_pages = get_arg(args::num_out_pages);
+    uint32_t out_start_page = get_arg(args::out_start_page);
 
-    constexpr uint32_t xfer_size = get_compile_time_arg_val(0);
-    constexpr uint32_t l1_stride = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr uint32_t cb_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t LOWER_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t REP_DIM_PAGES = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 3);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t xfer_size = get_arg(args::xfer_size);
+    constexpr uint32_t l1_stride = get_arg(args::l1_stride);
+    constexpr uint32_t NUM_REPEATS = get_arg(args::num_repeats);
+    constexpr uint32_t LOWER_PAGES = get_arg(args::lower_pages);
+    constexpr uint32_t REP_DIM_PAGES = get_arg(args::rep_dim_pages);
+    constexpr uint32_t BATCH = get_arg(args::batch);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    CircularBuffer cb_in(cb_id);
+    // dfb::in — one l1_stride slot per output page, filled here, drained by the writer.
+    DataflowBuffer dfb_in(dfb::in);
 
     constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
     constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
@@ -43,7 +42,7 @@ void kernel_main() {
 
     while (pages_left > 0) {
         uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-        cb_in.reserve_back(batch);
+        dfb_in.reserve_back(batch);
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
@@ -62,12 +61,12 @@ void kernel_main() {
                 src_page = block * SRC_LOWER + lower_in_rep;
             }
 
-            noc.async_read(s, cb_in, xfer_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+            noc.async_read(s, dfb_in, xfer_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
             l1_offset += l1_stride;
             out_page++;
         }
         noc.async_read_barrier();
-        cb_in.push_back(batch);
+        dfb_in.push_back(batch);
         pages_left -= batch;
     }
 }

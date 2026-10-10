@@ -8,7 +8,7 @@
 // stick_size * NUM_REPEATS bytes — formed by replicating the input stick
 // NUM_REPEATS times *contiguously* in L1 (the within-stick bytes must be packed
 // so the materialized output row is correct), then pushing the full output page
-// to the CB for the writer.
+// to the staging DFB for the writer.
 //
 // 64B page-alignment fix (matches ops/expand's proven RM path):
 //   - The DRAM read copies in_read_size bytes (the aligned input page; stays
@@ -22,47 +22,46 @@
 // alignment constraint. Sim tolerated the old sub-64B DRAM transfers implicitly;
 // silicon requires the aligned transfers above (silicon PCC 0.28 pre-fix).
 //
-// CT args: stick_size, in_read_size, out_l1_stride, TensorAccessorArgs(in_t),
-//          cb_id, NUM_REPEATS, BATCH
-// RT args: src_addr, num_pages, start_page
+// Named CT args: stick_size, in_read_size, out_l1_stride, num_repeats, batch
+// Bindings:      tensor::src (input tensor), dfb::in (staging buffer this reader fills)
+// Named RT args: num_pages, start_page
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_pages = get_arg_val<uint32_t>(1);
-    uint32_t start_page = get_arg_val<uint32_t>(2);
+    uint32_t num_pages = get_arg(args::num_pages);
+    uint32_t start_page = get_arg(args::start_page);
 
-    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr uint32_t in_read_size = get_compile_time_arg_val(1);
-    constexpr uint32_t out_l1_stride = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr uint32_t cb_id = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    constexpr uint32_t NUM_REPEATS = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t stick_size = get_arg(args::stick_size);
+    constexpr uint32_t in_read_size = get_arg(args::in_read_size);
+    constexpr uint32_t out_l1_stride = get_arg(args::out_l1_stride);
+    constexpr uint32_t NUM_REPEATS = get_arg(args::num_repeats);
+    constexpr uint32_t BATCH = get_arg(args::batch);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    CircularBuffer cb_in(cb_id);
+    // dfb::in — one out_l1_stride slot per output page, filled here, drained by the writer.
+    DataflowBuffer dfb_in(dfb::in);
 
     uint32_t src_page = start_page;
     uint32_t pages_left = num_pages;
 
     while (pages_left > 0) {
         uint32_t batch = (pages_left < BATCH) ? pages_left : BATCH;
-        cb_in.reserve_back(batch);
+        dfb_in.reserve_back(batch);
         // Absolute L1 base is still needed for the L1-local within-stick
         // replication below (CoreLocalMem / NoC L1->L1 addressing).
-        uint32_t l1_base = cb_in.get_write_ptr();
+        uint32_t l1_base = dfb_in.get_write_ptr();
 
         for (uint32_t t = 0; t < batch; t++) {
             // Read the aligned input page into the first position of this slot.
             noc.async_read(
-                s, cb_in, in_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = t * out_l1_stride});
+                s, dfb_in, in_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = t * out_l1_stride});
             src_page++;
         }
 
@@ -83,7 +82,7 @@ void kernel_main() {
                     for (uint32_t r = 1; r < NUM_REPEATS; r++) {
                         noc.async_read(
                             self_ep,
-                            cb_in,
+                            dfb_in,
                             stick_size,
                             {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = l1_addr},
                             {.offset_bytes = t * out_l1_stride + r * stick_size});
@@ -142,7 +141,7 @@ void kernel_main() {
             }
         }
 
-        cb_in.push_back(batch);
+        dfb_in.push_back(batch);
         pages_left -= batch;
     }
 }
