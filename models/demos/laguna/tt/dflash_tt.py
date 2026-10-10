@@ -278,11 +278,15 @@ def map_dflash_shared_state_dict(
 
 
 def dflash_bf16_policy() -> PrecisionPolicy:
-    """Accuracy-first BF16 policy for this unoptimized core proof. TT_LAGUNA_DFLASH_DRAFT_WDT=bf8 stores the
-    attention and MLP projection weights as bfloat8_b (half the bytes a 32-row draft layer reads; the default:
-    teacher-forced AIME24 acceptance 2.667 vs 2.677 with bf16, draft 5.7-6.0 -> 5.2-5.3 ms per round); bf16 keeps BF16."""
+    """Accuracy-first BF16 policy for this unoptimized core proof. TT_LAGUNA_DFLASH_DRAFT_WDT stores the attention
+    and MLP projection weights as bfloat4_b (the default: teacher-forced AIME24 acceptance 2.687 vs 2.667 with bf8,
+    real-text acceptance over 1024 tokens no lower, draft 2.8 -> 2.5 ms per round), bfloat8_b (bf8; 2.667 vs 2.677
+    with bf16) or BF16 (bf16). The draft only proposes tokens: the target verifies every one. (A bfloat4_b copy of
+    the LM head the draft projects with cost 14% acceptance: it stays as the target's.)"""
 
-    wdt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("TT_LAGUNA_DFLASH_DRAFT_WDT", "bf8")]
+    wdt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}[
+        os.environ.get("TT_LAGUNA_DFLASH_DRAFT_WDT", "bf4")
+    ]
     return PrecisionPolicy(
         attn_qkv=wdt,
         attn_o=wdt,
