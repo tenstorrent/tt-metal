@@ -32,12 +32,26 @@ from loguru import logger
 ENABLE_LOGGING = False
 
 
+def fp32_grid_sample_config(device):
+    """grid_sample's own defaults (HiFi4, no approximation, no packer L1 accumulation) with
+    fp32 accumulation of its weighted 4-corner sum. ``init_device_compute_kernel_config``'s
+    defaults are LoFi with approximation, so they are spelled out."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 def multi_scale_deformable_attn_ttnn(
     value,
     value_spatial_shapes,
     sampling_grids,
     attention_weights,
     device,
+    grid_sample_compute_config=None,
 ):
     """
     ttnn implementation of multi-scale deformable attention core logic.
@@ -56,6 +70,8 @@ def multi_scale_deformable_attn_ttnn(
             when calculate the attention, has shape
             (bs, num_queries, num_heads, num_levels, num_points),
         device: TTNN device
+        grid_sample_compute_config: Compute kernel config for grid_sample's weighted
+            4-corner sum; None keeps grid_sample's default.
 
     Returns:
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
@@ -90,7 +106,15 @@ def multi_scale_deformable_attn_ttnn(
 
         # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
         # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
-        sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
+        # align_corners=False and zero padding are what the ``2 * loc - 1`` grid mapping and
+        # the reference's F.grid_sample assume.
+        sampling_value_l_ = ttnn.grid_sample(
+            value_l_,
+            sampling_grid_l_,
+            padding_mode="zeros",
+            align_corners=False,
+            compute_kernel_config=grid_sample_compute_config,
+        )
 
         # (bs*num_heads, num_queries*num_points, 1, head_dim) -> (bs*num_heads, head_dim, num_queries, num_points)
         sampling_value_l_ = ttnn.squeeze(
@@ -136,7 +160,16 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
+    def __init__(
+        self,
+        config: DeformableAttentionConfig,
+        device,
+        params=None,
+        *,
+        spatial_shapes,
+        grid_dtype=None,
+        grid_sample_compute_config=None,
+    ):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -153,7 +186,16 @@ class TTMSDeformableAttention:
             spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
                 module: it is folded into the sampling-offset Linear here and forward takes
                 no shapes of its own. Features at a different resolution require a new
-                instance.
+                instance. The fold consumes ``params.sampling_offsets``, so ``params`` serve
+                one instance.
+            grid_dtype: Dtype of the sampling grid: the sampling-offset Linear emits it and the
+                reference points are cast to it. None keeps the Linear's own output dtype and
+                the reference points' dtype. In bfloat16 a point in (0.5, 1) moves in steps of
+                2^-8, 0.8 px on a 200-wide map; float32 keeps the grid position sub-pixel
+                accurate (grid_sample reads float32 coordinates; only its bilinear weights are
+                bfloat16).
+            grid_sample_compute_config: Passed to grid_sample; see
+                :func:`multi_scale_deformable_attn_ttnn`.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -190,6 +232,8 @@ class TTMSDeformableAttention:
         self.sampling_offsets_weight, self.sampling_offsets_bias = self._fold_grid_scale(self.spatial_shapes)
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.grid_dtype = grid_dtype
+        self.grid_sample_compute_config = grid_sample_compute_config
 
     def _fold_grid_scale(self, spatial_shapes):
         """Pre-scale the ``sampling_offsets`` Linear by ``2 / [W, H]`` per level.
@@ -212,7 +256,8 @@ class TTMSDeformableAttention:
         if sampling_offsets is None:
             raise ValueError(
                 "TTMSDeformableAttention requires params.sampling_offsets to fold the offset "
-                "normalizer; got params=None or missing sampling_offsets."
+                "normalizer. It is missing, or another TTMSDeformableAttention built from these "
+                "params already folded and freed it; each instance needs its own params."
             )
 
         weight = sampling_offsets.weight
@@ -228,16 +273,22 @@ class TTMSDeformableAttention:
             scale[:, level, :, 0] = 2.0 / float(w)
             scale[:, level, :, 1] = 2.0 / float(h)
         scale_tt = ttnn.from_torch(
-            scale.reshape(1, out_features), device=self.device, dtype=weight.dtype, layout=ttnn.TILE_LAYOUT
+            scale.reshape(1, out_features), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
 
+        def fold(tensor):
+            folded = ttnn.mul(ttnn.typecast(tensor, ttnn.float32), scale_tt)
+            return ttnn.typecast(folded, tensor.dtype) if tensor.dtype != ttnn.float32 else folded
+
         bias = getattr(sampling_offsets, "bias", None)
-        folded_weight = ttnn.mul(weight, scale_tt)
-        folded_bias = ttnn.mul(bias, scale_tt) if bias is not None else None
+        folded_weight = fold(weight)
+        folded_bias = fold(bias) if bias is not None else None
         ttnn.deallocate(scale_tt)
         ttnn.deallocate(weight)
         if bias is not None:
             ttnn.deallocate(bias)
+        # Consumed: another instance built from these params fails the check above.
+        self.params.sampling_offsets = None
         return folded_weight, folded_bias
 
     def _grid_bias(self, reference_points, depth_levels):
@@ -258,6 +309,8 @@ class TTMSDeformableAttention:
         groups = self.num_heads * self.num_levels * (self.num_points // depth_levels)
 
         ref = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+        if self.grid_dtype is not None and ref.dtype != self.grid_dtype:
+            ref = ttnn.typecast(ref, self.grid_dtype)
         ref = ttnn.reshape(ref, (bs, num_queries, 1, block))
         ref = ttnn.mul(ref, 2.0)
         ref = ttnn.sub(ref, 1.0)
@@ -349,7 +402,9 @@ class TTMSDeformableAttention:
         # here, so the extent-2 coordinate axis never sits in a tiled dimension where it would
         # pad 2 -> 32. Materializing (heads, levels, points, 2) is deferred until after the add.
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
+        sampling_offsets = ttnn.linear(
+            query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias, dtype=self.grid_dtype
+        )
         sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT)
 
         if ENABLE_LOGGING:
@@ -389,6 +444,7 @@ class TTMSDeformableAttention:
             sampling_grids=sampling_grids,
             attention_weights=attention_weights,
             device=self.device,
+            grid_sample_compute_config=self.grid_sample_compute_config,
         )
 
         if ENABLE_LOGGING:
