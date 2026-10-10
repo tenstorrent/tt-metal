@@ -15,10 +15,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.ack_space import ack_space_layout
 from models.demos.common.prefill.runners.layer_completion_drainer import current_protocol, scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_sink import (
-    build_layer_completion_sink,
-    build_layer_completion_sink_v2,
+    CountOnlyLayerCompletionSink,
+    StructuredLayerCompletionSink,
 )
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
@@ -731,66 +732,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         teardown_timeout_ms=30000,
         protocol=LAYER_COMPLETION_PROTOCOL,
     )
-    # ACK space, not layer space, and for BOTH transports below. Each derives a record's identity
-    # from a plain dense counter -- LayerAckService from
-    # seq = (k // local_layers) * num_layers + first_layer_idx + k % local_layers, the host sink
-    # from seq = request_id * num_layers + ack_idx -- and LayerCompletionReorderBuffer advances
-    # next_expected_ by exactly 1 per drained record. So both must count records this rank actually
-    # EMITS, not layers it holds. A hybrid stack acks only on KV-writing layers (`block.py` gates
-    # the ack on `attention.writes_kv`), so a 24-layer Kimi-K3 rank emits 6 records per chunk
-    # against a configured 24: on the D2H transport four real chunks are then labelled as one, and
-    # on the host transport the global indices {3,7,11,...} leave seq 0 never sent, so nothing ever
-    # drains. Dense models have one ack per layer, so acks == layers and this is a no-op for them.
-    #
-    # `layer_idx` is the exception: it must stay GLOBAL on BOTH transports (the router addresses the
-    # KV stage with it). The host sink is handed the true index; D2H reconstructs it from
-    # `ack_layer_ids` below, and cross-checks the record's own {slot_id, actual_start, actual_end}
-    # to catch a dropped record rather than silently relabelling from there on.
-    #
-    # Derived here rather than taken from main(): this is a separate function and main()'s
-    # `layer_split` is not in its scope. The migration block below reads the layer-space pair.
+    # ACK space for both transports (see ack_space.py); the migration block below uses layer space.
     layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
     first_layer_idx, num_my_layers = layer_split[rank]
-    ack_layer_ids = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
-    if ack_layer_ids is None:
-        acks_per_rank = [count for _, count in layer_split]
-        ack_idx_of_layer = None
-    else:
-        ack_layer_ids = sorted(ack_layer_ids)
-        acks_per_rank = [
-            sum(1 for layer in ack_layer_ids if first <= layer < first + count) for first, count in layer_split
-        ]
-        ack_idx_of_layer = {layer: idx for idx, layer in enumerate(ack_layer_ids)}
-    num_ack_layers = sum(acks_per_rank)
-    # This rank's ACK records as GLOBAL layer indices, in emission order. The D2H transport
-    # derives a record's position from a counter, so without this map its `layer_idx` would be
-    # an ACK index while the host transport puts the global layer in the same field -- the two
-    # transports would disagree on what that field means for every hybrid model. Empty for a
-    # dense model, where ack index already IS the global layer.
-    my_ack_layer_ids = (
-        []
-        if ack_layer_ids is None
-        else [layer for layer in ack_layer_ids if first_layer_idx <= layer < first_layer_idx + num_my_layers]
+    extra_ack_layers = runtime.layer_ack_layers(0, 0)[0] if getattr(runtime, "layer_ack_layers", None) else 0
+    ack_space = ack_space_layout(
+        layer_split,
+        rank,
+        kv_slot_layer_ids=getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS),
+        extra_ack_layers=extra_ack_layers,
     )
-    # Distinct names: `first_layer_idx` / `num_my_layers` are rebound in LAYER space by the
-    # migration block further down, and ack indices addressing a KV stage would be silently wrong
-    # (6/12/18 instead of 24/48/72 on Kimi-K3).
-    ack_first_idx = sum(acks_per_rank[:rank])
-    ack_local_count = acks_per_rank[rank]
-    if ack_local_count == 0:
-        raise RuntimeError(
-            f"rank {rank} holds layers [{first_layer_idx}, {first_layer_idx + num_my_layers}) and none of "
-            f"them writes a KV slab, so it emits no layer-completion records; "
-            f"LayerAckService requires at least one "
-            f"(TT_FATAL on local_layers=0) and the reorder buffer would wait on records that never come. "
-            f"Use a layer split that gives every rank a KV-writing layer, or run without migration."
-        )
-    # A runtime may ack rows no layer of the split describes -- DFlash acks the drafter's context K/V
-    # as layers past the verifier's last, because those writes land after the forward returns. Widen
-    # the ack space here rather than at the two call sites: every rank must agree on the global count,
-    # since it is the modulus of the seq the master router reorders on.
-    if getattr(runtime, "layer_ack_layers", None) is not None:
-        num_ack_layers, ack_local_count = runtime.layer_ack_layers(num_ack_layers, ack_local_count)
     if use_d2h:
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
@@ -807,10 +758,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service,
             ring_shm_name,
             source_rank=rank,
-            num_ack_layers=num_ack_layers,
-            ack_first_idx=ack_first_idx,
-            ack_local_count=ack_local_count,
-            ack_layer_ids=my_ack_layer_ids,
+            num_ack_layers=ack_space.num_ack_layers,
+            ack_first_idx=ack_space.ack_first_idx,
+            ack_local_count=ack_space.ack_local_count,
+            ack_layer_ids=ack_space.ack_layer_ids,
             protocol=LAYER_COMPLETION_PROTOCOL,
         )
         if runtime.config.use_trace:
@@ -835,18 +786,19 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "which the layer-ack path requires at every rank count "
                 "(see docs/ADDING_A_PREFILL_MODEL.md)."
             )
-        queue_cls = LayerCompletionQueueV2 if LAYER_COMPLETION_PROTOCOL == 2 else LayerCompletionQueue
-        sink_factory = build_layer_completion_sink_v2 if LAYER_COMPLETION_PROTOCOL == 2 else build_layer_completion_sink
-        producer = queue_cls.connect(ring_shm_name, connect_timeout_ms=30000)
-        runtime.set_layer_completion_sink(
-            sink_factory(
+        if LAYER_COMPLETION_PROTOCOL == 2:
+            producer = LayerCompletionQueueV2.connect(ring_shm_name, connect_timeout_ms=30000)
+            sink = StructuredLayerCompletionSink(producer, source_rank=rank, is_shutdown=lambda: _shutdown)
+        else:
+            producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+            sink = CountOnlyLayerCompletionSink(
                 producer,
                 source_rank=rank,
-                num_layers=num_ack_layers,
-                ack_idx_of_layer=ack_idx_of_layer,
+                num_ack_layers=ack_space.num_ack_layers,
+                ack_idx_of_layer=ack_space.ack_idx_of_layer,
                 is_shutdown=lambda: _shutdown,
             )
-        )
+        runtime.set_layer_completion_sink(sink)
         source_desc = "host on_layer_complete callback"
     logger.info(
         f"[migration] layer-completion routing up (v{LAYER_COMPLETION_PROTOCOL}): "
