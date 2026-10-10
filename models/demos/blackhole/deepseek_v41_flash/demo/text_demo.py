@@ -92,6 +92,11 @@ SCENARIOS = [
     _s(Q128, 32, 512, 64, "prefill_128_b32"),
     _s(Q128, 128, 512, 32, "prefill_128_b128"),
     _s(GSM, 16, 512, 384, "gsm8k_b16", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 2048, 384, "gsm8k_b16_m2048", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 8192, 384, "gsm8k_b16_m8192", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 32768, 384, "gsm8k_b16_m32768", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 70000, 384, "gsm8k_b16_m70000", instruct=True, stop_at_eos=True),
+    _s(GSM, 16, 131072, 384, "gsm8k_b16_m131072", instruct=True, stop_at_eos=True),
     _s(GSM, 64, 512, 384, "gsm8k_b64", instruct=True, stop_at_eos=True),
     *[
         _s(f"{PROMPTS}/input_data_gsm8k_o{o}.json", 64, 512, 352, f"gsm8k_b64_o{o}", instruct=True, stop_at_eos=True)
@@ -153,6 +158,12 @@ SCENARIOS = [
     _s(
         Q128, 16, 131072, 64, "prefill_128_b16_m131072"
     ),  # DRAM probe: the 131072 build with a short prompt (runner / trace cost does not depend on the prompt; the prefill chunk trace does)
+    _s(
+        Q128, 16, 70000, 64, "prefill_128_b16_m70000"
+    ),  # round time vs the built context (same short prompt, 70000 / 131072 builds)
+    _s(Q128, 16, 2048, 64, "prefill_128_b16_m2048"),
+    _s(Q128, 16, 8192, 64, "prefill_128_b16_m8192"),
+    _s(Q128, 16, 32768, 64, "prefill_128_b16_m32768"),
     # the first 16 prompts of the vLLM perf pool (GSM8K 8-shot, ~720 tokens, chat template, exactly 256 generated tokens) at the vLLM B=16 / max_model_len 70000 build: the demo-side reference of the tt-inference-server perf sweep at concurrency 16
     _s(
         "/mnt/tt-data/ssinghal/dsv4-logs/perf/gsm8k_8shot_16.json", 16, 70000, 256, "gsm8k8shot_b16_c70k", instruct=True
