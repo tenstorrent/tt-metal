@@ -2038,7 +2038,12 @@ class MultichipDecoder(OptimizedDecoder):
             if not self._slice_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
             qkv_w = self.meta["qkv_w"]
-            ae1 = self._ae1 and B == 1 and self._reshape_to_shard and qkv.dtype == ttnn.bfloat16
+            ae1 = (
+                self._ae1
+                and (B == 1 or (1 < B <= 8 and sequential_kv_write and self._ap1_rows))
+                and self._reshape_to_shard
+                and qkv.dtype == ttnn.bfloat16
+            )
             if not ae1:  # attn_epilogue1 reads the gate logits from qkv itself
                 g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads], memory_config=split_mem)
         else:
@@ -2180,7 +2185,7 @@ class MultichipDecoder(OptimizedDecoder):
             from .attn_epilogue1 import attn_epilogue1
 
             wo_in = _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
-            attn = attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, wo_in)
+            attn = attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, wo_in, rows=B)
             o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
             return self._decode_tail(o, residual, B, next_norm_cores)
         # gate in the SDPA's native [1,B,nh,hd] head layout, then flatten ONCE (the generic _gate flattens,
