@@ -1316,6 +1316,15 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     }
 }
 
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    const auto status = JitBuildCache::inst().build_once_no_wait(hash, build_fn);
+    // An in-progress caller records its dedup later, when it joins through jit_build_once().
+    if (status == JitBuildCache::BuildOnceStatus::AlreadyBuilt) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
+    return status != JitBuildCache::BuildOnceStatus::InProgress;
+}
+
 void jit_build_cache_clear() {
     JitBuildCache::inst().clear();
     jit_build::clear_file_hash_cache();

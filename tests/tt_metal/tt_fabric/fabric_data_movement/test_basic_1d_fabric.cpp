@@ -993,9 +993,9 @@ void RunTestMCastConnAPI(
     } else {
         dst_chip_id = left_first_hop_phys_chip_id;
     }
-    link_idx =
-        get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
-    const auto left_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    link_idx = get_forwarding_link_indices(
+        src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+    const auto left_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
         left_dst_fabric_node_id,
@@ -1013,9 +1013,9 @@ void RunTestMCastConnAPI(
     } else {
         dst_chip_id = right_first_hop_phys_chip_id;
     }
-    link_idx =
-        get_forwarding_link_indices(src_fabric_node_id, get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
-    const auto right_dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    link_idx = get_forwarding_link_indices(
+        src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+    const auto right_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
         right_dst_fabric_node_id,
@@ -1764,7 +1764,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
     // append the EDM connection rt args for fwd connection
     ChipId dst_chip_id = first_hop_phys_chip_id;
-    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     uint32_t link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
@@ -2021,9 +2021,9 @@ void RunEDMConnectionStressTest(
                 worker_args.push_back(i % message_counts.size());
 
                 const auto sender_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->get_device_ids()[0]);
+                    control_plane.get_fabric_node_id_from_physical_chip_id(sender_device->get_device_ids()[0]);
                 const auto receiver_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->get_device_ids()[0]);
+                    control_plane.get_fabric_node_id_from_physical_chip_id(receiver_device->get_device_ids()[0]);
                 append_fabric_connection_rt_args(
                     sender_fabric_node_id,
                     receiver_fabric_node_id,
@@ -2143,7 +2143,7 @@ void FabricUnicastCommon(
         auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
         receiver_devices.push_back(fixture->get_device(dst_physical_device_id));
         // connection is to first hop for each direction
-        dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
+        dest_fabric_node_ids.push_back(control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
     auto sender_device = fixture->get_device(src_physical_device_id);
     tt::tt_metal::CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
@@ -2314,7 +2314,7 @@ void UDMFabricUnicastCommon(
         // Get destination device at the num_hops-th neighbor
         uint32_t dst_index = num_hops - 1;
         dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
-        dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+        dest_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
     } else {
         // New behavior: use explicit src and dest node IDs
         auto [src_node, dest_node] = std::get<std::tuple<uint32_t, uint32_t>>(routing_info);

@@ -17,7 +17,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -204,6 +204,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
+        self._eye_states: dict[int, StateTensor] = {}
         self._static_source_state = StateTensor()
         self._prompt_windows_state = StateTensor()
         self.parallel_config = parallel_config
@@ -372,6 +373,8 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: ttnn.Tensor,
         pad_to: int,
         traced: bool = False,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -387,7 +390,10 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
-        pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        pad_to: the padded packed length; keys the trace together with the presence of the tile-row map (one
+            capture per `(pad_to, map present)`).
+        adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
+            their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -435,6 +441,12 @@ class MiniMaxH3Transformer3DModel(Module):
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
 
+        # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
+        # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
+        rows = temb.shape[2] * MODALITY_NUM
+        eye_state = self._eye_states.setdefault(rows, StateTensor())
+        eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -442,8 +454,11 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            eye=eye_state.value,
+            adaln_tile_map=adaln_tile_map,
+            adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             traced=traced,
-            tracer_trace_key=pad_to,
+            tracer_trace_key=(pad_to, adaln_tile_map is not None),
         )
 
         hidden = self.norm_out(
@@ -479,7 +494,12 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        eye: ttnn.Tensor | None = None,
+        adaln_tile_map: ttnn.Tensor | None = None,
+        adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
+        tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
         for block in self.transformer_blocks:
             hidden = block(
                 hidden,
@@ -488,7 +508,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                onehot=onehot,
+                tilerow=tilerow,
             )
+        ttnn.deallocate(onehot)
+        if tilerow is not None:
+            ttnn.deallocate(tilerow[1])
         return hidden
 
     def release_traces(self) -> None:
