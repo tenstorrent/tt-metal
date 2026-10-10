@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf of the csa_index_remap SFPU op (sources/csa_index_remap_perf.cpp); unit: one section of three tiles,
-PERF_STAGE 0 being the datacopies alone."""
+"""Perf of the csa_index_remap SFPU op (sources/csa_index_remap_perf.cpp); unit: one section, three tiles copied and
+packed and one remapped, PERF_STAGE 0 being the datacopies alone."""
 
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -37,7 +37,8 @@ def test_perf_csa_index_remap(perf_report, variant):
         InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32),
         run_types=[PerfRunType.L1_TO_L1],
         templates=[CSA_REMAP(row_offset), DEST_SYNC(DestSync.Half), PERF_STAGE(stage)],
-        runtimes=[DEST_INDEX(0), TILE_COUNT(3), LOOP_FACTOR(64)],
+        # One section per tile count: the remap runs once per section.
+        runtimes=[DEST_INDEX(0), TILE_COUNT(1), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
             None,
             DataFormat.UInt32,
