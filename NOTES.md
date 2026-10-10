@@ -10,6 +10,15 @@
   m = same with timing env. Logs: /var/tmp/fasth3/t373/{drv373.log,build.log,run_<tag>_job<id>.log}; marker drv373.done.
   retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t373/drv373
 
+## Run 1441 (2026-10-10 14:55 PDT)
+- drv373 jobs 523 (w) and 525 (m) both failed on pytest-timeout 540 s: cold JIT. 523 compiled through warm-up stage 1
+  (step 1 took 94 s). 525 (JIT 58% hits) finished warm-up in 426 s and was killed 8 s into gen#0. No drop: fabric
+  checks 524/526 passed after each. Not a code fault: no timing lines reached (gen#0 never finished).
+- JIT cache t373/jit should now be full. drv373b (copy: tt-project/t373/drv373b.sh; ttp detach --remote g15blx01
+  --dir /var/tmp/fasth3/t373, pid 824901, 21:54Z) reuses the build and queues m then w at -t 570 behind other
+  tenants. Lint rc 0 for both. retry_when: ttp detach --check --host g15blx01 /var/tmp/fasth3/t373/drv373b
+  Marker: /var/tmp/fasth3/t373/drv373b.done; logs run_m_job<id>.log, run_w_job<id>.log.
+
 ## Next step
 1. Read run_m_job*.log: the VAE decode breakdown rows and the TT_DIT_STAGE_LOG ms lines for gens #1/#2
    (upload / device decode / yuv device / readback / host assemble / other) and "[t373] planar concat" line.
