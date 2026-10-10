@@ -258,7 +258,7 @@ def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_
         for t in range(2, min(T_out + 1, t_max + 1)):
             if T_out % t == 0:
                 t_blocks_set.add(t)
-        for t in [3, 5, 6, 7, 9, 11, 13, 15, 16, 21, 28, 32]:
+        for t in [2, 3, 4, 5, 6, 7, 9, 11, 13, 15, 16, 21, 28, 32]:
             if 1 < t <= T_out and t <= t_max:
                 t_blocks_set.add(t)
         t_blocks_set = {t for t in t_blocks_set if t <= t_max}
