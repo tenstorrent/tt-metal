@@ -129,34 +129,43 @@ the expert op and `post_combine_reduce`. T_moe is the gate.
 
 ### 1.3a Status on the 2×4 LB (2026-10-10, branch `pjosipovic/k3-moe-fp8-wire`)
 
-Shipped wire: per-token fp8 (one pow2 fp32 scale per token row, `fp8_scale_block=0`), fused DQ1 in the
-routed expert, fused DQ2 in `post_combine_reduce`. Program-sum numbers are per-op device time.
+**Reference load: Galaxy-equivalent.** The proxy must run with `K3_NUM_EXPERTS=224`. That gives 28 experts
+and 2560 dispatched rows per chip, as on the 8×4 Galaxy. The default of 896 experts puts 112 experts per chip
+on the LB, and the 10 ms routed expert then hides everything else. Earlier numbers in this doc and in the
+commit messages (13.3 ms vs 13.83 ms) used that default load and do not show the fp8 trade-off.
 
-| Target | Goal | Measured | |
+Shipped wire: per-token fp8 (one pow2 fp32 scale per token row), fused DQ1 in the routed expert, fused DQ2 in
+`post_combine_reduce`. Measured with `K3_NUM_EXPERTS=224`. Per-op times are Tracy device kernel time, median
+per chip.
+
+| | bf16 wire | fp8 wire | Δ |
 |---|---|---|---|
-| T_moe (traced, p50 of 20) | ≤ 13.83 − 0.30 × (0.596 + 1.097) = 13.32 ms | **13.30 ms** | met |
-| T_disp | ≤ 0.70 × B0 = 417 µs | 557 µs | not met: LB dispatch is not byte-bound |
-| T_comb incl. Q2 | ≤ 0.75 × B0 = 823 µs | 555 + 199 = 754 µs | met |
-| Q1 standalone | 0 (fused, F2) | 51 µs | not met: F2 not done |
-| DQ1 | 0 (fused) | 0 | met |
-| T_exp | ≤ 1.05 × B0 | 10.28 ms | met (fp32 DEST costs nothing in the matmuls) |
-| T_pcr incl. DQ2 | ≤ 1.10 × B0 | 202 µs | met |
-| final / routed PCC drop vs bf16 wire | ≤ 0.005 / ≤ 0.008 | 0.0002 / 0.0010 | met |
-| MoE temp DRAM peak | ≤ 0.75 × B0 | 0.63–0.71 × | met |
+| **T_moe (traced, p50 of 20)** | **4.97 ms** | **5.13 ms** | **+0.16 ms (fp8 slower)** |
+| routed expert | 2551 µs | 2620 µs | +69 (fp8 x takes the slow tilize path) |
+| dispatch | 582 µs | 539 µs | −43 |
+| combine | 417 µs | 368 µs | −49 |
+| Q1 / Q2 quantize | — | 50 / 144 µs | +194 |
+| post_combine_reduce | 196 µs | 196 µs | 0 |
 
-Two of the wins also speed up the bf16 path: the `post_combine_reduce` column split and batched reads (B0 PCR
-365 → about 200 µs) put bf16 at 13.66 ms traced. Against that baseline the fp8 wire saves 0.36 ms, which is
-0.21 × (T_disp + T_comb) on LB. LB understates the wire gains, since its dispatch spans one hop.
+Against the §1.3 targets: T_moe not met (fp8 is +3% vs bf16). T_disp not met (539 vs ≤ 407 µs): dispatch
+runs on 6 cores (2 links × (sender + 2 workers)), is bound by per-packet work rather than bytes, and 4 or 5
+workers per sender did not change it. T_comb incl. Q2 not met (512 vs ≤ 313 µs). Q1 standalone not met (F2
+not done). DQ1 = 0 met. T_exp met within 1.05× (+2.7%). T_pcr incl. DQ2 met. PCC met (final 0.99405 vs
+0.99424). Memory met (0.63–0.71× of bf16, measured at the default load).
 
-Findings that changed the plan:
-- fp32 DEST (required by any Fp8 CB on Blackhole) does not slow the expert's matmuls. The +0.3 ms first seen
-  came from SiTU-GLU switching to its accurate fp32 exp/reciprocal under fp32 DEST. The expert now always uses
-  its bf16-precision variant, since the result is packed to Bfp8_b.
-- The fp8 x tilize takes the slow (non-fast) path: about +55 µs per 5k-token expert. Fast tilize does not
-  accept Fp8_e4m3 input (it returns wrong data).
-- Per-row Q1/Q2 split each tile-row across partner cores that exchange partial row maxima. Q1 89 → 51 µs,
-  Q2 275 → 199 µs. The rest is SFPU work (abs-max, RNE) and 128-B row writes.
-- `post_combine_reduce` was latency-bound (one small read + barrier per slot) on 20 cores.
+On the LB the wire saves about 90 µs. The fp8 costs, Q1 + Q2 + the fp8 tilize, are about 260 µs. The wire
+only pays off once those costs drop below the dispatch and combine savings, or once dispatch spans more hops,
+as on Galaxy.
+
+Findings:
+- fp32 DEST (required by any Fp8 CB on Blackhole) does not slow the expert's matmuls. The first +0.3 ms
+  came from SiTU-GLU switching to its accurate fp32 exp/reciprocal under fp32 DEST. The expert now always
+  uses its bf16-precision variant, since the result is packed to Bfp8_b.
+- Fast tilize does not accept Fp8_e4m3 input (it returns wrong data), so fp8 x tilizes on the slow path.
+- Per-row Q1/Q2 split each tile-row across partner cores that exchange partial row maxima. They are
+  compute-bound (abs-max, RNE, pow2 multiply, pack-untilize) at about 1 µs per tile over two passes.
+- `post_combine_reduce` was latency-bound (one small read + barrier per slot, 20 cores). Column parts and
+  per-token batched reads take it from 337 to about 200 µs, for both wires.
 
 ### 1.4 Memory-footprint targets for MoE temporary buffers (DRAM per chip, 2×4 LB, 640 tokens/chip)
 
