@@ -3042,12 +3042,16 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.nn.functional.selu)
 
     def _i0(self, x):
-        # Modified Bessel I0; the kernel uses a poly approx valid on |x| <= 3.75.
+        # Modified Bessel I0; two-region kernel: Maclaurin |x| <= 6, asymptotic beyond.
         # torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the
         # mathematics: I0 is even and unbounded, so I0(+/-inf) = +inf, as the kernel returns.
         if math.isnan(x):
             return x
-        if math.isinf(x):
+        # The kernel returns +inf past I0_MAX_INPUT = 88.5 (Q's fitted boundary), while
+        # torch.special.i0 stays finite until exp() saturates at 88.7228. Mirror the kernel's
+        # cutoff so stimuli drawn in (88.5, 88.7228] compare inf against inf, not inf against
+        # a finite golden -- see ckernel_sfpu_i0.h for why the band is accepted.
+        if math.isinf(x) or abs(x) > 88.5:
             return self.handle_infinite_numbers(math.inf)
         return self._torch_unary(x, torch.special.i0)
 
