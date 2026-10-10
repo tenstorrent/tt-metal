@@ -602,12 +602,20 @@ void py_module(nb::module_& mod) {
             "num_workers_per_dram_bank",
             &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::num_workers_per_dram_bank,
             R"doc(
-            Number of Tensix reader/compute workers assigned to each DRAM bank.
+            Number of compute cores per DRAM bank.
 
-            The default of 1 preserves the established cross-architecture path. Values of 2 or 3
-            split each bank's width shard evenly across multiple workers on Blackhole. All readers
-            for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
-            width in tiles must equal this value times the reader width.
+            1 (the default) runs the single-reader program. With N >= 2, a call with no bias, no
+            fused activation, no untilize_out, 32x32 tiles, K a whole number of tiles, A in L1 and
+            an L1 width-sharded ROW_MAJOR output runs the multi-core pipeline on Blackhole and
+            Wormhole: N cores next to each bank split the bank's weight columns (unevenly when N
+            does not divide the shard width; when N exceeds the shard width it is rounded down to a
+            multiple of it and the extra cores split K and reduce their partial sums), every core
+            reads its activation rows straight from the L1 shards, and in0_block_w is the number of
+            K tiles per streamed weight block (any value). Accumulation follows
+            compute_kernel_config: fp32_dest_acc_en keeps each core's whole K in fp32 Dest,
+            otherwise 16-bit Dest with packer L1 accumulation in Float16_b. Any other call with
+            N = 2 or 3 runs the single-reader program with N readers per bank (Blackhole only; the
+            per-bank shard width in tiles must equal N times the reader width).
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.

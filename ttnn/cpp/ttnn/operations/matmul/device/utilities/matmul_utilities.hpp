@@ -378,6 +378,29 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
+// num_workers_per_dram_bank >= 2 runs the multi-core pipeline (create_program_dram_sharded_multicore_spec)
+// when the call has no bias, no fused activation and no untilize_out, both operands use 32x32 untransposed
+// tiles, K is a whole number of tiles, A is in L1 and the output is L1 width-sharded ROW_MAJOR; any other
+// call keeps the single-reader program with its multi-reader conditions.
+bool use_dram_sharded_multicore(
+    std::size_t workers_per_bank,
+    bool has_bias,
+    bool has_fused_activation,
+    bool untilize_out,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    uint32_t k_logical,
+    tt::tt_metal::BufferType a_buffer_type,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
+// per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
+// coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
+// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
+// from the device, so the result is the same for every chip of a mesh.
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
