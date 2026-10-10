@@ -17,8 +17,20 @@ namespace ckernel::sfpu {
 
 inline void selu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+bool bf16_dest_selu();
+template <int ITERATIONS>
+void calculate_selu_bf16();
+// Whether BF16 DEST runs the generated selu kernel as one call over the whole tile.
+inline constexpr bool selu_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_selu() && scale == 0x3f867d5fu && alpha == 0x3fd62d7du) {
+            calculate_selu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
@@ -40,3 +52,5 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_selu_bf16.h"
