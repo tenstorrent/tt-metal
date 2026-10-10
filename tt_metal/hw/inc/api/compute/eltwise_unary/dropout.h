@@ -30,6 +30,7 @@ namespace ckernel {
 // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
 #ifdef ARCH_BLACKHOLE
+    // One call per tile: VectorMode::None runs the body once, and 32 iterations cover the four faces.
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
