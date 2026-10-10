@@ -1,0 +1,16 @@
+# Paper Fig. 2: naive (1x1, 2.00 DRAM tile reads per multiply) against 2x4 output blocking
+# (0.75 reads per multiply), both POWER_CASE=0 on the same board and shape. Produces
+# matmul/regular and matmul/regular_b2x4.
+name: paper_fig2_blocked
+workload: long_matmul
+app_args: [1024, 2048, 2048, 160]
+# 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
+# tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.
+telemetry_freq_hz: 20000
+trim_ms: 1.0
+runs:
+  power_cases: [0]
+  ops: [matmul]
+  blocks: [[1, 1], [2, 4]]
+analyses:
+  - naive_vs_blocked

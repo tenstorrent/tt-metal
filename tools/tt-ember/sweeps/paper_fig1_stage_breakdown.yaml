@@ -1,0 +1,20 @@
+# Paper Table 2, Table 3 and Fig. 1: pJ/FLOP per kernel stage (reader / writer / compute).
+# Case 1 (all active, 100% write amplification) is the reference; cases 2, 4 and 5 each idle
+# exactly one engine against it. The published Fig. 1 (pj_per_flop_by_engine) used case 0 as the
+# writer stand-in, before case 5 existed; energy_per_flop_by_engine uses case 5 instead.
+name: paper_fig1_stage_breakdown
+workload: long_matmul
+app_args: [1024, 2048, 2048, 160]
+# 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
+# tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.
+telemetry_freq_hz: 20000
+trim_ms: 1.0
+runs:
+  power_cases: [0, 1, 2, 4, 5]
+  ops: [matmul]
+analyses:
+  - compare_runs2
+  - energy_by_engine
+  - energy_per_flop_by_engine
+  - pj_per_flop_by_engine
+  - pj_per_flop

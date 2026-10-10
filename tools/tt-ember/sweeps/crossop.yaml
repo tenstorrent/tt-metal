@@ -1,0 +1,21 @@
+# Cross-op sweep (not in the paper): the POWER_CASE ablation repeated for every LONG_MATMUL_OP,
+# so the seven instructions can be compared at byte-identical data movement. K=4096 as in the
+# original cross-op runs, so absolute pJ/FLOP is not comparable with the K=2048 paper figures.
+# Set aiclk_mhz: 1000 for the iso-clock variant on Blackhole (needs tt_umd in the venv).
+name: crossop
+workload: long_matmul
+app_args: [1024, 2048, 4096, 160]
+# 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
+# tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.
+telemetry_freq_hz: 20000
+trim_ms: 1.0
+aiclk_mhz: null
+runs:
+  power_cases: [5, 1, 2, 4]
+  ops: [matmul, add, silu, exp, sigmoid, gelu, recip]
+analyses:
+  - compare_runs2
+  - energy_by_engine
+  - energy_per_flop_by_engine
+  - cross_op
+  - cross_op_corrected
