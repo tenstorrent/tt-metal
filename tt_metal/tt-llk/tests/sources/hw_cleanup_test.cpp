@@ -138,11 +138,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 inline void pack_init(const FormatConfig& formats)
 {
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
         formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-    _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
 }
 
 inline void pack_dest_tile(const std::uint32_t address)
@@ -158,13 +155,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
     pack_init(formats);
+    _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
     // The math side of the cleanup waits for MATH_PACK to drain, so the section is released first.
     pack_dest_tile(L1_ADDRESS(params.buffer_Res[0]));
 
     _llk_pack_hw_cleanup_canonical_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
 
-    // The cleanup poisons the pack MOP, strides and PAC X.
+    // Only pack_init, as the op after a cleanup runs: tile 2 relies on the cleanup's pack configure and Dest init.
     pack_init(formats);
     pack_dest_tile(L1_ADDRESS(params.buffer_Res[1]));
 }
