@@ -9,12 +9,13 @@ from .decode_prefetch import (
     KV_GCB,
     ROUTER_GATE_GCB,
     check_decode_layout,
-    decode_prefetch_page_bytes,
+    decode_prefetch_rings,
     ensure_named_gcb,
     ensure_q_a_gcb,
     kv_page_bytes,
     make_decode_prefetch_buffers,
     q_a_page_bytes,
+    ring_prefetch,
     router_gate_page_bytes,
 )
 from ..layers import (
@@ -790,10 +791,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
       GCBs, neither of which scales past a handful of layers.
 
     Subclasses for other checkpoints override ``decode_layouts`` (the q_a / q_b / kv / o_b
-    cuts) and ``q_head_norm`` (whether q_b's output gets a per-head unweighted RMSNorm).
+    cuts), ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the GCB each of those
+    streams through) and ``q_head_norm`` (whether q_b's output gets a per-head unweighted
+    RMSNorm).
     """
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(decode_prefetch_rings)
     q_head_norm = True
 
     def __init__(
@@ -860,6 +864,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         if use_prefetcher and prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
+        rings = self.prefetch_rings(tp_size)
 
         def projection(name, weight=None, cache_suffix="", rectangle_b_grid=False):
             """``LinearDecode`` for ``weights[name].weight`` ``[K, N]`` DRAM ND-sharded.
@@ -869,23 +874,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             count: q_a and kv get their own full-width rings, the rest share the
             64-receiver decode GCB.
             """
-            prefetch = {"use_prefetcher": use_prefetcher}
-            if use_prefetcher:
-                if name == "q_a_proj":
-                    prefetch["global_cb"] = ensure_q_a_gcb(prefetch_buffers, device, weight_dtype)
-                    prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
-                elif name == "kv_proj":
-                    prefetch["global_cb"] = ensure_named_gcb(
-                        prefetch_buffers,
-                        KV_GCB,
-                        device,
-                        [DECODE_LAYOUTS["kv_proj"]],
-                        weight_dtype,
-                    )
-                    prefetch["global_cb_page_bytes"] = kv_page_bytes(weight_dtype)
-                else:
-                    prefetch["global_cb"] = prefetch_buffers[name]
-                    prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+            prefetch = (
+                ring_prefetch(rings, name, prefetch_buffers, device, weight_dtype)
+                if use_prefetcher
+                else {"use_prefetcher": False}
+            )
             layout = dict(self.decode_layouts[name])
             mapper = None
             cache_name = name
@@ -979,10 +972,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 "b_blocks": o_a_layout["b_blocks"] // tp_size,
                 "n_blocks": o_a_layout["n_blocks"] * tp_size,
             }
-        o_a_prefetch = {"use_prefetcher": use_prefetcher}
-        if use_prefetcher:
-            o_a_prefetch["global_cb"] = prefetch_buffers["o_a_proj"]
-            o_a_prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+        o_a_prefetch = (
+            ring_prefetch(rings, "o_a_proj", prefetch_buffers, device, weight_dtype)
+            if use_prefetcher
+            else {"use_prefetcher": False}
+        )
         self.o_a_proj = BatchedLinearDecode(
             weights["o_a_proj.weight"],
             device,
