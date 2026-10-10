@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Perf for the Welford SFPU kernel: one full-tile update per input tile, the running mean and M2
+kept in the SFPU registers, with and without the reciprocal table."""
+
+import pytest
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.llk_params import ApproximationMode, DestAccumulation, Transpose
+from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig, PerfRunType
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import calculate_tile_and_face_counts
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    LOOP_FACTOR,
+    NUM_FACES,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
+    WELFORD_RECIP_SIZE,
+)
+
+INPUT_DIMENSIONS = [128, 64]  # tile_cnt: 8
+
+
+def _dest_acc_modes(formats):
+    # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    dest_acc=lambda formats: _dest_acc_modes(formats),
+    recip_size=[256, 0],
+)
+def test_perf_sfpu_welford(perf_report, formats, dest_acc, recip_size):
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        INPUT_DIMENSIONS, INPUT_DIMENSIONS, face_r_dim=16, num_faces=4
+    )
+
+    configuration = PerfConfig(
+        "sources/sfpu_welford_perf.cpp",
+        formats,
+        run_types=[
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
+        # Everything compile-time so the measured kernel does no runtime-parameter reads.
+        templates=[
+            APPROX_MODE(ApproximationMode.No),
+            WELFORD_RECIP_SIZE(recip_size),
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),  # amortise profiler overhead
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    configuration.run(perf_report)
