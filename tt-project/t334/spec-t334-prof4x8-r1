@@ -1,0 +1,8 @@
+ID=t334-prof4x8-r1
+TASK=t334
+CONFIG=convvae-prof-4x8
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t334
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=bash /var/tmp/fasth3/t334/run334.sh
+NEEDS=/home/smarton/fasth3/t315/ttnn/ttnn/_ttnn.so,/home/smarton/fasth3/out/t37/s2reuse0/lat.gen0.pt
