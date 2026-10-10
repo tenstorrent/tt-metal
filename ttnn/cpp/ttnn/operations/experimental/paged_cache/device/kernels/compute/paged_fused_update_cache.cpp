@@ -32,6 +32,8 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t num_heads = get_compile_time_arg_val(8);
+    constexpr bool group_mode = get_compile_time_arg_val(9) == 1;  // see the reader
+    constexpr uint32_t cb_meta = get_compile_time_arg_val(10);
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
@@ -52,6 +54,13 @@ void kernel_main() {
             compute_kernel_lib::untilize_config::InitUninitMode::InitOnly,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+    }
+
+    if constexpr (group_mode) {
+        cb_wait_front(cb_meta, 1);
+        if (read_tile_value(cb_meta, 0, 0) == 0) {
+            return;  // follower: the leader merges this row into its tile
+        }
     }
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {

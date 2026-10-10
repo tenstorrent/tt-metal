@@ -85,7 +85,8 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                     "Expect batch in input tensor match the batch in cache tensor");
             }
         } else {
-            TT_FATAL(!operation_attributes.share_cache, "share_cache not supported with paged cache");
+            // share_cache on a paged cache: each row still addresses its own page-table row; the flag only orders the
+            // rows that land in the same cache tile (a chain, or one merging core per tile with a DRAM page table)
             TT_FATAL(update_idxs_tensor.has_value(), "Paged cache requires update_idxs tensor");
 
             if (page_table.value().is_sharded()) {

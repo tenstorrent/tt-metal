@@ -265,6 +265,42 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         .initial_value = 0,
     });
 
+    // Group mode (share_cache with an index tensor and a DRAM page table): instead of a core-to-core chain per set
+    // (K cores, V cores), the rows that land in the same cache tile are merged by one core of the set, which reads
+    // and writes that tile once (see the unfused paged_update_cache). The chain semaphore becomes the leader's
+    // "rows ready" count; a second one releases each follower.
+    const bool group_mode =
+        operation_attributes.share_cache && use_index_tensor && is_paged_cache && page_table_is_dram && B <= 32;
+    const tt::CBIndex cb_scratch_id = CBIndex::c_5;
+    const tt::CBIndex cb_meta_id = CBIndex::c_6;
+    const uint32_t done_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = done_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores_bb,
+        .initial_value = 0,
+    });
+    if (group_mode) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = B * 64,
+            .core_ranges = all_cores_bb,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_scratch_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = B * 64,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 256,
+            .core_ranges = all_cores_bb,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_meta_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = 256,
+            }}},
+        });
+    }
+
     if (use_index_tensor) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = index_stick_size,
@@ -324,6 +360,9 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
     TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(group_mode));
+    reader_compile_time_args.push_back(static_cast<uint32_t>(cb_scratch_id));
+    reader_compile_time_args.push_back(static_cast<uint32_t>(cb_meta_id));
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
@@ -349,6 +388,9 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         page_table_stick_size,
         page_table_is_dram};
     TensorAccessorArgs(dst1_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(group_mode));
+    writer_compile_time_args.push_back(static_cast<uint32_t>(cb_meta_id));
+    writer_compile_time_args.push_back(done_semaphore_id);
 
     std::vector<uint32_t> compute_kernel_args = {
         src1_cb_index,
@@ -360,6 +402,8 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         output_cb_index,
         Wt,
         num_heads,
+        static_cast<uint32_t>(group_mode),
+        static_cast<uint32_t>(cb_meta_id),
     };
 
     // Create reader kernel
@@ -404,6 +448,18 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
     // — computed via the shared helper so get_dynamic_runtime_args re-patches identical values on cache
     // hits. Empty in index-tensor mode (offsets read on-device from the re-patched index tensor).
     const auto offsets = compute_tiled_fused_offsets(operation_attributes, tensor_args);
+    // group mode: every row's core (NoC coordinates) of each set, appended to that set's writer runtime args
+    std::vector<uint32_t> coords1, coords2;
+    if (group_mode) {
+        for (uint32_t j = 0; j < cores1.size(); ++j) {
+            const auto p1 = device->worker_core_from_logical_core(cores1.at(j));
+            const auto p2 = device->worker_core_from_logical_core(cores2.at(j));
+            coords1.push_back(p1.x);
+            coords1.push_back(p1.y);
+            coords2.push_back(p2.x);
+            coords2.push_back(p2.y);
+        }
+    }
     for (uint32_t i = 0; i < cores1.size(); ++i) {
         const CoreCoord& core1 = cores1.at(i);
         const CoreCoord& core2 = cores2.at(i);
@@ -413,8 +469,8 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         const uint32_t tile_update_offset_B = use_index_tensor ? 0u : offsets.at(i).tile_update_offset_B;
 
         // Calculate synchronization parameters
-        bool wait_to_start = operation_attributes.share_cache and (i != 0);
-        bool send_signal = operation_attributes.share_cache and (i != cores1.size() - 1);
+        bool wait_to_start = operation_attributes.share_cache and (i != 0) and !group_mode;
+        bool send_signal = operation_attributes.share_cache and (i != cores1.size() - 1) and !group_mode;
         uint32_t send_core1_x = 0, send_core1_y = 0;
         uint32_t send_core2_x = 0, send_core2_y = 0;
 
@@ -454,18 +510,21 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         }
 
         // Set runtime args for writer
-        writer_desc.emplace_runtime_args(
-            core1,
-            {
-                static_cast<uint32_t>(has_work),
-                dst1_buffer,
-                use_index_tensor ? 0u : cache_start_id,
-                use_index_tensor ? 0u : tile_update_offset_B,
-                i,
-                static_cast<uint32_t>(send_signal),
-                send_core1_x,
-                send_core1_y,
-            });
+        {
+            KernelDescriptor::RTArgList wargs;
+            wargs.push_back(static_cast<uint32_t>(has_work));
+            wargs.push_back(dst1_buffer);
+            wargs.push_back(use_index_tensor ? 0u : cache_start_id);
+            wargs.push_back(use_index_tensor ? 0u : tile_update_offset_B);
+            wargs.push_back(i);
+            wargs.push_back(static_cast<uint32_t>(send_signal));
+            wargs.push_back(send_core1_x);
+            wargs.push_back(send_core1_y);
+            for (uint32_t v : coords1) {
+                wargs.push_back(v);
+            }
+            writer_desc.emplace_runtime_args(core1, wargs);
+        }
 
         // Set runtime args for compute
         compute_desc.emplace_runtime_args(
@@ -499,18 +558,21 @@ ProgramDescriptor PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
         }
 
         // Set runtime args for writer
-        writer_desc.emplace_runtime_args(
-            core2,
-            {
-                static_cast<uint32_t>(has_work),
-                dst2_buffer,
-                use_index_tensor ? 0u : cache_start_id,
-                use_index_tensor ? 0u : tile_update_offset_B,
-                i,
-                static_cast<uint32_t>(send_signal),
-                send_core2_x,
-                send_core2_y,
-            });
+        {
+            KernelDescriptor::RTArgList wargs;
+            wargs.push_back(static_cast<uint32_t>(has_work));
+            wargs.push_back(dst2_buffer);
+            wargs.push_back(use_index_tensor ? 0u : cache_start_id);
+            wargs.push_back(use_index_tensor ? 0u : tile_update_offset_B);
+            wargs.push_back(i);
+            wargs.push_back(static_cast<uint32_t>(send_signal));
+            wargs.push_back(send_core2_x);
+            wargs.push_back(send_core2_y);
+            for (uint32_t v : coords2) {
+                wargs.push_back(v);
+            }
+            writer_desc.emplace_runtime_args(core2, wargs);
+        }
 
         // Set runtime args for compute
         compute_desc.emplace_runtime_args(

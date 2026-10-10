@@ -309,6 +309,8 @@ class MultichipDecoder(OptimizedDecoder):
         # nlp_concat_heads (one core each: ~37 / ~30 -> ~3 us)
         self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
         self._router_1d = _parse_binary_env("TT_LAGUNA_ROUTER_1D", True)  # see _router_scores
+        # multi-row verify KV writes through the fused K+V op (share_cache group mode) instead of one op per K / V
+        self._seq_kv_fused = _parse_binary_env("TT_LAGUNA_SEQ_KV_FUSED", True)
         # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
         # separate N = 18 g_proj matmul (one core, ~23 us per draft layer)
         self._dflash_fold_g = _parse_binary_env("TT_LAGUNA_DFLASH_FOLD_G", True)
@@ -2176,7 +2178,7 @@ class MultichipDecoder(OptimizedDecoder):
             qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
             if self.use_dram_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
-        fused_kv = self._fused_kv_update and not (sequential_kv_write and B > 1) and B <= 4 * 8
+        fused_kv = self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
         if (
             self._ap1
             and fold_g
@@ -2244,12 +2246,14 @@ class MultichipDecoder(OptimizedDecoder):
             else:
                 q = self._apply_rope(q, cos, sin)
                 k = self._apply_rope(k, cos, sin)
-            fused_kv = self._fused_kv_update and not (sequential_kv_write and B > 1) and B <= 4 * 8
+            fused_kv = self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
             k_sh = self._shard_kv(k, B)
             v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
         if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
+            # a multi-row verify (rows of one user): share_cache merges the rows of each cache tile on one core per K / V
             ttnn.experimental.paged_fused_update_cache(
-                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table
+                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table,
+                share_cache=bool(sequential_kv_write and B > 1),
             )
         elif sequential_kv_write and B > 1:
             # Spec-decode VERIFY: the B candidate rows share ONE user's blocks; with BLOCK_SIZE==TILE==32
