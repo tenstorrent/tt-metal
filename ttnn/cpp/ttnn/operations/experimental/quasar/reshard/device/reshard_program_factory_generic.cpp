@@ -29,7 +29,11 @@ namespace {
 // (Names are prefixed to avoid Unity-build collisions with the sibling reshard factories.)
 constexpr const char* kGenInputTensorParam = "input";
 constexpr const char* kGenOutputTensorParam = "output";
-constexpr const char* kGenDfbName = "shard_cb";
+
+// The "reader" kernel runs as 4 threads and the "writer" as 2. Both gather pages; each thread
+// takes its own slice of the core's page ranges.
+constexpr uint32_t kGenNumReaderThreads = 4;
+constexpr uint32_t kGenNumWriterThreads = 2;
 
 }  // namespace
 
@@ -663,16 +667,13 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     auto cores = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
 
-    uint32_t total_size = 0;
     uint32_t page_size = 0;
     uint32_t unit_size = 0;
-    auto output_shard_shape = output.shard_spec().value().shape;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     if (input.layout() == Layout::TILE) {
         page_size = tt::tile_size(data_format);
         unit_size = page_size;
-        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / TILE_HW) * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
         uint32_t input_page_size = input_buffer->page_size();
@@ -681,7 +682,6 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
 
         unit_size = base_page_size;
         page_size = base_page_size;
-        total_size = static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output.element_size());
     }
 
     const bool diff_width = input_buffer->page_size() != output_buffer->page_size();
@@ -705,9 +705,8 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     }
     const uint32_t coords_count = static_cast<uint32_t>(grid.x + grid.y);  // == physical_core_coords.size()
 
-    // Build per-core positional vararg vectors. We reuse the legacy host packing verbatim, then drop
-    // the input-address slot (index coords_count): the kernel now reads the input base from tensor::input,
-    // so every downstream sequential read shifts down by one to stay aligned.
+    // Build per-core positional vararg vectors. We reuse the legacy host packing for each thread's
+    // slice, then drop its input-address slot: the kernel reads the input base from tensor::input.
     struct PerNodeVarargs {
         NodeCoord node;
         std::vector<uint32_t> varargs0;  // reader endpoint
@@ -729,49 +728,32 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     per_node.reserve(cores.size());
     uint32_t max_len = 0;
 
+    // Runtime args are per node, so each kernel's varargs hold every thread's slice after the
+    // core-coordinate table, led by one start index per thread.
+    const std::vector<uint32_t> no_core_coords;
+    constexpr uint32_t num_threads = kGenNumReaderThreads + kGenNumWriterThreads;
     for (const auto& core : cores) {
-        std::vector<uint32_t> runtime_args_0;
-        std::vector<uint32_t> runtime_args_1;
-        if (diff_width) {
-            const auto& page_stride_vector = diff_width_ranges.at(core);
-            runtime_args_0 = detail::get_runtime_args_for_given_ranges_diff_width(
-                physical_core_coords,
-                page_stride_vector,
-                0,
-                /*input_addr=*/0,
-                0,
-                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
-            auto output_page_offset = runtime_args_0[coords_count + 1];
-            runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
-                physical_core_coords,
-                page_stride_vector,
-                output_page_offset,
-                /*input_addr=*/0,
-                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
-                page_stride_vector.size());
-        } else {
-            const auto& page_stride_vector = same_width_ranges.at(core);
-            runtime_args_0 = detail::get_runtime_args_for_given_ranges(
-                physical_core_coords,
-                page_stride_vector,
-                0,
-                /*input_addr=*/0,
-                0,
-                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u));
-            auto output_page_offset = runtime_args_0[coords_count + 1];  // offset is equivalent to number of pages
-                                                                         // output in previous risc core
-            runtime_args_1 = detail::get_runtime_args_for_given_ranges(
-                physical_core_coords,
-                page_stride_vector,
-                output_page_offset,
-                /*input_addr=*/0,
-                tt::div_up(static_cast<uint32_t>(page_stride_vector.size()), 2u),
-                page_stride_vector.size());
+        const uint32_t num_ranges = diff_width ? diff_width_ranges.at(core).size() : same_width_ranges.at(core).size();
+        std::vector<uint32_t> runtime_args_0 = physical_core_coords;
+        std::vector<uint32_t> runtime_args_1 = physical_core_coords;
+        runtime_args_0.resize(coords_count + kGenNumReaderThreads);
+        runtime_args_1.resize(coords_count + kGenNumWriterThreads);
+        uint32_t output_page_offset = 0;
+        for (uint32_t t = 0; t < num_threads; t++) {
+            const uint32_t begin = num_ranges * t / num_threads;
+            const uint32_t end = num_ranges * (t + 1) / num_threads;
+            // Without core coordinates the slice is: input-address slot (unused), num_output_pages, ...
+            const std::vector<uint32_t> slice =
+                diff_width ? detail::get_runtime_args_for_given_ranges_diff_width(
+                                 no_core_coords, diff_width_ranges.at(core), output_page_offset, 0, begin, end)
+                           : detail::get_runtime_args_for_given_ranges(
+                                 no_core_coords, same_width_ranges.at(core), output_page_offset, 0, begin, end);
+            output_page_offset += slice[1];
+            const bool is_reader = t < kGenNumReaderThreads;
+            std::vector<uint32_t>& args = is_reader ? runtime_args_0 : runtime_args_1;
+            args[coords_count + (is_reader ? t : t - kGenNumReaderThreads)] = args.size();
+            args.insert(args.end(), slice.begin() + 1, slice.end());
         }
-
-        // Drop the (now unused) input-address slot from both vectors.
-        runtime_args_0.erase(runtime_args_0.begin() + coords_count);
-        runtime_args_1.erase(runtime_args_1.begin() + coords_count);
 
         max_len = std::max(
             {max_len, static_cast<uint32_t>(runtime_args_0.size()), static_cast<uint32_t>(runtime_args_1.size())});
@@ -792,15 +774,11 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {"unit_size", unit_size},
     };
 
-    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, uint32_t num_threads) {
         return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .dfb_bindings = {DFBBinding{
-                .dfb_spec_name = DFBSpecName{kGenDfbName},
-                .accessor_name = kGenDfbName,
-                .endpoint_type = endpoint,
-            }},
+            .num_threads = num_threads,
             .tensor_bindings =
                 {TensorBinding{
                      .tensor_parameter_name = TensorParamName{kGenInputTensorParam},
@@ -814,34 +792,18 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         };
     };
 
+    // No DFB: the kernels only gather into the resident output shard, whose address comes from the
+    // output tensor accessor.
     KernelSpec k0 = make_worker(
         "reader",
         ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
-        DFBEndpointType::PRODUCER);
+        kGenNumReaderThreads);
     KernelSpec k1 = make_worker(
         "writer",
         ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
-        DFBEndpointType::CONSUMER);
-
-    // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and
-    // only ever touches the real, mapped output pages). A sharded output shard shape can be padded
-    // larger than the logical tensor (e.g. a [32, 96] tensor with a (32, 128) shard), which makes the
-    // shard-derived total_size exceed the output tensor's real packed size and trips the Metal 2.0
-    // borrowed-DFB size check. Clamp to the output tensor's packed size so the DFB never claims more
-    // L1 than the backing tensor actually has.
-    const uint32_t output_tensor_bytes = static_cast<uint32_t>(output.tensor_spec().compute_packed_buffer_size_bytes());
-    const uint32_t dfb_total_size = std::min(total_size, output_tensor_bytes);
-
-    DataflowBufferSpec shard_dfb{
-        .unique_id = DFBSpecName{kGenDfbName},
-        .entry_size = output_buffer->page_size(),
-        .num_entries = dfb_total_size / output_buffer->page_size(),
-        .data_format_metadata = data_format,
-        .borrowed_from = TensorParamName{kGenOutputTensorParam},
-    };
+        kGenNumWriterThreads);
 
     spec.kernels = {k0, k1};
-    spec.dataflow_buffers = {shard_dfb};
     spec.tensor_parameters = {
         TensorParameter{.unique_id = TensorParamName{kGenInputTensorParam}, .spec = input.tensor_spec()},
         TensorParameter{.unique_id = TensorParamName{kGenOutputTensorParam}, .spec = output.tensor_spec()},
