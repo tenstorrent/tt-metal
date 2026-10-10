@@ -989,6 +989,9 @@ def test_qwen_demo_text(
                 from tracy.common import PROFILER_LOGS_DIR
 
                 logger.info("PROFILE_WINDOW flush_start: reading device profiler buffers after warmup")
+                # Drain every program of the warmup first: a read while a program still runs leaves its end
+                # marker for the final dump, which then fails on the orphan (job161, layer-major CP warmup).
+                ttnn.synchronize_device(mesh_device)
                 ttnn.ReadDeviceProfiler(mesh_device)
                 for log_name in ("profile_log_device.csv", "cpp_device_perf_report.csv"):
                     log_path = PROFILER_LOGS_DIR / log_name
