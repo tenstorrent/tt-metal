@@ -45,6 +45,20 @@ static json tensor_meta_to_json(const TensorMeta& m) {
     return ret;
 }
 
+std::string serialize_cached_op_tensor_metadata(
+    const std::vector<TensorMeta>& input_tensors, const std::vector<TensorMeta>& output_tensors) {
+    json metadata;
+    metadata["input_tensors"] = json::array();
+    metadata["output_tensors"] = json::array();
+    for (const auto& tensor : input_tensors) {
+        metadata["input_tensors"].push_back(tensor_meta_to_json(tensor));
+    }
+    for (const auto& tensor : output_tensors) {
+        metadata["output_tensors"].push_back(tensor_meta_to_json(tensor));
+    }
+    return metadata.dump();
+}
+
 static json get_kernels_json(ChipId device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
@@ -117,6 +131,14 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
 
 #endif  // TRACY_ENABLE
 
+#if !defined(TRACY_ENABLE)
+std::string serialize_cached_op_tensor_metadata(
+    [[maybe_unused]] const std::vector<TensorMeta>& input_tensors,
+    [[maybe_unused]] const std::vector<TensorMeta>& output_tensors) {
+    return {};
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // assemble_device_op_json — non-template, compiled once
 // Builds the full JSON string, updates global caches, returns Tracy message.
@@ -173,11 +195,14 @@ std::string assemble_device_op_json(
 
     std::string short_str = fmt::format(
         "`TT_DNN_DEVICE_OP: {}, {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id, program_cache_hit);
+    std::string cached_op_prefix =
+        fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
 
     if (cached_ops.find(device_id) == cached_ops.end()) {
-        cached_ops.emplace(device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, short_str}});
+        cached_ops.emplace(
+            device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, cached_op_prefix}});
     } else {
-        cached_ops.at(device_id).emplace(program_hash, short_str);
+        cached_ops.at(device_id).emplace(program_hash, cached_op_prefix);
     }
 
     // Tracy hard limit is uint16_t::max bytes including null terminator.
