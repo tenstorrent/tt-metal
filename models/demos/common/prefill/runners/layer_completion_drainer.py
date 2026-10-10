@@ -16,28 +16,20 @@ hood, so callers hold one `completion_channel` and never branch:
   protocol 2: a structured completion ring — self-describing messages
       drained work-conservingly by LayerCompletionDrainer.
 
-LayerCompletionDrainer (v2):
+LayerCompletionDrainer (v2) keys every chunk on the identity its messages
+carry, (slot_id, pos_start, pos_end): the host transport stamps the runner's
+request id into request_id while the D2H transport stamps a per-rank counter,
+so request_id is diagnostic only. A chunk is complete when its disjoint layer
+spans tile [0, num_layers); it is then evicted, so the same slot and positions
+can come round again (slot reuse, multi-turn resumes).
 
 * WORK-CONSERVING: a completion that is not yet actionable (the embedder's
-  `can_process` predicate, e.g. "migration context for this slot exists") goes
-  to a per-request SIDE QUEUE and never stalls the input ring — later requests'
-  completions keep advancing. Side queues are retried after every processed
-  message and whenever the ring runs dry.
+  `can_process` predicate) goes to that chunk's side queue and never stalls the
+  ring; side queues are retried after every processed message and whenever the
+  ring runs dry.
 
-* PER-REQUEST COVERAGE: tracks each request's completed layer spans. A request
-  is fully covered when its spans total `num_layers` — with overlap enforced
-  as an error at insert, that implies an exact tiling of [0, num_layers).
-
-* EXPECTATION HOOK (future error detection): `on_first_completion` fires once
-  per request with the first message seen. The embedder may use it to register
-  a coverage rule on `RequestCoverage.expectation` — e.g. for pipelined
-  prefill, "every layer eventually spans for the position range of the first
-  completion received" — evaluated by a future checker. Nothing is enforced
-  yet; this is the seam.
-
-* TEARDOWN INVARIANT: finish() requires every side queue to be empty and
-  raises listing the stranded (never-actionable) messages otherwise — a lost
-  dependency surfaces as a precise, attributed error, not a silent stall.
+* TEARDOWN INVARIANT: finish() raises listing any side-queued message that
+  never became actionable.
 
 Kept dependency-light at import (stdlib + loguru — ttnn and the
 layer_completion bindings are imported lazily inside the connect helpers) so
@@ -75,67 +67,41 @@ def current_protocol() -> int:
     return protocol
 
 
-class RequestCoverage:
-    """Per-request layer-coverage bookkeeping: disjoint spans seen so far, the chunk's
-    slot/position identity (cross-checked on every message), and the side queue of
-    not-yet-actionable completions for this request."""
+def chunk_key(c: Completion) -> tuple:
+    return (c.slot_id, c.pos_start, c.pos_end)
 
-    __slots__ = (
-        "request_id",
-        "slot_id",
-        "pos_start",
-        "pos_end",
-        "intervals",
-        "layers_accounted",
-        "side_queue",
-        "expectation",
-    )
 
-    def __init__(self, request_id: int):
-        self.request_id = request_id
-        self.slot_id = None
-        self.pos_start = None
-        self.pos_end = None
-        self.intervals = []  # sorted, disjoint [start, end) — overlap is a producer bug
+class ChunkCoverage:
+    """One in-flight chunk: its disjoint layer spans so far and the side queue of
+    not-yet-actionable completions."""
+
+    __slots__ = ("key", "request_id", "intervals", "layers_accounted", "side_queue")
+
+    def __init__(self, key: tuple, request_id: int):
+        self.key = key
+        self.request_id = request_id  # diagnostic: transports stamp different ids
+        self.intervals = []  # sorted, disjoint [start, end)
         self.layers_accounted = 0
         self.side_queue = deque()
-        # Registered by the embedder's on_first_completion hook; evaluated by future
-        # error-detection rules. Shape for pipelined prefill: "layers eventually tile
-        # [0, num_layers) for THIS request's position range".
-        self.expectation = None
-
-    def record_identity(self, c: Completion) -> None:
-        """Bind slot/pos from the first message of the request; cross-check afterwards."""
-        if self.slot_id is None:
-            self.slot_id, self.pos_start, self.pos_end = c.slot_id, c.pos_start, c.pos_end
-        elif (self.slot_id, self.pos_start, self.pos_end) != (c.slot_id, c.pos_start, c.pos_end):
-            raise ValueError(
-                f"[drainer] request {self.request_id}: inconsistent identity — first message had "
-                f"slot={self.slot_id} pos=[{self.pos_start},{self.pos_end}), now {c}: "
-                "producer-side correlation bug"
-            )
 
     def add_span(self, c: Completion, num_layers: int) -> None:
-        """Record [c.layer_start, c.layer_end). Raises on overlap or out-of-bounds — both
-        are producer bugs, and the self-describing payload makes them attributable."""
+        """Raises on overlap or out-of-bounds: both are producer bugs."""
         start, end = c.layer_start, c.layer_end
         if not (0 <= start < end <= num_layers):
             raise ValueError(
-                f"[drainer] request {c.request_id}: layer span [{start},{end}) out of bounds " f"[0,{num_layers}): {c}"
+                f"[drainer] chunk {self.key}: layer span [{start},{end}) out of bounds [0,{num_layers}): {c}"
             )
         for iv_start, iv_end in self.intervals:
             if start < iv_end and iv_start < end:
                 raise ValueError(
-                    f"[drainer] request {c.request_id}: layer span [{start},{end}) overlaps "
-                    f"already-covered [{iv_start},{iv_end}): {c}"
+                    f"[drainer] chunk {self.key}: layer span [{start},{end}) overlaps already-covered "
+                    f"[{iv_start},{iv_end}): {c}"
                 )
         self.intervals.append((start, end))
         self.intervals.sort()
         self.layers_accounted += end - start
 
     def is_complete(self, num_layers: int) -> bool:
-        # Disjointness is enforced at insert, so reaching the full layer count within
-        # [0, num_layers) implies an exact tiling.
         return self.layers_accounted == num_layers
 
 
@@ -144,15 +110,13 @@ class LayerCompletionDrainer:
 
     Args:
         ring: anything with try_pop() -> tuple | None in the v2 wire order.
-        num_layers: GLOBAL model layer count (coverage bound per request).
+        num_layers: global ack-layer count per chunk: the model's layers plus the MTP /
+            DFlash rows acked past them (the coverage bound).
         can_process(completion) -> bool: readiness predicate; blocked messages are
-            side-queued (per request) instead of stalling the ring. Default: always ready.
-        on_completion(completion): action for each processed message (e.g. issue a
-            migration). Default: coverage accounting only.
-        on_first_completion(request_id, completion, coverage): expectation hook, fired
-            once per request (see RequestCoverage.expectation). Default: no-op.
-        on_request_complete(request_id, coverage): notification when a request tiles
-            [0, num_layers). Default: no-op.
+            side-queued per chunk instead of stalling the ring. Default: always ready.
+        on_completion(completion): action for each processed message. Default: none.
+        on_chunk_complete(key, coverage): fired when a chunk tiles [0, num_layers), just
+            before it is evicted. Default: none.
         poll_idle_s: sleep quantum for drain_blocking when nothing is actionable.
     """
 
@@ -163,98 +127,94 @@ class LayerCompletionDrainer:
         num_layers: int,
         can_process=None,
         on_completion=None,
-        on_first_completion=None,
-        on_request_complete=None,
+        on_chunk_complete=None,
         poll_idle_s: float = 0.001,
     ):
         self._ring = ring
         self._num_layers = num_layers
         self._can_process = can_process or (lambda c: True)
         self._on_completion = on_completion or (lambda c: None)
-        self._on_first_completion = on_first_completion or (lambda rid, c, cov: None)
-        self._on_request_complete = on_request_complete or (lambda rid, cov: None)
+        self._on_chunk_complete = on_chunk_complete or (lambda key, cov: None)
         self._poll_idle_s = poll_idle_s
-        self._requests = {}  # request_id -> RequestCoverage
+        self._chunks = {}  # chunk_key -> ChunkCoverage, insertion-ordered, evicted on completion
         self.total_layers = 0  # span-summed layers processed (NOT message count)
         self.processed = 0
         self.side_queued = 0
+        self.completed_chunks = 0
 
     @property
-    def requests(self):
-        return self._requests
+    def chunks(self):
+        return self._chunks
 
-    def _coverage(self, request_id: int) -> RequestCoverage:
-        cov = self._requests.get(request_id)
+    def _coverage(self, c: Completion) -> ChunkCoverage:
+        key = chunk_key(c)
+        cov = self._chunks.get(key)
         if cov is None:
-            cov = self._requests[request_id] = RequestCoverage(request_id)
+            cov = self._chunks[key] = ChunkCoverage(key, c.request_id)
         return cov
 
     def _process(self, c: Completion) -> None:
-        cov = self._coverage(c.request_id)
-        first = cov.layers_accounted == 0 and not cov.intervals and cov.slot_id is None
-        cov.record_identity(c)
+        cov = self._coverage(c)
         cov.add_span(c, self._num_layers)
-        if first:
-            self._on_first_completion(c.request_id, c, cov)
         self._on_completion(c)
         self.total_layers += c.layer_end - c.layer_start
         self.processed += 1
         if cov.is_complete(self._num_layers):
-            self._on_request_complete(c.request_id, cov)
+            self._on_chunk_complete(cov.key, cov)
+            if cov.side_queue:
+                raise RuntimeError(
+                    f"[drainer] chunk {cov.key} completed with blocked completions: {list(cov.side_queue)}"
+                )
+            del self._chunks[cov.key]
+            self.completed_chunks += 1
 
     def _retry_side_queues(self) -> bool:
-        """Re-test side-queued messages (oldest request first — the only ordering
-        preference the consumer keeps). Returns True if any became actionable."""
+        """Re-test side-queued messages, oldest chunk first. True if any became actionable."""
         progressed = False
-        for request_id in sorted(self._requests):
-            sq = self._requests[request_id].side_queue
+        for cov in list(self._chunks.values()):
+            sq = cov.side_queue
             while sq and self._can_process(sq[0]):
                 self._process(sq.popleft())
                 progressed = True
         return progressed
 
     def step(self) -> bool:
-        """One work-conserving iteration. Returns True if anything moved (popped,
-        processed, or unblocked); False means idle-safe to sleep."""
+        """One work-conserving iteration. True if anything moved; False means idle."""
         msg = self._ring.try_pop()
         if msg is None:
             return self._retry_side_queues()
         c = Completion._make(msg)
         if self._can_process(c):
             self._process(c)
-            # Processing may have unblocked side-queued messages (embedder state change).
-            self._retry_side_queues()
+            self._retry_side_queues()  # processing may have unblocked side-queued messages
         else:
-            cov = self._coverage(c.request_id)
-            cov.record_identity(c)  # identity is known (and checked) even while blocked
-            cov.side_queue.append(c)
+            self._coverage(c).side_queue.append(c)
             self.side_queued += 1
         return True
 
     def finish(self) -> int:
-        """Teardown invariant: every side queue must be empty — a stranded message is a
-        lost dependency, reported with its full payload. Returns total layers drained."""
-        stranded = [(request_id, list(cov.side_queue)) for request_id, cov in self._requests.items() if cov.side_queue]
+        """Teardown invariant: no side-queued message may remain. Returns total layers drained."""
+        stranded = [(key, list(cov.side_queue)) for key, cov in self._chunks.items() if cov.side_queue]
         if stranded:
-            detail = "; ".join(f"request {rid}: {msgs}" for rid, msgs in stranded)
+            detail = "; ".join(f"chunk {key}: {msgs}" for key, msgs in stranded)
             raise RuntimeError(f"[drainer] finish() with side-queued (never-actionable) completions: {detail}")
         return self.total_layers
 
-    def drain_blocking(self, expected_total_layers: int, timeout_s: float = 600.0) -> int:
-        """Work-conserving loop until `expected_total_layers` (span-summed) have been
-        processed, then finish(). Raises TimeoutError with a coverage snapshot."""
+    def drain_blocking(self, expected_ack_layers: int, timeout_s: float = 600.0) -> int:
+        """Loop until `expected_ack_layers` (span-summed) have been processed, then finish().
+        Raises TimeoutError with a coverage snapshot."""
         deadline = time.perf_counter() + timeout_s
-        while self.total_layers < expected_total_layers:
+        while self.total_layers < expected_ack_layers:
             if not self.step():
                 if time.perf_counter() > deadline:
                     snapshot = ", ".join(
-                        f"req {rid}: {cov.layers_accounted}/{self._num_layers} layers"
+                        f"chunk {key}: {cov.layers_accounted}/{self._num_layers} layers"
                         + (f" (+{len(cov.side_queue)} blocked)" if cov.side_queue else "")
-                        for rid, cov in sorted(self._requests.items())
+                        for key, cov in self._chunks.items()
                     )
                     raise TimeoutError(
-                        f"[drainer] timed out at {self.total_layers}/{expected_total_layers} layers "
-                        f"after {timeout_s}s; coverage: [{snapshot}]"
+                        f"[drainer] timed out at {self.total_layers}/{expected_ack_layers} layers "
+                        f"after {timeout_s}s; open chunks: [{snapshot}]"
                     )
                 time.sleep(self._poll_idle_s)
         return self.finish()
@@ -335,27 +295,33 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-def _drain_layer_completion_ring(completion_ring, expected_layers: int, timeout_s: float = 600.0) -> int:
-    """v2: work-conserving drain of the structured ring until `expected_layers` (span-summed)
-    are accounted, validating per-request coverage along the way."""
+def _drain_layer_completion_ring(
+    completion_ring, expected_ack_layers: int, *, num_layers: int, timeout_s: float
+) -> int:
+    """v2: work-conserving drain until `expected_ack_layers` (span-summed) are accounted; a
+    producer-side inconsistency (overlap, out of bounds) raises."""
     if completion_ring is None:
         return 0
-    num_layers = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     drainer = LayerCompletionDrainer(completion_ring, num_layers=num_layers)
     try:
-        drainer.drain_blocking(expected_layers, timeout_s=timeout_s)
+        drainer.drain_blocking(expected_ack_layers, timeout_s=timeout_s)
     except TimeoutError as e:
         logger.warning(f"[layer-completion] {e}")
     logger.info(
-        f"[layer-completion] v2 drain: {drainer.total_layers}/{expected_layers} layers across "
-        f"{len(drainer.requests)} request(s), {drainer.processed} messages"
+        f"[layer-completion] v2 drain: {drainer.total_layers}/{expected_ack_layers} layers, "
+        f"{drainer.completed_chunks} chunk(s) complete, {len(drainer.chunks)} open, {drainer.processed} messages"
     )
     return drainer.total_layers
 
 
-def drain_layer_completions(completion_channel, expected_layers: int, timeout_s: float = 600.0) -> int:
-    """Drain `expected_layers` (num_layers per chunk) of per-layer completions from the
-    channel connect_layer_completion_channel() returned."""
+def drain_layer_completions(
+    completion_channel, expected_ack_layers: int, *, num_layers: int, timeout_s: float = 600.0
+) -> int:
+    """Drain `expected_ack_layers` per-layer completions from the channel
+    connect_layer_completion_channel() returned. `num_layers` is the global ack-layer count per
+    chunk (the v2 coverage bound; unused by v1)."""
     if current_protocol() == 2:
-        return _drain_layer_completion_ring(completion_channel, expected_layers, timeout_s)
-    return _drain_layer_acks(completion_channel, expected_layers, timeout_s)
+        return _drain_layer_completion_ring(
+            completion_channel, expected_ack_layers, num_layers=num_layers, timeout_s=timeout_s
+        )
+    return _drain_layer_acks(completion_channel, expected_ack_layers, timeout_s)

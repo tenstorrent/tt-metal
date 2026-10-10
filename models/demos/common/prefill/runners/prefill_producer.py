@@ -1567,11 +1567,14 @@ def main() -> None:
         sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
+            "channel (pure token feeder; the real consumer owns it). Under protocol 2 some consumer must be "
+            "attached, or the runner waits on its full completion ring."
         )
 
     ack_layers = _ack_layers_per_chunk(kv_table)
+    # v2 coverage bound: the model's layers plus the rows acked past them (MTP, DFlash drafter).
+    ack_layer_bound = NUM_LAYERS + (ack_layers - NUM_ACK_LAYERS)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1593,7 +1596,7 @@ def main() -> None:
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
         service.barrier()
         if completion_channel is not None:
-            drain_layer_completions(completion_channel, ack_layers * warmup_chunks)
+            drain_layer_completions(completion_channel, ack_layers * warmup_chunks, num_layers=ack_layer_bound)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1611,7 +1614,7 @@ def main() -> None:
     # Wait for the runner's per-layer completions: one per ACK layer per chunk, for every chunk
     # pushed. ack_layers is what the runner emits per chunk (KV-writing layers plus MTP/DFlash
     # extras, read off the published table), not NUM_LAYERS.
-    drain_layer_completions(completion_channel, ack_layers * stats.total_pushes)
+    drain_layer_completions(completion_channel, ack_layers * stats.total_pushes, num_layers=ack_layer_bound)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
