@@ -4027,7 +4027,41 @@ class EltwiseBinaryGolden(FidelityMasking):
         # Compute in float32 to match the SFPU divide path, with the final cast modelling the
         # rounding on store to Dest. IEEE 754 division already produces the special-case
         # results the SFPU helper branches on (0/0 -> NaN, x/0 -> +/-inf, x/x -> 1.0).
-        return (t1.to(torch.float32) / t2.to(torch.float32)).to(t1.dtype)
+        #
+        # A subnormal operand is flushed to a sign-preserving zero first. The SFPU reaches the
+        # quotient through a multiply, which reads a subnormal as zero, so the hardware answers
+        # a subnormal dividend over a zero divisor with NaN rather than the infinity IEEE asks
+        # for on the unflushed value. That is the contract the ttnn suite asserts too, in
+        # test_div_fp32_special_values; without the flush here this golden claims an answer the
+        # divide has never given.
+        tiny = torch.finfo(torch.float32).tiny
+
+        def flush(t):
+            f = t.to(torch.float32)
+            return torch.where(
+                f.abs() < tiny, torch.copysign(torch.zeros_like(f), f), f
+            )
+
+        return (flush(t1) / flush(t2)).to(t1.dtype)
+
+    @staticmethod
+    def _div_nan_divisor_16bit_dest(t1, t2, quotient):
+        # What calculate_sfpu_binary_div does today, pinned rather than IEEE. Its 32-bit Dest
+        # path forwards a NaN divisor explicitly; its 16-bit path is in0 * (1/in1) with no such
+        # arm, and the reciprocal of a NaN is +0: the Reciprocal divergence recorded in
+        # test_eltwise_unary_sfpu.py and left unfixed for its cost. So a NaN divisor gives
+        # in0 * 0: zero for a finite dividend, NaN for an infinite or NaN one. Modelled per lane
+        # rather than as an xfail over the variant, so the other lanes stay asserted and a
+        # kernel that starts propagating the NaN fails here.
+        if torch.isnan(t2):
+            return t1.to(torch.float32) * 0.0
+        # The same path's zero-divisor arm, v_if(in1 == 0) -> copysgn(inf, in0), is reached by a
+        # NaN dividend too (in0 == 0 is false for it), so NaN/+-0 is an infinity carrying the
+        # NaN's sign bit, not a NaN. That sign is the operand's: torch's bf16 cast makes the
+        # stimulus NaN 0xFFFF, and the unpack keeps it, so the result is -inf.
+        if torch.isnan(t1) and t2 == 0:
+            return torch.copysign(torch.tensor(float("inf")), t1.to(torch.float32))
+        return quotient
 
     def _gt_int(self, t1, t2):
         return (t1 > t2).to(torch.int32)
@@ -4270,6 +4304,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 self.ops[operation](src1_row[i], src2_row[i])
                 for i in range(elements_per_row)
             ]
+
+            if (
+                operation == MathOperation.SfpuElwdiv
+                and model_dest
+                and dest_acc == DestAccumulation.No
+            ):
+                row_values = [
+                    self._div_nan_divisor_16bit_dest(src1_row[i], src2_row[i], v)
+                    for i, v in enumerate(row_values)
+                ]
 
             if model_dest:
                 result_row = torch.tensor(
