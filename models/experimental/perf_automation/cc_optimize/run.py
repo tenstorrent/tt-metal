@@ -3983,22 +3983,35 @@ def _run_device_step(*args, **kwargs):
     fixed by a fourth attempt -- at that point the last result is returned and the ordinary failure
     handling upstream takes it from there.
     """
-    for attempt in range(1 + _THERMAL_ABORT_RETRIES):
+
+    def _attempt():
         _THERMAL_ABORTED[0] = False
-        result = _run_device_proc(*args, **kwargs)
-        if not _THERMAL_ABORTED[0]:
+        return _run_device_proc(*args, **kwargs)
+
+    return rerun_after_thermal_abort(_attempt, lambda: _THERMAL_ABORTED[0])
+
+
+def rerun_after_thermal_abort(attempt, was_aborted, label: str = "that step"):
+    """Run `attempt()`, and run it again while `was_aborted()` says the board reached the abort limit
+    during it -- at most _THERMAL_ABORT_RETRIES more times, then the last result stands.
+
+    The one owner of "re-run the step, not the run" (see _run_device_step), shared with emit-e2e's
+    gate steps, whose aborts are detected differently but must be retried by the same rule."""
+    for n in range(1 + _THERMAL_ABORT_RETRIES):
+        result = attempt()
+        if not was_aborted():
             return result
-        if attempt >= _THERMAL_ABORT_RETRIES:
+        if n >= _THERMAL_ABORT_RETRIES:
             print(
                 "  [thermal-abort] the board reached the abort limit on every attempt (%d); "
-                "returning the last result rather than retrying forever" % (attempt + 1),
+                "returning the last result rather than retrying forever" % (n + 1),
                 file=sys.stderr,
                 flush=True,
             )
             return result
         print(
-            "  [thermal-abort] retrying that step from a cool board (attempt %d of %d)"
-            % (attempt + 2, _THERMAL_ABORT_RETRIES + 1),
+            "  [thermal-abort] retrying %s from a cool board (attempt %d of %d)"
+            % (label, n + 2, _THERMAL_ABORT_RETRIES + 1),
             file=sys.stderr,
             flush=True,
         )

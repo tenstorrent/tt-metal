@@ -38,6 +38,7 @@ from scripts.tt_hw_planner.commands.emit_e2e import (  # noqa: E402
     _recover_if_wedged,
     _run_deterministic_gates,
     _source_fingerprint,
+    _thermal_step,
     run_stamp,
 )
 from scripts.tt_hw_planner.pcc_targets import E2E_PCC  # noqa: E402
@@ -142,12 +143,15 @@ def _unchanged_round_note(unchanged: int, blockers: list) -> str:
 def _run_probe(demo_dir: Path) -> dict:
     probe = _THP / "_trace_capture_probe.py"
     try:
-        r = subprocess.run(
-            [sys.executable, str(probe), str(demo_dir)],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT,
-            cwd=str(_REPO),
+        r = _thermal_step(
+            "trace-capture probe",
+            lambda: subprocess.run(
+                [sys.executable, str(probe), str(demo_dir)],
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT,
+                cwd=str(_REPO),
+            ),
         )
     except Exception as e:  # noqa: BLE001
         return {"trace_ready": False, "static_blockers": [{"rung": "probe", "guidance": "probe failed: %s" % e}]}

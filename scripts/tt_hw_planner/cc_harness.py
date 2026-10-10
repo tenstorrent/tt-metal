@@ -372,10 +372,12 @@ def tag_agent_env(env: dict | None = None) -> tuple[dict, str]:
     return {**(os.environ if env is None else env), AGENT_RUN_ENV: tag}, tag
 
 
-def _carries_tag(pid: int, tag: str) -> bool:
+def _carries_tag(pid: int, tag: str, var: str = AGENT_RUN_ENV) -> bool:
+    """Whether process `pid` was started with `var`=`tag` in its environment (the agent tag by default;
+    emit-e2e's thermal watcher asks the same question about its own run tag)."""
     try:
         with open("/proc/%d/environ" % pid, "rb") as fh:
-            return ("%s=%s" % (AGENT_RUN_ENV, tag)).encode() in fh.read().split(b"\0")
+            return ("%s=%s" % (var, tag)).encode() in fh.read().split(b"\0")
     except OSError:
         return False
 

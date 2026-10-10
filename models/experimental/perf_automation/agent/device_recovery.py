@@ -573,6 +573,10 @@ def board_needs_reset() -> bool:
     return _board_needs_reset()
 
 
+# Where the kernel driver exposes the boards. Every "who holds the device" question reads it.
+DEVICE_NODE_DIR = "/dev/tenstorrent"
+
+
 def device_holders() -> set:
     """Pids holding /dev/tenstorrent open, except this process and its ancestors. Best-effort: no
     `fuser` or an unreadable node yields fewer holders, never an exception. The one scan both the
@@ -581,7 +585,7 @@ def device_holders() -> set:
     import subprocess as _sp
 
     holders = set()
-    for node in _glob.glob("/dev/tenstorrent/*"):
+    for node in _glob.glob(DEVICE_NODE_DIR + "/*"):
         try:
             r = _sp.run(["fuser", node], capture_output=True, text=True, timeout=30)
             holders.update(int(t) for t in (r.stdout + " " + r.stderr).split() if t.strip().isdigit())

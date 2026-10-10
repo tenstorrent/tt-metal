@@ -293,6 +293,35 @@ def _retry_after_wedge(label: str, run_once) -> tuple:
     return second, notes
 
 
+def _thermal_step(label: str, run_once):
+    """Run a device-running gate step under optimize's thermal layers (e2e_thermal.device_step): hold at
+    the safety ceiling before it, cool after it, and re-run it from a cool board when the board reached
+    the abort limit while it ran. Returns whatever run_once returns."""
+    try:
+        from ..e2e_thermal import device_step
+    except Exception as exc:  # noqa: BLE001 -- protection that cannot load must not stop the step
+        print("  [thermal-gate] WARNING: %s runs with NO thermal gating (%s)" % (label, exc), file=sys.stderr)
+        return run_once()
+    return device_step(label, run_once)
+
+
+def _device_gate_step(label: str, run_once):
+    """A device-running gate step: re-run once on a wedged board (_retry_after_wedge), inside the thermal
+    layers (_thermal_step). One label names both, so the two can never disagree about which step it is."""
+    return _thermal_step(label, lambda: _retry_after_wedge(label, run_once))
+
+
+def _thermal_env(env: dict) -> dict:
+    """`env` carrying this run's thermal tag and pytest plugin (e2e_thermal.agent_env), or `env` unchanged
+    with a warning when that cannot load -- a child without protection still runs."""
+    try:
+        from ..e2e_thermal import agent_env
+    except Exception as exc:  # noqa: BLE001
+        print("  [thermal-gate] WARNING: child env carries NO thermal protection (%s)" % exc, file=sys.stderr)
+        return dict(env)
+    return agent_env(env)
+
+
 def _recover_if_wedged(text: str) -> Optional[str]:
     """Reset when a failure's OWN output carries a dead-board signature; None when it does not.
 
@@ -1068,7 +1097,7 @@ def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
         return _StepResult(found is not None, (proc.stderr or "") + "\n" + (proc.stdout or ""), detail=found)
 
     try:
-        probe, notes = _retry_after_wedge("G6 block stacks", _stack_probe_once)
+        probe, notes = _device_gate_step("G6 block stacks", _stack_probe_once)
     except Exception:  # noqa: BLE001 -- an unrunnable probe is not a model defect
         return None
     found = probe.detail
@@ -1820,13 +1849,16 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
             _pb3 = repo / "python_env" / "bin" / "python"
             _pbin3 = str(_pb3) if _pb3.exists() else sys.executable
             try:
-                pr3 = subprocess.run(
-                    [_pbin3, str(hop), str(demo_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_s,
-                    cwd=str(repo),
-                    env=penv3,
+                pr3 = _thermal_step(
+                    "host-op observer probe",
+                    lambda: subprocess.run(
+                        [_pbin3, str(hop), str(demo_dir)],
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_s,
+                        cwd=str(repo),
+                        env=penv3,
+                    ),
                 )
                 _res = None
                 for line in ((pr3.stdout or "") + "\n" + (pr3.stderr or "")).splitlines():
@@ -1932,7 +1964,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     # where to look.
     _e2e, _e2e_notes = None, []
     try:
-        _e2e, _e2e_notes = _retry_after_wedge("G2/G3 tests/e2e", _e2e_once)
+        _e2e, _e2e_notes = _device_gate_step("G2/G3 tests/e2e", _e2e_once)
     finally:
         # Also cleaned when the step RAISED: there is no verdict to diagnose, and leaving temp dirs
         # behind on every exception is its own leak.
@@ -2129,7 +2161,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
                             tr = None
                 return _StepResult(bool(tr and tr.get("trace_ready")), out, detail=tr)
 
-            _trace, _trace_notes = _retry_after_wedge("G6 trace", _trace_probe_once)
+            _trace, _trace_notes = _device_gate_step("G6 trace", _trace_probe_once)
             if _trace.stalled:
                 reasons.append(
                     f"G6 trace: trace-capture probe hung >{g6_hang}s "
@@ -2160,9 +2192,13 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
                 _proof = json.loads(_proof_raw)
             except Exception:  # noqa: BLE001
                 _proof = None
-        _tg = evaluate_trace_gate(demo_dir, allow_no_trace=_anno, overflow_proof=_proof)
+        # A stale capture is re-run on the device inside evaluate_trace_gate, and the overflow loop
+        # captures up to three more times -- both are device steps.
+        _tg = _thermal_step(
+            "trace gate", lambda: evaluate_trace_gate(demo_dir, allow_no_trace=_anno, overflow_proof=_proof)
+        )
         if _tg.get("verdict") == "FAIL" and _is_overflow_detail(_tg.get("capture_detail")):
-            _fix = overflow_fix_loop(demo_dir)
+            _fix = _thermal_step("trace-gate overflow fix-loop", lambda: overflow_fix_loop(demo_dir))
             print("[emit-e2e] trace-gate overflow fix-loop: %s" % _fix.get("detail"))
             if _fix.get("resolved"):
                 _tg = evaluate_trace_gate(demo_dir, trace_caps=_fix.get("caps"), allow_no_trace=_anno)
@@ -2417,6 +2453,7 @@ def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:
         "captures) so trace can run. next_target may name a host op (residency / token-feed / KV / "
         "fixed-shape decode step) — fix it ON DEVICE the same way, WITHOUT regressing PCC (correctness is "
         "re-checked first every round, so a host-free edit that breaks PCC is rejected immediately).\n"
+        + _thermal_prompt_block()
         + _TT_ONLY_CONTRACT
     )
 
@@ -2435,6 +2472,12 @@ def cmd_emit_e2e(args) -> int:
             _rec[0].prepare_device_reset(box=str(getattr(args, "box", "") or ""))
         except Exception:  # noqa: BLE001 -- reset preparation must never stop the run
             pass
+    try:  # optimize's hold / cooldown / watch / abort, for everything this run and its agents start
+        from ..e2e_thermal import install as _thermal_install
+
+        _thermal_install(recover=_recover_board)
+    except Exception as exc:  # noqa: BLE001 -- protection that cannot start must not stop the run
+        print("  [thermal-gate] WARNING: emit-e2e thermal protection did not start (%s)" % exc, file=sys.stderr)
     return _emit_e2e_phase_a(args)
 
 
@@ -2475,12 +2518,16 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     # count its failures under a different run than this one (see device_recovery.stamp_run).
     if _os.environ.get("PERF_MCP_RUN_ID"):
         mcp_env["PERF_MCP_RUN_ID"] = _os.environ["PERF_MCP_RUN_ID"]
+    # The server runs the device gates, and this env is built from scratch: carry the run's thermal tag
+    # and plugin explicitly rather than trusting the agent CLI to pass its own environment through.
+    mcp_env = _thermal_env(mcp_env)
     cfg = cc_harness.build_mcp_config(pybin, server_path, mcp_env, "e2e-mcp")
     cfg_path = thp_dir / f".e2e_mcp_config_{re.sub(r'[^A-Za-z0-9._-]', '_', model_id)}.json"
     cfg_path.write_text(_json.dumps(cfg, indent=2))
     env = dict(_os.environ)
     env["TT_METAL_HOME"] = str(repo_root)
     env["PYTHONPATH"] = str(repo_root)
+    env = _thermal_env(env)
 
     def gate_fn():
         # The gate's OWN budget is the floor: this call wraps the gate, so a tighter limit here
@@ -3622,6 +3669,29 @@ run is never killed for being slow -- but a SILENT one is killed for looking dea
 """
 
 
+def _thermal_prompt_block() -> str:
+    """What the agent sees when the board is protected, with the thresholds read off perf_mcp (the
+    owner) rather than retyped, so the agent is never told a number the gates do not use."""
+    try:
+        from models.experimental.perf_automation.agent import probes as _pr
+
+        pm = _pr._cc_optimize("perf_mcp")
+        ceiling, cool, abort = pm._SAFETY_CEILING_C, pm._COOL_BACK_TO_C, pm._ABORT_CEILING_C
+    except Exception:  # noqa: BLE001 - without the owner the gates are inert too; say nothing
+        return ""
+    from models.experimental.perf_automation.agent.thermal_pytest_plugin import ABORT_EXIT_CODE
+
+    return (
+        "\nTHERMAL PROTECTION (this board has lost chips running hot for hours): every pytest you run "
+        "waits before it starts, and between tests, while the board is at or above %.0fC, until it is "
+        "back to %.0fC. A device run is ENDED when the board reaches %.0fC: it prints `[thermal-abort]` "
+        "and exits with code %d, or dies with no traceback. That is the board being protected, NOT a "
+        "code failure -- re-run the same command; it waits for the board first. Do not work around it "
+        "(do not override PYTEST_PLUGINS or drop the repo root from PYTHONPATH).\n"
+        % (ceiling, cool, abort, ABORT_EXIT_CODE)
+    )
+
+
 def _progress_prompt_block() -> str:
     """The progress requirement, carrying the watchdog's OWN stall window.
 
@@ -3765,7 +3835,7 @@ run it launches by watching progress, and a limit typed into a test later kills 
 same test -- a profiled run of it takes several times longer than this one.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}{_README_LAYOUT_BLOCK}
+{hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}{_thermal_prompt_block()}{_README_LAYOUT_BLOCK}
 {_TT_ONLY_CONTRACT}
 """
 
