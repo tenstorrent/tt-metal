@@ -1,0 +1,136 @@
+{
+ "base": {
+  "sets": {
+   "wh_designed": {
+    "regret": 1.074,
+    "regr": 35,
+    "severe": 8
+   },
+   "wh_target": {
+    "regret": 1.064,
+    "regr": 2,
+    "severe": 2
+   },
+   "bh_designed": {
+    "regret": 1.0709,
+    "regr": 2,
+    "severe": 0
+   },
+   "wh_fresh1": {
+    "regret": 1.048,
+    "regr": 2,
+    "severe": 0
+   },
+   "wh_miss2": {
+    "regret": 1.1021,
+    "regr": 11,
+    "severe": 3
+   },
+   "wh_sharded": {
+    "regret": 1.0231,
+    "regr": 6,
+    "severe": 2
+   },
+   "wh_kdepth": {
+    "regret": 1.1051,
+    "regr": 12,
+    "severe": 2
+   },
+   "wh_cov1": {
+    "regret": 1.0552,
+    "regr": 7,
+    "severe": 0
+   },
+   "wh_cov2": {
+    "regret": 1.0566,
+    "regr": 3,
+    "severe": 0
+   },
+   "wh_cov3": {
+    "regret": 1.0707,
+    "regr": 4,
+    "severe": 0
+   },
+   "wh_cov4": {
+    "regret": 1.1422,
+    "regr": 16,
+    "severe": 2
+   },
+   "wh_draws": {
+    "regret": 1.0178,
+    "regr": 91,
+    "severe": 17
+   }
+  },
+  "pairacc": 0.931,
+  "med_err": 0.1125
+ },
+ "base+resid": {
+  "sets": {
+   "wh_designed": {
+    "regret": 1.0525,
+    "regr": 19,
+    "severe": 3
+   },
+   "wh_target": {
+    "regret": 1.0462,
+    "regr": 1,
+    "severe": 0
+   },
+   "bh_designed": {
+    "regret": 1.0446,
+    "regr": 2,
+    "severe": 0
+   },
+   "wh_fresh1": {
+    "regret": 1.0292,
+    "regr": 0,
+    "severe": 0
+   },
+   "wh_miss2": {
+    "regret": 1.0618,
+    "regr": 6,
+    "severe": 1
+   },
+   "wh_sharded": {
+    "regret": 1.0218,
+    "regr": 5,
+    "severe": 2
+   },
+   "wh_kdepth": {
+    "regret": 1.0533,
+    "regr": 6,
+    "severe": 1
+   },
+   "wh_cov1": {
+    "regret": 1.0364,
+    "regr": 6,
+    "severe": 0
+   },
+   "wh_cov2": {
+    "regret": 1.0372,
+    "regr": 1,
+    "severe": 0
+   },
+   "wh_cov3": {
+    "regret": 1.0734,
+    "regr": 9,
+    "severe": 0
+   },
+   "wh_cov4": {
+    "regret": 1.0996,
+    "regr": 14,
+    "severe": 1
+   },
+   "wh_draws": {
+    "regret": 1.0131,
+    "regr": 71,
+    "severe": 13
+   }
+  },
+  "pairacc": 0.9516,
+  "med_err": 0.094
+ },
+ "corr_abs_median": 0.02359087186923827,
+ "corr_abs_p90": 0.09791018212913878
+}

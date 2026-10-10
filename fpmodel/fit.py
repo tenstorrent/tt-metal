@@ -24,11 +24,25 @@ HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0}
 ABS_W = 0.5  # absolute log error weight (relative error 1): keeps predicted times calibrated, not just ordered
 
 
-def residuals(x, g, logt, pid_codes, w):
+STAGE_W = float(
+    os.environ.get("STAGE_W", "0")
+)  # weight of the per-RISC stage tails (profiler) in the fit; 0 = total time only
+MIN_TAIL_NS = 1000.0
+
+
+def residuals(x, g, logt, pid_codes, w, tails=None):
     p = dict(zip(NAMES, np.exp(x)))
-    e = np.log(predict(g, p)) - logt
+    if tails is None:
+        e = np.log(predict(g, p)) - logt
+    else:
+        t, pr = predict(g, p, parts=True)
+        e = np.log(t) - logt
     med = pd.Series(e).groupby(pid_codes).transform("median").to_numpy()
-    return np.concatenate([(e - med) * w, ABS_W * e * w])
+    out = [(e - med) * w, ABS_W * e * w]
+    if tails is not None:
+        for key, (meas, m) in tails.items():
+            out.append(STAGE_W * w[m] * (np.log(np.maximum(pr[key][m], 1.0)) - np.log(meas[m])))
+    return np.concatenate(out)
 
 
 def subset(g, m):
@@ -44,11 +58,17 @@ def fit(d, rows, p0=None):
     lo = np.log([LO.get(n, 1e-3) for n in NAMES])
     hi = np.log([HI.get(n, 1e7) for n in NAMES])
     x0 = np.clip(np.log([p0[n] for n in NAMES]), lo + 1e-9, hi - 1e-9)
+    tails = None
+    if STAGE_W > 0 and "brisc_ns" in x:
+        tw = (x.brisc_ns - x.trisc2_ns).to_numpy(float)
+        tc = (x.trisc2_ns - x.ncrisc_ns).to_numpy(float)
+        mc = (x.family != "multicore").to_numpy()
+        tails = {"tail_c": (tc, mc & (tc > MIN_TAIL_NS)), "tail_w": (tw, mc & (tw > MIN_TAIL_NS))}
     r = least_squares(
         residuals,
         x0,
         bounds=(lo, hi),
-        args=(g, np.log(x.device_ns.to_numpy()), pid, w),
+        args=(g, np.log(x.device_ns.to_numpy()), pid, w, tails),
         loss="soft_l1",
         f_scale=0.1,
         max_nfev=300,

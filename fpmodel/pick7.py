@@ -36,6 +36,8 @@ def multicore_candidates(e):
             continue
         if r.get("transpose_b", 0) == 1:  # draw 4: both MultiCore picks with a transposed B ran 1.15-1.8x slower
             continue
+        if r.N > 32 and os.environ.get("MC_ANY_N") != "1":  # v18r5: only one-tile-wide outputs, where the non-reusing
+            continue  # factory has a reason to win (WH: 9 of 377 timed problems, mostly N=32; median 3.4x slower elsewhere)
         grid = (g.grid_x * g.grid_y).max()
         tiles = r.batch * -(-r.M // 32) * -(-r.N // 32)
         x = r.copy()

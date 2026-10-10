@@ -1,0 +1,156 @@
+{
+ "base": {
+  "sets": {
+   "wh_designed": {
+    "regret": 1.0508,
+    "regr": 20,
+    "severe": 4
+   },
+   "wh_target": {
+    "regret": 1.0487,
+    "regr": 1,
+    "severe": 0
+   },
+   "bh_designed": {
+    "regret": 1.0514,
+    "regr": 4,
+    "severe": 0
+   },
+   "wh_fresh1": {
+    "regret": 1.03,
+    "regr": 1,
+    "severe": 0
+   },
+   "wh_miss2": {
+    "regret": 1.0578,
+    "regr": 7,
+    "severe": 0
+   },
+   "wh_sharded": {
+    "regret": 1.0185,
+    "regr": 2,
+    "severe": 2
+   },
+   "wh_kdepth": {
+    "regret": 1.0771,
+    "regr": 9,
+    "severe": 1
+   },
+   "wh_cov1": {
+    "regret": 1.0475,
+    "regr": 7,
+    "severe": 1
+   },
+   "wh_cov2": {
+    "regret": 1.0546,
+    "regr": 3,
+    "severe": 1
+   },
+   "wh_cov3": {
+    "regret": 1.052,
+    "regr": 1,
+    "severe": 0
+   },
+   "wh_cov4": {
+    "regret": 1.0553,
+    "regr": 7,
+    "severe": 1
+   },
+   "wh_wbench": {
+    "regret": 1.0354,
+    "regr": 11,
+    "severe": 2
+   },
+   "bh_draws": {
+    "regret": 1.0172,
+    "regr": 92,
+    "severe": 12
+   },
+   "wh_draws": {
+    "regret": 1.0128,
+    "regr": 80,
+    "severe": 13
+   }
+  },
+  "pairacc": 0.9354,
+  "med_err": 0.1201
+ },
+ "base+resid": {
+  "sets": {
+   "wh_designed": {
+    "regret": 1.0426,
+    "regr": 13,
+    "severe": 2
+   },
+   "wh_target": {
+    "regret": 1.0441,
+    "regr": 1,
+    "severe": 0
+   },
+   "bh_designed": {
+    "regret": 1.0421,
+    "regr": 3,
+    "severe": 0
+   },
+   "wh_fresh1": {
+    "regret": 1.0196,
+    "regr": 0,
+    "severe": 0
+   },
+   "wh_miss2": {
+    "regret": 1.0445,
+    "regr": 5,
+    "severe": 0
+   },
+   "wh_sharded": {
+    "regret": 1.0192,
+    "regr": 2,
+    "severe": 2
+   },
+   "wh_kdepth": {
+    "regret": 1.044,
+    "regr": 5,
+    "severe": 0
+   },
+   "wh_cov1": {
+    "regret": 1.033,
+    "regr": 5,
+    "severe": 1
+   },
+   "wh_cov2": {
+    "regret": 1.0406,
+    "regr": 3,
+    "severe": 1
+   },
+   "wh_cov3": {
+    "regret": 1.0629,
+    "regr": 4,
+    "severe": 0
+   },
+   "wh_cov4": {
+    "regret": 1.0542,
+    "regr": 7,
+    "severe": 1
+   },
+   "wh_wbench": {
+    "regret": 1.0314,
+    "regr": 10,
+    "severe": 2
+   },
+   "bh_draws": {
+    "regret": 1.015,
+    "regr": 87,
+    "severe": 11
+   },
+   "wh_draws": {
+    "regret": 1.0104,
+    "regr": 69,
+    "severe": 13
+   }
+  },
+  "pairacc": 0.9536,
+  "med_err": 0.1104
+ },
+ "corr_abs_median": 0.016443037814056274,
+ "corr_abs_p90": 0.11485134713300506
+}

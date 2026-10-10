@@ -14,18 +14,53 @@ WORK = "/localdev/rmiller/mm-oob-model-work"
 SETS = {  # name -> (path, arch); read-only inputs
     "wh_designed": (f"{WORK}/frozen/wh_1505.csv", "wh"),
     "wh_target": (f"{WORK}/device/target_wh.csv", "wh"),
-    "bh_designed": (f"{WORK}/frozen/bh_0200.csv", "bh"),
+    "bh_designed": (
+        f"{WORK}/frozen/bh_designed_all2.csv",
+        "bh",
+    ),  # BH designed_all2: 2051 problems, full sweeps (superset of the 153 in bh_0200.csv)
     # full sweeps of fresh problems, added once their draws had served as clean tests (active learning)
     "wh_fresh1": (f"{WORK}/frozen/wh_fresh1_sweep.csv", "wh"),  # 59 swept draw-1 problems
     "wh_miss2": (f"{WORK}/frozen/wh_miss_draw2.csv", "wh"),  # draw-2 problems where v6 was > 3% slower than legacy
     "wh_sharded": (f"{WORK}/frozen/wh_sharded_sweep.csv", "wh"),  # sharded-input problems of draws 2 and 3
     # fresh draws whose clean tests are done (legacy, rules and the then-current model's pick per problem)
     "wh_kdepth": (
-        f"{WORK}/frozen/wh_kdepth_partial.csv",
+        f"{WORK}/frozen/wh_kdepth_full.csv",
         "wh",
-    ),  # full sweeps of shapes near the suite's K-depth misses
+    ),  # full sweeps of 66 shapes near the suite's K-depth misses
+    # coverage round 1: the least-covered problems of a pool of suite-shape neighbours, contenders only (v18r2)
+    "wh_cov1": (f"{WORK}/frozen/wh_cov1.csv", "wh"),
+    # coverage round 2: sibling sweeps (K block depth, subblock) in the regimes of v18r2's remaining suite misses (v18r3)
+    "wh_cov2": (f"{WORK}/frozen/wh_cov2.csv", "wh"),
+    "wh_cov3": (f"{WORK}/frozen/wh_cov3.csv", "wh"),  # round 3: full sweeps near v18r3's confirmed suite misses (v18r4)
+    "wh_cov4": (f"{WORK}/frozen/wh_cov4.csv", "wh"),  # round 4: full sweeps of random single-K-tile shapes (v18r6)
+    "wh_wbench": (
+        f"{WORK}/frozen/wh_wbench.csv",
+        "wh",
+    ),  # write-rate sweep: K=32 LoFi, output 1K-1M rows x 32-4096 cols, every config (v18r8)
+    "bh_draws": (
+        [
+            f"{WORK}/frozen/bh_draws/{f}"
+            for f in (
+                "freshbh_timed.csv",
+                "freshbh2_timed.csv",
+                "freshbh3_timed.csv",
+                "freshbh4_timed.csv",
+                "freshbh5_timed.csv",
+                "freshbh6_timed.csv",
+                "freshbh7_timed.csv",
+                "freshbh6_v15chg_timed.csv",
+                "freshbh7_v17chg_timed.csv",
+            )
+        ],
+        "bh",
+    ),  # BH random draws 1-7, clean tests done
+    "bh_kt1": (f"{WORK}/frozen/bh_kt1.csv", "bh"),  # BH: full sweeps of the 64 single-K-tile shapes
+    "bh_wbench": (f"{WORK}/frozen/bh_wbench.csv", "bh"),  # BH: write-rate sweep, 75 shapes
+    "bh_cov1": (f"{WORK}/frozen/bh_cov1.csv", "bh"),  # BH coverage round 1: 200 least-covered pool problems, contenders
     "wh_draws": ([f"{WORK}/frozen/wh_draw{k}_timed.csv" for k in (2, 3, 4, 5)], "wh"),
 }
+# MultiCore probes: the MultiCore config timed on a set's own problems (origin "multicore"), joined unless MC_PROBES=0 (v18r4 on)
+MC_PROBES = {"wh_designed": f"{WORK}/device/multicore_wh.csv", "bh_designed": f"{WORK}/bh/bh_designed_mc.csv"}
 KEY = ["problem_id", "origin", "config"]
 CAND = ("enumerated", "heuristic")
 gm = lambda x: float(np.exp(np.mean(np.log(np.asarray(x, float)))))
@@ -46,6 +81,11 @@ def load(names):
             ],
             ignore_index=True,
         )
+        x["mcprobe"] = False
+        if os.environ.get("MC_PROBES", "1") == "1" and n in MC_PROBES:
+            m = pd.read_csv(MC_PROBES[n], low_memory=False)
+            m = m[m.problem_id.astype(str).isin(set(x.problem_id.astype(str)))]
+            x = pd.concat([x, m.assign(origin="enumerated", family="multicore", mcprobe=True)], ignore_index=True)
         x["set"], x["arch_"] = n, arch
         if isinstance(path, list):  # timed draws: the model's pick is one of that problem's candidates
             x["origin"] = x.origin.replace({"model": "enumerated"})

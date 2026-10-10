@@ -52,6 +52,12 @@ EXPERIMENTAL = {
     "satlat": "saturated reads still expose part of the read latency every K step: after each barrier the reader's pipe is empty until its next requests land",
     "satlatmc": "as satlat, but only where multicast keeps the cores in lockstep (their per-step gaps coincide, so the shared pipe idles)",
     "packov": "math and pack of a subblock overlap only partly: a fitted fraction of the shorter stage adds to the longer",
+    "batchfix": "unfused batch: each core's outer batch loop pays a fixed cost per iteration (re-init, semaphores, CB and write handshakes)",
+    "reuseovl": "Reuse cores stream their blocks back to back: reads for the next block overlap this one's compute, so the pipeline fills once per core",
+    "wfam": "each factory's output writer reaches its own share of the DRAM write bandwidth (relative to 2D; Kt=1 sweeps: Reuse ~1.3x, 1D in1 ~0.7x, 1D in0 ~0.45x)",
+    "wfamw": "as wfam, but the factory penalty ramps in with the core's output block width (narrow blocks write at the 2D rate; write-rate sweep)",
+    "reusewov": "Reuse writes each output subblock as soon as it is packed: the block's compute hides its write, only the last subblock's write is exposed",
+    "unpack": "the unpacker loads sbh in0 + sbw in1 tiles per matmul_block inner step; at low fidelity it, not math, bounds a subblock",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
@@ -118,6 +124,12 @@ CONSTANTS = {
         "fraction of the shorter of math and pack per subblock-step that does not overlap the longer",
         "packov",
     ),
+    "batch_fixed": (2000.0, "cycles per unfused batch iteration on each core", "batchfix"),
+    "wf_reuse": (1.0, "Reuse output write rate relative to 2D", "wfam"),
+    "wf_in0": (1.0, "1D in0-mcast output write rate relative to 2D", "wfam"),
+    "wf_in1": (1.0, "1D in1-mcast output write rate relative to 2D", "wfam"),
+    "wf_w0": (8.0, "output block width (tiles) at which a factory's write penalty is complete", "wfamw"),
+    "unpack_cyc": (20.0, "unpacker cycles per tile loaded into srcA/srcB", "unpack"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -172,6 +184,12 @@ LO = {
     "sat_lat": 1e-3,
     "sat_lat_mc": 1e-3,
     "pack_ov": 1e-3,
+    "unpack_cyc": 1.0,
+    "wf_reuse": 0.1,
+    "wf_in0": 0.1,
+    "wf_in1": 0.1,
+    "wf_w0": 1.0,
+    "batch_fixed": 1.0,
 }
 HI = {
     "mc_eff0": 1.0,
@@ -185,6 +203,12 @@ HI = {
     "sat_lat": 2.0,
     "sat_lat_mc": 2.0,
     "pack_ov": 1.0,
+    "unpack_cyc": 200.0,
+    "wf_reuse": 4.0,
+    "wf_in0": 4.0,
+    "wf_in1": 4.0,
+    "wf_w0": 128.0,
+    "batch_fixed": 1e5,
 }
 
 
@@ -221,6 +245,7 @@ def geometry(d):
     g["nob"] = np.where(reuse, np.ceil(rblocks / rcores) * bsf, bloop * np.ceil(pcM / obh) * np.ceil(pcN / obw))
     g["nK"] = np.ceil(Kt / kb)
     g["dbuf"] = np.where(reuse, True, bloop * g["nK"] > 1)
+    g["bloop"] = np.where(reuse | (fam == "multicore"), 1.0, bloop)
     g.update(Mt=Mt, Kt=Kt, Nt=Nt, B=B, kb=kb, obh=obh, obw=obw, sbh=sbh, sbw=sbw, fam=fam)
     g["nsb"] = np.ceil(obh / sbh) * np.ceil(obw / sbw)
     g["tb_a"] = d.a_dtype.map(TILE_BYTES).to_numpy(float)
@@ -353,6 +378,8 @@ def predict(g, p, parts=False):
     reload = 0.0
     if on("spill"):  # compute-side work inside the K loop, so it pipelines against the reads
         reload = g["reloads"] * (nsb * p["rl_init"] + np.where(g["tb_p"] >= 4096, tiles * p["u2d"], 0.0))
+    if on("unpack"):  # unpack and math pipeline per inner step: the slower of the two sets the pace
+        math = np.maximum(math, kb * (sbh + sbw) * p["unpack_cyc"])
     stage = np.maximum(math, pack) + (p["pack_ov"] * np.minimum(math, pack) if on("packov") else 0.0)
     comp = nsb * (stage + fixed) + reload / np.maximum(nK, 1)
     epi = 0.0
@@ -366,6 +393,15 @@ def predict(g, p, parts=False):
         wbytes = tiles * g["tb_o"]
         cw = 1 + sbh * sbw * g["tb_o"] / (p["wburst_KB"] * 1e3) if on("wburst") else 1.0
         dram_w = s["dram_GBs"] * 1e9 * p["dram_w_eff"] / clk if on("dramw") else dram
+        if on("wfam"):
+            wf = np.select(
+                [g["fam"] == "reuse", g["fam"] == "1d_in0", g["fam"] == "1d_in1"],
+                [p["wf_reuse"], p["wf_in0"], p["wf_in1"]],
+                1.0,
+            )
+            if on("wfamw"):
+                wf = 1 + (wf - 1) * np.minimum(1.0, g["obw"] / p["wf_w0"])
+            dram_w = dram_w * wf
         rate_w = np.minimum(noc, dram_w / (np.maximum(g["cores"], 1) * cw))
         write = np.select(
             [g["dst_o"] == 0, g["dst_o"] == 1],
@@ -389,7 +425,10 @@ def predict(g, p, parts=False):
         loop = np.where(g["dbuf"], piped, serial)
         block = loop + epi + np.where(g["fam"] == "2d", np.maximum(write - loop, write / np.maximum(nsb, 1)), write)
     else:
-        block = np.where(g["dbuf"], piped, serial) + epi + write
+        wexp = write
+        if on("reusewov"):  # the writer drains subblocks while later subblocks compute
+            wexp = np.where(g["fam"] == "reuse", np.maximum(write / np.maximum(nsb, 1), write - nK * comp), write)
+        block = np.where(g["dbuf"], piped, serial) + epi + wexp
     if on("blkfix"):
         block = block + p["blk_fixed"]
     pad = 0.0
@@ -398,6 +437,11 @@ def predict(g, p, parts=False):
         pad = np.where(g["kpad"] > 0, obh * (lat0 + g["kpad"] * p["pad_elem"]), 0.0)
         block = block + pad
     core = g["nob"] * block
+    if on("batchfix"):
+        core = core + np.where(g["bloop"] > 1, g["bloop"] * p["batch_fixed"], 0.0)
+    if on("reuseovl"):  # one pipeline over all of the core's blocks: K steps of every block back to back
+        stream = read + (g["nob"] * nK - 1) * np.maximum(read, comp) + comp + g["nob"] * (epi + write + pad)
+        core = np.where(g["fam"] == "reuse", stream, core)
 
     # MultiCore: one output tile at a time, every input tile read with its own barrier
     mc = g["fam"] == "multicore"
@@ -411,5 +455,18 @@ def predict(g, p, parts=False):
 
     t = p["launch_us"] * 1e3 + core / clk * 1e9
     if parts:
-        return t, dict(read=read, comp=comp, reload=reload, epi=epi, write=write, nob=g["nob"], nK=nK)
+        one = np.ones_like(np.asarray(t, float))
+        # stage tails the profiler measures per RISC: compute after the reader's last block (the step in progress, plus
+        # the buffered one when compute is the bottleneck of a double-buffered loop), and the output write after the last pack
+        ahead = np.where(g["dbuf"], np.clip(comp - read, 0.0, comp), 0.0)
+        tail_c = (epi + comp + ahead) * one / clk * 1e9
+        tail_w = (
+            (np.where(g["fam"] == "reuse", write / np.maximum(nsb, 1), write) if on("reusewov") else write)
+            * one
+            / clk
+            * 1e9
+        )
+        return t, dict(
+            read=read, comp=comp, reload=reload, epi=epi, write=write, nob=g["nob"], nK=nK, tail_c=tail_c, tail_w=tail_w
+        )
     return t

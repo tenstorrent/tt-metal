@@ -25,6 +25,9 @@ SHRINK = float(os.environ.get("SHRINK", "1.0"))
 PARAMS = dict(
     objective="regression_l1",
     num_leaves=int(os.environ.get("LEAVES", "7")),
+    max_depth=int(
+        os.environ.get("DEPTH", "-1")
+    ),  # 2 = pairwise interactions only: the correction is a sum of 1-D and 2-D shape functions
     learning_rate=float(os.environ.get("LR", "0.03")),
     n_estimators=int(os.environ.get("TREES", "300")),
     min_child_samples=40,
@@ -113,15 +116,26 @@ if __name__ == "__main__":
         for k in range(5):
             test = np.isin(d.problem_id.iloc[rr], probs[k::5])
             tr, te = rr[~test], rr[test]
+            if os.environ.get("MC_TRAIN") != "1":  # MultiCore probes, when loaded, are scored but not trained on
+                tr = tr[~d.mcprobe.iloc[tr].to_numpy()]
             p = fit.fit(d, tr)
             xtr, xte = d.iloc[tr], d.iloc[te]
             btr, gtr, ptr = base_parts(xtr, p)
             bte, gte, pte = base_parts(xte, p)
             ftr, fte = features(xtr, gtr, ptr), features(xte, gte, pte)
             y = centered_target(xtr, btr)
+            rfrac = float(
+                os.environ.get("RFRAC", "1.0")
+            )  # learning curve: residual sees only this share of training problems
+            if rfrac < 1.0:
+                tp = xtr.problem_id.unique()
+                keep_p = set(np.random.default_rng(k).choice(tp, int(len(tp) * rfrac), replace=False))
+                sub = xtr.problem_id.isin(keep_p).to_numpy()
+            else:
+                sub = np.ones(len(xtr), bool)
             cand = xtr.origin.isin(CAND).to_numpy()
             w = 1.0 / np.sqrt(xtr.problem_id.map(xtr.problem_id.value_counts()).to_numpy())
-            m = lgb.LGBMRegressor(**PARAMS).fit(ftr[cand], y[cand], sample_weight=w[cand])
+            m = lgb.LGBMRegressor(**PARAMS).fit(ftr[cand & sub], y[cand & sub], sample_weight=w[cand & sub])
             c = SHRINK * m.predict(fte)
             base_oof[te], corr_oof[te], final_oof[te] = bte, c, bte * np.exp(c)
             print(f"{a} fold {k}: |corr| median {np.median(np.abs(c)):.3f}", flush=True)
