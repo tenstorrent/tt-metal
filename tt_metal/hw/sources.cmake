@@ -418,4 +418,7 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalization_owner.inc
+    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalize.inc
+    inc/api/compute/softsign_bw.h
 )
