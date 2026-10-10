@@ -537,6 +537,40 @@ same counts); steps past it are empty on every chip.
 Worked: balanced back to (slightly below) the expert-step numbers, hot gains kept; the first configuration that
 beats the same-code baseline in all four cases. Bit-identical.
 
+### 6.18 Grid splits: LoudBox 11 x 10, 12 x 9 (row dispatch), Galaxy 12 x 10 (host-side plans)
+- **12 x 9 (Galaxy proxy that can trace):** `FLAT_CMB_GRID=12x9` = dispatch on a row with the fabric Tensix mux on
+  the 8 x 1 ring (works with FABRIC_2D_TORUS_Y). Combine's cells are the same as on 11 x 10 ((0,0) (2,0) (3,0) (5,0)
+  (6,0) (7,0) (8,0)), so row-0 columns 1, 4, 9, 10, 11 are free. Flat on rows 1-8 alone leaves 12 down cores (64 gu +
+  16 readers + 4 relays of 96 cells): ~15 output columns per down core, L1 overflow (plan TT_FATAL). With the five
+  row-0 cells (`MIMO_FL_XDOWN=1,0;4,0;9,0;10,0;11,0`): 17 down, bit-identical. It has one row less than a Galaxy chip,
+  so it is a weak proxy for the overlap (fewer flat cells than the LoudBox).
+- **Galaxy 12 x 10, host-side plans** (`TT_METAL_MOCK_CLUSTER_DESC_PATH=.../blackhole_galaxy.yaml`; nothing run):
+  full grid 64 gu (np 1) + 16 readers + 4 relays + 36 down; rows 1-9 (combine on row 0) 64 gu (np 1) + 32 down,
+  plus whatever row-0 cells combine leaves (5 on the LoudBox): about the full grid's down count. So on a Galaxy
+  chip the layout loss that costs the LoudBox up to 200+ us (19 vs 26 down) should mostly disappear.
+- **Planner bug (rows capped on a Galaxy chip):** the east gate/up rectangle reaches column 12 of a 12-wide grid:
+  `bw_max = min(4, grid.x - 8)` assumes the east readers at column 6 (p150), but a Galaxy chip's are at 7
+  (shift 1), leaving 3 columns. Fix before running on a Galaxy: size it after the readers are placed (and add a
+  third gate/up rectangle if 64 do not fit).
+
+Measured (pin rule, entry walk; one config per model, vs the baseline on the same grid and code):
+
+| overlap us | Kimi bal | Kimi hot | GLM bal | GLM hot |
+|---|---|---|---|---|
+| 11 x 10 baseline (flat 110 cores, then combine) | 1345 | 1685 | 949 | 1596 |
+| 11 x 10 np 2, rows 1-9 (planner default) | **1144 (-15.0%)**, flat 980 | 1657 (-1.7%), flat 1595 | **812 (-14.5%)**, flat 661 | 1454 (-8.9%), flat 1376 |
+| 11 x 10 64 gu + 19 down | 1265 (-5.9%), flat 1104 | **1515 (-10.1%)**, flat 1274 | 891 (-6.1%), flat 742 | **1287 (-19.4%)**, flat 1170 |
+| 12 x 9 baseline (flat full grid, then combine) | 1697 (combine 805) | 2137 (combine 1115) | 1231 (combine 627) | 1994 (combine 990) |
+| 12 x 9 rows 1-8 + 5 row-0 cells | 2075 (flat 2026) | 3611 (flat 3520) | 949 | 1444 |
+
+- 11 x 10: with the entry walk the np 2 layout is back: its flat is much faster on balanced routing, and its slower
+  hot-case flat is now largely covered (combine 86-90% hidden). Both layouts beat the baseline in all four cases;
+  np 2 wins balanced by ~9 points, 64 gu + 19 down wins hot by ~8-10. The choice per model depends on how often
+  routing is hot (captured routing: max / mean typically 1.8-2.8, occasionally 25x+).
+- 12 x 9 is not a usable Galaxy proxy: combine alone is ~1.8x slower than on 11 x 10 (805 vs 442 us; the fabric
+  Tensix mux that row dispatch requires sits in the fabric path), and Kimi's flat on 8 rows is badly starved
+  (2026 vs 891 us on the full 12 x 9). The Galaxy evidence that stands is the host-side plan above.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
