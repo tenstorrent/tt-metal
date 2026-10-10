@@ -14,6 +14,7 @@
 
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
+#include "profiler/tt_metal_profiler.hpp"
 #include "profiler/profiler_state_manager.hpp"
 
 namespace tt::tt_metal {
@@ -38,7 +39,7 @@ void ProfilerInitializer::init(
             "All devices must belong to the same MetalEnv / context ID");
     }
 
-    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
+    if (getDeviceProfilerState(descriptor_->env_impl())) {
         for (auto* dev : devices_) {
             // For Galaxy init, we only need to loop over mmio devices
             if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
@@ -63,11 +64,11 @@ void ProfilerInitializer::init(
                 }
             }
         }
-        detail::ProfilerSync(ProfilerSyncState::INIT);
+        detail::ProfilerSync(descriptor_->metal_context(), ProfilerSyncState::INIT);
 
         if (profiler_state_manager_ && rtoptions_.get_experimental_noc_debug_dump_enabled()) {
             tt::tt_metal::LaunchIntervalBasedProfilerReadThread(
-                std::vector<IDevice*>(devices_.begin(), devices_.end()));
+                descriptor_->metal_context(), std::vector<IDevice*>(devices_.begin(), devices_.end()));
         }
     }
 #endif
@@ -84,14 +85,14 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
     TT_FATAL(
         !init_done.contains(InitializerKey::Fabric),
         "ProfilerInitializer must be torn down after FabricFirmwareInitializer");
-    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
+    if (getDeviceProfilerState(descriptor_->env_impl())) {
         // Read profiler results from dispatch cores
         for (auto* dev : devices_) {
             TT_ASSERT(dev != nullptr, "Device is nullptr");
             detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
         }
 
-        detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
+        detail::ProfilerSync(descriptor_->metal_context(), ProfilerSyncState::CLOSE_DEVICE);
     }
 
     devices_.clear();
@@ -100,7 +101,7 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
 }
 
 void ProfilerInitializer::post_teardown() {
-    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
+    if (getDeviceProfilerState(descriptor_->env_impl())) {
         // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is
         // called as a std::atexit() function, and ProfilerStateManager::cleanup_device_profilers() cannot be safely
         // called from a std::atexit() function because it creates new threads, which is unsafe during program
