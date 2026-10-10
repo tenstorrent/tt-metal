@@ -109,7 +109,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
-    const std::optional<Tensor>& actual_end) {
+    const std::optional<Tensor>& actual_end,
+    bool packed_head) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
@@ -130,7 +131,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         kernel_config,
         actual_start,
         sequence_parallel_axis,
-        actual_end);
+        actual_end,
+        packed_head);
 }
 
 }  // namespace ttnn::experimental::kda
