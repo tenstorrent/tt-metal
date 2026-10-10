@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 // Perf driver for the EMA SFPU entry (ckernel_sfpu_ema.h via
 // llk_math_ema_sfpu_entry.h). Mirrors sources/sfpu_ema_test.cpp, with the tile loop
 // wrapped in the perf markers and repeated LOOP_FACTOR times to amortise profiler
@@ -159,11 +158,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Isolates the math pipe: no dest handshake with pack, so what is left is
-            // the datacopy plus the EMA kernel.
-            //
-            // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
-            // stays in. It is what consumes the SrcA valid bits that unpack sets, so
-            // dropping it and trying to retire them with a bare TTI_CLEARDVALID hangs the
+            // the datacopy plus the EMA kernel; with unpack to DEST (Float32) the unpacker
+            // fills DEST itself and only the EMA kernel is left.
+            // For the 16-bit forms this is the shape of eltwise_unary_sfpu_perf.cpp's
+            // MATH_ISOLATE: the datacopy stays in. It consumes the SrcA valid bits unpack
+            // sets, so dropping it and retiring them with a bare TTI_CLEARDVALID hangs the
             // math thread. The datacopy is therefore a fixed cost inside this marker, the
             // same way it is for every other unary SFPU op measured this way -- it is
             // constant across a before/after comparison of the SFPU block, so it cancels
@@ -171,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             //
             // EMA always works through dst tile 0 (input) and dst tile 1 (output) via
             // compile-time offsets, so there is no MAX_TILES_DEST blocking here: every
-            // iteration copies into tile 0 and the kernel writes tile 1.
+            // iteration fills tile 0 and the kernel writes tile 1.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)

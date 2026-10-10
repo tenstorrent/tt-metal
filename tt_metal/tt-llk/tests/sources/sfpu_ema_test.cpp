@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Another math init in the same DEST section before the EMA, as a fused kernel would issue it.
             _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* transpose */);
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* acc_to_dest */);
         }
 
         // EMA reads dst tile 0, writes dst tile 1, updates the LREG4 carry.

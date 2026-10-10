@@ -3,9 +3,11 @@
 
 """Functional coverage for the EMA SFPU kernel.
 
-Two tests, both driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
+Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
 
 - `test_sfpu_ema` -- the default-suite check, one alpha over 1/2/4 time tiles.
+- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init between the
+  datacopy and `ema_tile` in every DEST section.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
 
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
@@ -49,6 +51,9 @@ EMA_BETA = 1.0 - EMA_ALPHA
 # 2 tiles is 64 time steps per channel, enough for the recurrence to settle and for
 # rounding differences to accumulate through the carry.
 SWEEP_NUM_TIME_TILES = 2
+
+# Two time tiles, so the carry crosses a DEST section after the interleaved init.
+AFTER_INIT_NUM_TIME_TILES = 2
 
 # k/1000 for k in 0..999. alpha=0 is a degenerate pass-through (beta=1) and is kept
 # deliberately: it is the cheapest check that the carry term is actually multiplied
@@ -184,13 +189,19 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
 
 
 # Another math init in the same DEST section must not change the EMA result.
-@parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_time_tiles=[2],
+# One axis, so pytest's own parametrize: the harness helper hands a single axis over as a tuple.
+@pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=["dest_acc:No", "dest_acc:Yes"],
 )
-def test_sfpu_ema_after_binary_init(dest_acc, num_time_tiles):
+def test_sfpu_ema_after_binary_init(dest_acc):
     res_tensor, golden_input = _run_ema_on_device(
-        EMA_ALPHA, EMA_BETA, num_time_tiles, dest_acc, binary_init_before_ema=True
+        EMA_ALPHA,
+        EMA_BETA,
+        AFTER_INIT_NUM_TIME_TILES,
+        dest_acc,
+        binary_init_before_ema=True,
     )
     golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
 
