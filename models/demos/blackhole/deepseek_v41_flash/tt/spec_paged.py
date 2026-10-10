@@ -221,7 +221,10 @@ class SpecPagedCompressedAttention(_SpecFinish, DSV41PagedCompressedAttention):
         ):  # index-source layer: (owners: write the block's keys,) then the per-row top-512 shared with the next layers of this kind
             if owner:
                 self.indexer.append_key_block(self._lat_pre, st)
-            st["topk_ids"] = self.indexer.forward(x, self._last_qr, st)
+            if not getattr(
+                self.indexer, "dense", False
+            ):  # (dense position bucket: no ids, the attention op selects every valid entry)
+                st["topk_ids"] = self.indexer.forward(x, self._last_qr, st)
         o = self._paged_attend(q, lat if owner else None, st, self.ratio, P.SRC_OFF[self.src_layer], P.WINDOW + 512)
         return self._finish(o, st)
 
