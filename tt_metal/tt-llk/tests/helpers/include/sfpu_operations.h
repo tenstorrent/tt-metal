@@ -1821,10 +1821,15 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::MASK)
+    {
+        // mask_init programs the DEST row step that the mask body's store uses.
+        SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::mask_init);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, ISCLOSE and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
