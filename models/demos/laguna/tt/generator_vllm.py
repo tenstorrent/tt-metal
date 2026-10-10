@@ -182,6 +182,11 @@ class LagunaForCausalLM:
     # traced DFlash verify picks each row's greedy token on device (logits padded to one 32-row tile, the batch-32
     # sampler) and reads back 16 ids instead of 16 x vocab logits (~3.2 MB) + a host argmax
     _DFLASH_DEVICE_ARGMAX = os.environ.get("TT_LAGUNA_DFLASH_DEVICE_ARGMAX", "1") == "1"
+    # the draft proposal (6 draft layers over the retained context + 16 query rows, LM head, greedy pick) replays a
+    # trace per tile-padded context size instead of dispatching ~400 ops from the host every round
+    _DFLASH_DRAFT_TRACE = (
+        _DFLASH_VERIFY_TRACE and _DFLASH_DEVICE_ARGMAX and os.environ.get("TT_LAGUNA_DFLASH_DRAFT_TRACE", "1") == "1"
+    )
     _DFLASH_DEVICE_COUNT = int(DFLASH_SPEC.serving_device_count)
     _DFLASH_PROFILE = DFLASH_SPEC.serving_profile
     model_capabilities = {
@@ -408,6 +413,126 @@ class LagunaForCausalLM:
         if int(rows.shape[0]) != expected:
             raise RuntimeError(f"DFlash proposal produced {rows.shape[0]} logit rows, expected {expected}")
         return torch.argmax(rows, dim=-1).to(torch.int32).tolist()
+
+    def _dflash_draft_shape(self, cache, bonus_token_id):
+        """(block, context start, context rows, query rows, padded rows) of the next proposal round, exactly as
+        DFlashTTCore.proposal_round derives them."""
+        from .dflash_reference import build_proposal_block
+
+        core = self._dflash_core
+        start, rows = cache.context_bounds()
+        block = build_proposal_block(
+            core.config,
+            bonus_token_id=int(bonus_token_id),
+            last_valid_position=int(start) + int(rows) - 1,
+            num_speculative_tokens=int(core.config.max_speculative_tokens),
+        )
+        q = int(block.input_ids.numel())
+        padded = -(-(int(rows) + q) // cache.block_size) * cache.block_size
+        return block, int(start), int(rows), q, padded
+
+    def _dflash_draft_alloc(self, padded):
+        """Persistent inputs of the traced proposal for one padded size (allocated before any trace capture)."""
+        core = self._dflash_core
+        hd = int(core.config.head_dim)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.mesh_device, memory_config=dram,
+                                   mesh_mapper=_replicate(self.mesh_device))  # fmt: skip
+
+        return {
+            "padded": int(padded),
+            "tok": dev(torch.zeros((1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "place": dev(torch.zeros((1, padded, 32)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "take": dev(torch.zeros((1, 32, padded)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "cos": dev(torch.zeros((1, 1, padded, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "sin": dev(torch.zeros((1, 1, padded, hd)), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            "tok32": dev(torch.zeros((1, 1, 1, 32), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "tid": None,
+        }
+
+    def _dflash_draft_body(self, st):
+        """DFlashTTCore._proposal_round_fixed over the persistent inputs, ending in the on-device greedy pick."""
+        core, cache = self._dflash_core, self._dflash_cache
+        width = int(core.config.hidden_size)
+        n = int(core.config.max_speculative_tokens)
+        query_hidden = self.model.embed_prefill(st["tok"])  # [1, 32, width]
+        context_hidden = cache.buffer_rows(st["padded"])
+        for index in range(int(core.config.num_hidden_layers)):
+            layer_input = ttnn.add(context_hidden, core.exact_matmul(st["place"], query_hidden))
+            out = core.layers[index].prefill_forward(
+                layer_input, cache.kv_cache[index], cache.page_tables[index], user_id=0, start_pos=0,
+                rope_mats=(st["cos"], st["sin"]),
+            )  # fmt: skip
+            query_hidden = core.exact_matmul(st["take"], out)
+        query_hidden = core.apply_final_norm(query_hidden)
+        sampled = ttnn.slice(query_hidden, [0, 1, 0], [1, 1 + n, width])
+        shards = self.model.lm_head_shards_dflash(sampled, enable_experimental=True)
+        padded = ttnn.pad(ttnn.reshape(shards, (1, 1, n, int(shards.shape[-1]))), [(0, 0), (0, 0), (0, 32 - n), (0, 0)], 0.0)
+        self.gen._greedy_sample(padded, 32, st["tok32"])
+
+    def _dflash_draft_refresh(self, st, block, start, rows, q):
+        """Copy one round's token ids, row placement and RoPE window into the persistent inputs."""
+        core = self._dflash_core
+        padded = st["padded"]
+        tok = torch.full((1, 32), int(core.config.mask_token_id), dtype=torch.int32)
+        tok[0, :q] = block.input_ids.to(torch.int32).reshape(-1)
+        ttnn.copy_host_to_device_tensor(self.gen._host(tok, ttnn.uint32), st["tok"])
+        place = torch.zeros((padded, 32), dtype=torch.bfloat16)
+        index = torch.arange(q)
+        place[rows + index, index] = 1.0
+        phase = torch.outer(torch.arange(start, start + padded, dtype=torch.float32), core._rope_inv_freq)
+        phase = torch.cat((phase, phase), dim=-1)
+        hd = int(core.config.head_dim)
+        for key, t in (("place", place.unsqueeze(0)), ("take", place.t().contiguous().unsqueeze(0)),
+                       ("cos", phase.cos().to(torch.bfloat16).reshape(1, 1, padded, hd)),
+                       ("sin", phase.sin().to(torch.bfloat16).reshape(1, 1, padded, hd))):  # fmt: skip
+            host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
+            ttnn.copy_host_to_device_tensor(host, st[key])
+
+    def _dflash_draft_prepare(self):
+        """Allocate, compile and capture the proposal trace of every padded size a round can reach (32 .. the
+        cache capacity). Runs during warmup before the verify trace is captured."""
+        cache = self._dflash_cache
+        q = int(cache.query_rows)
+        states = {}
+        for padded in range(32, int(cache.capacity) + 1, 32):
+            states[padded] = self._dflash_draft_alloc(padded)
+        cache.begin_request("laguna-dflash-draft-warmup")
+        try:
+            for padded, st in states.items():
+                rows = max(1, padded - q)
+                from .dflash_reference import build_proposal_block
+
+                block = build_proposal_block(self._dflash_core.config, bonus_token_id=0, last_valid_position=rows - 1,
+                                             num_speculative_tokens=int(self._dflash_core.config.max_speculative_tokens))  # fmt: skip
+                self._dflash_draft_refresh(st, block, 0, rows, q)
+                self._dflash_draft_body(st)  # compile
+            ttnn.synchronize_device(self.mesh_device)
+            for padded, st in states.items():
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                self._dflash_draft_body(st)
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                st["tid"] = tid
+            ttnn.synchronize_device(self.mesh_device)
+        finally:
+            cache.end_request("laguna-dflash-draft-warmup")
+        self._dflash_draft_traces = states
+        print(f"[laguna dflash] warmup: draft proposal traced for padded sizes {sorted(states)}", flush=True)
+
+    def _dflash_draft_tokens(self, cache, bonus_token_id):
+        """The 15 draft tokens from the traced proposal, or None (no trace for this size: the eager path runs)."""
+        states = getattr(self, "_dflash_draft_traces", None)
+        if not states:
+            return None
+        block, start, rows, q, padded = self._dflash_draft_shape(cache, bonus_token_id)
+        st = states.get(padded)
+        if st is None or st.get("tid") is None:
+            return None
+        self._dflash_draft_refresh(st, block, start, rows, q)
+        ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
+        return [int(t) for t in self.gen._read_token(st["tok32"], int(self._dflash_core.config.max_speculative_tokens))]
 
     def close_dflash(self):
         """Explicitly release request state and draft-owned KV allocations."""
@@ -3810,6 +3935,9 @@ class LagunaForCausalLM:
                 # anything first allocated after capture can be overwritten by a replay (a 2nd draft round
                 # hung in its logits read on 2026-10-02 06:47 without this).
                 self._dflash_prewarm_eager(kv_cache, width)
+                if self._DFLASH_DRAFT_TRACE:
+                    self._dflash_draft_prepare()
+                    self._dflash_controller.draft_tokens = self._dflash_draft_tokens
                 self._dflash_verify_capture(staged)
             print(
                 "[laguna dflash] warmup: normal decode trace OMITTED; "

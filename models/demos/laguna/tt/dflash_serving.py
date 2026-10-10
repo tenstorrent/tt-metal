@@ -322,13 +322,17 @@ class DFlashServedController:
             pending_ms = (time.perf_counter() - sync_start) * 1000.0
             entries_before = self.core.mesh_device.num_program_cache_entries()
         draft_start = time.perf_counter()
-        proposal = self.core.proposal_round(
-            self.cache,
-            target_model=self.target_model,
-            bonus_token_id=known_bonus,
-            enable_experimental=True,
-        )
-        drafts = [int(token) for token in self.draft_argmax(proposal)]
+        # a traced proposal (the serving adapter's draft_tokens hook) when one exists for this context size
+        draft_tokens = getattr(self, "draft_tokens", None)
+        drafts = draft_tokens(self.cache, known_bonus) if draft_tokens is not None else None
+        if drafts is None:
+            proposal = self.core.proposal_round(
+                self.cache,
+                target_model=self.target_model,
+                bonus_token_id=known_bonus,
+                enable_experimental=True,
+            )
+            drafts = [int(token) for token in self.draft_argmax(proposal)]
         expected_drafts = int(self.core.config.max_speculative_tokens)
         if len(drafts) != expected_drafts:
             raise ValueError(f"DFlash drafter returned {len(drafts)} tokens, expected {expected_drafts}")
