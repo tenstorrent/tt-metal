@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
+
+#include <sstream>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -89,10 +91,10 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::comput
     // all_gather label (Replicate on the cluster axis, the input's placements elsewhere) renumbered to the output
     // layout: Shard{0} stays Shard{0}, Shard{1} (users) becomes Shard{2}, Shard{2} (heads) becomes Shard{3} -- a
     // device's heads are one contiguous block of the width -- and Replicate stays. A Shard of dim 3 (head_dim) would
-    // interleave within every head, which no output dim describes: the output keeps the input's label then, as it
-    // does when the helper has no honest gather label (nullopt, already reported). Returning {} would instead hand
-    // the framework the union over every tensor argument, `buffer_tensor` (caller-owned scratch outside the return
-    // value) and its stale label included.
+    // interleave within every head, which no output dim describes: refused like a helper refusal (reported, an error
+    // under strict mode) and the output keeps the input's label, as it does when the helper has no honest gather
+    // label (nullopt, already reported). Returning {} would instead hand the framework the union over every tensor
+    // argument, `buffer_tensor` (caller-owned scratch outside the return value) and its stale label included.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));
@@ -116,6 +118,13 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::comput
         } else if (dim == 2u) {
             placements.push_back(Shard{3});
         } else {
+            std::ostringstream label;
+            label << input_topology;
+            ttnn::operations::ccl::common::refuse(
+                "all_gather_concat cannot renumber a Shard of head_dim (tensor dim 3) into its [seq, 1, users, "
+                "num_heads * head_dim] output: a device's head_dim piece is interleaved within every head (label " +
+                    label.str() + ")",
+                ttnn::operations::ccl::common::RefusalFamily::Gather);
             return {input_topology};
         }
     }

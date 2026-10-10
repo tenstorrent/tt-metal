@@ -4,6 +4,8 @@
 
 #include "all_to_all_async_device_operation.hpp"
 
+#include <sstream>
+
 #include <algorithm>
 
 #include <tt-metalium/mesh_device_view.hpp>
@@ -195,16 +197,17 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
     // coordinate (row-major) order a label's coordinates follow. The two agree only on a line (one axis of size > 1):
     // on a 2x4, device (1, 0) holds piece 7 where {8}, [Shard{out_dim}] over row-major coordinates says piece 4. A
     // label cannot carry the ring order (consumers iterate the storage order), so on a mesh with two non-trivial axes
-    // the output keeps the input's label until the factory indexes the ring by coordinate or the label can express
-    // the walk. No honest label from the helper (nullopt, already reported): the input's label as well. Returning {}
-    // would instead hand the framework the union over every tensor argument, the caller's persistent intermediate
-    // and output buffers and their stale labels included.
+    // the hook refuses -- reported like a helper refusal, an error under strict mode -- and the output keeps the
+    // input's label until the factory indexes the ring by coordinate or the label can express the walk. No honest
+    // label from the helper (nullopt, already reported): the input's label as well. Returning {} would instead hand
+    // the framework the union over every tensor argument, the caller's persistent intermediate and output buffers and
+    // their stale labels included.
     //
     // On a line the label is spelled over the ring coordinates themselves (get_ring_coordinates(), the list the
     // factory indexes; defined for a 2-D view only, as the factory requires) rather than over the input label's: the
     // helper's whole-mesh rule keeps a collapsed label's coordinates without checking their order, and a label built
     // from an explicit coordinate list (from_host_shards, combine_device_tensors) need not walk the line in order. A
-    // label that does not cover exactly the ring's devices keeps the input's label.
+    // label that does not cover exactly the ring's devices is refused the same way and keeps the input's label.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto& mesh_shape = mesh_device->shape();
@@ -212,7 +215,14 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
     for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
         non_trivial_axes += mesh_shape[static_cast<int32_t>(axis)] > 1 ? 1 : 0;
     }
-    if (mesh_shape.dims() != 2 || non_trivial_axes > 1) {
+    if (mesh_shape.dims() != 2) {
+        return {input_topology};  // the factory requires a 2-D mesh view: validation rejects this right after
+    }
+    if (non_trivial_axes > 1) {
+        ttnn::operations::ccl::common::refuse(
+            "all_to_all_async over a mesh with two non-trivial axes numbers its ring by the walk around the mesh "
+            "boundary (MeshDeviceView::get_ring_devices), which no TensorTopology can carry",
+            ttnn::operations::ccl::common::RefusalFamily::Scatter);
         return {input_topology};
     }
     const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
@@ -233,6 +243,12 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
     const auto& label_coords = output_topology->mesh_coords();
     if (label_coords.size() != ring_coords.size() ||
         !std::is_permutation(label_coords.begin(), label_coords.end(), ring_coords.begin())) {
+        std::ostringstream label;
+        label << *output_topology;
+        ttnn::operations::ccl::common::refuse(
+            "all_to_all_async label " + label.str() + " does not cover exactly the ring's " +
+                std::to_string(ring_coords.size()) + " devices",
+            ttnn::operations::ccl::common::RefusalFamily::Scatter);
         return {input_topology};
     }
     return {

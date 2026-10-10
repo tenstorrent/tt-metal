@@ -829,14 +829,14 @@ def test_all_to_all_async_generic_collapsed_shard_outer_axis_is_refused(mesh_dev
 
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
-def test_all_to_all_async_whole_mesh(mesh_device, strict_ccl_topology):
+def test_all_to_all_async_whole_mesh(mesh_device, strict_ccl_topology, expect_error):
     """The whole-mesh all_to_all of {N}, [Shard(2)] with in_dim=2, out_dim=3 leaves device k with every row and
     column block k. Its program factory numbers the ring by MeshDeviceView::get_ring_devices() -- the walk around the
     mesh boundary -- which is the coordinate order only on a line, so: on 1x2 / 1x8 the label is {N}, [Shard(3)] and
     composing by it gives the original (negative control: the union default kept {N}, [Shard(2)], which stacks the
-    column blocks along the rows); on a 2-D mesh the hook deliberately keeps the union default -- the input's
-    {N}, [Shard(2)] -- because {N}, [Shard(3)] over row-major coordinates would put device (1, 0)'s piece 7 where
-    piece 4 belongs, and no label can carry the boundary order. The caller's persistent output buffer (replicated
+    column blocks along the rows); on a 2-D mesh the hook refuses -- an error under strict mode, and in the default
+    mode (next test) the input's {N}, [Shard(2)] kept -- because {N}, [Shard(3)] over row-major coordinates would put
+    device (1, 0)'s piece 7 where piece 4 belongs, and no label can carry the boundary order. The caller's persistent output buffer (replicated
     zeros before the call) is the tensor relabelled either way. Shape: each device's input is 4 x 4N tiles so every
     destination shard is 4 x 4 tiles = eight two-tile packets; the op's factory statically partitions the
     intermediate buffer by packet id and rejects shards of a single packet (its final packet would overflow the
@@ -847,15 +847,36 @@ def test_all_to_all_async_whole_mesh(mesh_device, strict_ccl_topology):
     tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2))
     _skip_unless_ring(tt_input, None)
 
+    if rows > 1 and cols > 1:
+        with expect_error(RuntimeError, "walk around the mesh boundary"):
+            _all_to_all_async(tt_input, mesh_device, full.shape, in_dim=2, out_dim=3)
+        return
+
     tt_output = _all_to_all_async(tt_input, mesh_device, full.shape, in_dim=2, out_dim=3)
 
-    if rows > 1 and cols > 1:
-        assert _placements(tt_output) == [SHARD(2)]
-        assert _dist_shape(tt_output) == (num_devices,)
-    else:
-        assert _placements(tt_output) == [SHARD(3)]
-        assert _dist_shape(tt_output) == (num_devices,)
-        assert torch.equal(_compose_by_label(tt_output), full)
+    assert _placements(tt_output) == [SHARD(3)]
+    assert _dist_shape(tt_output) == (num_devices,)
+    assert torch.equal(_compose_by_label(tt_output), full)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
+@pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
+def test_all_to_all_async_whole_mesh_2d_warn_only_keeps_input_label(mesh_device, warn_only_ccl_topology):
+    """The default (warn-only) mode on a mesh with two non-trivial axes: the refused all_to_all still runs, logs (at
+    error level: a scatter-family fallback) and the output -- the caller's persistent output buffer -- keeps the
+    input's {N}, [Shard(2)]: the hook's explicit fallback, not the framework's union over the buffers' stale labels.
+    That label under-claims (every device does hold a distinct piece, in boundary order), so nothing is composed by
+    it. Before this change the hook returned this label silently in every mode."""
+    torch.manual_seed(30)
+    _, _, num_devices = _mesh(mesh_device)
+    full = _integers([1, 1, 128 * num_devices, 128 * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2))
+    _skip_unless_ring(tt_input, None)
+
+    tt_output = _all_to_all_async(tt_input, mesh_device, full.shape, in_dim=2, out_dim=3)
+
+    assert _placements(tt_output) == [SHARD(2)]
+    assert _dist_shape(tt_output) == (num_devices,)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
