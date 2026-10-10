@@ -41,9 +41,9 @@ void kernel_main() {
     const uint32_t thread_id = get_my_thread_id();
     const uint32_t num_threads = get_num_threads();
 #ifdef IMPLICIT_SYNC
-    // Host enables this only when every row is one unpadded DFB entry: each TXN_ID read fills the
-    // next entry (the shard itself or a staging ring) and posts its credit when it lands. Quasar
-    // NoC reads take any source byte offset, so the row is read from its exact start.
+    // Host enables this with a staging DFB of one unpadded row per entry: each TXN_ID read fills the
+    // next ring entry and posts its credit when it lands. Quasar NoC reads take any source byte
+    // offset, so the row is read from its exact start.
     const uint32_t row_offset_bytes = aligned_input_width_offset_bytes + aligned_offset;
     for (uint32_t h = thread_id; h < block_height; h += num_threads) {
         noc.async_read<NocOptions::TXN_ID>(s0, cb_in0, {.page_id = start_id + h, .offset_bytes = row_offset_bytes}, {});
