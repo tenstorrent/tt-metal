@@ -22,8 +22,9 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
 - Not met: batch-1 decode (83-88 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
-- DFlash speculative decoding reaches the batch-1 decode target at 1K / 2K / 4K input tokens over a 1024-token
-  answer (164 / 157 / 169 vs 157 / 156 / 155 tok/s; 154 vs 158 at 128, 147 vs 152 at 8K), and 195 tok/s on AIME24.
+- DFlash speculative decoding reaches the batch-1 decode target at every input length over a 2048-token answer
+  (188 / 200 / 194 / 202 / 160 vs 158 / 157 / 156 / 155 / 152 tok/s at 128 / 1K / 2K / 4K / 8K; over 1024 tokens at
+  1K-4K, 3% short at 128 and 8K).
   About 7x faster than on 2026-10-09 (25 -> 171 tok/s on AIME24 and 21-25 -> 107-132 tok/s on real text over the
   first 256 tokens).
 
@@ -70,21 +71,23 @@ Time to first token (measured / target):
 | 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
 | 8,192 | 714 ms / 103 ms | 23.4 s / 3.31 s |
 
-DFlash speculative decoding, batch 1 (decode tok/s over the first 256 / 1024 generated tokens; normal decode is
+DFlash speculative decoding, batch 1 (decode tok/s over the first 256 / 1024 / 2048 generated tokens; normal decode is
 83-88 tok/s at these lengths; the draft accepts more later in an answer). A round
 drafts 15 tokens, then checks up to the first 5 in Laguna in one step (a 3-row check when 2 or fewer are checked) and keeps the matching ones plus one of
 Laguna's own. It checks fewer when the draft is unsure (once the product of its top-1 probabilities drops below 0.2),
 which reads fewer expert weights. 18-21 ms per round (draft 2.5 ms, check 16.0-18.4 ms) vs 11.3-12.0 ms per token
 for normal decode, so DFlash wins when more than ~0.9 drafts per round are accepted:
 
-| Prompt | Input tokens | 256 tokens: tok/s (drafts / round) | 1024 tokens: tok/s (drafts / round) |
-|---|---:|---:|---:|
-| AIME24 | 235 | 171.4 (2.5) | 194.9 (3.1) |
-| Real text | 128 | 131.5 (1.5) | 154.2 (2.1) |
-| Real text | 1,024 | 112.9 (1.2) | 164.4 (2.4) |
-| Real text | 2,048 | 115.1 (1.3) | 156.8 (2.2) |
-| Real text | 4,096 | 125.9 (1.5) | 169.1 (2.6) |
-| Real text | 8,192 | 107.4 (1.2) | 147.2 (2.1) |
+| Prompt | Input tokens | 256 tokens | 1024 tokens | 2048 tokens | Target |
+|---|---:|---:|---:|---:|---:|
+| AIME24 | 235 | 171.4 (2.5) | 194.9 (3.1) | 178.1 (2.9) | |
+| Real text | 128 | 131.5 (1.5) | 154.2 (2.1) | 188.4 (2.9) | 158 |
+| Real text | 1,024 | 112.9 (1.2) | 164.4 (2.4) | 199.8 (3.3) | 157 |
+| Real text | 2,048 | 115.1 (1.3) | 156.8 (2.2) | 194.1 (3.2) | 156 |
+| Real text | 4,096 | 125.9 (1.5) | 169.1 (2.6) | 202.4 (3.4) | 155 |
+| Real text | 8,192 | 107.4 (1.2) | 147.2 (2.1) | 159.6 (2.4) | 152 |
+
+tok/s (drafts accepted per round); target = the batch-1 decode target.
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
@@ -152,7 +155,7 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
 
 ```bash
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py   # performance tables, ~10 min
-PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash --dflash-prompt aime,text   # DFlash table (256 tokens; add --dflash-tokens 1024 for the 1024-token column)
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash --dflash-prompt aime,text   # DFlash table (256 tokens; --dflash-tokens 1024 / 2048 for the other columns)
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/roofline.py      # SoL and targets, no device
 python $MODEL_DIR/demo/perf_demo.py                                           # end to end through vLLM
 ```
