@@ -2297,7 +2297,7 @@ using distributed::MeshDevice;
 std::vector<MeshCoordinate> detail::local_coordinates(const MeshDevice& mesh) {
     std::vector<MeshCoordinate> coords;
     for (const MeshCoordinate& coord : MeshCoordinateRange(mesh.shape())) {
-        if (mesh.is_local(coord)) {
+        if (mesh.impl().is_local(coord)) {
             coords.push_back(coord);
         }
     }
@@ -2312,7 +2312,10 @@ static void check_info_coordinate(const MeshDevice& mesh, const MeshCoordinate& 
         coord,
         mesh.shape());
     TT_FATAL(
-        mesh.is_local(coord), "Cannot query {} at {}: device is remote (owned by another host)", property_name, coord);
+        mesh.impl().is_local(coord),
+        "Cannot query {} at {}: device is remote (owned by another host)",
+        property_name,
+        coord);
 }
 
 void detail::throw_non_uniform_info(const MeshCoordinate& coord, std::string_view property_name) {
