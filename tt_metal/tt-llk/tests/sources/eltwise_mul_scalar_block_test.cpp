@@ -98,11 +98,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        _llk_math_eltwise_mul_scalar_block_init_<MATH_FIDELITY>();
+        _llk_math_eltwise_mul_scalar_block_init_<dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>();
         for (int block = 0; block < params.NUM_BLOCKS; ++block)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
+            _llk_math_eltwise_mul_scalar_block_<dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }

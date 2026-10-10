@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_eltwise_mul_scalar_block_init_<MATH_FIDELITY>();
+        _llk_math_eltwise_mul_scalar_block_init_<dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>();
         PROFILER_SYNC();
     }
     {
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
+                    _llk_math_eltwise_mul_scalar_block_<dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
                 }
             }
         }
@@ -149,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_math_wait_for_dest_available_<dest_sync>();
-                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
+                    _llk_math_eltwise_mul_scalar_block_<dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
