@@ -2297,12 +2297,12 @@ class LTXDistilledPipeline(LTXPipeline):
         # Roots recorded before this call belong to warm-up or an earlier gen; keep only what THIS
         # decode records so the perf table's breakdown never describes a different pass.
         roots_before = timing_tree.root_count()
-        # LTX_AUDIO_OVERLAP=1 (opt-in): the VAE returns once its YUV reads land and the export worker
-        # assembles the planar frames, so the audio decode is queued on the device without waiting for that
-        # host-only step. The bytes are the same either way.
+        # The VAE returns once its YUV reads land and the export worker assembles the planar frames, so the
+        # audio decode is queued on the device without waiting for that host-only step. The bytes are the
+        # same either way; LTX_AUDIO_OVERLAP=0 assembles on this thread instead.
         defer_yuv = (
             yuv_export
-            and os.environ.get("LTX_AUDIO_OVERLAP", "0") == "1"
+            and os.environ.get("LTX_AUDIO_OVERLAP", "1") != "0"
             and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0"
         )
         t0 = time.time()
