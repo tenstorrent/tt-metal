@@ -1,0 +1,8 @@
+ID=t286-t5-r3
+TASK=t286
+WORKDIR=/var/tmp/fasth3/t286
+ENV=/home/smarton/fasth3/runner/env.yaml
+CONFIG=h3turbo-5s
+TIMEOUT=600
+CMD=env T286_ROOT_MAX=85 T286_SKIP_VAE_WARM=1 T286_W=/home/smarton/fasth3/t286 T286_VENV=/home/smarton/fasth3/tt-metal/python_env bash /var/tmp/fasth3/t286/run286.sh t5 5
+NEEDS=/var/tmp/fasth3/models/MiniMax-H3/READ_OK,/var/tmp/fasth3/models/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors,/home/smarton/fasth3/t286/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t209/kf_first.png
