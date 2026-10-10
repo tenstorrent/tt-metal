@@ -6,7 +6,6 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
@@ -24,9 +23,9 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
-    const auto arch = tt::tt_metal::hal::get_arch();
-    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
     check_allocated_device_tensor(in.q, operation_name, "q");
+    const auto arch = in.q.device()->arch();
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
     check_layout(in.q, Layout::TILE, operation_name, "q");
     check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
     check_interleaved(in.q, operation_name, "q");

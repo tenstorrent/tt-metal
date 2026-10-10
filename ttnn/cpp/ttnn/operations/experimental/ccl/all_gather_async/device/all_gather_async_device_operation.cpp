@@ -83,7 +83,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
             !args.use_all_gather_async_llama_sharded,
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "

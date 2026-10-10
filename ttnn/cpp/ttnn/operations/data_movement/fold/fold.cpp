@@ -325,7 +325,7 @@ static Tensor apply_halo_padding(
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
