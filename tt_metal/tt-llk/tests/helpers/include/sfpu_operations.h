@@ -2387,6 +2387,21 @@ void call_ternary_sfpu_operation(
     const std::uint32_t value         = 0x40000000u /* 2.0f */,
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
+#if defined(ARCH_BLACKHOLE)
+    // ITERATIONS is the rows per face. A full tile of where, addcmul, addcdiv or lerp runs as one 32-row call on
+    // Blackhole, as their compute API entry points issue it; a partial tile runs per face.
+    constexpr bool one_call =
+        ITERATIONS == 8 && (OPERATION == SfpuType::where || OPERATION == SfpuType::addcmul || OPERATION == SfpuType::addcdiv || OPERATION == SfpuType::lerp);
+    if constexpr (one_call)
+    {
+        if (vector_mode == ckernel::VectorMode::RC)
+        {
+            call_ternary_sfpu_operation<DST_SYNC_MODE, DST_ACCUM_MODE, OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 32>(
+                dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, value, ckernel::VectorMode::None);
+            return;
+        }
+    }
+#endif
     if constexpr (OPERATION == SfpuType::where)
     {
         SFPU_TERNARY_CALL(

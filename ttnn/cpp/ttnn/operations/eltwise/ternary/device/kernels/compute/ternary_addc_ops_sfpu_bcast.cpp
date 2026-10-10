@@ -9,6 +9,16 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
+
+// With the three operands in c_0's formats the inits run once: c_0's copy init serves all three, and the copies leave
+// the SFPU address modes, programmable constants and replay buffer as the op init set them.
+#if defined(ARCH_BLACKHOLE)
+constexpr bool init_once =
+    !DST_ACCUM_MODE && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+#else
+constexpr bool init_once = false;
+#endif
 
 ALWI void process_tile(
     uint32_t cb_in0_id,
@@ -54,17 +64,25 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_init(dfb_in0.get_id());
+        if constexpr (!init_once) {
+            copy_init(dfb_in0.get_id());
+        }
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
+        if constexpr (!init_once) {
+            copy_init(dfb_in1.get_id());
+        }
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
+        if constexpr (!init_once) {
+            copy_init(dfb_in2.get_id());
+        }
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         // Use direct addcmul kernel: computes input_a + scalar_arg * input_b * input_c -> DST[0]
-        TERNARY_SFPU_OP_INIT();
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();
@@ -120,6 +138,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

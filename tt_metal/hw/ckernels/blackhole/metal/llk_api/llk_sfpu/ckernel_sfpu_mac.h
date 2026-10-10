@@ -87,8 +87,8 @@ inline void mac_init() {
 // result is always written to tile 0.  Passing anything else has no effect.
 //
 // Because the replay slots (0..6) are shared with other SFPU ops, this must be
-// replayed while mac_init's recording is still the resident one - i.e. a
-// mac_tile call is only valid immediately after mac_tile_init.
+// replayed while mac_init's recording is still the resident one - i.e. no
+// other SFPU op may run between mac_tile_init and mac_tile.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_mac(
     [[maybe_unused]] const uint dst_index_in0,  // input a  (fixed at 0)
