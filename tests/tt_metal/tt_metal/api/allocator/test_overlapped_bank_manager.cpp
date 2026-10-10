@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include "gmock/gmock.h"
 #include <cstdint>
+#include <limits>
 #include <tt-metalium/allocator.hpp>
 #include <vector>
 
@@ -162,6 +163,71 @@ INSTANTIATE_TEST_SUITE_P(
 /********************************
  * Overlapped BankManager Tests *
  ********************************/
+TEST(OverlappedAllocators, CPU_FixedAddressOwnershipAndBounds) {
+    constexpr DeviceAddr bank_size = 16384;
+    constexpr DeviceAddr block_size = 1024;
+    constexpr DeviceAddr address = 4096;
+    auto bank_manager = get_bank_manager_with_allocator_dependencies(bank_size, block_size, {});
+    const auto before = bank_manager.get_statistics();
+    const auto allocate_at = [&](DeviceAddr requested) {
+        return bank_manager.allocate_buffer(
+            block_size, block_size, false, CoreRangeSet{}, std::nullopt, AllocatorID{0}, {}, std::nullopt, requested);
+    };
+
+    EXPECT_EQ(allocate_at(address), address);
+    EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, before.total_allocated_bytes + block_size);
+    EXPECT_THROW(allocate_at(address), std::runtime_error);
+    EXPECT_THROW(allocate_at(address + 1), std::runtime_error);
+    EXPECT_THROW(allocate_at(bank_size), std::runtime_error);
+    EXPECT_THROW(allocate_at(std::numeric_limits<DeviceAddr>::max() - (block_size - 1)), std::runtime_error);
+    EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, before.total_allocated_bytes + block_size);
+    bank_manager.deallocate_buffer(address);
+    expect_statistics_equal(bank_manager.get_statistics(), before);
+    EXPECT_EQ(allocate_at(address), address);
+    bank_manager.deallocate_buffer(address);
+
+    // A manager switch can reserve more memory at the bottom of L1.
+    bank_manager.shrink_size(address + block_size);
+    EXPECT_THROW(allocate_at(address), std::runtime_error);
+    bank_manager.reset_size();
+    EXPECT_EQ(allocate_at(address), address);
+    bank_manager.deallocate_buffer(address);
+}
+
+TEST(OverlappedAllocators, CPU_FixedAddressRespectsOtherReservations) {
+    constexpr DeviceAddr block_size = 1024;
+    constexpr DeviceAddr address = 4096;
+    const BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+    auto bank_manager = get_bank_manager_with_allocator_dependencies(16384, block_size, deps);
+    const auto allocate_at = [&](AllocatorID allocator_id,
+                                 const std::vector<std::pair<DeviceAddr, DeviceAddr>>& ranges) {
+        return bank_manager.allocate_buffer(
+            block_size, block_size, false, CoreRangeSet{}, std::nullopt, allocator_id, ranges, std::nullopt, address);
+    };
+    EXPECT_EQ(allocate_at(AllocatorID{1}, {}), address);
+    EXPECT_THROW(allocate_at(AllocatorID{0}, {}), std::runtime_error);
+    bank_manager.deallocate_buffer(address, AllocatorID{1});
+    EXPECT_THROW(allocate_at(AllocatorID{0}, {{address + 32, address + block_size}}), std::runtime_error);
+    EXPECT_EQ(allocate_at(AllocatorID{0}, {}), address);
+    bank_manager.deallocate_buffer(address);
+
+    // External reservations must also apply to the single-allocator case.
+    auto single = get_bank_manager_with_allocator_dependencies(16384, block_size, {});
+    EXPECT_THROW(
+        single.allocate_buffer(
+            block_size,
+            block_size,
+            false,
+            CoreRangeSet{},
+            std::nullopt,
+            AllocatorID{0},
+            {{address, address + block_size}},
+            std::nullopt,
+            address),
+        std::runtime_error);
+    EXPECT_EQ(single.get_statistics().total_allocated_bytes, 0);
+}
+
 TEST(OverlappedAllocators, CPU_InvalidAllocator) {
     // Create bank manager with 2 allocators (0 and 1)
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};

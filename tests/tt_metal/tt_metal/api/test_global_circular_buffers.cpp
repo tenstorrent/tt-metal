@@ -15,6 +15,8 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
@@ -24,6 +26,7 @@
 
 // Access to internal API: ProgramImpl::finalize_offsets
 #include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -127,6 +130,101 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         auto& program_ = workload.get_programs().at(device_range);
         EXPECT_THROW(program_.impl().finalize_offsets(mesh_device.get()), std::exception);
     }
+}
+
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressReconstruction) {
+    auto mesh_device = devices_[0];
+    const CoreCoord sender{0, 0};
+    const CoreRangeSet receivers{CoreRange{{1, 0}, {1, 0}}};
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping{{sender, receivers}};
+    const auto before = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
+    auto original = experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536);
+    auto alias = original;
+    const auto data_address = original.buffer_address();
+    const auto config_address = original.config_address();
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    auto* physical_device = mesh_device->get_devices().front();
+    const auto alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    // Eight header words, one NoC coordinate pair, and two aligned counters.
+    const uint32_t config_bytes = ((10 * sizeof(uint32_t) + alignment - 1) / alignment + 2) * alignment;
+    std::map<CoreCoord, std::vector<uint32_t>> expected_config;
+    for (const auto core : {sender, CoreCoord{1, 0}}) {
+        detail::ReadFromDeviceL1(
+            physical_device, core, config_address, config_bytes, expected_config[core], CoreType::WORKER);
+    }
+
+    // Copies held by cached programs must not keep the allocation alive.
+    original.deallocate();
+    alias.deallocate();
+    EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, before);
+    std::vector<uint32_t> scratch(config_bytes / sizeof(uint32_t), 0xa5a5a5a5);
+    for (const auto& [core, expected] : expected_config) {
+        detail::WriteToDeviceL1(physical_device, core, config_address, scratch, CoreType::WORKER);
+    }
+    auto restored =
+        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
+    EXPECT_EQ(restored.buffer_address(), data_address);
+    EXPECT_EQ(restored.config_address(), config_address);
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    for (const auto& [core, expected] : expected_config) {
+        std::vector<uint32_t> restored_config;
+        detail::ReadFromDeviceL1(
+            physical_device, core, config_address, config_bytes, restored_config, CoreType::WORKER);
+        EXPECT_EQ(restored_config, expected);
+    }
+    restored.deallocate();
+    EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, before);
+}
+
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRollsBack) {
+    auto mesh_device = devices_[0];
+    const CoreCoord sender{0, 0};
+    const CoreRangeSet receivers{CoreRange{{1, 0}, {1, 0}}};
+    const CoreRangeSet all_cores{CoreRange{{0, 0}, {1, 0}}};
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping{{sender, receivers}};
+    auto original = experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536);
+    const auto data_address = original.buffer_address();
+    const auto config_address = original.config_address();
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    original.deallocate();
+
+    const distributed::DeviceLocalBufferConfig config{
+        .page_size = 32,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
+    };
+    auto* physical_device = mesh_device->get_devices().front();
+    for (const auto blocked_address : {data_address, config_address}) {
+        auto blocker = distributed::MeshBuffer::allocate_at_address(
+            distributed::ReplicatedBufferConfig{.size = 64}, config, mesh_device.get(), blocked_address);
+        const auto occupied = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
+        // Existing explicit-address create remains a non-owning view.
+        auto view = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = 64}, config, mesh_device.get(), blocked_address);
+        EXPECT_EQ(view->get_backing_buffer(), nullptr);
+        view->deallocate();
+        EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, occupied);
+        std::vector<uint32_t> sentinel(8, 0xa5a5a5a5);
+        detail::WriteToDeviceL1(physical_device, sender, blocked_address, sentinel, CoreType::WORKER);
+        EXPECT_THROW(
+            experimental::GlobalCircularBuffer(
+                *mesh_device, mapping, 65536, BufferType::L1, data_address, config_address),
+            std::runtime_error);
+        EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, occupied);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        std::vector<uint32_t> after;
+        detail::ReadFromDeviceL1(physical_device, sender, blocked_address, 32, after, CoreType::WORKER);
+        EXPECT_EQ(after, sentinel);
+    }
+    EXPECT_THROW(
+        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address),
+        std::runtime_error);
+    // A failed config allocation must have released the successfully allocated data.
+    auto restored =
+        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
+    distributed::Synchronize(*mesh_device, std::nullopt);
 }
 
 }  // namespace tt::tt_metal

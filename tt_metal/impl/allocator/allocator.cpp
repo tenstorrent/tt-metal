@@ -142,7 +142,7 @@ void AllocatorImpl::verify_safe_allocation() const {
     }
 }
 
-DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
+DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer, std::optional<DeviceAddr> requested_address) {
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
     auto size = buffer->aligned_size();
@@ -150,6 +150,10 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->impl().bottom_up();
     auto num_cores = buffer->num_cores();
+    TT_FATAL(
+        !requested_address.has_value() || ((buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) &&
+                                           !buffer->impl().per_core_allocation_),
+        "Fixed-address allocation requires a lockstep L1 buffer");
     this->verify_safe_allocation();
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
@@ -293,12 +297,22 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 num_cores,
                 BankManager::AllocatorDependencies::AllocatorID{0},
                 additional_ranges,
-                scoped_dependent_allocators);
+                scoped_dependent_allocators,
+                requested_address);
             break;
         }
         case BufferType::L1_SMALL: {
             TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
-            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
+            address = l1_small_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_->compute_grid,
+                num_cores,
+                BankManager::AllocatorDependencies::AllocatorID{0},
+                {},
+                std::nullopt,
+                requested_address);
             break;
         }
         case BufferType::TRACE:
