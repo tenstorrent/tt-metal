@@ -28,7 +28,14 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
 
     // True iff the factory flagged cb_inp (c_0) UnpackToDestFp32 (FP32 input + fp32_dest_acc_en).
-    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    [[maybe_unused]] constexpr bool welford_unpack_fp32_active =
+        get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+#ifdef ARCH_BLACKHOLE
+    // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
+    constexpr bool welford_rerecord_per_tile = false;
+#else
+    constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+#endif
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -55,7 +62,7 @@ void kernel_main() {
 
         // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory sets
         // UnpackToDestFp32 for cb_inp so transpose_tile preserves FP32 precision into DEST.
-        // Its math-side init (called from transpose_init) records slots [16, 32) of the math-thread
+        // On Wormhole its math-side init (called from transpose_init) records slots [16, 32) of the math-thread
         // replay buffer, clobbering the LREG2 / LREG3 portions of welford's recurrence (welford
         // records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
         // welford_init<WelfordInitMode::PreserveStats>() after each transpose_tile re-records
@@ -66,16 +73,17 @@ void kernel_main() {
         // consume that state, and the next iteration's transpose_init reprograms it.
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
-        // gated out.
+        // gated out. On Blackhole welford records slots [0, 16) only, so neither record is redone
+        // per tile (welford_rerecord_per_tile).
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_inp, block_size);
             uint32_t r;
             for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(cb_inp);
                 }
                 transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update<W>(dst0, start_N, *p_reciprocals);
@@ -83,11 +91,11 @@ void kernel_main() {
             }
             if (wt + r == Wt - 1) {
                 // This block contains the last tile
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(cb_inp);
                 }
                 transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);

@@ -50,7 +50,16 @@ void kernel_main() {
 #endif
     // True iff the factory configured the input buffer with UnpackToDestFp32. Used by the
     // non-FUSE branch to gate the welford state re-establishment after the transpose.
-    constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
+    [[maybe_unused]] constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
+#ifdef ARCH_BLACKHOLE
+    // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
+    constexpr bool welford_rerecord_per_tile = false;
+    // The fused pre-add keeps the accumulator in LREG4/5 across blocks; only its SFPU add needs it parked in DEST.
+    [[maybe_unused]] constexpr bool welford_state_in_lregs = true;
+#else
+    constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+    [[maybe_unused]] constexpr bool welford_state_in_lregs = false;
+#endif
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -83,28 +92,32 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         // Block-interleaved pre-add + Welford. The Welford accumulator lives in the SFPU within a
         // tile_regs scope, but the pre-add must use its own tile_regs scope to pack its result to
-        // dfb_inp_id before the Welford pass can transpose-read it back. To bridge those scopes the
-        // accumulator (mean, M2) is spilled to dfb::mean_spill / dfb::m2_spill between chunks via
-        // welford_save_state / welford_restore_state. This lets dfb_inp_id stay sized to a small
-        // number of tiles (blk * 2 for double-buffer) regardless of Wt. Larger blk amortizes the
-        // save/restore overhead and accuracy loss across more tiles per spill cycle; blk is
-        // chosen by the factory as gcd(Wt, DST capacity) so it always divides Wt.
+        // dfb_inp_id before the Welford pass can transpose-read it back. On Blackhole the
+        // accumulator (mean, M2) stays in LREG4/5 across those scopes; elsewhere it is spilled to
+        // dfb::mean_spill / dfb::m2_spill between chunks via welford_save_state / welford_restore_state.
+        // This lets dfb_inp_id stay sized to a small number of tiles (blk * 2 for double-buffer)
+        // regardless of Wt. Larger blk amortizes the save/restore overhead and accuracy loss across
+        // more tiles per spill cycle; blk is chosen by the factory as gcd(Wt, DST capacity) so it
+        // always divides Wt.
 
-        // Seed the spill buffers with an initialized (zero) Welford state,
-        // since iteration 0 below expects it.
-        tile_regs_acquire();
-        welford_init();
-        welford_save_state(dst1);
-        tile_regs_commit();
-        dfb_mean_spill.reserve_back(1);
-        dfb_m2_spill.reserve_back(1);
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb::mean_spill);
-        pack_tile(dst1, dfb::mean_spill);
-        pack_tile(dst2, dfb::m2_spill);
-        tile_regs_release();
-        dfb_mean_spill.push_back(1);
-        dfb_m2_spill.push_back(1);
+        // Start from a zero Welford state: in the registers, or in the spill buffers iteration 0 below reads.
+        if constexpr (welford_state_in_lregs) {
+            welford_init();
+        } else {
+            tile_regs_acquire();
+            welford_init();
+            welford_save_state(dst1);
+            tile_regs_commit();
+            dfb_mean_spill.reserve_back(1);
+            dfb_m2_spill.reserve_back(1);
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb::mean_spill);
+            pack_tile(dst1, dfb::mean_spill);
+            pack_tile(dst2, dfb::m2_spill);
+            tile_regs_release();
+            dfb_mean_spill.push_back(1);
+            dfb_m2_spill.push_back(1);
+        }
 
         uint32_t start_N = 0;
         for (auto block : generic::blocks(Wt, blk)) {
@@ -123,8 +136,15 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb::in0, dfb::res);
                     copy_init(dfb::res);
                     copy_tile(dfb::res, i, 1);
+                    if constexpr (welford_state_in_lregs) {
+                        // Mean to tile 2 and M2 to tile 3, clear of the add's operands in tiles 0 and 1.
+                        welford_save_state(dst2);
+                    }
                     add_binary_tile_init();
                     add_binary_tile(0, 1, 0);
+                    if constexpr (welford_state_in_lregs) {
+                        welford_restore_state(dst2);
+                    }
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(0, dfb_inp_id);
@@ -149,29 +169,34 @@ void kernel_main() {
             dfb_in0.pop_front(block.size());
             dfb_res.pop_front(block.size());
 
-            // --- Welford: reload accumulator, update with block tiles, spill back ---
-            dfb_mean_spill.wait_front(1);
-            dfb_m2_spill.wait_front(1);
+            // --- Welford: update with block tiles (the spill path reloads the accumulator and spills it back) ---
+            if constexpr (!welford_state_in_lregs) {
+                dfb_mean_spill.wait_front(1);
+                dfb_m2_spill.wait_front(1);
+            }
             dfb_inp.wait_front(block.size());
             tile_regs_acquire();
-            reconfig_data_format_srca(dfb::in0, dfb::mean_spill);
-            copy_init(dfb::mean_spill);
-            copy_tile(dfb::mean_spill, 0, dst1);
-            reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
-            copy_init(dfb::m2_spill);
-            copy_tile(dfb::m2_spill, 0, dst2);
-            welford_restore_state(dst1);
-
-            reconfig_data_format_srca(dfb::m2_spill, dfb_inp_id);
-            if constexpr (!welford_unpack_fp32_active) {
+            if constexpr (welford_state_in_lregs) {
+                reconfig_data_format_srca(dfb::in0, dfb_inp_id);
+            } else {
+                reconfig_data_format_srca(dfb::in0, dfb::mean_spill);
+                copy_init(dfb::mean_spill);
+                copy_tile(dfb::mean_spill, 0, dst1);
+                reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+                copy_init(dfb::m2_spill);
+                copy_tile(dfb::m2_spill, 0, dst2);
+                welford_restore_state(dst1);
+                reconfig_data_format_srca(dfb::m2_spill, dfb_inp_id);
+            }
+            if constexpr (!welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
             }
             for (auto i : block.local()) {
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(dfb_inp_id);
                 }
                 transpose_tile(dfb_inp_id, i, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 if (block.to_global(i) < Wt - 1) {
@@ -181,41 +206,63 @@ void kernel_main() {
                 }
                 start_N += 32;
             }
-            welford_save_state(dst1);
-            tile_regs_commit();
-            dfb_mean_spill.pop_front(1);
-            dfb_m2_spill.pop_front(1);
-            dfb_inp.pop_front(block.size());
-            dfb_mean_spill.reserve_back(1);
-            dfb_m2_spill.reserve_back(1);
-            tile_regs_wait();
-            pack_reconfig_data_format(dfb_inp_id, dfb::mean_spill);
-            pack_tile(dst1, dfb::mean_spill);
-            pack_tile(dst2, dfb::m2_spill);
-            tile_regs_release();
-            dfb_mean_spill.push_back(1);
-            dfb_m2_spill.push_back(1);
+            if constexpr (welford_state_in_lregs) {
+                if constexpr (!DST_ACCUM_MODE) {
+                    // A round trip through the 16-bit DEST truncates the state to bfloat16, as the spill path does.
+                    welford_save_state(dst1);
+                    welford_restore_state(dst1);
+                }
+                tile_regs_commit();
+                dfb_inp.pop_front(block.size());
+                tile_regs_wait();
+                tile_regs_release();
+            } else {
+                welford_save_state(dst1);
+                tile_regs_commit();
+                dfb_mean_spill.pop_front(1);
+                dfb_m2_spill.pop_front(1);
+                dfb_inp.pop_front(block.size());
+                dfb_mean_spill.reserve_back(1);
+                dfb_m2_spill.reserve_back(1);
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb_inp_id, dfb::mean_spill);
+                pack_tile(dst1, dfb::mean_spill);
+                pack_tile(dst2, dfb::m2_spill);
+                tile_regs_release();
+                dfb_mean_spill.push_back(1);
+                dfb_m2_spill.push_back(1);
+            }
         }
 
-        // Finalize: reload accumulator and write mean and variance to the scratch buffer.
-        dfb_mean_spill.wait_front(1);
-        dfb_m2_spill.wait_front(1);
+        // Finalize: write mean and variance to the scratch buffer; the spill path reloads the accumulator first.
+        if constexpr (!welford_state_in_lregs) {
+            dfb_mean_spill.wait_front(1);
+            dfb_m2_spill.wait_front(1);
+        }
         tile_regs_acquire();
-        reconfig_data_format_srca(dfb_inp_id, dfb::mean_spill);
-        copy_init(dfb::mean_spill);
-        copy_tile(dfb::mean_spill, 0, dst1);
-        reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
-        copy_init(dfb::m2_spill);
-        copy_tile(dfb::m2_spill, 0, dst2);
-        welford_restore_state(dst1);
+        if constexpr (!welford_state_in_lregs) {
+            reconfig_data_format_srca(dfb_inp_id, dfb::mean_spill);
+            copy_init(dfb::mean_spill);
+            copy_tile(dfb::mean_spill, 0, dst1);
+            reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+            copy_init(dfb::m2_spill);
+            copy_tile(dfb::m2_spill, 0, dst2);
+            welford_restore_state(dst1);
+        }
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         tile_regs_commit();
-        dfb_mean_spill.pop_front(1);
-        dfb_m2_spill.pop_front(1);
+        if constexpr (!welford_state_in_lregs) {
+            dfb_mean_spill.pop_front(1);
+            dfb_m2_spill.pop_front(1);
+        }
 
         dfb_scratch.reserve_back(2);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::mean_spill, dfb::scratch);
+        if constexpr (welford_state_in_lregs) {
+            pack_reconfig_data_format(dfb_inp_id, dfb::scratch);
+        } else {
+            pack_reconfig_data_format(dfb::mean_spill, dfb::scratch);
+        }
         pack_tile(dst1, dfb::scratch);
         pack_tile(dst2, dfb::scratch);
         dfb_scratch.push_back(2);
@@ -231,7 +278,7 @@ void kernel_main() {
 
         // When the input buffer carries Float32 with fp32_dest_acc_en=true, the program factory
         // sets UnpackToDestFp32 for it so transpose_tile preserves FP32 precision into DEST.
-        // Its math-side init (called from transpose_init) records slots [16, 32) of the
+        // On Wormhole its math-side init (called from transpose_init) records slots [16, 32) of the
         // math-thread replay buffer, clobbering the LREG2 / LREG3 portions of Welford's recurrence
         // (welford records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
         // welford_init<WelfordInitMode::PreserveStats>() after each transpose_tile re-records
@@ -244,14 +291,15 @@ void kernel_main() {
         //
         // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
         // through SrcA without touching the math-thread replay buffer, so the recovery is
-        // gated out.
+        // gated out. On Blackhole welford records slots [0, 16) only, so neither record is redone
+        // per tile (welford_rerecord_per_tile).
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             dfb_inp.wait_front(1);  // cumulative wait
-            if constexpr (welford_unpack_fp32_active) {
+            if constexpr (welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
             }
             transpose_tile(dfb_inp_id, 0, dst0);
-            if constexpr (welford_unpack_fp32_active) {
+            if constexpr (welford_rerecord_per_tile) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
@@ -260,11 +308,11 @@ void kernel_main() {
             dfb_inp.pop_front(1);
         }
         dfb_inp.wait_front(1);  // cumulative wait
-        if constexpr (welford_unpack_fp32_active) {
+        if constexpr (welford_rerecord_per_tile) {
             transpose_init(dfb_inp_id);
         }
         transpose_tile(dfb_inp_id, 0, dst0);
-        if constexpr (welford_unpack_fp32_active) {
+        if constexpr (welford_rerecord_per_tile) {
             welford_init<WelfordInitMode::PreserveStats>();
         }
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);

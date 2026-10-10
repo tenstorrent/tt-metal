@@ -722,14 +722,15 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
     ],
 )
 @pytest.mark.parametrize(
-    "inp_dtype, stats_dtype",
+    "inp_dtype, stats_dtype, fp32_dest_acc_en",
     [
-        (ttnn.bfloat16, ttnn.bfloat16),
-        (ttnn.float32, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16, True),
+        (ttnn.float32, ttnn.float32, True),
+        (ttnn.bfloat16, ttnn.bfloat16, False),
     ],
-    ids=["bf16_inp_bf16_stats", "fp32_inp_fp32_stats"],
+    ids=["bf16_inp_bf16_stats", "fp32_inp_fp32_stats", "bf16_inp_bf16_stats_bf16_dest"],
 )
-def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype):
+def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype, fp32_dest_acc_en):
     """Welford pre_all_gather, both FUSE_PRE_ADD and no-residual paths.
 
     Both paths go through LayerNormPreAllGatherWelfordProgramFactory.
@@ -745,6 +746,8 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
       but still tight enough to catch a fused-add-specific bug that breaks beyond TF32 noise).
 
     bf16 stats: scratch CB and output are bf16, so the floor is bf16 quantization (~8e-3).
+    16-bit DEST: the fused path truncates mean and M2 to bf16 at the end of every block, as the
+    spill buffers do, so with nine blocks (W=288) its variance runs about 2% low.
     """
     torch.manual_seed(0)
 
@@ -762,7 +765,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=True,
     )
 
@@ -835,6 +838,8 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     #   For W=128 the larger of the two parametrizations sets the bound:
     #   atol_mean ~ 1.8e-4 --> Set to 4e-4, atol_var ~ 2e-3. --> Set to 4e-3.
     # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3) --> set to 0.01.
+    # - 16-bit DEST: the fused state is truncated to bf16 once per block; measured up to 4.2e-2 absolute on var,
+    #   relative Frobenius 2.0e-2 (mean) and 1.5e-2 (var), PCC 0.9977 --> about twice that.
     if stats_dtype == ttnn.float32:
         welford_atol = 1e-5
         welford_rtol = 1e-5
@@ -847,6 +852,17 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
         fused_pcc = 0.99999
         fused_frob_mean = 1e-3
         fused_frob_var = 1e-3
+    elif not fp32_dest_acc_en:
+        welford_atol = 0.01
+        welford_rtol = 0.01
+        welford_pcc = 0.995
+        welford_frob = 0.008
+        fused_atol_mean = 0.01
+        fused_atol_var = 0.02
+        fused_rtol = 0.03
+        fused_pcc = 0.995
+        fused_frob_mean = 0.04
+        fused_frob_var = 0.03
     else:
         welford_atol = 0.01
         welford_rtol = 0.01
