@@ -228,6 +228,7 @@ inline void _llk_unpack_AB_(
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
     [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     if constexpr (BType == BroadcastType::ROW)
