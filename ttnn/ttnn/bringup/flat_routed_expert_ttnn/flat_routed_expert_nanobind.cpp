@@ -161,7 +161,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         grid rows 0-1 takes each local expert as soon as every flat y writer reports its rows landed. The flat expert's
         arguments as for flat_routed_expert (planned below rows 0-1: MIMO_FL_ROWS=2,9), combine's as for
         hybrid_routed_expert_moe's overlap. Returns combine's output [1, 1, seq_len_per_chip, num_experts_per_tok, H]
-        bf16 ROW_MAJOR; y_out (optional, bfp8 TILE [rows, H]) receives the flat expert's output.
+        bf16 ROW_MAJOR; y_out (optional, [rows, H]) receives the flat expert's output: bf16 ROW_MAJOR with y_row_major
+        (default: combine's readers read its rows directly, no untilizer cores; plan with MIMO_FL_ROWS=1,9), else bfp8
+        TILE (combine untilizes it on rows 0-1; MIMO_FL_ROWS=2,9).
         )doc",
         &fre::flat_combine_overlap,
         nb::arg("dispatched_buffer").noconvert(),
@@ -190,6 +192,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("down_fp32") = false,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
+        nb::arg("y_row_major") = true,
         nb::arg("y_out") = nb::none());
     mod.def(
         "flat_routed_expert_plan",

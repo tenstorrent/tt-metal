@@ -8,8 +8,10 @@
 // reports each local expert to combine's collector once its rows have landed (se_cmb_done.hpp), so combine takes an
 // expert while the next ones are still being computed.
 //
-// Initial version: bfp8 y tiles (combine's untilizers read them as they read the hybrid's), combine walks the experts
-// in slot order (one pass), the flat expert's arena spans the whole grid and also holds combine's L1.
+// y is row-major bf16 by default (y_row_major): combine's readers read its rows directly, so combine needs no
+// untilizers and only grid row 0 (its senders and collector), and the flat expert takes rows 1-9. With bfp8 y tiles
+// combine's untilizers read them as they read the hybrid's, on rows 0-1. Combine walks the experts in slot order (one
+// pass); the flat expert's arena spans the whole grid and also holds combine's L1.
 #pragma once
 
 #include <memory>
@@ -75,7 +77,7 @@ struct FlatCombineOverlapInputs {
     Tensor done_words;
     Tensor arena;  // over every worker core: the flat expert's buffers on its rows, combine's on rows 0-1
     Tensor words;
-    Tensor y;  // the flat expert's output: bfp8 TILE [rows, H], what combine reads
+    Tensor y;  // the flat expert's output [rows, H], what combine reads: bf16 ROW_MAJOR (y_row_major) or bfp8 TILE
     Tensor dispatched_metadata;
     Tensor expert_offsets;
     Tensor global_expert_idx_table;  // the full (groups, extent, experts_per_chip) table, replicated

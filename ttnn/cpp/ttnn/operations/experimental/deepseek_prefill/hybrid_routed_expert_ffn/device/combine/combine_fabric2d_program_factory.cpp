@@ -476,6 +476,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
         add_combine_defines(rdr);
+        if (!sems.has_untilizers()) {
+            // Row-major routed-expert output: no untilizers, the readers read its rows and wait on `ready` themselves.
+            rdr.defines.emplace_back("CMBF2D_READY_SEM", std::to_string(sems.ready()));
+        }
         rdr.compile_time_args =
             cmbf2d::ReaderCtArgs(
                 args, tensor_args, coord, self, work, l1, plan, untilizers_for_stream(groups, stream, sems, l1))
@@ -579,12 +583,18 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     {
         const auto& collector = placement.at(coord).collector.value();
 
-        // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
-        // run ahead of it. The readers consume what the untilizers staged in L1 and are ordered behind them.
+        // Only the cores that read routed-expert output from DRAM, so only they can run ahead of it: the
+        // untilizers (the readers consume what they staged in L1 and are ordered behind them), or with row-major
+        // output and no untilizers the readers themselves.
         std::vector<CoreCoord> waiting;
         for (const auto& group : groups) {
             for (const auto& untilizer : group) {
                 waiting.push_back(untilizer.worker_virtual);
+            }
+        }
+        if (!sems.has_untilizers()) {
+            for (const auto& [stream, self] : placement.at(coord).streams) {
+                waiting.push_back(self.worker_virtual);
             }
         }
         // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
@@ -648,7 +658,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     auto* mesh_device = operation_attributes.device;
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
-    const uint32_t per_group = untilizers_per_group();
+    // Row-major routed-expert output needs no untilizers: the readers read its rows directly.
+    const uint32_t per_group = dispatched_is_tiled(tensor_args) ? untilizers_per_group() : 0;
     const auto sems =
         allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
     const auto l1 = compute_l1_layout(

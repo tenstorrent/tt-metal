@@ -5,14 +5,17 @@
 """The flat routed expert overlapped with combine_fabric2d (ttnn.bringup.flat_combine_overlap, initial version), on
 the same seq-640 layer cases as test_hybrid_routed_expert_combine.py (8 x 1 ring; GLM 5.3 / Kimi K2.7 scaled to it).
 
-The flat expert is planned below combine's rows 0-1 (MIMO_FL_ROWS=2,9, set here before any plan is built), so the
-back-to-back baseline runs the same 88-core flat expert. Accuracy: the overlap's combine output against flat then
-combine_fabric2d back to back (bit-exact: combine reads the same bfp8 rows either way) and against the PyTorch
-reference (per-slot PCC, as the hybrid's test). Perf: every program replayed from a trace."""
+By default (FLAT_CMB_YRM=1) the flat expert writes row-major bf16 y, which combine's readers read directly (no
+untilizer cores): the flat expert is planned below combine's sender row 0 (MIMO_FL_ROWS=1,9, set here before any plan
+is built). FLAT_CMB_YRM=0: bfp8 y tiles, combine untilizes them on rows 0-1, the flat expert on rows 2-9. The
+back-to-back baseline runs the same flat expert. Accuracy: the overlap's combine output against flat then
+combine_fabric2d back to back (bit-exact: combine reads the same rows either way) and against the PyTorch reference
+(per-slot PCC, as the hybrid's test). Perf: every program replayed from a trace."""
 
 import os
 
-os.environ.setdefault("MIMO_FL_ROWS", "2,9")
+_YRM = os.environ.get("FLAT_CMB_YRM", "1") == "1"
+os.environ.setdefault("MIMO_FL_ROWS", "1,9" if _YRM else "2,9")
 
 import pytest
 import torch
@@ -139,7 +142,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     topology = per_axis_topology(device_params["fabric_config"])[0]
 
     def flat_solo():
-        return flat(tt_x, tt_counts, tt_regions)
+        return flat(tt_x, tt_counts, tt_regions, y_row_major=_YRM)
 
     def combine(y_bf16):
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
@@ -188,6 +191,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
             expert_go_semaphore=sems[2],
             activation=flat.act,
             pin=flat.pin,
+            y_row_major=_YRM,
         )
 
     ref = []
@@ -254,6 +258,11 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     )
 
 
+def _combine_input(y):
+    """What standalone combine reads of the flat expert's y: its bf16 rows as they are, or the bfp8 tiles as bf16."""
+    return y if _YRM else ttnn.typecast(y, ttnn.bfloat16)
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only")
 @pytest.mark.parametrize(
     "mesh_device, device_params, threshold_id, model_id", _params(), indirect=["mesh_device", "device_params"]
@@ -262,7 +271,7 @@ def test_flat_combine_overlap(mesh_device, device_params, threshold_id, model_id
     c = _build_case(mesh_device, device_params, threshold_id, model_id)
     # back to back first (the reference rewrites the host dispatch buffer in place, so the device runs first)
     y = c["flat_solo"]()
-    seq_out = ttnn.to_torch(c["combine"](ttnn.typecast(y, ttnn.bfloat16)), mesh_composer=c["composer"])
+    seq_out = ttnn.to_torch(c["combine"](_combine_input(y)), mesh_composer=c["composer"])
     ov = [ttnn.to_torch(c["overlapped"](), mesh_composer=c["composer"]) for _ in range(2)]  # 2nd: a cache hit
     for i, o in enumerate(ov):
         same = torch.equal(o, seq_out)
@@ -289,7 +298,7 @@ def test_flat_combine_overlap_perf(mesh_device, device_params, threshold_id, mod
         flat_us = hyb._replay_us(mesh_device, tr, _PERF_ITERS)
     finally:
         ttnn.release_trace(mesh_device, tr)
-    yw = ttnn.typecast(y, ttnn.bfloat16)
+    yw = _combine_input(y)
     c["combine"](yw)
     tr, out = hyb._capture(mesh_device, lambda: c["combine"](yw))
     try:

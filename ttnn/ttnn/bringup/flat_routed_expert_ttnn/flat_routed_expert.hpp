@@ -43,9 +43,9 @@ ttnn::Tensor flat_routed_expert(
 // The flat routed expert overlapped with combine_fabric2d in one program per chip (initial version; see
 // device/flat_combine_overlap_device_operation.hpp): the flat expert's arguments as for flat_routed_expert, combine's
 // as for hybrid_routed_expert_moe's overlap (the full replicated expert index table, the three global semaphores the
-// caller keeps across calls). The flat expert must be planned below grid rows 0-1 (MIMO_FL_ROWS=2,9). Returns
-// combine's output [1, 1, seq_len_per_chip, num_experts_per_tok, H] bf16 ROW_MAJOR; `y_out` (optional) receives the
-// flat expert's bfp8 y.
+// caller keeps across calls). The flat expert must be planned below combine's rows: row 0 with row-major y (the
+// default, MIMO_FL_ROWS=1,9), rows 0-1 with bfp8 y tiles (MIMO_FL_ROWS=2,9). Returns combine's output
+// [1, 1, seq_len_per_chip, num_experts_per_tok, H] bf16 ROW_MAJOR; `y_out` (optional) receives the flat expert's y.
 ttnn::Tensor flat_combine_overlap(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_token_counts,
@@ -72,6 +72,7 @@ ttnn::Tensor flat_combine_overlap(
     bool down_fp32 = false,
     bool x_bf16 = false,
     bool h_bf16 = false,
+    bool y_row_major = true,
     const std::optional<ttnn::Tensor>& y_out = std::nullopt);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.

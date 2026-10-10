@@ -169,6 +169,7 @@ ttnn::Tensor flat_combine_overlap(
     bool down_fp32,
     bool x_bf16,
     bool h_bf16,
+    bool y_row_major,
     const std::optional<ttnn::Tensor>& y_out) {
     using namespace tt::tt_metal;
     FlatRoutedExpertConfig cfg{
@@ -180,7 +181,7 @@ ttnn::Tensor flat_combine_overlap(
         .weights_bf8 = gate_up_weights.dtype() == DataType::BFLOAT8_B,
         .activation = activation,
         .pin = pin,
-        .y_row_major = false,
+        .y_row_major = y_row_major,
         .down_fp32 = down_fp32,
         .pack_stochastic_rounding = false,
         .x_bf16 = x_bf16,
@@ -191,21 +192,27 @@ ttnn::Tensor flat_combine_overlap(
         plan->rdown == reader_down_weights.has_value(), "flat_combine_overlap: reader_down_weights iff reader tails");
     // the report args go past every writer's own (the factory checks): the gate/up cores' xy and the schedule's args
     cfg.cmb_rt = 48 + static_cast<uint32_t>(plan->gu.size()) + 2 * cfg.experts_per_chip;
-    // the flat expert's rectangle, where combine multicasts `go`: it must stay off combine's rows 0-1
+    // the flat expert's rectangle, where combine multicasts `go`: it must stay off combine's rows (0-1 with untilizers,
+    // the senders' row 0 with row-major y, which combine's readers read directly)
     const auto cores = plan->arena_cores();
     CoreCoord lo{1000, 1000}, hi{0, 0};
     for (const auto& c : cores) {
         lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
         hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
     }
-    TT_FATAL(lo.y >= 2, "flat_combine_overlap: the flat expert uses grid row {} (plan it with MIMO_FL_ROWS=2,9)", lo.y);
+    const uint32_t first_row = y_row_major ? 1 : 2;
+    TT_FATAL(
+        lo.y >= first_row,
+        "flat_combine_overlap: the flat expert uses grid row {} (plan it with MIMO_FL_ROWS={},9)",
+        lo.y,
+        first_row);
     const uint32_t writers = static_cast<uint32_t>(plan->down.size() + (plan->rdown ? plan->rdn.size() : 0));
     const uint32_t rows = x.logical_shape()[-2];
     const ttnn::Tensor y = y_out ? *y_out
                                  : ttnn::empty(
                                        ttnn::Shape({rows, cfg.hidden}),
-                                       DataType::BFLOAT8_B,
-                                       Layout::TILE,
+                                       y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+                                       y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
                                        device,
                                        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     const ttnn::Tensor out = ttnn::empty(
@@ -273,6 +280,7 @@ ttnn::Tensor flat_combine_overlap(
         cfg.down_fp32,
         cfg.x_bf16,
         cfg.h_bf16,
+        cfg.y_row_major,
         cfg.cmb_rt};
     auto result = ttnn::prim::bringup::flat_combine_overlap(
         p,

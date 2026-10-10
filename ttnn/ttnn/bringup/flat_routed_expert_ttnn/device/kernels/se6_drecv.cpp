@@ -225,6 +225,10 @@ void kernel_main() {
         yw.issue(dyn);
         if (yw.retire(dyn)) {
             ++out_done;
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(dyn.eid[yw.done_a]);
+            cmb.report(false);
+#endif
         }
 #else
         if (!y_pending && out_done < num_v && x_ready && cb_pages_available_at_front(out_cb, out_tiles)) {

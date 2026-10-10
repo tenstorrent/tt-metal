@@ -121,14 +121,17 @@ CollectorPlacement decide_collector(
     std::set<tt::tt_metal::CoreCoord>& taken,
     tt::tt_metal::IDevice* dev,
     const tt::tt_metal::CoreCoord& grid,
-    const tt::tt_fabric::FabricNodeId& who) {
+    const tt::tt_fabric::FabricNodeId& who,
+    bool sender_row_first) {
     const std::size_t sender_row = streams.begin()->second.worker_logical.y;
-    for (std::size_t column = 0; column < grid.x; column++) {
-        for (std::size_t row : {sender_row + 1, sender_row}) {
-            const tt::tt_metal::CoreCoord core{column, row};
-            if (row < grid.y && taken.insert(core).second) {
-                return CollectorPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)};
-            }
+    // With no untilizers the routed expert may use every row past the senders', so the collector joins them: the
+    // whole sender row is tried first.
+    for (std::size_t i = 0; i < 2 * grid.x; i++) {
+        const tt::tt_metal::CoreCoord core = sender_row_first
+                                                 ? tt::tt_metal::CoreCoord{i % grid.x, sender_row + i / grid.x}
+                                                 : tt::tt_metal::CoreCoord{i / 2, sender_row + 1 - i % 2};
+        if (core.y < grid.y && taken.insert(core).second) {
+            return CollectorPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)};
         }
     }
     TT_FATAL(
@@ -224,7 +227,8 @@ DevicePlacement decide_device_placement(
     // columns and refuses one already taken.
     if (with_collector) {
         placement.collector =
-            decide_collector(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node);
+            decide_collector(
+                placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node, untilizers_per_group == 0);
     }
     return placement;
 }

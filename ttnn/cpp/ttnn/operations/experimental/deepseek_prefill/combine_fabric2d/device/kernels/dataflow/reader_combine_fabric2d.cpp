@@ -303,9 +303,33 @@ struct Reader {
 #if TILE
         return untilized.take(walk, p);
 #else
+#ifdef CMBF2D_READY_SEM
+        gate();
+#endif
         return dram.in.get_noc_addr(p);
 #endif
     }
+#if !TILE && defined(CMBF2D_READY_SEM)
+    // Overlapped with row-major routed-expert output, there are no untilizers and the routed expert's rows are read
+    // here: the first read of a step's rows waits until the collector says that step's expert has been written.
+    // Forwarded chunks (other chips' experts) never wait on it.
+    uint32_t step = 0;
+    bool step_ready = false;
+    void begin_step(uint32_t s) {
+        step = s;
+        step_ready = false;
+    }
+    void gate() {
+        if (!step_ready) {
+            const uint32_t local =
+                ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+            ::cmbf2d::wait_for_ready(
+                CMBF2D_READY_SEM,
+                ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
+            step_ready = true;
+        }
+    }
+#endif
     uint32_t published = 0;
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
@@ -661,6 +685,9 @@ void kernel_main() {
             [](uint32_t k) {
                 return kernel_compile_time_args[ct.assignment_base + k * ::cmbf2d::ASSIGNMENT_WORDS + 1];
             });
+#endif
+#if !TILE && defined(CMBF2D_READY_SEM)
+        reader.begin_step(local_expert);
 #endif
         reader.run_schedule(local_expert);
         reader.run_local_phase(local_expert);

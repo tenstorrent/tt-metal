@@ -18,10 +18,12 @@ void FlatCombineOverlapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& p, const tensor_args_t& t) {
     using tt::tt_metal::DataType;
     using tt::tt_metal::Layout;
-    TT_FATAL(p.flat.cmb_rt > 0 && !p.flat.y_row_major, "flat_combine_overlap: bfp8 y tiles with the report args set");
+    TT_FATAL(p.flat.cmb_rt > 0, "flat_combine_overlap: the report args are not set");
+    // bfp8 tiles (combine's untilizers read them) or row-major bf16 rows (combine's readers read them directly)
     TT_FATAL(
-        t.y.layout() == Layout::TILE && t.y.dtype() == DataType::BFLOAT8_B,
-        "flat_combine_overlap: y must be bfp8 TILE (what combine's untilizers read)");
+        p.flat.y_row_major ? t.y.layout() == Layout::ROW_MAJOR && t.y.dtype() == DataType::BFLOAT16
+                           : t.y.layout() == Layout::TILE && t.y.dtype() == DataType::BFLOAT8_B,
+        "flat_combine_overlap: y must be bfp8 TILE, or bf16 ROW_MAJOR with y_row_major");
     TT_FATAL(
         p.fwd_arrived && p.final_arrived && p.expert_go,
         "flat_combine_overlap: fwd_arrived, final_arrived and expert_go global semaphores are required");
@@ -84,6 +86,11 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     for (auto& prog : combine->programs) {
         TT_FATAL(prog.range.shape().mesh_size() == 1, "flat_combine_overlap: combine builds one program per chip");
         const auto coord = prog.range.start_coord();
+        if (std::getenv("FLAT_CMB_LOG") && coord == combine->programs.front().range.start_coord()) {
+            for (const auto& k : prog.descriptor.kernels) {
+                log_info(tt::LogOp, "flat_combine_overlap: combine kernel {} on {}", k.kernel_source, k.core_ranges.str());
+            }
+        }
         auto flat = FlatRoutedExpertProgramFactory::create(p.flat, fi, y);
         flat.program.append(prog.descriptor);
         const auto& c = collectors.at(coord);

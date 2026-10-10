@@ -178,7 +178,6 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
 
     // ---- kernels + runtime args ----
     // combine overlap (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the overlap fills
-    TT_FATAL(cfg.cmb_rt == 0 || !cfg.y_row_major, "flat_routed_expert: the combine overlap takes bfp8 y tiles");
     auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args) {
         if (cfg.cmb_rt) {
             TT_FATAL(
@@ -584,14 +583,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {2,     p.h_tiles, p.h_tile, H_PIECES, 16, out,    V,   S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,     DONE,     GO, p.hbuf, MTD, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               plus(plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync), cmb_def));
+               plus(plus(yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw), ync), y_nc ? Defines{} : cmb_def));
         const auto kw =
             dm("se6_dw.cpp",
                cores,
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E, 0, 0, 0, MTD, pw, Ht},
-               y_nc ? plus(yrm_def(dyn_def, pw), ync) : dyn_def);
+               y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def);
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,
@@ -619,13 +618,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lits(gu_xy_sg[sg])
                 .cat(dyn)
                 .lits(sgx(sg));
-            add_rt(kr, dc, add_writer_rt(kr, dc, a));
+            add_rt(kr, dc, y_nc ? a : add_writer_rt(kr, dc, a));
             Args w;
             w.a(AddrSrc::Down).lit(d % banks).lit((d / banks) * p.wd_region).cat(dyn).lits(sgx(sg));
             if (y_nc) {
                 w.a(AddrSrc::Y).lit(p.col0s[d]);
             }
-            add_rt(kw, dc, w);
+            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w) : w);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
     }

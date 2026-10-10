@@ -38,8 +38,9 @@ struct SeCmbDone {
         }
     }
     void wrote(uint32_t e) { --left[e]; }
-    // Report every step whose expert this core has finished (all earlier ones too).
-    void report() {
+    // Report every step whose expert this core has finished (all earlier ones too). `barrier`: wait for this core's
+    // writes to land first (false: the caller knows they have, the row-major y writer's flushed transaction ids).
+    void report(bool barrier = true) {
         if (next >= num_e || left[next] != 0) {
             return;
         }
@@ -52,7 +53,9 @@ struct SeCmbDone {
             *go = 0;  // the collector sets it once per launch
             go_seen = true;
         }
-        noc_async_write_barrier();  // the rows have landed
+        if (barrier) {
+            noc_async_write_barrier();  // the rows have landed
+        }
         const uint32_t x = get_arg_val<uint32_t>(SE_CMB_DONE_RT);
         const uint32_t y = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 1);
         const uint32_t counts = get_arg_val<uint32_t>(SE_CMB_DONE_RT + 2);

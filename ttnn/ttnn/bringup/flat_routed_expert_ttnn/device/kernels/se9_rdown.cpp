@@ -226,6 +226,10 @@ void kernel_main() {
         if (yw.retire(dyn)) {
             noc_semaphore_inc(done_noc, 1);
             ++out_done;
+#ifdef SE_CMB_DONE_RT
+            cmb.wrote(dyn.eid[yw.done_a]);
+            cmb.report(false);
+#endif
         }
 #else
         if (!y_pending && out_done < num_v && cb_pages_available_at_front(out_cb, out_tiles)) {
