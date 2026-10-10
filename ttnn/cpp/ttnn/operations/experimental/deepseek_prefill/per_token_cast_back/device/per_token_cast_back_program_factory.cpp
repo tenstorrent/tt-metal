@@ -74,6 +74,11 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     const auto& shape = input_e4m3.logical_shape();
     auto [M, H] = fold_M_H(shape);  // M = rows, H = width (last dim)
+    const bool scales_in_row_tail = operation_attributes.scales_in_row_tail;
+    if (scales_in_row_tail) {
+        // Packed row [H e4m3 | H/scale_block_w fp32]: H is the data width, the row is wider.
+        H = H * operation_attributes.scale_block_w / (operation_attributes.scale_block_w + 4);
+    }
 
     // Tile / face dims come from the tensor's tile spec.
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
@@ -115,8 +120,11 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t chunk_scale_blocks = block_w / scale_block_w;  // scales per 128-chunk row
     const uint32_t scales_per_token = H / scale_block_w;
     const uint32_t scale_entry_length = static_cast<uint32_t>(input_scale.logical_shape()[-1]);
-    const uint32_t scales_start_offset =
-        (token_count_aware && operation_attributes.scales_from_metadata) ? (scale_entry_length - scales_per_token) : 0;
+    // Packed-row scales sit right after the H e4m3 bytes: word offset H/4.
+    const uint32_t scales_start_offset = scales_in_row_tail ? H / 4
+                                         : (token_count_aware && operation_attributes.scales_from_metadata)
+                                             ? (scale_entry_length - scales_per_token)
+                                             : 0;
 
     // The whole datapath is fp32; the scale is always fp32 (plain fp32 tensor or the int32-backed metadata tail).
     const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
@@ -274,6 +282,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         tile_w,
         face_h,
         face_w};
+    if (!token_count_aware) {
+        reader_ct_args.push_back(scales_start_offset);  // 10: scale_col_offset (plain path)
+    }
     if (token_count_aware) {
         reader_ct_args.insert(
             reader_ct_args.end(),

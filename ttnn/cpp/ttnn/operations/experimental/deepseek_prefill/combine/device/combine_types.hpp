@@ -25,6 +25,9 @@ struct CombineParams {
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_combine = false;
+    // Scaled FP8 combine: each output row is [H e4m3 bytes | H/32 fp32 scales] (one scale per 1x32
+    // block = one tile row), quantized with power-of-two scales and round-to-nearest-even.
+    bool fp8_scaled_combine = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -38,7 +41,8 @@ struct CombineParams {
         "worker_core_range_set",
         "init_zeros",
         "use_l1_small_for_semaphores",
-        "use_fp8_combine");
+        "use_fp8_combine",
+        "fp8_scaled_combine");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -53,7 +57,8 @@ struct CombineParams {
             worker_core_range_set,
             init_zeros,
             use_l1_small_for_semaphores,
-            use_fp8_combine);
+            use_fp8_combine,
+            fp8_scaled_combine);
     };
 };
 

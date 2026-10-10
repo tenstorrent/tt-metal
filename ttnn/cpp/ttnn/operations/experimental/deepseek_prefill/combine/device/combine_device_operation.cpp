@@ -68,6 +68,23 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     // The ROW_MAJOR path has no untilize stage, so the reader would forward unconverted BF16
     // bytes through FP8-sized output pages, producing corrupt output (local writes) or
     // overrunning the output-sized writer CB (non-local writes).
+    if (operation_attributes.fp8_scaled_combine) {
+        auto arch = tensor_args.dispatched_buffer.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::BLACKHOLE, "fp8_scaled_combine=true requires Blackhole hardware (got arch {})", arch);
+        TT_FATAL(!operation_attributes.use_fp8_combine, "fp8_scaled_combine and use_fp8_combine are exclusive");
+        TT_FATAL(
+            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE,
+            "fp8_scaled_combine=true requires a TILE-layout dispatched buffer (the scales are formed per tile row)");
+        const auto& tile = tensor_args.dispatched_buffer.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == 32 && tile.get_width() == 32,
+            "fp8_scaled_combine=true requires 32x32 tiles (one scale per 32-wide tile row)");
+        TT_FATAL(
+            tensor_args.dispatched_buffer.logical_shape()[-1] % 128 == 0,
+            "fp8_scaled_combine=true requires hidden dim % 128 == 0, got {}",
+            tensor_args.dispatched_buffer.logical_shape()[-1]);
+    }
     if (operation_attributes.use_fp8_combine) {
         auto arch = tensor_args.dispatched_buffer.device()->arch();
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "use_fp8_combine=true requires Blackhole hardware (got arch {})", arch);
@@ -122,7 +139,18 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     // FP8 combine emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
     // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
     // with detail::create_tensor_cb(output_tensor, ...) will pick up the right dtype/page-size.
-    auto output_dtype = operation_attributes.use_fp8_combine ? DataType::FP8_E4M3 : DataType::BFLOAT16;
+    auto output_dtype = (operation_attributes.use_fp8_combine || operation_attributes.fp8_scaled_combine)
+                            ? DataType::FP8_E4M3
+                            : DataType::BFLOAT16;
+    if (operation_attributes.fp8_scaled_combine) {
+        // Packed row: [hidden_dim e4m3 bytes | hidden_dim/32 fp32 scales (4 bytes each)].
+        output_shape = ttnn::Shape(
+            {1,
+             1,
+             operation_attributes.seq_len_per_chip,
+             operation_attributes.num_experts_per_tok,
+             hidden_dim + hidden_dim / 8});
+    }
 
     auto output_spec = tt::tt_metal::TensorSpec(
         Shape(output_shape), tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(layout), mem_config));
@@ -155,7 +183,8 @@ ttnn::Tensor prefill_combine(
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_combine) {
+    bool use_fp8_combine,
+    bool fp8_scaled_combine) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -170,7 +199,8 @@ ttnn::Tensor prefill_combine(
             .worker_core_range_set = worker_core_range_set,
             .init_zeros = init_zeros,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
-            .use_fp8_combine = use_fp8_combine},
+            .use_fp8_combine = use_fp8_combine,
+            .fp8_scaled_combine = fp8_scaled_combine},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

@@ -68,9 +68,10 @@ void kernel_main() {
     constexpr uint32_t max_dispatch_buffer_tokens = get_compile_time_arg_val(18);
     constexpr uint32_t ACCESSOR_CT_BASE = 19;
 #else
-    // Plain path: the scale is a FLOAT32 (M, H/128) tensor read from column 0.
-    constexpr uint32_t scale_col_offset = 0;
-    constexpr uint32_t ACCESSOR_CT_BASE = 10;
+    // Plain path: the scale is a FLOAT32 (M, H/scale_block_w) tensor (offset 0), or the packed-row tail of
+    // the e4m3 input itself (offset H/4 words; the scaled FP8 combine output).
+    constexpr uint32_t scale_col_offset = get_compile_time_arg_val(10);
+    constexpr uint32_t ACCESSOR_CT_BASE = 11;
 #endif
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;

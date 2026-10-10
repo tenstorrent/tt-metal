@@ -153,7 +153,7 @@ def test_k3_moe_perf_lb(variant, config_only, mesh_device, device_params, num_li
                     else:
                         cur_b = max(cur_b, b)
                 union += cur_b - cur_a
-                span = ivs[-1][1] - ivs[0][0]
+                span = max(b for _, b in ivs) - ivs[0][0]  # latest END, not the end of the last-starting program
                 print(
                     f"K3_OVL chip {chip}: progs {len(rs)} sum {total / f:,.0f} ns  union {union / f:,.0f} ns  "
                     f"overlap {(total - union) / f:,.0f} ns  span {span / f:,.0f} ns  gaps {(span - union) / f:,.0f} ns"

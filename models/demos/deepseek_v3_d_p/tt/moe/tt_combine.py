@@ -59,6 +59,7 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        fp8_scaled: bool = False,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -76,6 +77,9 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
             fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
+            fp8_scaled: Scaled FP8 wire (Blackhole, TILE input): each output row is packed as
+                [emb_dim e4m3 bytes | emb_dim/32 fp32 scales]; dequantize with
+                per_token_cast_back(scales_in_row_tail=True, scale_block_w=32).
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -92,6 +96,8 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.fp8_scaled = fp8_scaled
+        assert not (fp8_output and fp8_scaled), "fp8_output and fp8_scaled are exclusive"
 
     def forward(
         self,
@@ -156,6 +162,7 @@ class TtCombineModule(LightweightModule):
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
+            fp8_scaled_combine=self.fp8_scaled,
         )
 
         return output

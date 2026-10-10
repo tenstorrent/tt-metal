@@ -400,3 +400,51 @@ def test_multi_chunk_random(device, num_tokens, config):
 
 
 # ============================================================================
+
+
+def test_nan_poisoned_unwritten_slots_k3(device):
+    """Combine leaves slots of non-local experts unwritten (TtMoe runs combine with init_zeros=False), so
+    they may hold any bytes -- with the scaled fp8 combine wire they are dequantized garbage that can be
+    NaN/Inf. Poison them with NaN: the output must stay finite, including the no-local-expert token whose
+    accumulator is initialised from the last (unwritten) slot times a zero weight. Kimi-K3 routed side:
+    3584-wide latent, top-16 of 896."""
+    torch.manual_seed(7)
+    emb_dim, num_routed_experts, topk = 3584, 896, 16
+    indices_torch, indices_tt = make_indices(NUM_TOKENS, topk, device, num_routed_experts=num_routed_experts)
+    # One quarter of the experts local (one LB column); force a few tokens to have no local expert.
+    local = torch.zeros(num_routed_experts, dtype=torch.bool)
+    local[:224] = True
+    no_local_tokens = [0, 17, NUM_TOKENS - 1]
+    for t in no_local_tokens:
+        indices_torch[0, t] = torch.randperm(num_routed_experts - 224)[:topk] + 224
+    indices_tt = ttnn.from_torch(
+        indices_torch,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    table = torch.where(
+        local,
+        torch.zeros(num_routed_experts, dtype=torch.int32),
+        torch.full((num_routed_experts,), -1, dtype=torch.int32),
+    )
+    dispatch_table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    combine = torch.randn(1, NUM_TOKENS, topk, emb_dim, dtype=torch.bfloat16)
+    weights = torch.rand(1, NUM_TOKENS, topk, 1, dtype=torch.bfloat16)
+    is_local = local[indices_torch[0].long()]  # [tokens, topk]
+    combine[0][~is_local] = float("nan")
+    ref_combine = combine.clone()
+    ref_combine[0][~is_local] = 0.0
+    ref = pytorch_reference(ref_combine, weights)
+
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    ).float()
+    assert torch.isfinite(result).all(), f"{(~torch.isfinite(result)).sum().item()} non-finite outputs"
+    for t in no_local_tokens:
+        assert torch.all(result[0, t] == 0), f"token {t} has no local expert and must reduce to exactly 0"
+    assert_pcc(result, ref.float(), threshold=PCC_THRESHOLD, label="nan_poisoned_unwritten_slots_k3")

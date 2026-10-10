@@ -139,6 +139,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    dispatch_wire=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -560,6 +561,10 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
+        # MOE_DISPATCH_WIRE=fp8 selects the fp8 dispatch wire (K3 fp8 plan) without a new param id.
+        dispatch_wire=dispatch_wire or os.environ.get("MOE_DISPATCH_WIRE", "bf16"),
+        fp8_scale_block=int(os.environ.get("MOE_FP8_SCALE_BLOCK", "32")),
+        combine_wire=os.environ.get("MOE_COMBINE_WIRE", "bf16"),
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")

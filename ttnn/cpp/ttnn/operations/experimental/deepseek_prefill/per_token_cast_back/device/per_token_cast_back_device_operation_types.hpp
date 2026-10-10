@@ -26,6 +26,9 @@ struct PerTokenCastBackParams {
     bool scales_from_metadata = false;
     // Elements per scale (32, 64 or 128). The I/O chunk stays 128 wide; a chunk row holds 128/scale_block_w scales.
     uint32_t scale_block_w = 128;
+    // Plain path only: each e4m3 input row is packed as [H e4m3 bytes | H/scale_block_w fp32 scales]
+    // (the scaled FP8 combine output). input_scale is the same tensor; the output is H wide.
+    bool scales_in_row_tail = false;
 };
 
 struct PerTokenCastBackInputs {

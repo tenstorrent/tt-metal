@@ -5,6 +5,7 @@
 #include "combine_device_operation.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <bitset>
 #include <map>
 #include <unordered_set>
@@ -734,6 +735,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // cb_dispatched_buffer (c_0) in chunks of this size, and the untilize compute kernel consumes
     // the same chunk size — so c_0 only needs to hold 2 * block_ct_dim pages for double-buffering.
     const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
+    const bool fp8_scaled = operation_attributes.fp8_scaled_combine;
     uint32_t block_ct_dim = 8;
     while (full_ct_dim % block_ct_dim != 0) {
         --block_ct_dim;
@@ -776,13 +778,55 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // c_2 on untilizer cores: untilized (TILE) or row-copied (ROW_MAJOR) output rows,
         // double-buffered (2 × read_batch_size).  Lets the producer fill batch N+1 into the
         // second half while writer_untilize is still routing batch N out of the first half.
-        detail::create_tensor_cb(
-            desc,
-            untilizer_core_grid,
-            output_tensor,
-            /*buffering_factor=*/2 * read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_2,
-            "untilize");
+        if (fp8_scaled) {
+            // Scaled FP8: c_2 holds only the e4m3 data rows (hidden_size bytes, the pack_untilize row
+            // stride). writer_untilize appends each row's scales from its staging CB when it routes it.
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = 2 * read_batch_size * static_cast<uint32_t>(hidden_size),
+                .core_ranges = untilizer_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                    .data_format = tt::DataFormat::Fp8_e4m3,
+                    .page_size = static_cast<uint32_t>(hidden_size),
+                }}},
+            });
+            // c_10 |x| tiles, c_11 reduce scaler, c_12 scale tiles (compute -> writer, col 0), c_13 1/scale
+            // tiles, all fp32; c_14 writer-private per-batch scale rows [read_batch_size x hidden/32 fp32].
+            constexpr uint32_t fp32_tile_bytes = 32 * 32 * 4;
+            auto fp32_cb = [&](tt::CBIndex idx, uint32_t tiles) {
+                desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                    .total_size = tiles * fp32_tile_bytes,
+                    .core_ranges = untilizer_core_grid,
+                    .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                        .buffer_index = static_cast<uint8_t>(idx),
+                        .data_format = tt::DataFormat::Float32,
+                        .page_size = fp32_tile_bytes,
+                    }}},
+                });
+            };
+            fp32_cb(tt::CBIndex::c_10, block_ct_dim);
+            fp32_cb(tt::CBIndex::c_11, 1);
+            fp32_cb(tt::CBIndex::c_12, 2 * block_ct_dim);
+            fp32_cb(tt::CBIndex::c_13, block_ct_dim);
+            const uint32_t scale_row_bytes = static_cast<uint32_t>(hidden_size) / 8u;  // hidden/32 fp32
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = read_batch_size * scale_row_bytes,
+                .core_ranges = untilizer_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+                    .data_format = tt::DataFormat::Float32,
+                    .page_size = read_batch_size * scale_row_bytes,
+                }}},
+            });
+        } else {
+            detail::create_tensor_cb(
+                desc,
+                untilizer_core_grid,
+                output_tensor,
+                /*buffering_factor=*/2 * read_batch_size,
+                /*cb_id=*/tt::CBIndex::c_2,
+                "untilize");
+        }
         // c_9 on untilizer cores: metadata-batch CB. reader_untilize on this core reads the
         // per-batch metadata pages from DRAM and pushes them here; writer_untilize pops
         // batch_count pages each iteration and decides the per-batch path locally (sender
@@ -978,6 +1022,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
         writer_untilize_compile_time_args.push_back(
             SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
+        // Scaled FP8 combine (packed row = [hidden e4m3 | hidden/32 fp32 scales]).
+        writer_untilize_compile_time_args.push_back(fp8_scaled ? 1u : 0u);                // fp8_scaled
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(hidden_size));  // data bytes per row (fp8)
+        writer_untilize_compile_time_args.push_back(block_ct_dim);                        // tiles per scale block push
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_11));  // reduce scaler CB
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_12));  // scale tiles CB
+        writer_untilize_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_14));  // scale staging CB
 
         std::map<std::string, std::string> writer_untilize_defines;
         writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
@@ -1081,16 +1132,24 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // 10: cb_counter_total_pages = full page capacity of c_1 on the untilizer
             // (counter pages + trailer page). Used so this kernel cb_wait_fronts the entire CB.
             detail::get_num_pages(expert_token_counts) + 1,
+            // 11..17: scaled FP8 combine
+            fp8_scaled ? 1u : 0u,                      // 11: fp8_scaled
+            static_cast<uint32_t>(tt::CBIndex::c_10),  // 12: cb_abs
+            static_cast<uint32_t>(tt::CBIndex::c_11),  // 13: cb_scaler
+            static_cast<uint32_t>(tt::CBIndex::c_12),  // 14: cb_scale (to writer)
+            static_cast<uint32_t>(tt::CBIndex::c_13),  // 15: cb_inv_scale
+            std::bit_cast<uint32_t>(1.0e-4f),          // 16: amax clamp min
+            std::bit_cast<uint32_t>(1.0f / 448.0f),    // 17: 1 / E4M3 max
         };
         compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
             // an 8-bit float format (Fp8_e4m3). The FP8 combine path produces an Fp8_e4m3 output
             // CB (c_2), so fp32_dest_acc_en must be enabled there.
-            .fp32_dest_acc_en = operation_attributes.use_fp8_combine,
+            .fp32_dest_acc_en = operation_attributes.use_fp8_combine || fp8_scaled,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
             // tiles, but pack_untilize_block uses block_ct_dim (up to 8). Full-sync 32-bit restores
             // the 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
-            .dst_full_sync_en = operation_attributes.use_fp8_combine,
+            .dst_full_sync_en = operation_attributes.use_fp8_combine || fp8_scaled,
         };
         untilize_compute_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(compute_kd));

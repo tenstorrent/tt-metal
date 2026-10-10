@@ -66,6 +66,10 @@ void bind_combine(nb::module_& mod) {
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
+            fp8_scaled_combine (bool, optional): When True (Blackhole, TILE input), each output row is
+                packed as [hidden e4m3 bytes | hidden/32 fp32 scales]: one power-of-two scale per 1x32
+                block, values rounded to nearest even. Output last dim = hidden + hidden/8. Dequantize
+                with per_token_cast_back(scales_in_row_tail=True). Defaults to False.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
 
@@ -94,7 +98,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("use_fp8_combine") = false,
+        nb::arg("fp8_scaled_combine") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

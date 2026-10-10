@@ -13,6 +13,53 @@
 #include "api/debug/dprint.h"
 #include "internal/circular_buffer_interface.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reduce.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/bcast.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/clamp.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/identity.h"
+#include "api/compute/compute_kernel_api.h"
+
+// Scaled FP8 combine helpers (same math as per_token_cast_to_fp8: power-of-two scale, RNE to e4m3).
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+template <int ITERATIONS = 8>
+inline void combine_ceil_power_of_two() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vInt exponent = sfpi::exexp(value, sfpi::ExponentMode::Biased);
+        sfpi::vFloat mantissa = sfpi::setexp(value, 127);
+        sfpi::vFloat result = sfpi::setexp(sfpi::vFloat(1.0f), exponent);
+        v_if(mantissa != 1.0f) { result = sfpi::setexp(sfpi::vFloat(1.0f), exponent + 1); }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+template <int ITERATIONS = 8>
+inline void combine_round_to_e4m3_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+        sfpi::vUInt lsb = (bits >> 20) & 1;
+        bits = bits + 0x7ffffU + lsb;
+        bits = bits & 0xfff00000U;
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+inline void combine_ceil_power_of_two_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, combine_ceil_power_of_two, (8), idst, VectorMode::RC);
+}
+inline void combine_round_to_e4m3_rne_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, combine_round_to_e4m3_rne, (8), idst, VectorMode::RC);
+}
+#endif
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -59,6 +106,17 @@ void kernel_main() {
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(9);
     constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(10);
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
+    constexpr bool fp8_scaled = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t cb_abs_id = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_scaler_id = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_scale_id = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_inv_scale_id = get_compile_time_arg_val(15);
+    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(16);
+    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(17);
+    CircularBuffer cb_abs(cb_abs_id);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_scale(cb_scale_id);
+    CircularBuffer cb_inv_scale(cb_inv_scale_id);
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
@@ -74,8 +132,15 @@ void kernel_main() {
     (void)core_id;
     (void)num_untilizer_cores;
 
-    compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
-    pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
+    if constexpr (fp8_scaled) {
+        // Configure on the fp32 reduce operand so the unpacker sees full 4-face tiles (see
+        // per_token_cast_to_fp8); every phase below reconfigures its own operands.
+        compute_kernel_hw_startup(cb_abs_id, cb_untilize_id);
+        cb_scaler.wait_front(1);  // writer_untilize fills the 1.0 reduce scaler once
+    } else {
+        compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
+        pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
+    }
 
     // Wait for the owning sender's expert-token-count multicast.  reader_untilize on this same
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
@@ -118,7 +183,74 @@ void kernel_main() {
             cb_untilize.reserve_back(read_batch_size);
             for (uint32_t block = 0; block < num_blocks; block++) {
                 cb_in.wait_front(block_ct_dim);
-                {
+                if constexpr (fp8_scaled) {
+                    // 1x32 block = one tile row: scale[r] = pow2_up(max(amax_r, 1e-4) / 448) per tile.
+                    // Phase A: |x| of each tile (fp32) -> cb_abs.
+                    reconfig_full_operand_srca(cb_in_id);
+                    pack_reconfig_data_format(cb_abs_id);
+                    copy_init(cb_in_id);
+                    abs_tile_init();
+                    cb_abs.reserve_back(block_ct_dim);
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        tile_regs_acquire();
+                        copy_tile(cb_in_id, k, 0);
+                        abs_tile(0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_abs_id);
+                        tile_regs_release();
+                    }
+                    cb_abs.push_back(block_ct_dim);
+                    // Phase B: row max -> scale (slot 0, to the writer) and 1/scale (slot 1).
+                    cb_abs.wait_front(block_ct_dim);
+                    cb_scale.reserve_back(block_ct_dim);
+                    cb_inv_scale.reserve_back(block_ct_dim);
+                    reconfig_data_format(cb_abs_id, cb_scaler_id);
+                    pack_reconfig_data_format(cb_scale_id);
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        tile_regs_acquire();
+                        reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_id);
+                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, 0);
+                        reduce_uninit();
+                        clamp_tile_init();
+                        clamp_tile(0, clamp_min_bits, 0x7f7fffffu);
+                        binop_with_scalar_tile_init();
+                        mul_unary_tile(0, inv_448_bits);
+                        MATH((combine_ceil_power_of_two_tile(0)));
+                        copy_dest_values_init();
+                        copy_dest_values<DataFormat::Float32>(0, 1);
+                        recip_tile_init();
+                        recip_tile(1);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(0, cb_scale_id);
+                        pack_tile(1, cb_inv_scale_id);
+                        tile_regs_release();
+                    }
+                    cb_scale.push_back(block_ct_dim);
+                    cb_inv_scale.push_back(block_ct_dim);
+                    cb_abs.pop_front(block_ct_dim);
+                    // Phase C: x * (1/scale) per row, RNE onto the e4m3 grid, untilize into the row stride.
+                    cb_inv_scale.wait_front(block_ct_dim);
+                    reconfig_data_format(cb_in_id, cb_inv_scale_id);
+                    mul_bcast_cols_init(cb_in_id, cb_inv_scale_id);
+                    pack_reconfig_data_format(cb_untilize_id);
+                    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(cb_untilize_id);
+                    tile_regs_acquire();
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_id, k, k, k);
+                    }
+                    MATH((SFPU_UNARY_INIT(unused)));
+                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                        MATH((combine_round_to_e4m3_rne_tile(k)));
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_untilize_dest<block_ct_dim, full_ct_dim>(cb_untilize_id, 1, block);
+                    tile_regs_release();
+                    pack_untilize_uninit(cb_untilize_id);
+                    cb_inv_scale.pop_front(block_ct_dim);
+                } else {
                     // DeviceZoneScopedN("UNTILIZING");
                     pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
                 }
@@ -129,5 +261,7 @@ void kernel_main() {
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
 
-    pack_untilize_uninit(cb_untilize_id);
+    if constexpr (!fp8_scaled) {
+        pack_untilize_uninit(cb_untilize_id);
+    }
 }

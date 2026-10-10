@@ -21,10 +21,31 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
     const std::optional<ttnn::Tensor>& metadata,
-    uint32_t scale_block_w) {
+    uint32_t scale_block_w,
+    bool scales_in_row_tail) {
     const auto dtype = output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16);
     const auto mem_config = memory_config.value_or(input_e4m3.memory_config());
 
+    if (scales_in_row_tail) {
+        TT_FATAL(
+            !token_count_aware && !input_scale.has_value() && !metadata.has_value(),
+            "per_token_cast_back: scales_in_row_tail takes the scales from the input rows (plain path, no "
+            "input_scale / metadata)");
+        return ttnn::prim::per_token_cast_back(
+            input_e4m3,
+            input_e4m3,
+            dtype,
+            mem_config,
+            narrow_scales_to_bf16,
+            /*token_count_aware=*/false,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            /*experts_per_chip=*/0,
+            /*scales_from_metadata=*/false,
+            scale_block_w,
+            /*scales_in_row_tail=*/true);
+    }
     if (!token_count_aware) {
         TT_FATAL(
             input_scale.has_value(),
