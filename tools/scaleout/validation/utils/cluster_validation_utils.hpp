@@ -75,10 +75,12 @@ bool generate_link_metrics(
     uint32_t data_size,
     const ConnectivityValidationConfig& validation_config);
 
-void reset_ethernet_links(
+// Returns false if the ethernet firmware on any local link did not process a reset message in time.
+bool reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
-void bring_down_cross_host_ethernet_ports(
+// Returns false if any local cross-host endpoint did not go down.
+bool bring_down_cross_host_ethernet_ports(
     const fsd::proto::FactorySystemDescriptor& fsd_proto, PhysicalSystemDescriptor& physical_system_descriptor);
 
 std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
@@ -102,7 +104,7 @@ tt_metal::AsicTopology build_reset_topology(
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor);
 
-void perform_link_reset(
+bool perform_link_reset(
     const std::string& reset_host,
     uint32_t reset_tray_id,
     uint32_t reset_asic_location,
