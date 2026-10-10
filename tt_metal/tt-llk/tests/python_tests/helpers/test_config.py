@@ -1424,6 +1424,8 @@ class TestConfig:
             OPTIONS_COMPILE += f"-DLLK_RELEASE_GAP={int(os.environ['LLK_RELEASE_GAP'])} "
         if int(os.environ.get("LLK_SERVE_PRE", "0")):  # N nops more in the BRISC pre-release wait
             OPTIONS_COMPILE += f"-DLLK_SERVE_PRE={int(os.environ['LLK_SERVE_PRE'])} "
+        if int(os.environ.get("REPRO_PACK_RESYNC", "0")):  # every N pack calls, wait for idle packers
+            OPTIONS_COMPILE += f"-DLLK_PACK_RESYNC={int(os.environ['REPRO_PACK_RESYNC'])} "
         if os.environ.get("LLK_NO_QUIET") == "1":  # undo 52412ea8e67: PACK_ISOLATE peers do not wait
             OPTIONS_COMPILE += "-DLLK_NO_QUIET "
         OPTIONS_COMPILE += f"-DLLK_TRISC_BP_OFF={int(os.environ.get('LLK_TRISC_BP_OFF', '0'))} "

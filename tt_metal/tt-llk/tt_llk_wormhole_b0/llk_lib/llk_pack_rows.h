@@ -14,6 +14,24 @@
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
+#if defined(LLK_PACK_RESYNC) && LLK_PACK_RESYNC > 0 && !defined(LLK_PACK_RESYNC_HELPER)
+#define LLK_PACK_RESYNC_HELPER
+// Experiment: every LLK_PACK_RESYNC pack calls, wait until all four packers are idle, so they start the next call together
+// and no DEST bank lag (packer rhythm) carries over. The first call of the kernel resyncs too.
+inline void llk_pack_resync_point()
+{
+    static std::uint32_t resync_count = LLK_PACK_RESYNC - 1;
+    if (++resync_count >= LLK_PACK_RESYNC)
+    {
+        resync_count = 0;
+        TTI_STALLWAIT(ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
+    }
+}
+#define LLK_PACK_RESYNC_POINT() llk_pack_resync_point()
+#elif !defined(LLK_PACK_RESYNC_POINT)
+#define LLK_PACK_RESYNC_POINT()
+#endif
+
 /**
  * @brief Configures address modification modes for row packing.
  *
@@ -116,6 +134,7 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
  */
 inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t address)
 {
+    LLK_PACK_RESYNC_POINT(); // experiment
     // Set the tile index in dest to read from
     set_dst_write_addr(tile_index);
 

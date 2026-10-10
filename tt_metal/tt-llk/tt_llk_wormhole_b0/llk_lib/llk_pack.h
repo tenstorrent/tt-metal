@@ -15,6 +15,24 @@
 #include "llk_memory_checks.h"
 #include "llk_pack_common.h"
 
+#if defined(LLK_PACK_RESYNC) && LLK_PACK_RESYNC > 0 && !defined(LLK_PACK_RESYNC_HELPER)
+#define LLK_PACK_RESYNC_HELPER
+// Experiment: every LLK_PACK_RESYNC pack calls, wait until all four packers are idle, so they start the next call together
+// and no DEST bank lag (packer rhythm) carries over. The first call of the kernel resyncs too.
+inline void llk_pack_resync_point()
+{
+    static std::uint32_t resync_count = LLK_PACK_RESYNC - 1;
+    if (++resync_count >= LLK_PACK_RESYNC)
+    {
+        resync_count = 0;
+        TTI_STALLWAIT(ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
+    }
+}
+#define LLK_PACK_RESYNC_POINT() llk_pack_resync_point()
+#elif !defined(LLK_PACK_RESYNC_POINT)
+#define LLK_PACK_RESYNC_POINT()
+#endif
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
@@ -431,6 +449,7 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
+    LLK_PACK_RESYNC_POINT(); // experiment
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
 

@@ -16,6 +16,24 @@
 #include "lltt.h"
 #include "sfpi.h"
 
+#if defined(LLK_PACK_RESYNC) && LLK_PACK_RESYNC > 0 && !defined(LLK_PACK_RESYNC_HELPER)
+#define LLK_PACK_RESYNC_HELPER
+// Experiment: every LLK_PACK_RESYNC pack calls, wait until all four packers are idle, so they start the next call together
+// and no DEST bank lag (packer rhythm) carries over. The first call of the kernel resyncs too.
+inline void llk_pack_resync_point()
+{
+    static std::uint32_t resync_count = LLK_PACK_RESYNC - 1;
+    if (++resync_count >= LLK_PACK_RESYNC)
+    {
+        resync_count = 0;
+        TTI_STALLWAIT(ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
+    }
+}
+#define LLK_PACK_RESYNC_POINT() llk_pack_resync_point()
+#elif !defined(LLK_PACK_RESYNC_POINT)
+#define LLK_PACK_RESYNC_POINT()
+#endif
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
@@ -247,6 +265,7 @@ template <
 inline void _llk_pack_untilize_(
     const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
 {
+    LLK_PACK_RESYNC_POINT(); // experiment
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);

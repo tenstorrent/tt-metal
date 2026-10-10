@@ -8,6 +8,24 @@
 
 #include "llk_pack.h"
 
+#if defined(LLK_PACK_RESYNC) && LLK_PACK_RESYNC > 0 && !defined(LLK_PACK_RESYNC_HELPER)
+#define LLK_PACK_RESYNC_HELPER
+// Experiment: every LLK_PACK_RESYNC pack calls, wait until all four packers are idle, so they start the next call together
+// and no DEST bank lag (packer rhythm) carries over. The first call of the kernel resyncs too.
+inline void llk_pack_resync_point()
+{
+    static std::uint32_t resync_count = LLK_PACK_RESYNC - 1;
+    if (++resync_count >= LLK_PACK_RESYNC)
+    {
+        resync_count = 0;
+        TTI_STALLWAIT(ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
+    }
+}
+#define LLK_PACK_RESYNC_POINT() llk_pack_resync_point()
+#elif !defined(LLK_PACK_RESYNC_POINT)
+#define LLK_PACK_RESYNC_POINT()
+#endif
+
 using namespace ckernel;
 using namespace ckernel::packer;
 
@@ -268,6 +286,7 @@ inline void _llk_pack_fast_tilize_uninit_(
 inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {
+    LLK_PACK_RESYNC_POINT(); // experiment
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     // use false here so that the 31st bit of the address remains set as the offset addresses for the other packers continue to be used
     // while the address for the first packer is manipulated using ADDDMAREG and REG2FLOP
