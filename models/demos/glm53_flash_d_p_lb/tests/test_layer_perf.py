@@ -16,7 +16,7 @@ Builds take seconds per layer (KDA / MLA / dense weights are random host tensors
 Numerics are meaningless (random weights). Routing is near-uniform; GLM_FAKE_HOT=n makes experts 0 .. n-1 hot.
 GLM_LP_REAL=1 loads the real checkpoint instead (spec paths.hf / BRINGUP_HF; the flat expert cache is used).
 
-Knobs: GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
+Knobs: GLM_LP_STEP_OPS (steps whose ops are listed, default experts), GLM_LP_LAYERS (comma list), GLM_LP_CHUNK, GLM_LP_START, GLM_LP_ITERS (default 3), GLM_LP_TOP (ops listed per
 layer, default 12), GLM_LP_JSON (write the rows there). The spec's device settings (experts dtype / fidelity, links)
 apply as in the model. Mesh and fabric come from the spec (BRINGUP_SPEC).
 
@@ -110,16 +110,23 @@ def test_layer_perf(mesh_device):
             finally:
                 profiler.disable()
             chip_ns, step_ns, op_ns = defaultdict(float), defaultdict(lambda: defaultdict(float)), defaultdict(float)
+            step_op = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))  # step -> op -> [ms on the busiest chip, calls]
             for c in calls:
                 step = c["key"].split(".", 1)[-1]
                 for chip, ns in c["ns_dev"].items():
                     chip_ns[chip] += ns
                     step_ns[step][chip] += ns
                 op_ns[c["op"]] += max(c["ns_dev"].values())
+                step_op[step][c["op"]][0] += max(c["ns_dev"].values()) / 1e6
+                step_op[step][c["op"]][1] += 1
             busiest = max(chip_ns, key=chip_ns.get)
             row["device_ms"] = round(chip_ns[busiest] / 1e6, 3)
             row["device_ms_min_chip"] = round(min(chip_ns.values()) / 1e6, 3)
             row["steps_ms"] = {k: round(max(v.values()) / 1e6, 3) for k, v in step_ns.items()}
+            row["step_ops_ms"] = {
+                st: {op: [round(v[0], 3), v[1]] for op, v in sorted(ops.items(), key=lambda kv: -kv[1][0])}
+                for st, ops in step_op.items()
+            }
             row["top_ops_ms"] = {
                 k: round(v / 1e6, 3)
                 for k, v in sorted(op_ns.items(), key=lambda kv: -kv[1])[: int(os.environ.get("GLM_LP_TOP", "12"))]
@@ -133,6 +140,9 @@ def test_layer_perf(mesh_device):
         if rt:
             for k, v in row["steps_ms"].items():
                 print(f"[lp]     step {k:<16} {v:8.3f} ms", flush=True)
+            for st in os.environ.get("GLM_LP_STEP_OPS", "experts").split(","):
+                for op, (ms, n) in row["step_ops_ms"].get(st, {}).items():
+                    print(f"[lp]     {st:<8} {op:<38} {ms:8.3f} ms ({n} calls)", flush=True)
             for k, v in row["top_ops_ms"].items():
                 print(f"[lp]     op   {k:<40} {v:8.3f} ms", flush=True)
         del blk
