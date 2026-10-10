@@ -89,6 +89,7 @@ const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/ha
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
 const char* kUnresolvedSlotKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_unresolved_slot.cpp";
+const char* kShardedPagesKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_sharded_pages.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -676,6 +677,68 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         names(rw.reads),
         (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
     EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+}
+
+// The sharded pages() iterator's pages, used as NoC endpoints (hazard_buf_rw_sharded_pages.cpp), must resolve
+// exactly: src READ only, dst WRITE only. The pages carry their accessor and the iterator computes addresses without a
+// note, so a regression to the public get_noc_addr adds a WRITE on src, and one to a plain Page drops the READ.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact) {
+    auto md = devices_.at(0);
+    IDevice* dev = md->get_devices()[0];
+    const exp::NodeCoord node{0, 0};
+
+    // Four one-page rows in one L1 shard, so the iterator walks a multi-page contiguous run.
+    const Shape shape{4, 32};
+    ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {4, 32}, ShardOrientation::ROW_MAJOR);
+    MemoryConfig sharded_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+    MeshTensor src = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), sharded_config)));
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    MeshTensor dst = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), interleaved_config)));
+
+    exp::KernelSpec k{
+        .unique_id = exp::KernelSpecName{"sharded_pages"},
+        .source = kShardedPagesKernel,
+        .num_threads = 1,
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+    };
+    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(k, "src", "src");
+    BindTensorParameterToKernel(k, "dst", "dst");
+    exp::ProgramSpec spec{
+        .name = "hazard_buf_rw_sharded_pages",
+        .kernels = {k},
+        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
+            .name = "wu", .kernels = {exp::KernelSpecName{"sharded_pages"}}, .target_nodes = node}},
+    };
+    spec.tensor_parameters = {
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"src"}, .spec = src.tensor_spec()},
+        exp::TensorParameter{.unique_id = exp::TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
+    Program program = exp::MakeProgramFromSpec(*md, spec);
+    exp::ProgramRunArgs params;
+    params.tensor_args = {
+        {exp::TensorParamName{"src"}, exp::TensorArgument{src}},
+        {exp::TensorParamName{"dst"}, exp::TensorArgument{dst}}};
+    exp::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("sharded_pages");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
+    auto names = [](const auto& accesses) {
+        std::set<std::string_view> s;
+        for (const auto& a : accesses) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+    EXPECT_FALSE(rw.opaque);
+    EXPECT_EQ(names(rw.reads), (std::set<std::string_view>{"src"}));
+    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"dst"}));
 }
 
 // A record whose slot names none of the kernel's bindings (stale or foreign metadata) can't be attributed:
