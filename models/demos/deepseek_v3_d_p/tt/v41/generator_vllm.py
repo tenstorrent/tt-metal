@@ -243,7 +243,7 @@ class DeepseekV41ForCausalLM:
             phases = "" if trace is None else " " + " ".join(f"{k} {v:.3f}" for k, v in trace.last.items())
             logger.info(
                 f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode};{phases} "
-                f"join {time.time() - t1:.3f})"
+                f"join {time.time() - t1:.3f} {self.decoder.last_join.get('mode')})"
             )
             out[i, 0] = logits[-1]
         return out
@@ -304,6 +304,13 @@ class DeepseekV41ForCausalLM:
         if enable_trace:
             if self.prefill_traced:
                 return
+            t0 = time.time()
+            for state in self.prefill_states:
+                for slot in range(self.max_batch_size):
+                    self.decoder.capture_join(state, slot)
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.join_traces)} joins captured in {time.time() - t0:.1f} s"
+            )
             for n in self.trace_lengths:
                 for state in self.prefill_states:
                     t0 = time.time()

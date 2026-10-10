@@ -80,10 +80,9 @@ def _release(state) -> None:
             ttnn.deallocate(t)
     if state.swa_scratch is not None:
         ttnn.deallocate(state.swa_scratch)
-    for carry in state.compressor_carry.values():
-        if carry is not None:
-            for t in carry:
-                ttnn.deallocate(t)
+    for carry in state.carry_buffers.values():
+        for t in carry:
+            ttnn.deallocate(t)
 
 
 @pytest.mark.timeout(int(os.environ.get("V41_BATCH_TIMEOUT", 4 * 3600)))

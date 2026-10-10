@@ -269,8 +269,23 @@ class V41PrefillState:
             kv_zeros(g.kv_rows(0), 0) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
         )
         self.window_carry = {l: kv_zeros(WINDOW_SLOT, config.compress_ratio(l)) for l in self.layers}
-        # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are complete
+        # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are complete;
+        # held in fixed buffers (``carry_buffers``), so a graph captured on the state (the decode pool's join) reads
+        # them at one address whatever the prompt
         self.compressor_carry = {l: None for l in sources if config.compress_ratio(l) > 1}
+        self.carry_buffers = {
+            l: tuple(
+                ttnn.from_torch(
+                    torch.zeros(1, 1, 1, config.HEAD_DIM),
+                    device=mesh_device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(2)
+            )
+            for l in self.compressor_carry
+        }
         # chunk-transient sharing: the latest index source's top-k and the candidate source's CandidateBlocks
         self.selection = {}
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
@@ -412,9 +427,12 @@ class V41PrefillState:
             self.compressor_carry[source] = None
             return
         first = length - remainder
-        self.compressor_carry[source] = tuple(
-            ttnn.slice(self._gather_sp(t), [0, 0, first, 0], [1, 1, length, self.config.HEAD_DIM]) for t in carry
-        )
+        assert remainder == 1, (remainder, ratio)  # one trailing token: the carry buffers hold one row
+        for t, buffer in zip(carry, self.carry_buffers[source]):
+            row = ttnn.slice(self._gather_sp(t), [0, 0, first, 0], [1, 1, length, self.config.HEAD_DIM])
+            ttnn.copy(row, buffer)
+            ttnn.deallocate(row)
+        self.compressor_carry[source] = self.carry_buffers[source]
 
     def advance(self, length: int):
         self.start += length

@@ -229,53 +229,64 @@ class V41DecodePool:
         return self._offsets[source]
 
     # --- joining ----------------------------------------------------------------------------------------------
-    def join(self, slot: int, state: V41PrefillState) -> None:
-        """Copy ``state`` (a prefill's caches, replicated on every chip) into pool slot ``slot`` (rank ``slot //
-        users``, row ``slot % users``): its compressed rows and index keys, every layer's window carry into the
-        layer's ring (the carry's row k, position ``state.start - 128 + k``, at ring slot ``(step + k) % RING`` so the
-        next step's token, at ``step % RING``, replaces position ``start - 128``), and the compressor carries."""
-        assert state.compressed_kv_format == self.kv_format, (state.compressed_kv_format, self.kv_format)
-        assert state.geometry.max_seq_len <= self.max_seq_len, (state.geometry.max_seq_len, self.max_seq_len)
+    def join_inputs(self, slot: int, state: V41PrefillState) -> dict:
+        """The host index tensors of ``join``: per rank (the slot's rank gets the rows, the others the sentinel)
+        the ring slots of the carry's 128 rows (position ``state.start - 128 + k`` at ring slot ``(step + k) %
+        RING``, so the next step's token, at ``step % RING``, replaces position ``start - 128``), per ratio the
+        compressed rows written so far (sentinel past them), the slot's row of the carry buffers."""
         rank, u = divmod(slot, self.users)
         assert 0 <= rank < self.sp, slot
-        cfg, g = self.config, state.geometry
 
         def index(n: int, values: torch.Tensor):
             host = torch.full((self.sp, 1, 1, n), -1, dtype=torch.int32)  # -1: the sentinel as uint32
-            host[rank, 0, 0] = values.to(torch.int32)
-            return self.per_rank(host, ttnn.uint32)
+            host[rank, 0, 0, : values.numel()] = values.to(torch.int32)
+            return self.per_rank(host, ttnn.uint32, device=False)
 
-        # compressed rows and index keys of complete groups
+        carried = any(c is not None for c in state.compressor_carry.values())  # an odd prompt's trailing token
+        inputs = {
+            "ring": index(RING, (torch.arange(RING) + self.step) % RING),
+            "row": index(1, torch.tensor([u])) if carried else index(1, torch.zeros(0)),
+        }
+        for ratio in sorted({self.config.compress_ratio(src) for src in self.slots if src >= 0}):
+            inputs[f"comp{ratio}"] = index(self.max_seq_len // ratio, torch.zeros(state.start // ratio))
+        return inputs
+
+    def join_ops(self, slot: int, state: V41PrefillState, idx: dict) -> None:
+        """The device ops of ``join`` on the index buffers ``idx`` (as ``join_inputs``, on device): the same graph
+        for every state of the geometry and every step (capturable per state and slot)."""
+        assert state.compressed_kv_format == self.kv_format, (state.compressed_kv_format, self.kv_format)
+        assert state.geometry.max_seq_len <= self.max_seq_len, (state.geometry.max_seq_len, self.max_seq_len)
+        cfg, g = self.config, state.geometry
+        u = slot % self.users
         for src in state.kv:
             ratio = cfg.compress_ratio(src)
-            written = state.start // ratio
-            if written == 0:
-                continue
-            idx = index(written, torch.zeros(written, dtype=torch.int64))
+            comp, cap = idx[f"comp{ratio}"], self.slots[src].cap
+            n = min(cap, g.compressed_rows(ratio))
             base = u * self.slots[src].rows + self.comp_row(src)
-            scatter_rows(state.kv[src], self.kv[src], idx, src_base=g.kv_row_of_compressed(0), dst_base=base, stride=1)
             scatter_rows(
-                state.index_k[src], self.index_k_flat[src], idx, dst_base=u * (self.slots[src].cap + 32), stride=1
+                state.kv[src], self.kv[src], comp, src_base=g.kv_row_of_compressed(0), dst_base=base, stride=1, rows=n
             )
-            ttnn.deallocate(idx)
-        # window carries into the rings (the carry's 128 rows are the 128 positions before state.start)
+            scatter_rows(state.index_k[src], self.index_k_flat[src], comp, dst_base=u * (cap + 32), stride=1, rows=n)
         assert state.window_carry[self.layers[0]].shape[2] == RING
-        ring = index(RING, (torch.arange(RING) + self.step) % RING)
         for layer in self.layers:
             base = u * self.slot_rows(layer) + self.ring_row(layer)
-            scatter_rows(state.window_carry[layer], self.kv_tensor(layer), ring, dst_base=base)
-        ttnn.deallocate(ring)
-        # compressor carries (a trailing incomplete ratio-2 group) into row u of the pool's carry buffers
-        row = index(1, torch.tensor([u]))
-        for src, carry in state.compressor_carry.items():
-            if carry is None:
-                continue
-            for t, dst in zip(carry, self.carry[src]):
+            scatter_rows(state.window_carry[layer], self.kv_tensor(layer), idx["ring"], dst_base=base)
+        for src, dst_pair in self.carry.items():
+            # the state's carry buffers (stale after a prefill of complete groups: then idx["row"] is the sentinel
+            # and the slot's first step, which starts a group, writes the carry)
+            for t, dst in zip(state.carry_buffers[src], dst_pair):
                 assert t.shape[2] == 1, tuple(t.shape)  # a prefill's row
                 src_rows = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
                 dst_rows = ttnn.to_layout(dst, ttnn.ROW_MAJOR_LAYOUT)
-                scatter_rows(src_rows, dst_rows, row)
+                scatter_rows(src_rows, dst_rows, idx["row"])
                 ttnn.copy(ttnn.to_layout(dst_rows, ttnn.TILE_LAYOUT), dst)
                 ttnn.deallocate(src_rows)
                 ttnn.deallocate(dst_rows)
-        ttnn.deallocate(row)
+
+    def join(self, slot: int, state: V41PrefillState) -> None:
+        """Copy ``state`` (a prefill's caches, replicated on every chip) into pool slot ``slot`` (rank ``slot //
+        users``, row ``slot % users``), eagerly: ``join_ops`` on ``join_inputs`` uploaded for this join."""
+        idx = {k: ttnn.to_device(v, self.mesh_device) for k, v in self.join_inputs(slot, state).items()}
+        self.join_ops(slot, state, idx)
+        for t in idx.values():
+            ttnn.deallocate(t)

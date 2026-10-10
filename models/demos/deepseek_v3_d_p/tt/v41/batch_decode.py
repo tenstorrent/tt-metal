@@ -112,6 +112,9 @@ class TtV41BatchDecoder(TtV41Decoder):
         )
         self.capture = None
         self.eager_count = 0
+        self.join_traces: dict[tuple[int, int], SubDeviceTraceController] = {}
+        self.join_buffers: dict = {}
+        self.last_join: dict = {}
 
     # --- users -------------------------------------------------------------------------------------------------
     @property
@@ -120,7 +123,8 @@ class TtV41BatchDecoder(TtV41Decoder):
 
     def join(self, slot: int, tokens: torch.Tensor, state: V41PrefillState) -> None:
         """Slot ``slot`` takes over ``state`` after ``prefill(tokens)`` filled it: its caches move into the pool
-        (``V41DecodePool.join``), its Engram history is seeded from the last compressed ids."""
+        (``V41DecodePool.join_ops``; replayed when ``capture_join`` captured this state and slot, else eager), its
+        Engram history is seeded from the last compressed ids."""
         assert 0 <= slot < self.num_slots, slot
         assert state.start >= self.config.SLIDING_WINDOW - 1, f"a prompt of {state.start}: decode needs a full window"
         user = _User(state.start)
@@ -128,8 +132,45 @@ class TtV41BatchDecoder(TtV41Decoder):
             hash_ = self.model.engram_hash
             n = hash_.layout.max_ngram_size - 1
             user.engram_history = hash_.token_map[tokens[-n:].to(torch.int64)].clone()
-        self.pool.join(slot, state)
+        t0 = time.time()
+        inputs = self.pool.join_inputs(slot, state)
+        trace = self.join_traces.get((id(state), slot))
+        if trace is None:
+            idx = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
+            self.pool.join_ops(slot, state, idx)
+            for t in idx.values():
+                ttnn.deallocate(t)
+            mode = "eager"
+        else:
+            self._stage_join(inputs)
+            trace.replay(blocking=False)
+            mode = "replay"
+        self.last_join = {"mode": mode, "s": round(time.time() - t0, 4)}
         self.slots[slot] = user
+
+    def _stage_join(self, inputs: dict) -> None:
+        if not self.join_buffers:
+            self.join_buffers = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
+            return
+        for k, v in inputs.items():
+            ttnn.copy_host_to_device_tensor(v, self.join_buffers[k])
+
+    def capture_join(self, state: V41PrefillState, slot: int) -> None:
+        """Capture the join of ``state`` into ``slot`` (their tensors are persistent; the index buffers are
+        uploaded per join), so later joins of the pair replay it: a join is ~60 small ops, 20 to 80 ms issued
+        eagerly."""
+        key = (id(state), slot)
+        if key in self.join_traces:
+            return
+        self._stage_join(self.pool.join_inputs(slot, state))
+        controller = SubDeviceTraceController(self.mesh_device)
+        ttnn.synchronize_device(self.mesh_device)
+        controller.begin_capture()
+        try:
+            self.pool.join_ops(slot, state, self.join_buffers)
+        finally:
+            controller.end_capture()
+        self.join_traces[key] = controller
 
     def leave(self, slot: int) -> None:
         self.slots.pop(slot, None)
@@ -289,6 +330,9 @@ class TtV41BatchDecoder(TtV41Decoder):
         if self.capture is not None:
             self.capture.controller.release()
             self.capture = None
+        for controller in self.join_traces.values():
+            controller.release()
+        self.join_traces = {}
 
     @property
     def trace_segments(self) -> int:
