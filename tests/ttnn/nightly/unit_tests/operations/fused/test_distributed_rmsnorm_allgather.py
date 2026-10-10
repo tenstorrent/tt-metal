@@ -25,7 +25,11 @@ def _run_distributed_rmsnorm_single_device(
     use_2d_core_grid,
     eps=1e-5,
     pcc_threshold=0.99,
+    pre_use_2d_core_grid=None,
 ):
+    # The pre op can take a different grid mode than the post op; defaults to the same one.
+    if pre_use_2d_core_grid is None:
+        pre_use_2d_core_grid = use_2d_core_grid
     assert hidden_dim_total % num_simulated_devices == 0
     hidden_per_dev = hidden_dim_total // num_simulated_devices
 
@@ -79,7 +83,7 @@ def _run_distributed_rmsnorm_single_device(
             t,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            use_2d_core_grid=use_2d_core_grid,
+            use_2d_core_grid=pre_use_2d_core_grid,
         )
         for t in tt_inputs
     ]
@@ -130,3 +134,31 @@ def test_rmsnorm_2d_core_grid_single_device(device, seq_len, hidden_dim_total, n
         use_2d_core_grid=use_2d_core_grid,
     )
     assert passing, f"PCC check failed (use_2d_core_grid={use_2d_core_grid}): {pcc_msg}"
+
+
+@pytest.mark.parametrize(
+    "seq_len, hidden_dim_total, num_simulated_devices",
+    [
+        # 20 tile rows (Mistral-Small-4 prefill: 5120-token chunk over SP=8, hidden 4096 over TP=4). The
+        # old rectangular 2D layout put 2 rows on each core and read/wrote the wrong tiles for the
+        # second (~2% error without gamma, PCC collapse with it).
+        (640, 4096, 4),
+        # 80 tile rows: one row per core, a single width slice each.
+        (2560, 4096, 4),
+        # 128 tile rows: more rows than cores, so the op must fall back to the 1D row split.
+        (4096, 4096, 4),
+    ],
+)
+def test_rmsnorm_post_2d_core_grid_multi_row(device, seq_len, hidden_dim_total, num_simulated_devices):
+    """2D post-all-gather at more tile rows than the grid has rows. Pre stays 1D: its 2D path is not
+    exercised at these shapes."""
+    passing, pcc_msg = _run_distributed_rmsnorm_single_device(
+        device=device,
+        seq_len=seq_len,
+        hidden_dim_total=hidden_dim_total,
+        num_simulated_devices=num_simulated_devices,
+        use_2d_core_grid=True,
+        pre_use_2d_core_grid=False,
+        pcc_threshold=0.999,
+    )
+    assert passing, f"PCC check failed: {pcc_msg}"
