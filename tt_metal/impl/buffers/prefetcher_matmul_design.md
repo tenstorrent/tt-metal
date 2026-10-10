@@ -227,6 +227,42 @@ single compile-time arg.
 Worker L1 has ~1.5 MB of CB space, so even a `3 * max_block_size` reader CB
 fits comfortably for production shapes.
 
+### Delivering into PrefetcherPipes
+
+`ttnn.dram_prefetcher(..., prefetcher_pipes=pipes)` delivers into worker-sender
+PrefetcherPipes instead of the GCB. A Program binds a pipe only through a
+ProgramSpec, and a GCB and a pipe cannot share a Program, so this path is a
+second program factory (`DramPrefetcherPipeSpecFactory`, a Metal 2.0 spec
+factory) beside the GCB's descriptor factory; the geometry above is shared.
+
+- Senders: the pipes' sender cores are the reader cores. Taken in row-major
+  order, the i-th reads DRAM bank i (the order the GCB path takes its sender
+  cores in); pipes beyond the reader count are not used.
+- Receivers: every reader's pipe has the same receiver count R. Receiver r, in
+  the order the pipe's `receiver_cores()` lists them, gets column slice r of
+  every block row (`PrefetcherPipe::write_strided`, the same split as
+  `remote_cb_push_back_and_write_pages`). So for an mcast-in0 consumer, pipe
+  b's receivers in that order must be the workers at row-major positions
+  `b * R .. b * R + R - 1`.
+- One block per entry: each receiver is sent one block's slice per pipe entry,
+  so the entry size is `block_num_tiles[t] * tile_size[t] / R` and follows the
+  tensor. The writer re-sizes its pipe (`set_entry_size`) at each tensor
+  switch; a consumer attaches at its own tensor's size. An entry must fit the
+  ring; the ring need not hold a whole number of entries.
+- Staging: a DFB cannot borrow a pipe's ring, so the reader's triple-buffered
+  staging is program-local L1 on the reader cores, rather than the GCB sender
+  L1 the GCB path places it on.
+- `pipe.barrier()` replaces `remote_cb_sender_barrier` at the end of each
+  layer, and the pipe's destructor commits its cursors (what
+  `update_remote_cb_config_in_l1` does for the GCB).
+- NoCs: both kernels use NOC 0, as on the GCB path, but in dynamic-NOC mode
+  (a ProgramSpec rejects two dedicated-NOC kernels pinned to one NOC). In
+  that mode the two RISCs share the per-core NoC counters, which the reader
+  re-syncs from the hardware at exit because performance mode skips the
+  per-read counter updates; the writer releases the reader through a
+  one-entry sync DFB only after its pipe is quiet, so the re-sync never races
+  the writer's traffic.
+
 ## 6. Tensor prefetcher
 
 ### Architecture

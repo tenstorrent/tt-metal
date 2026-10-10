@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -13,7 +14,11 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/prefetcher_pipe.hpp"
+
 #include "dram_prefetcher_device_operation_types.hpp"
+#include "dram_prefetcher_pipe_spec_factory.hpp"
+#include "dram_prefetcher_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -23,11 +28,9 @@ struct DramPrefetcherOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
+    using program_factory_t = std::variant<DramPrefetcherProgramFactory, DramPrefetcherPipeSpecFactory>;
+    // The PrefetcherPipe spec factory when prefetcher_pipes is set, else the GlobalCircularBuffer one.
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -37,6 +40,7 @@ ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    bool enable_performance_mode);
+    bool enable_performance_mode,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes);
 
 }  // namespace ttnn::prim
