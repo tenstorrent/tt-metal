@@ -863,6 +863,23 @@ class VECTOR_MODE(TemplateParameter):
 
 
 @dataclass
+class SFPU_COMP_SCALAR_ENTRY(TemplateParameter):
+    """Which ``_calculate_comp_unary_`` overload receives the threshold held in SFPU_UNARY_SCALAR.
+
+    ``"uint32"`` passes the raw bits to the shipped ``std::uint32_t`` entry point; ``"vfloat"`` decodes
+    them with ``Converter::as_float`` and passes a ``sfpi::vFloat``. The field is ``comp_scalar_entry``
+    (not ``entry``) because parameter field names become perf-CSV headers and must be unique across
+    classes (test_perf_header_gate.py).
+    """
+
+    comp_scalar_entry: str = "vfloat"
+
+    def convert_to_cpp(self) -> str:
+        via_uint32 = str(self.comp_scalar_entry == "uint32").lower()
+        return f"constexpr bool COMP_SCALAR_VIA_UINT32 = {via_uint32};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
