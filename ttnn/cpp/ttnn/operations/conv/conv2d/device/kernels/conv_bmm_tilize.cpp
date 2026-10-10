@@ -493,7 +493,7 @@ void kernel_main() {
 
                         uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                        if constexpr (true) {
+                        if constexpr (tile_pack_subblocks) {
                             PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
                                 start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles)));
                         } else {
@@ -570,7 +570,7 @@ void kernel_main() {
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
                         // As for the subblock pack, but with packer L1 accumulate the block run still pays off here.
-                        if constexpr (tile_pack_subblocks && !packer_l1_acc) {
+                        if constexpr (true) {
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, untilize_mode_out_cb_id);
                             }
