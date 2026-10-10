@@ -1,0 +1,229 @@
+{
+  "captured_at": 1791606438.8903265,
+  "files": {
+    "gdn-flat-prepare-hardware-control-v3/launch.json": {
+      "original_bytes": 1678,
+      "original_sha256": "fd4a9c2c8094618c1c3c81aea22c02dc7cf73e2f6a137b5950dff032651f7529"
+    },
+    "gdn-flat-prepare-hardware-control-v3/run.log.gz": {
+      "original_bytes": 12754,
+      "original_sha256": "daeef6696f218e21b240ce73fe86a6e9d6b4405f6bcd957bd901bd86b10d3aee"
+    },
+    "gdn-flat-prepare-hardware-control-v3/preflight.log.gz": {
+      "original_bytes": 1822,
+      "original_sha256": "59f55013c505bd541b98556a57269463b895a3fd3f289f44e429d1633667543e"
+    },
+    "gdn-flat-prepare-hardware-control-v3/launch-unit.txt": {
+      "original_bytes": 81,
+      "original_sha256": "01c805bb54cb84aa0ccd85c5c44388779463aeee237d050a47b064e6148c0ea8"
+    },
+    "gdn-flat-prepare-hardware-control-v3/unit.xml.gz": {
+      "original_bytes": 154206,
+      "original_sha256": "1bf2fb2ea6e013e18b4c6525da6f975d0c53a882cab1eb5f6b2fa9f9eac033b6"
+    },
+    "gdn-flat-prepare-hardware-control-v3/source-manifest.json": {
+      "original_bytes": 23682,
+      "original_sha256": "3027a486fe67efd33ab11f4c289af7e465bb06caa27053a621915aac4f60a90a"
+    },
+    "gdn-flat-prepare-hardware-v3/prepare.json": {
+      "original_bytes": 346908,
+      "original_sha256": "59be5b240ffe2ee94c14851c6f7666e551ce2de38c60091bdbce75318ca3f7c3"
+    },
+    "gdn-flat-prepare-hardware-v3/queue.json": {
+      "original_bytes": 946,
+      "original_sha256": "71bf0a3ab6eece253ef35aea7e3e18713ca7158a71709dc9609833602f3fa8c0"
+    },
+    "gdn-flat-prepare-hardware-v3/hardware.xml.gz": {
+      "original_bytes": 535,
+      "original_sha256": "b8ca081821a8c69eb3612a86eeb89112c077e145ebdf2734dc95883d52934c61"
+    },
+    "gdn-flat-layer-control-v1/launch.json": {
+      "original_bytes": 1665,
+      "original_sha256": "32ffe5702380f2f5f82eb576d94061e29b891abb1600eb21b46fa5fa459a1bb1"
+    },
+    "gdn-flat-layer-control-v1/run.log.gz": {
+      "original_bytes": 11407,
+      "original_sha256": "77f6d46639d85cb65c9bb578f6b23177c27b268807908a7254a4c6b02452b09d"
+    },
+    "gdn-flat-layer-control-v1/preflight.log.gz": {
+      "original_bytes": 1826,
+      "original_sha256": "a4ffbe3e5b21eac0582b36a367026da59cae36968d39543c9f13d35c0e38047c"
+    },
+    "gdn-flat-layer-control-v1/launch-unit.txt": {
+      "original_bytes": 81,
+      "original_sha256": "90ab79fb1b3edc9bc872a0cc7397df21ae47c4ea1d9a7700da6783df3822fcfa"
+    },
+    "gdn-flat-layer-control-v1/unit.xml.gz": {
+      "original_bytes": 156706,
+      "original_sha256": "fcb491618d12f77dcc8bd90056c2a8edd0ca7e2e1932651ffdc1a5439d44f0f9"
+    },
+    "gdn-flat-layer-control-v1/source-manifest.json": {
+      "original_bytes": 23848,
+      "original_sha256": "ee20e30c53f0c0b9bd1027c65365cbbe4d8ec4d32d8122567d32b2bf5e4b39c9"
+    },
+    "gdn-flat-layer-v1/queue.json": {
+      "original_bytes": 895,
+      "original_sha256": "a718f777a087804e694fc452bdd2fc207d60473e08cefb03d8ff7e2cf1bcf296"
+    },
+    "gdn-flat-layer-v1/layer.json": {
+      "original_bytes": 142332,
+      "original_sha256": "840f1a3fbd9cf94ddfafc9bccd46336797b1feb96968eaa7613a29ae9f0bf839"
+    },
+    "gdn-flat-layer-v1/hardware.xml.gz": {
+      "original_bytes": 539,
+      "original_sha256": "d15736a5a283bbdcbc83e17b04efff3978deeb17c29be9441b5a3105e384f7d5"
+    },
+    "gdn-fusion-full-control-v1/launch.json": {
+      "original_bytes": 1900,
+      "original_sha256": "67849aa8243ac85ed1d48a23a18738587ab0e4a5e89a941c1df40bbc080bd640"
+    },
+    "gdn-fusion-full-control-v1/run.log.gz": {
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gdn-fusion-full-control-v1/preflight.log.gz": {
+      "original_bytes": 1826,
+      "original_sha256": "6210a99190239fb5f51f1c228328720dd6c6c0c370689895403af665fb3d27bb"
+    },
+    "gdn-fusion-full-control-v1/launch-unit.txt": {
+      "original_bytes": 81,
+      "original_sha256": "8572f4e69203a1b746d80bd965c1aa1c0cddcc5254587aec5dd5461b6dd73a01"
+    },
+    "gdn-fusion-full-control-v1/unit.xml.gz": {
+      "original_bytes": 157363,
+      "original_sha256": "3dde02bcc074777926d286d07fbd6af2621d4c3b789a9f95ed34a2d6a679377c"
+    },
+    "gdn-fusion-full-control-v1/source-manifest.json": {
+      "original_bytes": 23848,
+      "original_sha256": "3641d5b988ef0c2a1b407118ce139e314ec835c22a1344716061f245c65b15a3"
+    },
+    "gdn-fusion-full-v1/queue.json": {
+      "original_bytes": 2468,
+      "original_sha256": "c3254d35e4c36d3a37b9d0b0ba2c30eb9ac1a5319f5c53eb31dc9a992a0ed62a"
+    },
+    "gdn-fusion-full-v1/flat-layer/layer.json": {
+      "original_bytes": 142323,
+      "original_sha256": "6507d45f5ea4e4d5e476b488f72c55ad2f602ddab92230d3bd25b803507cefc1"
+    },
+    "gdn-fusion-full-v1/flat-layer/hardware.xml.gz": {
+      "original_bytes": 539,
+      "original_sha256": "fb36125248fee0429e7eba0976616f5c3f8d07dfeeb4dae37da5be690d2c106c"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py.gz": {
+      "original_bytes": 51552,
+      "original_sha256": "febc847050e1c3534f2ca16763c4b9b006fc0b3a9782b5d66841488f163bcfef"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz": {
+      "original_bytes": 5421,
+      "original_sha256": "fec59b0656410d941cc9a60bbf01c6926b7aa46f21cdd60c973c3ad67b4521ac"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz": {
+      "original_bytes": 5161,
+      "original_sha256": "9b3ea645064ebfd5252a058d09c381cec12cb7afcb327c1f8011213401cc2519"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz": {
+      "original_bytes": 4477,
+      "original_sha256": "9ddd3761acf05a8991171976504a5ffd83c07607fa3b7a3abd5185e722d0dae7"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz": {
+      "original_bytes": 5145,
+      "original_sha256": "dc869e3ec4b779ea6a792f703a83ff4da531827e6514c4ea09705f2c37c6a716"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/config/precision_single_step_flat_prepare_epilogue_bfp8_all.json": {
+      "original_bytes": 1102,
+      "original_sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 4677,
+      "original_sha256": "1ca809d7f8f32f4104a836fd9f07c1e8efb89af1482069b8599d8cca605a4914"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz": {
+      "original_bytes": 1702,
+      "original_sha256": "bde931b8202345ee76f277e185b6c8ff278c211cab9db65c4dee34827fff6743"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz": {
+      "original_bytes": 9308,
+      "original_sha256": "8a39dcc70ca30b45b02db39b0e486cafea5817a29a68e2f410c3d242b2b2fb01"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_model_adapter.py.gz": {
+      "original_bytes": 11353,
+      "original_sha256": "190e2393254f9cd4c35f32c422d631e8cc08edccca7e8f3c01c27b63dc2dddd5"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 2139,
+      "original_sha256": "1062ecc8daa932eea6b872a3a28931f1dc9f04908fdaa22ce115a1df09df1426"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_bfp8_gdn_followup.py.gz": {
+      "original_bytes": 5365,
+      "original_sha256": "b3bf519777fbd4a9e66d8733515cf99aad11aa1c290471cf4e97be4f79ce9337"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz": {
+      "original_bytes": 11456,
+      "original_sha256": "2b31932bb5a1e97d8f19b887576b2cd4f74390cc97ad325f2aab3d0d53607f30"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 4571,
+      "original_sha256": "7052f65d601051b685771fb533c81c6e5eb87af3cb9cf00b3dc997b099dd789b"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_bfp8_gdn_followup.py.gz": {
+      "original_bytes": 17975,
+      "original_sha256": "ab001aae53df46daa0163ada853b2bbab235f1a9d154db202f28159013857023"
+    },
+    "gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz": {
+      "original_bytes": 4434,
+      "original_sha256": "5bb683457afe7efa72f9ac43d15abefbb32cf66c92d7591138247f5f6062a2cf"
+    },
+    "perf-priority-v1/comparison-native-before/index.html": {
+      "original_bytes": 96004,
+      "original_sha256": "a359716cfd6a628e05edbe7162eba8777c1b4f627ddf09d6f1be4b9762468468"
+    },
+    "perf-priority-v1/comparison-native-before/comparison.png": {
+      "original_bytes": 115592,
+      "original_sha256": "f886b6452213acea23b649764ddcbb5b887cf8cd772e8ef32598c0fc19d8dd06"
+    },
+    "perf-priority-v1/comparison-native-before/comparison.pdf": {
+      "original_bytes": 34676,
+      "original_sha256": "30b599ecf27e84df878701bd7cda0f2d5c2d24049d8c9a11e6d0e4280129e705"
+    },
+    "perf-priority-v1/comparison-native-before/comparison.svg": {
+      "original_bytes": 94163,
+      "original_sha256": "8e3f6255a0834bceaff53243731bbac1b1a0ff519a287c39c2263aadd431bff1"
+    },
+    "perf-priority-v1/comparison-native-after/index.html": {
+      "original_bytes": 96004,
+      "original_sha256": "917a65846894d73522058a38b58c1825a9ff7b35e8db1da51b42f272f56f3e7c"
+    },
+    "perf-priority-v1/comparison-native-after/comparison.png": {
+      "original_bytes": 115592,
+      "original_sha256": "f886b6452213acea23b649764ddcbb5b887cf8cd772e8ef32598c0fc19d8dd06"
+    },
+    "perf-priority-v1/comparison-native-after/comparison.pdf": {
+      "original_bytes": 34676,
+      "original_sha256": "d9da990e99ccb49c6200810002b8edf9e82281c34f55954d749314e92bed57ab"
+    },
+    "perf-priority-v1/comparison-native-after/comparison.svg": {
+      "original_bytes": 94163,
+      "original_sha256": "e685dd6e4a10aace3970b32a3f9fe4bed76611991daf0882565ff29e6335b22d"
+    },
+    "perf-priority-v1/control-drift/index.html": {
+      "original_bytes": 92050,
+      "original_sha256": "f5d818fee47944dd27d5f7855aed5df5950cde3adba29b06f53efe90a8826be6"
+    },
+    "perf-priority-v1/control-drift/comparison.png": {
+      "original_bytes": 100310,
+      "original_sha256": "74f8be6f9662e817ed4507a5398e99a8a7c68ac4b94ee2441a1df54717b552fa"
+    },
+    "perf-priority-v1/control-drift/comparison.pdf": {
+      "original_bytes": 33001,
+      "original_sha256": "2cd2eb3180f76bad45dfb4003dc7719c2e0fc03cbab491f270f5d9b13ee53d08"
+    },
+    "perf-priority-v1/control-drift/comparison.svg": {
+      "original_bytes": 90212,
+      "original_sha256": "7260959d0737afdbda83937b090eaf8dbebf13eb2027606928279c12edddf63e"
+    },
+    "units.txt": {
+      "original_bytes": 365,
+      "original_sha256": "700f4e8d986972e5067273659cefe643a9cdbb0b3b4b8c7bcaccfa39170624f2"
+    }
+  }
+}

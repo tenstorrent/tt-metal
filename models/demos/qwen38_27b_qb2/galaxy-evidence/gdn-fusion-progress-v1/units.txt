@@ -1,0 +1,17 @@
+MainPID=0
+Result=success
+Id=qwen38-gdn-flat-prepare-hardware-v3-20261010.service
+ActiveState=inactive
+InvocationID=
+
+MainPID=0
+Result=success
+Id=qwen38-gdn-flat-layer-v1-20261010.service
+ActiveState=inactive
+InvocationID=
+
+MainPID=3524236
+Result=success
+Id=qwen38-gdn-fusion-full-v1-20261010.service
+ActiveState=active
+InvocationID=bdaf9bad24074256bd637da7011814a7

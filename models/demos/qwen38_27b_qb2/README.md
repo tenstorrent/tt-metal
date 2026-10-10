@@ -11,6 +11,16 @@ The bring-up and queue descriptions below are historical snapshots; consult the
 logbook and current service state before treating a deployment as live or a
 candidate as qualified.
 
+**Oct 10, 04:32 UTC:** optimized BFP8 shared-QK completed full GPQA at
+**178/198 (89.90%)**; five output-budget cutoffs remain in the denominator and
+all were incorrect. At32K, measured full-model decode is14.87TSU atB16 and
+10.60 atB32 on one TP4 replica,26.5%/44.4% above the matched native baseline.
+See [completed receipts and audit](galaxy-evidence/perf-priority-completed-v1/README.md).
+The direct-preparation alignment fix and combined epilogue passed real-weight
+layer tests. A separate persistent profiling-first/full-model/GPQA queue is
+running; [candidate status and limits](galaxy-evidence/gdn-fusion-progress-v1/README.md).
+No combined-fusion model speedup, container release or Shield CI pass is claimed.
+
 **Oct 9, 17:30 UTC corrected GPQA:** **176/198 (88.89%)**, no truncations,
 50m49s. The user accepted this score; the original strict 177/198 gate is still
 recorded as missed. All 198 questions used preserved scientific notation.

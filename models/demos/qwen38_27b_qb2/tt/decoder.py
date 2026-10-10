@@ -282,7 +282,8 @@ class Qwen38Decoder(LightweightModule):
                     self.device,
                     c.linear_num_value_heads,
                     shared_qk_heads=c.linear_num_key_heads if recurrence in SHARED_QK_POLICIES else None,
-                    fused_epilogue=recurrence == "single_step_shared_qk_epilogue",
+                    fused_epilogue=uses_fused_epilogue(recurrence, 16),
+                    flat_prepare=recurrence == "single_step_flat_prepare_epilogue",
                 )
             self.gdn_decode_workspace.prepare(batch_size)
         return DecoderState(
@@ -881,6 +882,8 @@ class Qwen38Decoder(LightweightModule):
             )
             if uses_fused_epilogue(recurrence, b):
                 options["raw_output"] = True
+            if recurrence == "single_step_flat_prepare_epilogue":
+                options["flat_prepare_outputs"] = self.gdn_decode_workspace.flat_outputs(b)
             return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b), **options)
         # Native chunked scan remains the prefill path, including one-token
         # prefill continuations. Its independent batch axis is split to fit one

@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
-from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, compare
+from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, CANDIDATES, compare
 
 
 def run(args):
@@ -49,8 +49,9 @@ def run(args):
             env.pop(key, None)
         env.update(
             QWEN_GDN_EPILOGUE_LAYER="1",
+            QWEN_GDN_LAYER_CANDIDATE=args.candidate,
             QWEN_GDN_LAYER_RECEIPT=str(args.output / "layer.json"),
-            QWEN_PRECISION_CONFIG=str(model / "config/precision_single_step_shared_qk_epilogue_bfp8_all.json"),
+            QWEN_PRECISION_CONFIG=str(model / f"config/precision_{CANDIDATES[args.candidate]}_bfp8_all.json"),
         )
         command = [
             "/bin/bash",
@@ -102,4 +103,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("task", "source", "weights", "output", "manifest"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--candidate", choices=tuple(CANDIDATES), default="epilogue")
     run(parser.parse_args())

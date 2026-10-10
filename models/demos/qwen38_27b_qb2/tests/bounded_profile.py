@@ -15,7 +15,12 @@ from models.demos.qwen38_27b_qb2.tests.layer_profile_report import DURATIONS, an
 # 32K ISL first, 16K second; 128K/256K remain active secondary tuning targets.
 CASES = ((32768, 16), (32768, 32), (16384, 16), (16384, 32), (131072, 16), (262016, 8))
 VARIANTS = ("native", "single_step")
-SUPPORTED_VARIANTS = (*VARIANTS, "single_step_shared_qk")
+SUPPORTED_VARIANTS = (
+    *VARIANTS,
+    "single_step_shared_qk",
+    "single_step_shared_qk_epilogue",
+    "single_step_flat_prepare_epilogue",
+)
 SCOPE = (
     "Warm eager two-layer diagnostic with real weights and synthetic populated caches; "
     "not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"

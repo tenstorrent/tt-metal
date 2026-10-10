@@ -7,6 +7,10 @@ from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import compare_timings
 BATCHES = (32, 16, 8, 1)
 VARIANTS = ("native", "fused", "native")
 POLICIES = dict(native="single_step_shared_qk", fused="single_step_shared_qk_epilogue")
+CANDIDATES = {
+    "epilogue": "single_step_shared_qk_epilogue",
+    "flat_prepare": "single_step_flat_prepare_epilogue",
+}
 
 
 def compare(cases):

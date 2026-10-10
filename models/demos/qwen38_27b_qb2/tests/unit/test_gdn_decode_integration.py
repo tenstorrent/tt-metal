@@ -73,7 +73,9 @@ def test_shared_workspace_is_persistent_disjoint_and_skips_small_batches(monkeyp
     assert DecodeWorkspace(object(), 12).shared_qk(16) is None
 
 
-@pytest.mark.parametrize("recurrence", ["single_step", "single_step_shared_qk_epilogue"])
+@pytest.mark.parametrize(
+    "recurrence", ["single_step", "single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue"]
+)
 def test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step(monkeypatch, recurrence):
     calls = []
     scratch = object()
@@ -100,7 +102,9 @@ def test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step(m
         policy={"decode_recurrence": recurrence},
         device=SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=12, y=10)),
         delta_constants={},
-        gdn_decode_workspace=SimpleNamespace(output=lambda batch: scratch, shared_qk=lambda batch: None),
+        gdn_decode_workspace=SimpleNamespace(
+            output=lambda batch: scratch, shared_qk=lambda batch: None, flat_outputs=lambda batch: None
+        ),
     )
     inputs = [torch.zeros(16, 32, width) for width in (512, 512, 1536, 12, 12)]
     state = SimpleNamespace(recurrent=torch.zeros(16, 12, 128, 128))
@@ -202,3 +206,65 @@ def test_epilogue_policy_only_skips_output_layout_for_qualified_batches(monkeypa
     state = SimpleNamespace(recurrent=object())
     assert decoder.Qwen38Decoder._delta_recurrence(layer, *inputs, state, decode=True) is scratch
     assert seen == [dict(shared_qk_outputs=pair, **({"raw_output": True} if batch in (16, 32) else {}))]
+
+
+def test_flat_prepare_scratch_survives_bucket_changes_without_allocating_during_lookup(monkeypatch, expect_error):
+    allocations = []
+
+    def allocate(shape, *args):
+        tensor = SimpleNamespace(shape=tuple(shape), serial=len(allocations))
+        allocations.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", allocate)
+    workspace = DecodeWorkspace(object(), 12, shared_qk_heads=4, fused_epilogue=True, flat_prepare=True)
+    workspace.prepare(16)
+    original = workspace.flat_outputs(16)
+    assert [t.shape for t in original] == [(192, 128), (192, 8)]
+    workspace.prepare(32)
+    workspace.prepare(8)
+    workspace.prepare(16)
+    assert workspace.flat_outputs(16) is original
+    assert [t.shape for t in workspace.flat_outputs(32)] == [(384, 128), (384, 8)]
+    assert all(workspace.flat_outputs(b) is None for b in (1, 8, 64))
+    count = len(allocations)
+    for _ in range(3):
+        workspace.flat_outputs(16)
+        workspace.flat_outputs(32)
+    assert len(allocations) == count == len({id(t) for t in allocations})
+    other = DecodeWorkspace(object(), 12, flat_prepare=True)
+    with expect_error(RuntimeError, "cache allocation"):
+        other.flat_outputs(16)
+
+
+@pytest.mark.parametrize("batch", [1, 8, 16, 32])
+def test_flat_prepare_policy_selects_preallocated_buffers_and_retains_fallback(monkeypatch, batch):
+    scratch, qk, flat = object(), (object(), object()), (object(), object())
+    seen = []
+
+    def step(*args, **options):
+        seen.append(options)
+        return args[-1]
+
+    monkeypatch.setattr(decoder, "step_from_flat", step)
+    layer = SimpleNamespace(
+        config=SimpleNamespace(linear_num_value_heads=12),
+        policy={"decode_recurrence": "single_step_flat_prepare_epilogue"},
+        gdn_decode_workspace=SimpleNamespace(
+            output=lambda b: scratch,
+            shared_qk=lambda b: qk,
+            flat_outputs=lambda b: flat if b in (16, 32) else None,
+        ),
+    )
+    inputs = [torch.zeros(batch, 32, width) for width in (512, 512, 1536, 12, 12)]
+    assert (
+        decoder.Qwen38Decoder._delta_recurrence(layer, *inputs, SimpleNamespace(recurrent=object()), decode=True)
+        is scratch
+    )
+    assert seen == [
+        dict(
+            shared_qk_outputs=qk,
+            flat_prepare_outputs=flat if batch in (16, 32) else None,
+            **({"raw_output": True} if batch in (16, 32) else {}),
+        )
+    ]

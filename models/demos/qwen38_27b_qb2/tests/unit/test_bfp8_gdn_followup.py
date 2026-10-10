@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from models.demos.qwen38_27b_qb2.demo.run_bfp8_gdn_followup import (
+    FUSION_POLICIES,
     POLICIES,
     control_stable,
     predecessor_ready,
@@ -55,18 +56,43 @@ def test_clean_terminal_or_collected_unit_accepted():
     assert predecessor_ready(dict(terminal(), LoadState="not-found", InvocationID=""), receipt(), "expected")
 
 
-def test_candidate_retains_qualified_precision(tmp_path, expect_error):
+@pytest.mark.parametrize("fusion", [False, True])
+def test_candidate_retains_qualified_precision(tmp_path, expect_error, fusion):
     model = Path(__file__).resolve().parents[2]
-    validate_policies(model)
+    validate_policies(model, fusion=fusion)
     (tmp_path / "config").mkdir()
-    for name in POLICIES.values():
+    policies = FUSION_POLICIES if fusion else POLICIES
+    for name in policies.values():
         (tmp_path / "config" / name).write_bytes((model / "config" / name).read_bytes())
-    path = tmp_path / "config" / POLICIES["shared-qk"]
+    path = tmp_path / "config" / policies["shared-qk"]
     data = json.loads(path.read_text())
     data["weight_groups"]["attention"] = "bfloat4_b"
     path.write_text(json.dumps(data))
     with expect_error(ValueError, "changes precision"):
-        validate_policies(tmp_path)
+        validate_policies(tmp_path, fusion=fusion)
+
+
+def test_layer_gate_requires_every_rank_and_batch_even_with_passing_summary(expect_error):
+    from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, compare
+    from models.demos.qwen38_27b_qb2.tests.unit.test_gdn_epilogue_layer import cases
+
+    rows = [dict(row, batch=batch) for batch in BATCHES for row in cases()]
+    report = dict(
+        state="completed",
+        passed=True,
+        cleanup_completed=True,
+        candidate_recurrence="single_step_flat_prepare_epilogue",
+        cases=rows,
+        comparisons=[compare(rows[i : i + 3]) for i in range(0, len(rows), 3)],
+    )
+    assert predecessor_ready(terminal(), report, "expected", layer_release=True)
+    assert not predecessor_ready(dict(terminal(), MainPID="123"), report, "expected", layer_release=True)
+    report["cases"][1] = dict(report["cases"][1], state_sha256_per_rank=["changed"] * 4)
+    with expect_error(ValueError, "changed"):
+        predecessor_ready(terminal(), report, "expected", layer_release=True)
+    report["cases"].pop()
+    with expect_error(ValueError, "Incomplete"):
+        predecessor_ready(terminal(), report, "expected", layer_release=True)
 
 
 def test_control_drift_or_changed_tokens_does_not_qualify_speedup():

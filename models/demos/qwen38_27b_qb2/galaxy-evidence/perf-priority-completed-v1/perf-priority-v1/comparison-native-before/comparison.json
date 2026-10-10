@@ -1,0 +1,89 @@
+{
+  "state": "completed",
+  "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+  "replicas": 1,
+  "precision_change": false,
+  "promoted_to_serving": false,
+  "variant_labels": [
+    "native",
+    "shared-qk"
+  ],
+  "output_equivalence_required": false,
+  "source_receipts": [
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/native-before/sweep.json",
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5"
+    },
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/perf-priority-v1/shared-qk/sweep.json",
+      "sha256": "3037f7cd62b1fe52431550364ec7dc4d86aef696ea3c6e1e6d0274ccec417a99"
+    }
+  ],
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "cells": [
+    {
+      "input_tokens": 16384,
+      "batch_per_replica": 16,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 202.328017791227,
+      "native_tokens_per_second_per_user": 12.645501111951688,
+      "native_aggregate_input_tokens_per_second": 5752.163088443939,
+      "native_ttft_p50_s": 45.70307653490454,
+      "candidate_aggregate_decode_tokens_per_second": 261.39288325966737,
+      "candidate_tokens_per_second_per_user": 16.33705520372921,
+      "candidate_aggregate_input_tokens_per_second": 5753.434032201782,
+      "candidate_ttft_p50_s": 45.72297256812453,
+      "decode_uplift_percent": 29.192627948041626,
+      "same_output_hash_as_native": false
+    },
+    {
+      "input_tokens": 16384,
+      "batch_per_replica": 32,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 257.28204322555615,
+      "native_tokens_per_second_per_user": 8.04006385079863,
+      "native_aggregate_input_tokens_per_second": 5280.069214103259,
+      "native_ttft_p50_s": 99.55877291504294,
+      "candidate_aggregate_decode_tokens_per_second": 388.0460716061051,
+      "candidate_tokens_per_second_per_user": 12.126439737690784,
+      "candidate_aggregate_input_tokens_per_second": 5278.901420503732,
+      "candidate_ttft_p50_s": 99.56561712827533,
+      "decode_uplift_percent": 50.82516709722709,
+      "same_output_hash_as_native": true
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 16,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 188.05928492594288,
+      "native_tokens_per_second_per_user": 11.75370530787143,
+      "native_aggregate_input_tokens_per_second": 5325.7468524589,
+      "native_ttft_p50_s": 98.59239450516179,
+      "candidate_aggregate_decode_tokens_per_second": 237.93085244165613,
+      "candidate_tokens_per_second_per_user": 14.870678277603508,
+      "candidate_aggregate_input_tokens_per_second": 5325.882340037519,
+      "candidate_ttft_p50_s": 98.59421730786562,
+      "decode_uplift_percent": 26.519066865192276,
+      "same_output_hash_as_native": false
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 32,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 234.97495331602173,
+      "native_tokens_per_second_per_user": 7.342967291125679,
+      "native_aggregate_input_tokens_per_second": 4622.44221162216,
+      "native_ttft_p50_s": 227.0961029259488,
+      "candidate_aggregate_decode_tokens_per_second": 339.24740212418385,
+      "candidate_tokens_per_second_per_user": 10.601481316380745,
+      "candidate_aggregate_input_tokens_per_second": 4622.36616011075,
+      "candidate_ttft_p50_s": 227.09357784409076,
+      "decode_uplift_percent": 44.37598447691757,
+      "same_output_hash_as_native": true
+    }
+  ]
+}

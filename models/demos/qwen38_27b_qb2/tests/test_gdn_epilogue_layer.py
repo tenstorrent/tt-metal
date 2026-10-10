@@ -12,7 +12,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
-from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, POLICIES, VARIANTS, compare
+from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, CANDIDATES, POLICIES, VARIANTS, compare
 from models.demos.qwen38_27b_qb2.tests.test_gdn_layer_integration import run_case
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
@@ -29,7 +29,9 @@ def test_gdn_epilogue_layer():
     source = Path(__file__).resolve().parents[1]
     checkpoint = checkpoint_path()
     config = AutoConfig.from_pretrained(checkpoint, local_files_only=True).text_config
-    precision = load_precision(source / "config/precision_single_step_shared_qk_epilogue_bfp8_all.json")
+    candidate = CANDIDATES[os.getenv("QWEN_GDN_LAYER_CANDIDATE", "epilogue")]
+    policies = dict(POLICIES, fused=candidate)
+    precision = load_precision(source / f"config/precision_{candidate}_bfp8_all.json")
     report = dict(
         state="opening",
         passed=False,
@@ -37,6 +39,7 @@ def test_gdn_epilogue_layer():
         promoted_to_serving=False,
         checkpoint=str(checkpoint),
         precision=precision,
+        candidate_recurrence=candidate,
         source_sha256=model_source_hashes(source),
         reference="64 FP32 recurrence updates on actual per-rank convolution outputs plus bit-identical projected controls",
         cases=[],
@@ -68,7 +71,7 @@ def test_gdn_epilogue_layer():
             for variant in VARIANTS:
                 report.update(state="real_weight_comparison", active_batch=batch, active_variant=variant)
                 save(path, report)
-                case = run_case(layer, mesh, batch, recurrence=POLICIES[variant])
+                case = run_case(layer, mesh, batch, recurrence=policies[variant])
                 case.update(variant=variant, traced_call_us=case["candidate"]["samples_us"])
                 group.append(case)
                 report["cases"].append(case)

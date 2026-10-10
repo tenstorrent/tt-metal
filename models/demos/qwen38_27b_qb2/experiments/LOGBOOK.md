@@ -1767,3 +1767,48 @@ No session connection is needed for that queue to continue.
 - Network-denied collection/staging helpers retried with sandbox escalation.
   No model promotion, precision change, firmware/NFS mutation or running queue
   rewrite. Original large profiler artifacts remain on host disk and locally.
+
+## Oct 10, 04:16-04:33 UTC: resume Metal, qualify shared Q/K, fix direct preparation
+
+- User dropped the Blaze pivot and resumed BFP8 tt-metal optimization, with20TSU
+  as the next goal and32K primary/16K secondary. No Blaze implementation was
+  launched. Read current persistent-unit state before acting.
+- Completed prior full-model native/shared/native sweeps:32K B16/B32
+  14.8707/10.6015TSU, gains26.5%/44.4%;16K16.3371/12.1264. Controls within3%.
+  GPQA178/198 (89.90%), five incorrect65,536-output-token cutoffs, all198
+  included. Saved-response audit verified all private hashes and usage; completed
+  response score also178/198. Copied raw public receipts and manifests locally.
+- Container image had all eight TP4 DP workers and passed API/tool smokes.
+  OpenBench failed before requests because its staged openbench.py shadowed
+  the installed package. Captured this launch failure; no container-eval score.
+- Found the physical direct-preparation failure:32-byte scratch spacing violates
+  Blackhole DRAM's64-byte matching-address alignment on second-face reads.
+  Fixed scratch spacing/indexing without arithmetic or precision changes.
+  v3 recovered the dirty device through the safe runner, then all nine physical
+  cases passed, including two allocations and changed-input trace replay.
+- Added opt-in single_step_flat_prepare_epilogue policy with persistent Q/K,
+  value/gate and output scratch. B16/B32 only; B1/B8 paths and prefill unchanged.
+  Real-weight native/candidate/native controls: all four ranks identical after
+  64FP32 updates. B32 GDN block1016.70->805.58us; B16 710.27->568.64us.
+  Projections only:32K16.54/11.88TSU,16K18.38/13.83;20TSU not yet reached.
+- CPU integration gates481passed/40subtests/one unrelated skip. Exact-source
+  layer rerun reproduced the gain. Launched persistent full-model v1, then
+  stopped that owned unit during loading when user requested profiling first.
+  Its failed/interrupted status is an intentional reorder, not a model failure.
+- Replacement qwen38-gdn-fusion-full-v2-20261010, invocation
+  a257a3e921da46a3a9c987347c196190, puts four matched32K B32/B16 Tracy captures
+  before full sweeps and full GPQA. At04:32:31 first profile was running. Same
+  exclusive device lock;16h/256GiB/16CPU and child/output bounds; survives
+  disconnect, not reboot. Preserve every prior source/receipt; no live mutation
+  of immutable sources and no promotion of incomplete results.
+- Reviewed release PDF and current Shield on-dispatch/release workflows.
+  TTIS has the eight-DP experimental Docker/Helm package, but the checked-in
+  Qwen models-ci-config entry lists P300X2 only. Galaxy dev-catalog/CI integration,
+  successful Shield hardware dispatch/release run, updated candidate image and
+  release automation remain. Do not conflate local GPQA with Shield release.
+- Modeled useful-byte fractions improved to37.4%/38.6% at32K B16/B32, versus
+  native29.6%/26.8%, assuming512GB/s/chip. Not DRAM-counter utilization. Doubling
+  means29.74/21.20TSU; graph cleanup, recurrence scheduling and KV delivery need
+  end-to-end attribution before promising that target. Stage timelines overlap.
+- SSH helper executions blocked by sandbox were retried with explicit escalation.
+  Native installation, weights, NFS and firmware were not changed.

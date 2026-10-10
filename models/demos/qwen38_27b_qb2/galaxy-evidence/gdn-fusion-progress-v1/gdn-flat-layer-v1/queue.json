@@ -1,0 +1,24 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791606181.3877265,
+  "updated_at": "2026-10-10T04:23:37Z",
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-layer-source-v1/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-layer-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-layer-source-v1",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-layer-source-v1/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1200",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-layer-v1/hardware.xml"
+  ],
+  "finished_at": 1791606217.4414783
+}

@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-10-09T23:28:05.194943+00:00",
+  "generated_at": "2026-10-10T04:36:10.694062+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "README.md",
-      "bytes": 27955,
-      "sha256": "fa26a8601dc9a765c162b1144524875f8681ca696146b5771c91a74e6625d6f8"
+      "bytes": 28675,
+      "sha256": "1c1986387e1b97fc498a62edd6ee7e7d5e9d0ead8ab5de9a4e15d8f04f338aa1"
     },
     {
       "path": "config/precision_accurate_decode_bfp8_all.json",
@@ -31,6 +31,11 @@
       "path": "config/precision_diagnostic_bfp8_hifi4.json",
       "bytes": 1003,
       "sha256": "a1424ac3943fd32d3ef61d44c8f71b098419d516cb7c4a1bc6898a985fb7c4a2"
+    },
+    {
+      "path": "config/precision_single_step_flat_prepare_epilogue_bfp8_all.json",
+      "bytes": 1102,
+      "sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
     },
     {
       "path": "config/precision_single_step_shared_qk_bfp8_all.json",
@@ -84,8 +89,8 @@
     },
     {
       "path": "demo/run_bfp8_gdn_followup.py",
-      "bytes": 14817,
-      "sha256": "404f5fcb9901104194cd0e6b8a2d3dbc043e360dd359c3e973649ead8caa0774"
+      "bytes": 17925,
+      "sha256": "9e2b1637231545c9cb07bd520eb47cebe98ff85b375fc6f7f489a02451fd6195"
     },
     {
       "path": "demo/run_chunked_prefill_followup.py",
@@ -109,8 +114,8 @@
     },
     {
       "path": "demo/run_gdn_epilogue_layer.py",
-      "bytes": 4421,
-      "sha256": "93678e2bd08ea96c1eab2e6479f9a768ace7642069b58749db1d605e9eee496c"
+      "bytes": 4571,
+      "sha256": "7052f65d601051b685771fb533c81c6e5eb87af3cb9cf00b3dc997b099dd789b"
     },
     {
       "path": "demo/run_gdn_flat_prepare.py",
@@ -149,8 +154,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 130782,
-      "sha256": "79d19058617dcaed811284a5dc05b176c54207ecbe40c1b0912bab2591003ba8"
+      "bytes": 134079,
+      "sha256": "3e4c4919483b49adf624ecb82ae656cbdea687fea73fb83879ed90691645a78e"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -211,7 +216,8 @@
     {
       "path": "galaxy-evidence/accuracy-head-v1/status-at-launch.json",
       "bytes": 668,
-      "sha256": "91233dbfb3cb1b886cbb791c95069e4f00b9133f11efb562850c47abeadab307"
+      "sha256": "91233dbfb3cb1b886cbb791c95069e4f00b9133f11efb562850c47abeadab307",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/accuracy-head-v1/tokenizer.xml",
@@ -1027,7 +1033,8 @@
     {
       "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/native-before-snapshot.json",
       "bytes": 26714,
-      "sha256": "9d5fda70737687aed011bdf95a52f5013bfcf6ba8ef2e331240993e631b8ca8a"
+      "sha256": "9d5fda70737687aed011bdf95a52f5013bfcf6ba8ef2e331240993e631b8ca8a",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/bfp8-bottleneck-audit-v1/reproduce.py",
@@ -1073,7 +1080,8 @@
       "survives_disconnect": true,
       "resumes_after_reboot": false,
       "bytes": 600,
-      "sha256": "b7f00b583cd3d403632a6899bf09ad578141355c71f6633e844ceccd687fc2c6"
+      "sha256": "b7f00b583cd3d403632a6899bf09ad578141355c71f6633e844ceccd687fc2c6",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/bfp8-gdn-followup-v1/gpqa-first-v2/bfp8-budget32k/sweep.json",
@@ -1138,7 +1146,9 @@
     {
       "path": "galaxy-evidence/bfp8-priority-native-before-v1/perf-priority-v1/native-before/sweep.json",
       "bytes": 43831,
-      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5"
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5",
+      "state": "completed",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-native-before-v1/units.txt",
@@ -1183,7 +1193,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json",
       "bytes": 174860,
-      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee"
+      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/report.md",
@@ -1198,7 +1209,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/profile.json",
       "bytes": 18841,
-      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a"
+      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/run.log.gz",
@@ -1233,7 +1247,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
       "bytes": 177492,
-      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/report.md",
@@ -1248,7 +1263,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/profile.json",
       "bytes": 18892,
-      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527"
+      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/run.log.gz",
@@ -1263,7 +1281,9 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/queue-snapshot.json",
       "bytes": 3239,
-      "sha256": "581166893d4f5d778e2f5cf6ac6fdd0b0c70480aeafd3734de606152c78da797"
+      "sha256": "581166893d4f5d778e2f5cf6ac6fdd0b0c70480aeafd3734de606152c78da797",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v1/unit.txt",
@@ -1303,7 +1323,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/profile-summary.json",
       "bytes": 177294,
-      "sha256": "3faa2aa615400ecee6bcdce480ed294698e0befc52054301796f795e2f25a7d2"
+      "sha256": "3faa2aa615400ecee6bcdce480ed294698e0befc52054301796f795e2f25a7d2",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/report.md",
@@ -1318,7 +1339,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/profile.json",
       "bytes": 18841,
-      "sha256": "b470a370e53170e6757f7c6bf3cd073f94af67165da2379e6433df36ef44521b"
+      "sha256": "b470a370e53170e6757f7c6bf3cd073f94af67165da2379e6433df36ef44521b",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/run.log.gz",
@@ -1353,7 +1377,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/profile-summary.json",
       "bytes": 180012,
-      "sha256": "b3b4e83fca7811b7e2a2efa35ea043b0bdd4e4af7dd7ff876dca8b75685f2b17"
+      "sha256": "b3b4e83fca7811b7e2a2efa35ea043b0bdd4e4af7dd7ff876dca8b75685f2b17",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/report.md",
@@ -1368,7 +1393,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/profile.json",
       "bytes": 18892,
-      "sha256": "dff892c13b570ed55a03715475a2ce98d667b6e9c43dd0940fcfbae7ba304a8a"
+      "sha256": "dff892c13b570ed55a03715475a2ce98d667b6e9c43dd0940fcfbae7ba304a8a",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/run.log.gz",
@@ -1403,7 +1431,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json",
       "bytes": 174860,
-      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee"
+      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/report.md",
@@ -1418,7 +1447,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/profile.json",
       "bytes": 18841,
-      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a"
+      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/run.log.gz",
@@ -1453,7 +1485,8 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
       "bytes": 177492,
-      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/report.md",
@@ -1468,7 +1501,10 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/profile.json",
       "bytes": 18892,
-      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527"
+      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/run.log.gz",
@@ -1488,7 +1524,9 @@
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/queue-snapshot.json",
       "bytes": 5697,
-      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/bfp8-priority-profiles-v2/unit.txt",
@@ -1605,7 +1643,8 @@
       "survives_disconnect": true,
       "resumes_after_reboot": false,
       "bytes": 600,
-      "sha256": "a6f1a910f46cd7acb3f368c00cd297827ced10c29f5ed820501255e8d42ee0b8"
+      "sha256": "a6f1a910f46cd7acb3f368c00cd297827ced10c29f5ed820501255e8d42ee0b8",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/capacity-recovery-v1/clean-oom-control-v1/audit.json",
@@ -1693,7 +1732,8 @@
     {
       "path": "galaxy-evidence/chunked-prefill-hardware-v1/queue-at-launch.json",
       "bytes": 468,
-      "sha256": "2e2b548830400f31983539e8675160c8285e13958b2c742e99be18b2fc058d0a"
+      "sha256": "2e2b548830400f31983539e8675160c8285e13958b2c742e99be18b2fc058d0a",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/chunked-prefill-hardware-v1/run.log.gz",
@@ -1733,7 +1773,8 @@
     {
       "path": "galaxy-evidence/chunked-prefill-hardware-v2/queue-at-launch.json",
       "bytes": 20973,
-      "sha256": "dc570f5037baeb7ea493a2375d3bc116bfa69cdf8567fe358466599369de7c59"
+      "sha256": "dc570f5037baeb7ea493a2375d3bc116bfa69cdf8567fe358466599369de7c59",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/chunked-prefill-hardware-v2/service-at-launch.txt",
@@ -1823,12 +1864,16 @@
     {
       "path": "galaxy-evidence/decoder-g0-v1/baseline-head-g0.json",
       "bytes": 261153,
-      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb"
+      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/decoder-g0-v1/full-model.json",
       "bytes": 264158,
-      "sha256": "62871c0fd29b981678e85cd04a0e017a583884ea1bf5ebbd174d4f05e662e54e"
+      "sha256": "62871c0fd29b981678e85cd04a0e017a583884ea1bf5ebbd174d4f05e662e54e",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/decoder-g0-v1/hardware.log.gz",
@@ -1843,7 +1888,9 @@
     {
       "path": "galaxy-evidence/decoder-g0-v1/queue-at-completion.json",
       "bytes": 24261,
-      "sha256": "7330d2e79acda5b65008ff2689deff90d990c50cc7bc80e8f09f6a1a6a9cbc89"
+      "sha256": "7330d2e79acda5b65008ff2689deff90d990c50cc7bc80e8f09f6a1a6a9cbc89",
+      "state": "running",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/decoder-g0-v1/service-at-g0-completion.txt",
@@ -1863,7 +1910,8 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/completed-control-validation.json",
       "bytes": 1021,
-      "sha256": "4594e51b6779cbf7baa55087ac5a42fc39e7a5d14e866ab0a9d0948e2a683932"
+      "sha256": "4594e51b6779cbf7baa55087ac5a42fc39e7a5d14e866ab0a9d0948e2a683932",
+      "state": "completed_control_reader_passed"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/controller.py.gz",
@@ -1878,7 +1926,8 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/preflight.json",
       "bytes": 482,
-      "sha256": "c40fe008e23f65f61539a1979a57bc0deb74ce77323b5c8f2ac13fd9bcd0bc64"
+      "sha256": "c40fe008e23f65f61539a1979a57bc0deb74ce77323b5c8f2ac13fd9bcd0bc64",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/read_result.py.gz",
@@ -1903,7 +1952,8 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/status-at-collection.json",
       "bytes": 792,
-      "sha256": "df1bc89b522390ef0340acc62fbd277ebc0d6ed6a526432fc66b64fde056f1f7"
+      "sha256": "df1bc89b522390ef0340acc62fbd277ebc0d6ed6a526432fc66b64fde056f1f7",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-final-capture-v1/validate-final-capture-v1.py.gz",
@@ -1918,17 +1968,22 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-progress-v1/api.json",
       "bytes": 38554,
-      "sha256": "cc0a7525710e238de0068102b3ba78685848626207fe377274c97a8cb1fa1a33"
+      "sha256": "cc0a7525710e238de0068102b3ba78685848626207fe377274c97a8cb1fa1a33",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-progress-v1/deployment.json",
       "bytes": 19469,
-      "sha256": "6db6dc5be860a24333a4669929323133fe1fbf698cc2ec7f151e55f7407cf889"
+      "sha256": "6db6dc5be860a24333a4669929323133fe1fbf698cc2ec7f151e55f7407cf889",
+      "state": "gpqa",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-progress-v1/gpqa-gpqa-progress.json",
       "bytes": 176,
-      "sha256": "0dd316bd9f1e363c59b34d1518cc2ef79fafe4265b0ce6e37a763de09535785b"
+      "sha256": "0dd316bd9f1e363c59b34d1518cc2ef79fafe4265b0ce6e37a763de09535785b",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-progress-v1/gpqa-gpqa-responses.jsonl.gz",
@@ -1963,12 +2018,14 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-result-v1/comparison-and-timing.json",
       "bytes": 73309,
-      "sha256": "db4242427bde6ab641f179f24a1701d0dfb596f9cb79e4c69b578238905baeb4"
+      "sha256": "db4242427bde6ab641f179f24a1701d0dfb596f9cb79e4c69b578238905baeb4",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-result-v1/completion-audit-status.json",
       "bytes": 1681,
-      "sha256": "6d87307ffa76905ad096000201f70f3f6ffa1701239d98853e99d94d5c872039"
+      "sha256": "6d87307ffa76905ad096000201f70f3f6ffa1701239d98853e99d94d5c872039",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-result-v1/completion-audit.json.gz",
@@ -1978,7 +2035,9 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-result-v1/deployment.json",
       "bytes": 20227,
-      "sha256": "f740b2f3a121903ec548c034414c7384ee80ec0b731461b53769c4641c4c0d44"
+      "sha256": "f740b2f3a121903ec548c034414c7384ee80ec0b731461b53769c4641c4c0d44",
+      "state": "evaluation_completed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-result-v1/evaluator.log.gz",
@@ -2023,7 +2082,8 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/audit-status-at-launch.json",
       "bytes": 509,
-      "sha256": "c25260cef0c8e245fe9244530460c09002bf2a2237d193e4818d4d13d15b3ceb"
+      "sha256": "c25260cef0c8e245fe9244530460c09002bf2a2237d193e4818d4d13d15b3ceb",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/audit-unit.log.gz",
@@ -2058,7 +2118,8 @@
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/status-at-launch.json",
       "bytes": 725,
-      "sha256": "2021c3b6099d4638b32f648822ac3a849d210e73c8c224b202b73355d591a43e"
+      "sha256": "2021c3b6099d4638b32f648822ac3a849d210e73c8c224b202b73355d591a43e",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/decoder-gpqa-v1/unit.xml.gz",
@@ -2103,12 +2164,18 @@
     {
       "path": "galaxy-evidence/delivery-extended-v2/probe.json",
       "bytes": 193483,
-      "sha256": "302ac95a7da3009eb6ce60c6ac480f36127525d253d1aa4dc7ab9ae0b7500b87"
+      "sha256": "302ac95a7da3009eb6ce60c6ac480f36127525d253d1aa4dc7ab9ae0b7500b87",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/delivery-extended-v2/queue-terminal.json",
       "bytes": 29654,
-      "sha256": "317672cd9bec9e9ae9a549e73b971ecf025fcc91781f063ff2139f3324b203ad"
+      "sha256": "317672cd9bec9e9ae9a549e73b971ecf025fcc91781f063ff2139f3324b203ad",
+      "state": "completed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/delivery-extended-v2/run.log.gz",
@@ -2128,17 +2195,25 @@
     {
       "path": "galaxy-evidence/delivery-pass-v2/launch.json",
       "bytes": 2123,
-      "sha256": "2c0b4fd010346828b2e3d963cd33dcb5e2ce62dc86158b3fd48eca6ad2ee02ee"
+      "sha256": "2c0b4fd010346828b2e3d963cd33dcb5e2ce62dc86158b3fd48eca6ad2ee02ee",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/delivery-pass-v2/probe.json",
       "bytes": 27663,
-      "sha256": "1ac19d3870e0b8fe8bd8de08852feb789e4a049f5510e032ed122436e7fb6ed8"
+      "sha256": "1ac19d3870e0b8fe8bd8de08852feb789e4a049f5510e032ed122436e7fb6ed8",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/delivery-pass-v2/queue.json",
       "bytes": 21857,
-      "sha256": "cddf785919467913a5e1a14f24551f30a7e306306c07385e7764f3bc1548eb9d"
+      "sha256": "cddf785919467913a5e1a14f24551f30a7e306306c07385e7764f3bc1548eb9d",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/delivery-pass-v2/unit.xml.gz",
@@ -2158,7 +2233,8 @@
     {
       "path": "galaxy-evidence/dram-delivery-launch-v1/dram-delivery-launch-v1.json",
       "bytes": 2977,
-      "sha256": "0ab04cd37dd36c0abd3e644c33f60bdcdc0e9bf91b1b6026d091c7f341daed30"
+      "sha256": "0ab04cd37dd36c0abd3e644c33f60bdcdc0e9bf91b1b6026d091c7f341daed30",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/dram-delivery-launch-v1/dram-delivery-unit-v1.xml.gz",
@@ -2168,7 +2244,9 @@
     {
       "path": "galaxy-evidence/dram-delivery-launch-v1/queue.json",
       "bytes": 20424,
-      "sha256": "4ff1c70cb0484e7976793b760937470b9b4279b7209e40556e0d67ba691a0a4b"
+      "sha256": "4ff1c70cb0484e7976793b760937470b9b4279b7209e40556e0d67ba691a0a4b",
+      "state": "waiting_for_qualification_job",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/dram-delivery-launch-v1/services.txt",
@@ -2268,17 +2346,22 @@
     {
       "path": "galaxy-evidence/full-trace-attempt-v2/launch.json",
       "bytes": 2098,
-      "sha256": "55cf5975d5df461147f73fc4c49f621f120b76c0ebe3adbd00ae7bfef2529d3e"
+      "sha256": "55cf5975d5df461147f73fc4c49f621f120b76c0ebe3adbd00ae7bfef2529d3e",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/full-trace-attempt-v2/profile.json",
       "bytes": 27781,
-      "sha256": "5f7862b76ad4e3bba996279faca51450574c5ded86c66850b8740ceeb182bfa3"
+      "sha256": "5f7862b76ad4e3bba996279faca51450574c5ded86c66850b8740ceeb182bfa3",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/full-trace-attempt-v2/queue.json",
       "bytes": 22231,
-      "sha256": "dfe707e1661dc1471910b4710c58c22b36cc2a1ae161a38cf3c1529f9ec0194a"
+      "sha256": "dfe707e1661dc1471910b4710c58c22b36cc2a1ae161a38cf3c1529f9ec0194a",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/full-trace-attempt-v2/unit.xml.gz",
@@ -2471,7 +2554,11 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/epilogue.json",
       "bytes": 124148,
-      "sha256": "f09597d9d8de4ef198c431851e6517ceeb2c0202406089f20c8489aeb61a97d4"
+      "sha256": "f09597d9d8de4ef198c431851e6517ceeb2c0202406089f20c8489aeb61a97d4",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/hardware.xml",
@@ -2486,7 +2573,9 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/queue-snapshot.json",
       "bytes": 5697,
-      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/README.md",
@@ -2496,7 +2585,9 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/bfp8-gdn-v2/queue.json",
       "bytes": 600,
-      "sha256": "a3cbdf968b54164ed3fd8b56ead460c33e55d539c1e69c40c7e85c0166a15138"
+      "sha256": "a3cbdf968b54164ed3fd8b56ead460c33e55d539c1e69c40c7e85c0166a15138",
+      "state": "waiting",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/capture.json",
@@ -2531,12 +2622,16 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/gdn-epilogue-hardware-v1/queue.json",
       "bytes": 607,
-      "sha256": "8622ca00e04485dce4cc1e01cae98c04b0d802f1d2a41666ad7abd428534a637"
+      "sha256": "8622ca00e04485dce4cc1e01cae98c04b0d802f1d2a41666ad7abd428534a637",
+      "state": "waiting",
+      "cleanup_completed": false,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/image-hardware-v3/status.json",
       "bytes": 1807,
-      "sha256": "c7b03198f57c2f5e2c912ebc14fdf8501f26ba1d1bbbd47d0df7013bd6d00ce2"
+      "sha256": "c7b03198f57c2f5e2c912ebc14fdf8501f26ba1d1bbbd47d0df7013bd6d00ce2",
+      "state": "starting"
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/units.txt",
@@ -2676,12 +2771,17 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/gdn-epilogue-layer-v1/queue.json",
       "bytes": 898,
-      "sha256": "ad00889a2c041ad16889d1992c1a52b1ff62a9d671f480f06654ae12c2349fcf"
+      "sha256": "ad00889a2c041ad16889d1992c1a52b1ff62a9d671f480f06654ae12c2349fcf",
+      "state": "hardware_or_waiting_for_lock",
+      "cleanup_completed": false,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/perf-priority-v1/queue.json",
       "bytes": 5697,
-      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-launch-v1/units.txt",
@@ -2711,12 +2811,19 @@
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-v1/layer.json",
       "bytes": 142050,
-      "sha256": "d98e26e65238e5e687ef2d539ad0d15616904006c3eb9fd71322b79271205f58"
+      "sha256": "d98e26e65238e5e687ef2d539ad0d15616904006c3eb9fd71322b79271205f58",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/gdn-epilogue-layer-v1/queue.json",
       "bytes": 914,
-      "sha256": "e2d95c8ec7090ae73a3c756cee35bb7316e2bab3e217c94d848fbb120c12a8f0"
+      "sha256": "e2d95c8ec7090ae73a3c756cee35bb7316e2bab3e217c94d848fbb120c12a8f0",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-layer-results-v1/units.txt",
@@ -2846,7 +2953,8 @@
       "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
       "cleanup_completed": false,
       "bytes": 520,
-      "sha256": "e234e420e803f543cd3f0f6a68c7b127a67d61b1c9477569ec3c458ad777ad4d"
+      "sha256": "e234e420e803f543cd3f0f6a68c7b127a67d61b1c9477569ec3c458ad777ad4d",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v1/run.log.gz",
@@ -2876,7 +2984,8 @@
       "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
       "cleanup_completed": true,
       "bytes": 2118,
-      "sha256": "f7e16dbd95d2e9e1c330d7b62dc801d83bd799658090b203d76ae8c2942431e5"
+      "sha256": "f7e16dbd95d2e9e1c330d7b62dc801d83bd799658090b203d76ae8c2942431e5",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v2/run.log.gz",
@@ -2906,7 +3015,8 @@
       "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
       "cleanup_completed": true,
       "bytes": 2416,
-      "sha256": "ef1e29ec812859570967380f4b497f396afd18e4b37f6d0ad5b861c4e468f17e"
+      "sha256": "ef1e29ec812859570967380f4b497f396afd18e4b37f6d0ad5b861c4e468f17e",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v3/run.log.gz",
@@ -2936,7 +3046,8 @@
       "scope": "Synthetic single-token epilogue vs actual native norm plus multiply; not full-model or hardware qualification",
       "cleanup_completed": true,
       "bytes": 8984,
-      "sha256": "1c4a9b4453c5fc32b67df328aeff57eeffb44d057675ab86967e8b2a73d45ff1"
+      "sha256": "1c4a9b4453c5fc32b67df328aeff57eeffb44d057675ab86967e8b2a73d45ff1",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/gdn-epilogue-sim-v4/run.log.gz",
@@ -3051,12 +3162,17 @@
     {
       "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/gdn-flat-prepare-hardware-v2/queue.json",
       "bytes": 930,
-      "sha256": "d4bde4ebf9c2c095106182d107cdc1a989d2bbafeef87fdc5354a743e141f7d5"
+      "sha256": "d4bde4ebf9c2c095106182d107cdc1a989d2bbafeef87fdc5354a743e141f7d5",
+      "state": "hardware_or_waiting_for_lock",
+      "cleanup_completed": false,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/perf-priority-v1/queue.json",
       "bytes": 6494,
-      "sha256": "ca3044727b48a6eb398a87f7d9970090faa3a96bee65389e00ae702ec8e8e613"
+      "sha256": "ca3044727b48a6eb398a87f7d9970090faa3a96bee65389e00ae702ec8e8e613",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-flat-prepare-hardware-launch-v2/units.txt",
@@ -3131,7 +3247,11 @@
     {
       "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/probe.json",
       "bytes": 382,
-      "sha256": "e85d23713adcd06d9ad7dbce3aef37bb6eb8f485740eb0a276d75c4069d41bcb"
+      "sha256": "e85d23713adcd06d9ad7dbce3aef37bb6eb8f485740eb0a276d75c4069d41bcb",
+      "state": "running",
+      "passed": false,
+      "cleanup_completed": false,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/run.log.gz",
@@ -3147,6 +3267,622 @@
       "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/simulator-unit.txt",
       "bytes": 92,
       "sha256": "ea0db5098c663e25392630f289e0eeea73b470d718a15566d487588268c126cb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/README.md",
+      "bytes": 4552,
+      "sha256": "bbeee351d288471fa4b4d2fb99d13dd53952e673fd7bfd0cbb2cd891ab2ecb10"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/capture.json",
+      "bytes": 11020,
+      "sha256": "a27940978ee33c4c1d628e5aa4640d44d078d1f81eac5d06610ac766210ec2b1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "90ab79fb1b3edc9bc872a0cc7397df21ae47c4ea1d9a7700da6783df3822fcfa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/launch.json",
+      "bytes": 1665,
+      "sha256": "32ffe5702380f2f5f82eb576d94061e29b891abb1600eb21b46fa5fa459a1bb1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/preflight.log.gz",
+      "bytes": 384,
+      "sha256": "a2457c88e2a588289391ab6fbf9b89ca0338fc36d33079f897fe899add9409b0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/run.log.gz",
+      "bytes": 3166,
+      "sha256": "68e4ed43fe46346d7df72543654d2ff0323f1af0adc9201566e11a2ef743b204"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/source-manifest.json",
+      "bytes": 23848,
+      "sha256": "ee20e30c53f0c0b9bd1027c65365cbbe4d8ec4d32d8122567d32b2bf5e4b39c9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-control-v1/unit.xml.gz",
+      "bytes": 9138,
+      "sha256": "6492fa67060fe13d9bc216b30eacd01d8206bb2974c0b05d2387f11e15401a8c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-v1/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "a6f92c11fa0c944eb5269cb627112058b1926bffb60e9837583946985c718295"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-v1/layer.json",
+      "bytes": 142332,
+      "sha256": "840f1a3fbd9cf94ddfafc9bccd46336797b1feb96968eaa7613a29ae9f0bf839",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-layer-v1/queue.json",
+      "bytes": 895,
+      "sha256": "a718f777a087804e694fc452bdd2fc207d60473e08cefb03d8ff7e2cf1bcf296",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "01c805bb54cb84aa0ccd85c5c44388779463aeee237d050a47b064e6148c0ea8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/launch.json",
+      "bytes": 1678,
+      "sha256": "fd4a9c2c8094618c1c3c81aea22c02dc7cf73e2f6a137b5950dff032651f7529"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/preflight.log.gz",
+      "bytes": 383,
+      "sha256": "91bfa66a8c2cc80f22287f7792034799b27bc2a817f75b99be9275e9222d45f0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/run.log.gz",
+      "bytes": 3610,
+      "sha256": "73fecf60c4f221e2a4b8ac3f5c8b122da68924b7992046c506a068b7b799cde0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/source-manifest.json",
+      "bytes": 23682,
+      "sha256": "3027a486fe67efd33ab11f4c289af7e465bb06caa27053a621915aac4f60a90a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-control-v3/unit.xml.gz",
+      "bytes": 9045,
+      "sha256": "1f43b6586ac03facbf951cc0d586c388b3d5815f9e8f6b531c45faa52ac9cb29"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-v3/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "e6a9dfd29cecf2f294218090f7c05ed8bc951f74a9f793d74ca6cde5561130f3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-v3/prepare.json",
+      "bytes": 346908,
+      "sha256": "59be5b240ffe2ee94c14851c6f7666e551ce2de38c60091bdbce75318ca3f7c3",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-flat-prepare-hardware-v3/queue.json",
+      "bytes": 946,
+      "sha256": "71bf0a3ab6eece253ef35aea7e3e18713ca7158a71709dc9609833602f3fa8c0",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "8572f4e69203a1b746d80bd965c1aa1c0cddcc5254587aec5dd5461b6dd73a01"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/launch.json",
+      "bytes": 1900,
+      "sha256": "67849aa8243ac85ed1d48a23a18738587ab0e4a5e89a941c1df40bbc080bd640"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/preflight.log.gz",
+      "bytes": 384,
+      "sha256": "1aee8c40daf559372c13f1b3ff6b260108fe0b8b3ea6de1230bad6466f304d66"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/source-manifest.json",
+      "bytes": 23848,
+      "sha256": "3641d5b988ef0c2a1b407118ce139e314ec835c22a1344716061f245c65b15a3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-control-v1/unit.xml.gz",
+      "bytes": 9203,
+      "sha256": "e9486492bd3edabca32bcd02106d517da79bf70a5310163fc2304289ac8892a3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/config/precision_single_step_flat_prepare_epilogue_bfp8_all.json",
+      "bytes": 1102,
+      "sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_bfp8_gdn_followup.py.gz",
+      "bytes": 5096,
+      "sha256": "b2354d7fb266394bc1abd0ae19c548dde0311235049277007653ffca1a82c5d9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz",
+      "bytes": 1911,
+      "sha256": "21e1370df9cc637169a5d68259ea4ea3dbe9cc6c8238ad24e6f5441b6f604b30"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz",
+      "bytes": 1848,
+      "sha256": "fb717e56b75f1c4e1f3b4802ea08ef1eecbb08cdcafca298150da76aba1c5de3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz",
+      "bytes": 782,
+      "sha256": "5b10609050d3dfc1e6fb04b5b6acc6a08a5fd9d60bf598693173e2c64968535b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz",
+      "bytes": 1828,
+      "sha256": "e4d276a401ea271fa6d171d157e18aab7560d0f27292f3d4a065979c04dd9a35"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz",
+      "bytes": 3086,
+      "sha256": "ad778d878e827d8fa4c74893d6df8f4b5dbb842cfbf6c494328b836da2f51d65"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/test_gdn_model_adapter.py.gz",
+      "bytes": 3339,
+      "sha256": "dd4a186e32f4c376b50d457b08b6b2a47a5ccc3251b7a4af6713abb05f2b2683"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_bfp8_gdn_followup.py.gz",
+      "bytes": 1638,
+      "sha256": "97811d74a8047c07d616176690d868afb5909793a073b85f6ba6a4d3a73a15ea"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2544,
+      "sha256": "91e5ec585990ea07730794469ce261d4a42e8ff995112557631bb03b101d6576"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz",
+      "bytes": 924,
+      "sha256": "504125d24ff988b1d1a7f75a6f835b90d02d0b04df5080313b3a22c5c56e77d2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11331,
+      "sha256": "8282d87782a7c3361fb53f6004e7ed758f1602e289db65e9ec9b7196cee4fda5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1770,
+      "sha256": "9ba65b0b8dca041f8c628bb7e6160bcd87e340c940e1439db8678ae1b39e5f8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1432,
+      "sha256": "6a83f9ccecd5ca5ec1506ba5a01951af71dba2a1b195860577e46ef171c28aca"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1915,
+      "sha256": "68c7770d9bc3229a209c293dc13979095e327d9ed82e45b8e7b77ebaf20c263f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1465,
+      "sha256": "8306569f9f95a41facbe41e1d47d1347753e97b4caf21de93400f34d9573220f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-v1/flat-layer/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "e5bbb9d79de76a6420cca16cea30653d72c89ecb389fd4973e97d69ee539c45a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-v1/flat-layer/layer.json",
+      "bytes": 142323,
+      "sha256": "6507d45f5ea4e4d5e476b488f72c55ad2f602ddab92230d3bd25b803507cefc1",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/gdn-fusion-full-v1/queue.json",
+      "bytes": 2468,
+      "sha256": "c3254d35e4c36d3a37b9d0b0ba2c30eb9ac1a5319f5c53eb31dc9a992a0ed62a",
+      "state": "running",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-after/comparison.pdf",
+      "bytes": 34676,
+      "sha256": "d9da990e99ccb49c6200810002b8edf9e82281c34f55954d749314e92bed57ab"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-after/comparison.png",
+      "bytes": 115592,
+      "sha256": "f886b6452213acea23b649764ddcbb5b887cf8cd772e8ef32598c0fc19d8dd06"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-after/comparison.svg",
+      "bytes": 94163,
+      "sha256": "e685dd6e4a10aace3970b32a3f9fe4bed76611991daf0882565ff29e6335b22d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-after/index.html",
+      "bytes": 96004,
+      "sha256": "917a65846894d73522058a38b58c1825a9ff7b35e8db1da51b42f272f56f3e7c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-before/comparison.pdf",
+      "bytes": 34676,
+      "sha256": "30b599ecf27e84df878701bd7cda0f2d5c2d24049d8c9a11e6d0e4280129e705"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-before/comparison.png",
+      "bytes": 115592,
+      "sha256": "f886b6452213acea23b649764ddcbb5b887cf8cd772e8ef32598c0fc19d8dd06"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-before/comparison.svg",
+      "bytes": 94163,
+      "sha256": "8e3f6255a0834bceaff53243731bbac1b1a0ff519a287c39c2263aadd431bff1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/comparison-native-before/index.html",
+      "bytes": 96004,
+      "sha256": "a359716cfd6a628e05edbe7162eba8777c1b4f627ddf09d6f1be4b9762468468"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/control-drift/comparison.pdf",
+      "bytes": 33001,
+      "sha256": "2cd2eb3180f76bad45dfb4003dc7719c2e0fc03cbab491f270f5d9b13ee53d08"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/control-drift/comparison.png",
+      "bytes": 100310,
+      "sha256": "74f8be6f9662e817ed4507a5398e99a8a7c68ac4b94ee2441a1df54717b552fa"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/control-drift/comparison.svg",
+      "bytes": 90212,
+      "sha256": "7260959d0737afdbda83937b090eaf8dbebf13eb2027606928279c12edddf63e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/perf-priority-v1/control-drift/index.html",
+      "bytes": 92050,
+      "sha256": "f5d818fee47944dd27d5f7855aed5df5950cde3adba29b06f53efe90a8826be6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v1/units.txt",
+      "bytes": 365,
+      "sha256": "700f4e8d986972e5067273659cefe643a9cdbb0b3b4b8c7bcaccfa39170624f2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/capture.json",
+      "bytes": 12613,
+      "sha256": "804e7ae99160e5f1418ee0d73d72627fb22890fac39662b8d0983bcb94d30106"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/launch-unit.txt",
+      "bytes": 81,
+      "sha256": "d94b050304c1bb54a2a38ed92d89b28d3243a939d181e9a7207fda234d48595a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/launch.json",
+      "bytes": 1995,
+      "sha256": "9be825d65c7e95dd805320f517fdce7e51c553082bfdeec6820614efa8cc0e52"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/preflight.log.gz",
+      "bytes": 383,
+      "sha256": "88be4e18bbed3fdf8b4abda2912f2ea48ba99cb385762cc87ced6942b95dbe29"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/source-manifest.json",
+      "bytes": 23848,
+      "sha256": "f62215159f31a9f8e31e9b8e17b8ed48ab87e4ecdc83df16bc2ae1fe2a6b07c5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-control-v2/unit.xml.gz",
+      "bytes": 9176,
+      "sha256": "cd5cee90e15cc65188d195d9c66cf474e2faa767dda40db7d0d81fa714bb767f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/config/precision_single_step_flat_prepare_epilogue_bfp8_all.json",
+      "bytes": 1102,
+      "sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_bfp8_gdn_followup.py.gz",
+      "bytes": 5101,
+      "sha256": "10dd28a837f98660eb7c61066f3780fac55bd9d4af6f3c95d5e2d357732f1ee3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz",
+      "bytes": 1911,
+      "sha256": "21e1370df9cc637169a5d68259ea4ea3dbe9cc6c8238ad24e6f5441b6f604b30"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz",
+      "bytes": 1848,
+      "sha256": "fb717e56b75f1c4e1f3b4802ea08ef1eecbb08cdcafca298150da76aba1c5de3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz",
+      "bytes": 782,
+      "sha256": "5b10609050d3dfc1e6fb04b5b6acc6a08a5fd9d60bf598693173e2c64968535b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz",
+      "bytes": 1828,
+      "sha256": "e4d276a401ea271fa6d171d157e18aab7560d0f27292f3d4a065979c04dd9a35"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz",
+      "bytes": 3086,
+      "sha256": "ad778d878e827d8fa4c74893d6df8f4b5dbb842cfbf6c494328b836da2f51d65"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_model_adapter.py.gz",
+      "bytes": 3339,
+      "sha256": "dd4a186e32f4c376b50d457b08b6b2a47a5ccc3251b7a4af6713abb05f2b2683"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_bfp8_gdn_followup.py.gz",
+      "bytes": 1638,
+      "sha256": "97811d74a8047c07d616176690d868afb5909793a073b85f6ba6a4d3a73a15ea"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz",
+      "bytes": 2544,
+      "sha256": "91e5ec585990ea07730794469ce261d4a42e8ff995112557631bb03b101d6576"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz",
+      "bytes": 924,
+      "sha256": "504125d24ff988b1d1a7f75a6f835b90d02d0b04df5080313b3a22c5c56e77d2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz",
+      "bytes": 11331,
+      "sha256": "8282d87782a7c3361fb53f6004e7ed758f1602e289db65e9ec9b7196cee4fda5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1770,
+      "sha256": "9ba65b0b8dca041f8c628bb7e6160bcd87e340c940e1439db8678ae1b39e5f8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1432,
+      "sha256": "6a83f9ccecd5ca5ec1506ba5a01951af71dba2a1b195860577e46ef171c28aca"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz",
+      "bytes": 1915,
+      "sha256": "68c7770d9bc3229a209c293dc13979095e327d9ed82e45b8e7b77ebaf20c263f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz",
+      "bytes": 1465,
+      "sha256": "8306569f9f95a41facbe41e1d47d1347753e97b4caf21de93400f34d9573220f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v1/queue.json",
+      "bytes": 2653,
+      "sha256": "60b385f7f2a2a75d8a90894cef56764fc7710249fe9064e554f8d23edfaf0b5a",
+      "state": "failed",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/flat-layer/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "c159a770e1c530120cc655e0fba42cd517fe279f86bc2cbf727c7b4d4186dc4d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/flat-layer/layer.json",
+      "bytes": 142307,
+      "sha256": "1c71d81929e5fee603f318a3b0653013f3e8c6768de12f7ed4565e6ef332bff2",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "13038701d88c65dc868a90d251c018174e7d7c8b0f770e8fb72037407f369b46"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/exclusive_stages.csv",
+      "bytes": 7318,
+      "sha256": "3504d245905b9818c0184d5327ad9ff336f2cb9ae06b6595597846d2ce1a70bd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/inclusive_stages.csv",
+      "bytes": 8286,
+      "sha256": "5442e1600e870140d10d3a06d23d33e0230c3aedd3a222d00548bd11bedd1ec8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/operations.csv",
+      "bytes": 37766,
+      "sha256": "d68516b3c831e67839a80eeb84fde6c9e75d05b4f8d339f6fc1fa3fe034323e3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/profile-summary.json",
+      "bytes": 177493,
+      "sha256": "0f47955b246cb7123de16a01567a7e42f1c20abed48d060ade76fad2c5692825",
+      "state": "completed"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.md",
+      "bytes": 2975,
+      "sha256": "f340a0d6e3172009667d17fe1312c2d3bcce7a8a03226724608439169b5eefff"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.raw.md.gz",
+      "bytes": 1067,
+      "sha256": "651a8136e977fc958c369ca1454e7d1d0df18e7df4edb1811d971bd580d6fd1d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "9b3e3cf91f71e28956a468875e57555711202e66a743851ddf9b2fb23dca643e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/profile.json",
+      "bytes": 20173,
+      "sha256": "bbce56c7f7b242a189ba4f885b45226f04f17c7338d163d866cad8f8f7bf1cd8",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/run.log.gz",
+      "bytes": 4039,
+      "sha256": "c80af467cdee1192afad6c6c2f43274ea95934d8b2cab69d9a08bf89c5720a4a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/cpp_device_perf_report.csv.gz",
+      "bytes": 127892,
+      "sha256": "9be80db9f8b476561cbfd89411c4a2bce8180ed950a248cf8bb9eb2456881949"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2871,
+      "sha256": "a6b5cc9f945c056213abb52ccbf5e763c64cd92fbbd6134d27ee0991c22f5596"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 79740,
+      "sha256": "01414f31bc96d6e40b02642a09fccacae24cea89666088a61c6e8cd7beb90464"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 528,
+      "sha256": "1447560260c4da78bd499a2f6a8d9ac8b89a82877cfbb9fa3c0c167114301b97"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-native/tracy/reports/2026_10_10_04_33_06/ops_perf_results_2026_10_10_04_33_06.csv.gz",
+      "bytes": 245430,
+      "sha256": "bf92ee7188d3ac147892b986ac39613e88e1119514a1dba007ffcb53624bb18d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/device_totals.csv",
+      "bytes": 414,
+      "sha256": "615d24f843d7edffe114a14444dce76a8a1d4dd7ab7179c26f5ad2a0381124b0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/exclusive_stages.csv",
+      "bytes": 7310,
+      "sha256": "703e7a7151b0ed15537997db386cb9d6d17329625a4561e0d3e5ea4b36ff534e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/inclusive_stages.csv",
+      "bytes": 8268,
+      "sha256": "d6486b5dd8dd901df528ec809809e4647c1cf3d94ca655f6f66777d9fffdb672"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/operations.csv",
+      "bytes": 34551,
+      "sha256": "9fb2bab0424e9cdf078570d35f0c91d03da82d65bae8d2ee399c279ede158557"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
+      "bytes": 167646,
+      "sha256": "edf3154f382ae3d9b6cae417ef66351446f03c268220c5e3b5d788472088d814",
+      "state": "completed"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.md",
+      "bytes": 2970,
+      "sha256": "8c965d31468187bb78404737585cc6182c6a3168b8eb5e3f0b222b302ed1bb01"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.raw.md.gz",
+      "bytes": 1072,
+      "sha256": "deee830d62bb1c5ad465b7d8fcaf19d3fe11002dedc847fab314de833dc7524a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "caedb847fa3f873a0e417091b790f671cf610fec95c4455345e1b766cdd5624d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/profile.json",
+      "bytes": 20209,
+      "sha256": "b4cc3aa8422d67d78c578eb76788d8e775711d33fe56667964c140e80fb6a9cb",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/run.log.gz",
+      "bytes": 6969,
+      "sha256": "cfa3fa443fd54c068c02bb3ca7d708e39559d031e98665e787f2d1a8f52776e5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/cpp_device_perf_report.csv",
+      "bytes": 380804,
+      "sha256": "710afb43ea6e3579b9b83a7300fdb44adbce749c6752b4d6d96db2a528515332"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/new_zone_src_locations.log.gz",
+      "bytes": 2655,
+      "sha256": "23eaf159535d24d91582b889df161990c2573e08f9cbfd869ad9e7ec0c66eed5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/tracy_ops_data.csv.gz",
+      "bytes": 67199,
+      "sha256": "5497d2343dac2963b94e52c919a2017cf865be83bf852ad5c2e57e6768d70fe5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/zone_src_locations.log.gz",
+      "bytes": 523,
+      "sha256": "eb20912d9f678e50f9f4fe5bcbd9dd8dace5c560bc1dcff98cf20cbc14259873"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/reports/2026_10_10_04_34_06/ops_perf_results_2026_10_10_04_34_06.csv.gz",
+      "bytes": 209912,
+      "sha256": "b263b6fe68d3646435007efb8b896dc72b7a51e565deaee8cd422a6e582e38f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/gdn-fusion-full-v2/queue.json",
+      "bytes": 4278,
+      "sha256": "e916016bfdb4b1b6eaa5c3fdc9c4d2234fe30e96be5b55ee89b683125832cc2f",
+      "state": "running",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/gdn-fusion-progress-v2/units.txt",
+      "bytes": 504,
+      "sha256": "b1817b312b54a04ec34389f0be7d36923f81ed96f63f2fe0373ca11d5706cc1b"
     },
     {
       "path": "galaxy-evidence/gdn-matched-comparison-v4/README.md",
@@ -3584,12 +4320,17 @@
     {
       "path": "galaxy-evidence/gdn-phase-profile-launch-v2/gdn-phase-profile-v2/queue.json",
       "bytes": 913,
-      "sha256": "24d5c1c736d7c61312701b8e3fc04904aa64b1fa2648199d6ab94336a0382ec5"
+      "sha256": "24d5c1c736d7c61312701b8e3fc04904aa64b1fa2648199d6ab94336a0382ec5",
+      "state": "hardware_or_waiting_for_lock",
+      "cleanup_completed": false,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-phase-profile-launch-v2/perf-priority-v1/queue.json",
       "bytes": 5697,
-      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-phase-profile-launch-v2/units.txt",
@@ -4124,12 +4865,18 @@
     {
       "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/phase.json",
       "bytes": 22897,
-      "sha256": "77d6e9d65644b4f135381cb800d20efae1abcae5eab406a5be33268c590c6e45"
+      "sha256": "77d6e9d65644b4f135381cb800d20efae1abcae5eab406a5be33268c590c6e45",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/queue.json",
       "bytes": 1579,
-      "sha256": "39ed7809298186c76e6b503c046e8880cd99687209221c959722720ce2e48abc"
+      "sha256": "39ed7809298186c76e6b503c046e8880cd99687209221c959722720ce2e48abc",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-phase-results-v2/gdn-phase-profile-v2/tracy/.logs/cpp_device_perf_report.csv.gz",
@@ -4461,7 +5208,8 @@
     {
       "path": "galaxy-evidence/gpqa-completion-audit-v1/status.json",
       "bytes": 505,
-      "sha256": "27c3ccb164770e088dfe21a43061e15e652991411a13fd21a3fa6bb4f78ce78c"
+      "sha256": "27c3ccb164770e088dfe21a43061e15e652991411a13fd21a3fa6bb4f78ce78c",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/gpqa-config-audit-v1/README.md",
@@ -4581,7 +5329,9 @@
     {
       "path": "galaxy-evidence/gpqa-first-final-v2/gpqa-first-v2/qualification/evaluation/gpqa/gpqa-progress.json",
       "bytes": 624,
-      "sha256": "a39c0f85ac35775f9df1bc7868e38ac0c212ddd879e42d1bb4f1e190ee3114f1"
+      "sha256": "a39c0f85ac35775f9df1bc7868e38ac0c212ddd879e42d1bb4f1e190ee3114f1",
+      "state": "completed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/gpqa-first-final-v2/gpqa-first-v2/qualification/evaluation/gpqa/summary.json",
@@ -4591,7 +5341,8 @@
     {
       "path": "galaxy-evidence/gpqa-first-final-v2/gpqa-first-v2/queue.json",
       "bytes": 3569,
-      "sha256": "eef2945f85797b289da858039eefab2cb477e64387b1a35a7eb254853892a1e1"
+      "sha256": "eef2945f85797b289da858039eefab2cb477e64387b1a35a7eb254853892a1e1",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/gpqa-first-final-v2/openbench-overnight-v1/error-audit.json",
@@ -4616,7 +5367,8 @@
     {
       "path": "galaxy-evidence/gpqa-first-final-v2/openbench-timeout-control-v4/transport-proof/probe.json",
       "bytes": 1319,
-      "sha256": "51d96f399b99f64e07e2c2009eec4cc405a02e4f0ebf0f675a00145ac9061795"
+      "sha256": "51d96f399b99f64e07e2c2009eec4cc405a02e4f0ebf0f675a00145ac9061795",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/README.md",
@@ -4631,12 +5383,17 @@
     {
       "path": "galaxy-evidence/gpqa-first-v2/completed-precision-queue.json",
       "bytes": 11676,
-      "sha256": "ef4fb3c8ff381134488b4a5d58e1c40b8133547be2b351565db747923962bca8"
+      "sha256": "ef4fb3c8ff381134488b4a5d58e1c40b8133547be2b351565db747923962bca8",
+      "state": "completed",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/completed-state-progress.json",
       "bytes": 11391,
-      "sha256": "a98d4bef088133f8ccc6b7c34234966ec28003184881df587bb24dc7bb119368"
+      "sha256": "a98d4bef088133f8ccc6b7c34234966ec28003184881df587bb24dc7bb119368",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/completed-state-queue.json.gz",
@@ -4686,17 +5443,21 @@
     {
       "path": "galaxy-evidence/gpqa-first-v2/openbench-transport-probe.json",
       "bytes": 1187,
-      "sha256": "b5ecf53830edd7efe78bd8c62e276cf488295592d258f837b604b517b5a60a3c"
+      "sha256": "b5ecf53830edd7efe78bd8c62e276cf488295592d258f837b604b517b5a60a3c",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/previous-failure-deployment.json",
       "bytes": 18472,
-      "sha256": "54174ea8f941a4839b28e0bdbbce630d36cace8848731d024d256eb6c9e76049"
+      "sha256": "54174ea8f941a4839b28e0bdbbce630d36cace8848731d024d256eb6c9e76049",
+      "state": "failed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/previous-failure-queue.json",
       "bytes": 3431,
-      "sha256": "4f41a9445dbc892f2402a0aa8b1f89139668509e6553db90d71bdf3c9fdcdb61"
+      "sha256": "4f41a9445dbc892f2402a0aa8b1f89139668509e6553db90d71bdf3c9fdcdb61",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/previous-failure-server.log.gz",
@@ -4706,7 +5467,8 @@
     {
       "path": "galaxy-evidence/gpqa-first-v2/queue-snapshot.json",
       "bytes": 1292,
-      "sha256": "b3bd6caea2a7f69474670273584286ff537ee1c8a155d714bbb9b41790f0b376"
+      "sha256": "b3bd6caea2a7f69474670273584286ff537ee1c8a155d714bbb9b41790f0b376",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/gpqa-first-v2/service-snapshot.txt",
@@ -4913,12 +5675,16 @@
     {
       "path": "galaxy-evidence/head-g0-v1/api.json",
       "bytes": 38600,
-      "sha256": "7abddbea071f802b42bee4c5738481efaa92f9a708410734515fa9238f2368bd"
+      "sha256": "7abddbea071f802b42bee4c5738481efaa92f9a708410734515fa9238f2368bd",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/head-g0-v1/full-model.json",
       "bytes": 261153,
-      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb"
+      "sha256": "02517a16c9964c37ca42f9b69d0ec34f89e3e19f93f76fe76c2045ce406f9fbb",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/head-g0-v1/hardware.xml.gz",
@@ -4928,7 +5694,8 @@
     {
       "path": "galaxy-evidence/head-g0-v1/manifest.json",
       "bytes": 3566,
-      "sha256": "06bff5035c32ef414eae177d87182d4fd1a5b00b2cfc6108a8d7f2126d076478"
+      "sha256": "06bff5035c32ef414eae177d87182d4fd1a5b00b2cfc6108a8d7f2126d076478",
+      "state": "prepared_unqualified"
     },
     {
       "path": "galaxy-evidence/head-g0-v1/runtime-model-spec.json",
@@ -4948,7 +5715,8 @@
     {
       "path": "galaxy-evidence/head-gpqa-v1/completion-audit-status.json",
       "bytes": 1565,
-      "sha256": "63272aacd71d40a4b3ac5e6ab038b53fe33f9a36abe819c3b536588015742cd6"
+      "sha256": "63272aacd71d40a4b3ac5e6ab038b53fe33f9a36abe819c3b536588015742cd6",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/head-gpqa-v1/completion-audit.json.gz",
@@ -4963,7 +5731,8 @@
     {
       "path": "galaxy-evidence/head-gpqa-v1/post-cpu-status-at-completion.json",
       "bytes": 1300,
-      "sha256": "3cc6a7eccf466a4ead2f98c38e27837299f25e47b44897e3535dff26640fd859"
+      "sha256": "3cc6a7eccf466a4ead2f98c38e27837299f25e47b44897e3535dff26640fd859",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/head-gpqa-v1/protocol.json",
@@ -4988,7 +5757,8 @@
     {
       "path": "galaxy-evidence/helm-health-v1/authentication-audit.json",
       "bytes": 888,
-      "sha256": "6090ff816f2779d2261149484f51a908719b7ad46600af2bcf0297a299dfb436"
+      "sha256": "6090ff816f2779d2261149484f51a908719b7ad46600af2bcf0297a299dfb436",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/helm-health-v1/authentication-audit.py",
@@ -4998,7 +5768,8 @@
     {
       "path": "galaxy-evidence/helm-health-v1/render-audit.json",
       "bytes": 1067,
-      "sha256": "db3fa94c79ed99abcd00f696ddaf67e8fcac468083cfa3c3ae9ca1793408a15f"
+      "sha256": "db3fa94c79ed99abcd00f696ddaf67e8fcac468083cfa3c3ae9ca1793408a15f",
+      "state": "rendered_unqualified"
     },
     {
       "path": "galaxy-evidence/helm-health-v1/values.yaml",
@@ -5043,7 +5814,9 @@
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/queue-final.json",
       "bytes": 10944,
-      "sha256": "c2e7140f88bab44d41112904b684f3093f68b3e64cb72d638c84fd6ee7af4bd9"
+      "sha256": "c2e7140f88bab44d41112904b684f3093f68b3e64cb72d638c84fd6ee7af4bd9",
+      "state": "completed",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/run-final.log.gz",
@@ -5068,7 +5841,8 @@
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/status-at-launch.json",
       "bytes": 1030,
-      "sha256": "6af02d3453e782f7f28d0afd4a2a61732f7cd126810f5fc9d1400e742deeaea8"
+      "sha256": "6af02d3453e782f7f28d0afd4a2a61732f7cd126810f5fc9d1400e742deeaea8",
+      "state": "running"
     },
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/unit.xml.gz",
@@ -5113,7 +5887,8 @@
     {
       "path": "galaxy-evidence/hf-layer-reference-v1/queue-snapshot.json",
       "bytes": 21358,
-      "sha256": "0bf7a08e60927052313acaaf8a830f5ededbbb6e63df7ded494248092ec2e6f0"
+      "sha256": "0bf7a08e60927052313acaaf8a830f5ededbbb6e63df7ded494248092ec2e6f0",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/hf-layer-reference-v1/source-manifest.json",
@@ -5143,7 +5918,8 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-reference.json",
       "bytes": 2747,
-      "sha256": "30925629242a43175f528bd09cda4a3dfc18cf623b8709ff03c55bc7983f43c6"
+      "sha256": "30925629242a43175f528bd09cda4a3dfc18cf623b8709ff03c55bc7983f43c6",
+      "state": "completed"
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-reference.log.gz",
@@ -5153,7 +5929,9 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/cpu-status.json",
       "bytes": 1057,
-      "sha256": "e742ab22ce6490439f6398a1aea5ff8c450903cca335aa2f395a26e1523d90ff"
+      "sha256": "e742ab22ce6490439f6398a1aea5ff8c450903cca335aa2f395a26e1523d90ff",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/hardware.log.gz",
@@ -5178,7 +5956,9 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/layer-queue.json",
       "bytes": 22188,
-      "sha256": "58f4eb901fabb5f278f17db3242f984718af659fc7ad94a9e4891765396c1d85"
+      "sha256": "58f4eb901fabb5f278f17db3242f984718af659fc7ad94a9e4891765396c1d85",
+      "state": "completed",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/layer-service.txt",
@@ -5203,7 +5983,8 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-chunked-status.json",
       "bytes": 21025,
-      "sha256": "72dc20b986ba0be4f05bfa9b9a8ed64d891954607e22dc2d6a76088438cf0569"
+      "sha256": "72dc20b986ba0be4f05bfa9b9a8ed64d891954607e22dc2d6a76088438cf0569",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-cpu-failure.log.gz",
@@ -5213,7 +5994,9 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-cpu-status.json",
       "bytes": 2197,
-      "sha256": "e6992b660b224b5a773bd829caab6f95481a6b7e7883b6e0525c5c052a5d196d"
+      "sha256": "e6992b660b224b5a773bd829caab6f95481a6b7e7883b6e0525c5c052a5d196d",
+      "state": "completed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-failure.log.gz",
@@ -5228,17 +6011,20 @@
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-image-status.json",
       "bytes": 752,
-      "sha256": "eba851fa77977dc365eec6921029a5abf32f26f3a77bf22f5cde480e3c2bfaa1"
+      "sha256": "eba851fa77977dc365eec6921029a5abf32f26f3a77bf22f5cde480e3c2bfaa1",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-layer-status.json",
       "bytes": 21398,
-      "sha256": "62c6f053b210291020513faf2159be7b15563636e1c99d7143ee286bc0363e54"
+      "sha256": "62c6f053b210291020513faf2159be7b15563636e1c99d7143ee286bc0363e54",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/hf-reference-recovery-v2/v1-startup-status.json",
       "bytes": 694,
-      "sha256": "3ffbe58aa1578fa583dcfaee76ef841471a41c7c3c6b0c0d215951c9bcf98322"
+      "sha256": "3ffbe58aa1578fa583dcfaee76ef841471a41c7c3c6b0c0d215951c9bcf98322",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/README.md",
@@ -5258,7 +6044,8 @@
     {
       "path": "galaxy-evidence/higher-precision-diagnostic-plan-v1/validation.json",
       "bytes": 1364,
-      "sha256": "b4f662a863981c0d6a75cb1bd9bbcfd60d76511894b0e93def1734c8eaacc3c3"
+      "sha256": "b4f662a863981c0d6a75cb1bd9bbcfd60d76511894b0e93def1734c8eaacc3c3",
+      "state": "prepared_not_queued"
     },
     {
       "path": "galaxy-evidence/image-build-v5/README.md",
@@ -5298,22 +6085,26 @@
     {
       "path": "galaxy-evidence/image-build-v5/inspection/oci-inspection.json",
       "bytes": 8890,
-      "sha256": "e23987afcc9a2bb7caaf6f605e6cede1f91ddb6b28bc7e54f752db0c2328b0cd"
+      "sha256": "e23987afcc9a2bb7caaf6f605e6cede1f91ddb6b28bc7e54f752db0c2328b0cd",
+      "state": "verified"
     },
     {
       "path": "galaxy-evidence/image-build-v5/preservation.json",
       "bytes": 1059,
-      "sha256": "01198e622fb20fc221990667b539a271f6517d20685aa8e651afce4e9db3f0a2"
+      "sha256": "01198e622fb20fc221990667b539a271f6517d20685aa8e651afce4e9db3f0a2",
+      "state": "preserved_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v5/runtime-manifest.json",
       "bytes": 3556,
-      "sha256": "1be750be282327a1fb05d68fb3691bf5c7cfa2d2db01f851683768c27df0a2a2"
+      "sha256": "1be750be282327a1fb05d68fb3691bf5c7cfa2d2db01f851683768c27df0a2a2",
+      "state": "prepared_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v5/state.json",
       "bytes": 1261,
-      "sha256": "e403bf4707db3ec442cafd7bee34d4bccac3896c10f741a82e382543be0fd9ff"
+      "sha256": "e403bf4707db3ec442cafd7bee34d4bccac3896c10f741a82e382543be0fd9ff",
+      "state": "built_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v6/README.md",
@@ -5343,7 +6134,8 @@
     {
       "path": "galaxy-evidence/image-build-v6/final-state.json",
       "bytes": 1485,
-      "sha256": "1855d0488c2456eeb7ec8663927806a7ce924aa231635e834a5d1ee5af06d2c1"
+      "sha256": "1855d0488c2456eeb7ec8663927806a7ce924aa231635e834a5d1ee5af06d2c1",
+      "state": "built_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v6/launch.json",
@@ -5358,7 +6150,8 @@
     {
       "path": "galaxy-evidence/image-build-v6/state.json",
       "bytes": 552,
-      "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8"
+      "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8",
+      "state": "building"
     },
     {
       "path": "galaxy-evidence/image-build-v7/README.md",
@@ -5373,7 +6166,8 @@
     {
       "path": "galaxy-evidence/image-build-v7/bundle/manifest.json",
       "bytes": 3565,
-      "sha256": "df784ad57ae8029f0f4a7fcb2500fd1369d538ae0c98d371ac49188a4feb1856"
+      "sha256": "df784ad57ae8029f0f4a7fcb2500fd1369d538ae0c98d371ac49188a4feb1856",
+      "state": "prepared_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v7/bundle/runtime-model-spec.json",
@@ -5423,12 +6217,14 @@
     {
       "path": "galaxy-evidence/image-build-v7/state-at-launch.json",
       "bytes": 551,
-      "sha256": "42676eaba9cc3c37d0b6f58bd8c74b07b74455da447d67dfc3574c78187776d5"
+      "sha256": "42676eaba9cc3c37d0b6f58bd8c74b07b74455da447d67dfc3574c78187776d5",
+      "state": "building"
     },
     {
       "path": "galaxy-evidence/image-build-v7/state-final.json",
       "bytes": 1485,
-      "sha256": "9e16ce43ac170ec40d15cdc65942f6fef00ba87a9d2070c6685ae43f8f50993e"
+      "sha256": "9e16ce43ac170ec40d15cdc65942f6fef00ba87a9d2070c6685ae43f8f50993e",
+      "state": "built_unqualified"
     },
     {
       "path": "galaxy-evidence/image-build-v7/transfer-status-v7.json.gz",
@@ -5458,7 +6254,8 @@
     {
       "path": "galaxy-evidence/image-recovery-v2/identity/identity.json",
       "bytes": 1292,
-      "sha256": "02fb165103ada7b1415e17120e36f2fb6db13d5f914434d1d251bfecadf03033"
+      "sha256": "02fb165103ada7b1415e17120e36f2fb6db13d5f914434d1d251bfecadf03033",
+      "state": "local_image_identity_verified_unqualified"
     },
     {
       "path": "galaxy-evidence/image-recovery-v2/identity/launch.json",
@@ -5508,7 +6305,8 @@
     {
       "path": "galaxy-evidence/image-recovery-v2/startup/status-at-launch.json",
       "bytes": 705,
-      "sha256": "950fc80ff52b2f46cee9c6848f2d976b345496ef7ab2eece396c1ed38903bfb5"
+      "sha256": "950fc80ff52b2f46cee9c6848f2d976b345496ef7ab2eece396c1ed38903bfb5",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/image-recovery-v2/startup/verify_local_oci_image.py.gz",
@@ -5558,7 +6356,8 @@
     {
       "path": "galaxy-evidence/image-startup-bfp8-v7/status-at-launch.json",
       "bytes": 707,
-      "sha256": "ddcc2f77fed01dca8f38025f5b001996c1e0c244167cc84beeda6b394949a55c"
+      "sha256": "ddcc2f77fed01dca8f38025f5b001996c1e0c244167cc84beeda6b394949a55c",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/image-startup-bfp8-v7/transfer-preflight.txt.gz",
@@ -5603,7 +6402,8 @@
     {
       "path": "galaxy-evidence/image-startup-probe-v1/status-at-launch.json",
       "bytes": 605,
-      "sha256": "b44d0f587efc63b38fee158b3c5e3c8a13534f3a3e6197a6de03c6f9509d864b"
+      "sha256": "b44d0f587efc63b38fee158b3c5e3c8a13534f3a3e6197a6de03c6f9509d864b",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/kernel-diagnostics-v1/README.md",
@@ -6362,6 +7162,241 @@
       "sha256": "6d945418a29f5054a2a8a190bd8e70811d2227d11eb71097bd184829ad1bcbd6"
     },
     {
+      "path": "galaxy-evidence/perf-priority-completed-v1/README.md",
+      "bytes": 3357,
+      "sha256": "6e68a9517babb5db3ffecf3b2c5eae56c1d1966dda256b8a59f4dbc6e0ee46c3"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/audit.py.gz",
+      "bytes": 3059,
+      "sha256": "1bc02bbd21e0d649b5a598b9a0378ed30a7300323571e9a095c2f6c49fb13d5d"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/capture.json",
+      "bytes": 6190,
+      "sha256": "a8f01c331b71d98de1498ab68908e85c4cb8b9d5c9fa6b3e0061abb74c4d7c3f"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gdn-flat-prepare-hardware-control-v2/run.log.gz",
+      "bytes": 4177,
+      "sha256": "7cc89c1adfa8693f0cb4419463dc66399c9bed1317ac3743a236a7ac09f7ca8c"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gdn-flat-prepare-hardware-v2/hardware.xml.gz",
+      "bytes": 1150,
+      "sha256": "f20768daff60c04a713465bed5287a07dcdf55da3086bd8b23663e1a5a70119f"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gdn-flat-prepare-hardware-v2/prepare.json",
+      "bytes": 41911,
+      "sha256": "01e511176eb66f08a8170631bcae1000979b1ff8f8c8470fc08f6438766a3f18",
+      "state": "failed",
+      "passed": false,
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gdn-flat-prepare-hardware-v2/queue.json",
+      "bytes": 1614,
+      "sha256": "35b9750f0e2cb95936c2c3be0ec6a25824a7ed0b3b06f9ab95ffae73061fa6ba",
+      "state": "failed",
+      "cleanup_completed": false,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gpqa-audit.json",
+      "bytes": 103521,
+      "sha256": "a755a20eaa7cec2dd7be992c720250d76ccb9c7698677e585a0038f7182d916a"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/gpqa-qualification.json",
+      "bytes": 274,
+      "sha256": "9c741bdb330658aab24d6ec5078e626d1bae40880cf8a8252fc1c2e3685e657e"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/api.json",
+      "bytes": 38755,
+      "sha256": "8bf3613b7a60275d30cb078f84d15226da42b2818f21681b4f4801aebb93b0c0",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/evaluation.log.gz",
+      "bytes": 252,
+      "sha256": "bb2cdc5aaf076c60db0a1d4190758f7bdee80a814da7bbd9c1c8a546b32f7639"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/reset.log.gz",
+      "bytes": 358,
+      "sha256": "ed99835c21cff5103bf3ae79d30571414d084ec4d50f8d4a5be6a7a796dd2d99"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/server.log.gz",
+      "bytes": 28065,
+      "sha256": "9d3b1d2ec438df6ee163ebb688a74c3aeefb1197fa30ffb930c18d56c5f2ce5c"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/startup.log.gz",
+      "bytes": 24864,
+      "sha256": "52a55d3e3b775134c7b574a5aa615419bcacf0d4e5bafec14984fdb61686c3ea"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/status.json",
+      "bytes": 3966,
+      "sha256": "bd0611e510db844090bc5f53076c18d120f9db57b26ae5109a4a7c73056df8da",
+      "state": "failed"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/image-hardware-v4/synthetic-tool-roundtrip.json",
+      "bytes": 2326,
+      "sha256": "eb193a33811e82d6860bb68291156affd1584946443c4ba5aaca1ea33159c2d7",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-control-v1/perf-launch.json",
+      "bytes": 2042,
+      "sha256": "43b4cf31fddd7eee9a2a699aa2e695e7ab591d35fda372e7a0362321e53e7f5e"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-control-v1/source-manifest.json",
+      "bytes": 21927,
+      "sha256": "8fb9b3357f4e749cf7cc1b348f869ee421454d6b2a8b5aaccd41e19d7eccd07f"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/gpqa-responses.jsonl.gz",
+      "bytes": 22260,
+      "sha256": "13f3febd648333583ba7de7d522fbe97ecd1a5a0d961f1b2a87f0f6ef04812ba"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/protocol.json",
+      "bytes": 1472,
+      "sha256": "427fa15bd77ef57d716cc47511fbe241ec94e05d7285bed0f90cdeb202843103"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/summary.json",
+      "bytes": 2125,
+      "sha256": "8f9ff629f672f9b0ee8bbc0a4f1fe11ff20d35be008c6da7d0fec54902d9b5e8"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/native-g0/receipts/full-model.json",
+      "bytes": 266513,
+      "sha256": "b312ee13ab364a10f2682d17adc097f1ce0261f26502a256f4ff992a27836e50",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/native-g0/receipts/hardware.xml.gz",
+      "bytes": 307,
+      "sha256": "71a1e7ade0eefa30c28c240e4a9feb5c7af44bbd9478250966cb362f6a2fc738"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/queue.json",
+      "bytes": 27941,
+      "sha256": "814fde895943bc3314d3a0fb7ef31db2f2f6229effe3c553727443f01ab7cd5f",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/candidate-qualification/results/unit.xml.gz",
+      "bytes": 9142,
+      "sha256": "99a88df0f77ab04c11a37e36b820457660e35816a9406c13e041a1f75d151858"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/comparison-native-after/comparison.csv.gz",
+      "bytes": 579,
+      "sha256": "9548c4d96e7faab7de41f201e0b3f20c2d4577df3cfeec1dc9c40e4e203fda7c"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/comparison-native-after/comparison.json",
+      "bytes": 4474,
+      "sha256": "e8118a5ffcf25ff96ae7208e7084e80f946eadec81ac561354d7c98a27607bef",
+      "state": "completed",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/comparison-native-before/comparison.csv.gz",
+      "bytes": 571,
+      "sha256": "e4c323b241bf3ffd6942562ce844515dbc82bf17578fb8510f952299c61e219d"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/comparison-native-before/comparison.json",
+      "bytes": 4471,
+      "sha256": "929ed7fcc629ada46f7d1b848bb9170113145296ca7ab5b08793bc2485bfd08e",
+      "state": "completed",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/control-drift/comparison.csv.gz",
+      "bytes": 556,
+      "sha256": "43f062bc33c12bf453903d82cc20d4699e61d40509326ebe3a0377a5d6be8f0b"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/control-drift/comparison.json",
+      "bytes": 4484,
+      "sha256": "f9c9bc299b572d2beb0d68f2072141b0635f479f7387802882898bc3e8220011",
+      "state": "completed",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-after/hardware.xml.gz",
+      "bytes": 305,
+      "sha256": "511b2b009196a38002831873b3cab11169fe16afce731fc979092c4caf5ca020"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-after/sweep.csv.gz",
+      "bytes": 455,
+      "sha256": "e04e3bb36e7524310fed5b889dd2e270f6bec676171d7f5ae2badc3abab65116"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-after/sweep.json",
+      "bytes": 43881,
+      "sha256": "28868371d73aa60d1c52b0ca983359b2243d90ec52eb8493398cd81b95746393",
+      "state": "completed",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-before/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "9558e0d6c346d3df42807ffad403f712ed2347e70bdcb58e926442a37d2f0d23"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-before/sweep.csv.gz",
+      "bytes": 446,
+      "sha256": "5600e659c88a1ea0b4e1351bb0e10cfda0041c415302edfa492c3fc0a3be3ab4"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/native-before/sweep.json",
+      "bytes": 43831,
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5",
+      "state": "completed",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/queue.json",
+      "bytes": 9429,
+      "sha256": "1103005751743a4af0706c8464e8678af20539c9945f4abf1a2a826132bd13fa",
+      "state": "completed",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/shared-qk/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "18b2be4a838d6e9bb6476555adde18cc5953336879240de74ccdf0ee7213539c"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/shared-qk/sweep.csv.gz",
+      "bytes": 452,
+      "sha256": "0ef1f604e0748f5da026b8225dbd70023a4af203e49b23b353322448c5f88aeb"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-completed-v1/perf-priority-v1/shared-qk/sweep.json",
+      "bytes": 43922,
+      "sha256": "3037f7cd62b1fe52431550364ec7dc4d86aef696ea3c6e1e6d0274ccec417a99",
+      "state": "completed",
+      "cleanup_completed": true
+    },
+    {
       "path": "galaxy-evidence/perf-priority-v1/README.md",
       "bytes": 3273,
       "sha256": "351cb1d8e689dbdb26554ad1f0cef92f30f81e256f27e72ca2e395f9735a3365"
@@ -6384,7 +7419,8 @@
     {
       "path": "galaxy-evidence/perf-priority-v1/image-hardware-v4/status.json",
       "bytes": 590,
-      "sha256": "2cb011c221448d30b74ddfa8f66ca9dfe4c676dc5ed0927b91111d54dc9e8119"
+      "sha256": "2cb011c221448d30b74ddfa8f66ca9dfe4c676dc5ed0927b91111d54dc9e8119",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/perf-launch.json",
@@ -6399,7 +7435,9 @@
     {
       "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/release.json",
       "bytes": 2156,
-      "sha256": "80f5db998c511d1350ab4e340a57dfb70660c6d721a5cded20420281788c91a4"
+      "sha256": "80f5db998c511d1350ab4e340a57dfb70660c6d721a5cded20420281788c91a4",
+      "state": "completed",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/reorder-launch.json",
@@ -6424,7 +7462,9 @@
     {
       "path": "galaxy-evidence/perf-priority-v1/perf-priority-v1/queue.json",
       "bytes": 1509,
-      "sha256": "d274804a1ce0dc92f90de2af90d348da9dd997bff0c6f3f8a21f44fa58ee2dbc"
+      "sha256": "d274804a1ce0dc92f90de2af90d348da9dd997bff0c6f3f8a21f44fa58ee2dbc",
+      "state": "running",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/perf-priority-v1/units.txt",
@@ -6544,12 +7584,14 @@
     {
       "path": "galaxy-evidence/post-head-cpu-v1/status-at-launch.json",
       "bytes": 1088,
-      "sha256": "824e5295a1d720d312c014fd2161dddb9b1b2f8281b8539c1bdffbaae7bf9d72"
+      "sha256": "824e5295a1d720d312c014fd2161dddb9b1b2f8281b8539c1bdffbaae7bf9d72",
+      "state": "waiting"
     },
     {
       "path": "galaxy-evidence/post-head-cpu-v1/transfer-source-at-launch.json",
       "bytes": 210,
-      "sha256": "4aae31e7851a08b2f9459af111faae24d11e961fe6434f8766559a07f81ddc0b"
+      "sha256": "4aae31e7851a08b2f9459af111faae24d11e961fe6434f8766559a07f81ddc0b",
+      "state": "serving"
     },
     {
       "path": "galaxy-evidence/post-head-cpu-v1/transfer-source.py.snapshot",
@@ -6594,7 +7636,9 @@
     {
       "path": "galaxy-evidence/precision-perf-v1/status-at-launch.json",
       "bytes": 573,
-      "sha256": "2b6be632ac8f0157373df18aae1bb4ab7ef263b44493be8639cf7e377d7f7c9a"
+      "sha256": "2b6be632ac8f0157373df18aae1bb4ab7ef263b44493be8639cf7e377d7f7c9a",
+      "state": "waiting",
+      "cleanup_completed": false
     },
     {
       "path": "galaxy-evidence/precision-perf-v1/unit.log.gz",
@@ -6834,7 +7878,9 @@
     {
       "path": "galaxy-evidence/qualification-overnight-v1/deployment-after-stop.json",
       "bytes": 24050,
-      "sha256": "e77ee6c5a485b0eebac994ca037de7b9ab68786aef0c40ec93d96f30d9f355f7"
+      "sha256": "e77ee6c5a485b0eebac994ca037de7b9ab68786aef0c40ec93d96f30d9f355f7",
+      "state": "failed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/gpqa-responses-64k.jsonl",
@@ -6859,7 +7905,9 @@
     {
       "path": "galaxy-evidence/qualification-overnight-v1/queue-after-stop.json",
       "bytes": 22294,
-      "sha256": "c96d0c63e5ce0492dbae66572688501456e72d680df1219d883888fc679ae2bb"
+      "sha256": "c96d0c63e5ce0492dbae66572688501456e72d680df1219d883888fc679ae2bb",
+      "state": "failed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-dependencies.txt",
@@ -6869,22 +7917,27 @@
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-failure.json",
       "bytes": 4504,
-      "sha256": "bbe9e2f3d44df553e307b96ba945935d8019b5edec387489ff62b746ff5b97aa"
+      "sha256": "bbe9e2f3d44df553e307b96ba945935d8019b5edec387489ff62b746ff5b97aa",
+      "state": "completed",
+      "passed": 0
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v1.json",
       "bytes": 261,
-      "sha256": "0eb6769ada9c258e2537123045fbd01b2ef98d501971a1233424cfd2572792f6"
+      "sha256": "0eb6769ada9c258e2537123045fbd01b2ef98d501971a1233424cfd2572792f6",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v2.json",
       "bytes": 295,
-      "sha256": "e9541dab7fb57c54be5b5df74a5e2cc6e99bfa92a561406742caa33c28d56cb4"
+      "sha256": "e9541dab7fb57c54be5b5df74a5e2cc6e99bfa92a561406742caa33c28d56cb4",
+      "state": "failed"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v3.json",
       "bytes": 53,
-      "sha256": "c1a6f2392f1bde76e1f5b64b9cf1c75562e07cfab001940635edb3d793265995"
+      "sha256": "c1a6f2392f1bde76e1f5b64b9cf1c75562e07cfab001940635edb3d793265995",
+      "state": "ready"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v1/tau-task-error.log",
@@ -6949,7 +8002,9 @@
     {
       "path": "galaxy-evidence/qualification-overnight-v2/native-g0/full-model.json",
       "bytes": 260983,
-      "sha256": "697e4e614652d5f6e6d7ce1b883aae0691e9a756ba6fbbd623848b4a41a637b7"
+      "sha256": "697e4e614652d5f6e6d7ce1b883aae0691e9a756ba6fbbd623848b4a41a637b7",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/native-g0/hardware.xml",
@@ -6959,7 +8014,9 @@
     {
       "path": "galaxy-evidence/qualification-overnight-v2/queue-snapshot.json",
       "bytes": 20775,
-      "sha256": "b5a297a9523f6d8575c692a0559698a50c654fe53add0025498a5f30d9b461e5"
+      "sha256": "b5a297a9523f6d8575c692a0559698a50c654fe53add0025498a5f30d9b461e5",
+      "state": "running",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/unit.xml.gz",
@@ -6979,7 +8036,8 @@
     {
       "path": "galaxy-evidence/release-source-binding-v1/head-source.json",
       "bytes": 3743,
-      "sha256": "04eb6546ebb73d287400aa41c3ef93abe919fc36ee6209688582dffd29126924"
+      "sha256": "04eb6546ebb73d287400aa41c3ef93abe919fc36ee6209688582dffd29126924",
+      "state": "source_verified_hardware_unqualified"
     },
     {
       "path": "galaxy-evidence/replica-timing-host.xml",
@@ -7986,12 +9044,16 @@
     {
       "path": "galaxy-evidence/shared-qk-g0-pass-v1/full-model.json",
       "bytes": 261295,
-      "sha256": "3b713b47e15b4677065f9262472a7014a26276dfaf9707ff3be94509bad87f11"
+      "sha256": "3b713b47e15b4677065f9262472a7014a26276dfaf9707ff3be94509bad87f11",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/shared-qk-g0-pass-v1/gpqa-startup.json",
       "bytes": 15946,
-      "sha256": "c4932f5ae6bcaaae6180bb26eb28b1048ca3f26fe7690baac8f8ea2a4ea4f5dd"
+      "sha256": "c4932f5ae6bcaaae6180bb26eb28b1048ca3f26fe7690baac8f8ea2a4ea4f5dd",
+      "state": "starting",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/shared-qk-g0-pass-v1/hardware.xml.gz",
@@ -8001,12 +9063,16 @@
     {
       "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/api.json",
       "bytes": 38764,
-      "sha256": "24084a5f6391d0942908f7eaf35f0b72993c503a0aa2763fcba70e48d82fed0b"
+      "sha256": "24084a5f6391d0942908f7eaf35f0b72993c503a0aa2763fcba70e48d82fed0b",
+      "state": "completed",
+      "passed": true
     },
     {
       "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/deployment.json",
       "bytes": 18343,
-      "sha256": "651448bea15161c72a86773dec71819f6131682abb01fd67dc3f2b60c7a0b1f4"
+      "sha256": "651448bea15161c72a86773dec71819f6131682abb01fd67dc3f2b60c7a0b1f4",
+      "state": "evaluation_completed",
+      "passed": false
     },
     {
       "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/responses.jsonl",
@@ -8090,7 +9156,9 @@
     {
       "path": "galaxy-evidence/tau-pilot-v2/summary.json",
       "bytes": 4986,
-      "sha256": "8182512fecb958421a78fe09061020509b7ea14eb505426998564a218c5ec272"
+      "sha256": "8182512fecb958421a78fe09061020509b7ea14eb505426998564a218c5ec272",
+      "state": "completed",
+      "passed": 3
     },
     {
       "path": "galaxy-evidence/tau-review-v1/README.md",
@@ -8179,8 +9247,8 @@
     },
     {
       "path": "tests/bounded_profile.py",
-      "bytes": 4837,
-      "sha256": "5bc2d682b89a99d1482d9a87440108700e0685cd8d9bf265a609e8e739347787"
+      "bytes": 4927,
+      "sha256": "46b404e25e187dbd4fb9faaa53e4f190511cb3255def43125971488e9d624e35"
     },
     {
       "path": "tests/chunked_prefill_scenario.py",
@@ -8199,8 +9267,8 @@
     },
     {
       "path": "tests/gdn_epilogue_layer.py",
-      "bytes": 1578,
-      "sha256": "878b2fbfa365abab2a8302a09b94717404ae5ac6325fdf51901108a986efaf0e"
+      "bytes": 1702,
+      "sha256": "bde931b8202345ee76f277e185b6c8ff278c211cab9db65c4dee34827fff6743"
     },
     {
       "path": "tests/gdn_phase_profile.py",
@@ -8254,8 +9322,8 @@
     },
     {
       "path": "tests/test_gdn_epilogue_layer.py",
-      "bytes": 4518,
-      "sha256": "9d0c2478e1139b076505681fa5f57abbddfbb737858170f96416fd035ad1aa79"
+      "bytes": 4677,
+      "sha256": "1ca809d7f8f32f4104a836fd9f07c1e8efb89af1482069b8599d8cca605a4914"
     },
     {
       "path": "tests/test_gdn_flat_prepare.py",
@@ -8284,8 +9352,8 @@
     },
     {
       "path": "tests/unit/test_bfp8_gdn_followup.py",
-      "bytes": 4036,
-      "sha256": "303ad73807a04fee046a9af5185fe2dac88ac826fecfa10d303b4e6155e2a7d1"
+      "bytes": 5365,
+      "sha256": "b3bf519777fbd4a9e66d8733515cf99aad11aa1c290471cf4e97be4f79ce9337"
     },
     {
       "path": "tests/unit/test_bounded_profile.py",
@@ -8309,8 +9377,8 @@
     },
     {
       "path": "tests/unit/test_gdn_decode_integration.py",
-      "bytes": 8907,
-      "sha256": "5926d6952c94d6ae15d0182d56eeb0964379946b719ed87f3b6e60c16cf8466e"
+      "bytes": 11456,
+      "sha256": "2b31932bb5a1e97d8f19b887576b2cd4f74390cc97ad325f2aab3d0d53607f30"
     },
     {
       "path": "tests/unit/test_gdn_epilogue.py",
@@ -8319,8 +9387,8 @@
     },
     {
       "path": "tests/unit/test_gdn_epilogue_layer.py",
-      "bytes": 2034,
-      "sha256": "bbe6287c46e2cfc0edf8afdac9b96a92a65bb75d4bbc566941bbe1a48937b8e5"
+      "bytes": 2139,
+      "sha256": "1062ecc8daa932eea6b872a3a28931f1dc9f04908fdaa22ce115a1df09df1426"
     },
     {
       "path": "tests/unit/test_gdn_phase_profile.py",
@@ -8369,8 +9437,8 @@
     },
     {
       "path": "tt/decoder.py",
-      "bytes": 51321,
-      "sha256": "bb02d7d8c564fcf21443ce5e059d117d07d7aec8fcfeece2f39ec20d5504e729"
+      "bytes": 51552,
+      "sha256": "febc847050e1c3534f2ca16763c4b9b006fc0b3a9782b5d66841488f163bcfef"
     },
     {
       "path": "tt/gdn_epilogue/compute.cpp",
@@ -8399,18 +9467,18 @@
     },
     {
       "path": "tt/gdn_step/flat_prepare_reader.cpp",
-      "bytes": 4831,
-      "sha256": "30bbf6ec30c2f7b85ac4f0ab4b3c9c51c5ec6b1aaf0bf3d07ebce6eeb4dfbc95"
+      "bytes": 5161,
+      "sha256": "9b3ea645064ebfd5252a058d09c381cec12cb7afcb327c1f8011213401cc2519"
     },
     {
       "path": "tt/gdn_step/model_adapter.py",
-      "bytes": 4340,
-      "sha256": "8e07fc545fceaa76a3287cbe4141100cd987d1fa74129fa6ad5af3b5f71054f9"
+      "bytes": 5421,
+      "sha256": "fec59b0656410d941cc9a60bbf01c6926b7aa46f21cdd60c973c3ad67b4521ac"
     },
     {
       "path": "tt/gdn_step/workspace.py",
-      "bytes": 3983,
-      "sha256": "b6f8d70bedc4ff392456895a97faeeaa4540a2bbf536fd912d7f1aa607462577"
+      "bytes": 5145,
+      "sha256": "dc869e3ec4b779ea6a792f703a83ff4da531827e6514c4ea09705f2c37c6a716"
     },
     {
       "path": "tt/precision.py",

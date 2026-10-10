@@ -1,0 +1,91 @@
+{
+  "passed": true,
+  "first": {
+    "id": "chatcmpl-a4685b9f58ce0c60",
+    "object": "chat.completion",
+    "created": 1791601120,
+    "model": "Qwen/Qwen3.8-27B",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [
+            {
+              "id": "chatcmpl-tool-802828a80d8dbfab",
+              "type": "function",
+              "function": {
+                "name": "lookup_weather",
+                "arguments": "{\"city\": \"Paris\"}"
+              }
+            }
+          ],
+          "reasoning": null
+        },
+        "logprobs": null,
+        "finish_reason": "tool_calls",
+        "stop_reason": null,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.26.0-dp8-687419e2",
+    "usage": {
+      "prompt_tokens": 287,
+      "total_tokens": 314,
+      "completion_tokens": 27,
+      "prompt_tokens_details": null
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  },
+  "second": {
+    "id": "chatcmpl-817c85da97ee5a18",
+    "object": "chat.completion",
+    "created": 1791601135,
+    "model": "Qwen/Qwen3.8-27B",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "The current weather in Paris is 21\u00b0C.",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "reasoning": null
+        },
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": null,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.26.0-dp8-687419e2",
+    "usage": {
+      "prompt_tokens": 342,
+      "total_tokens": 354,
+      "completion_tokens": 12,
+      "prompt_tokens_details": null
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

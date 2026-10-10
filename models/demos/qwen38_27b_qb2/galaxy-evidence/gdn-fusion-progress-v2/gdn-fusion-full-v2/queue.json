@@ -1,0 +1,108 @@
+{
+  "state": "running",
+  "steps": [
+    {
+      "name": "flat-layer",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/flat-layer/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606651.154409,
+      "finished_at": 1791606729.249228
+    },
+    {
+      "name": "profile-s32768-b32-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b32-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606729.2605486,
+      "finished_at": 1791606789.337389
+    },
+    {
+      "name": "profile-s32768-b32-shared-qk",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b32-shared-qk/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "completed",
+      "started_at": 1791606789.4339015,
+      "finished_at": 1791606849.5076828
+    },
+    {
+      "name": "profile-s32768-b16-native",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/scripts/run_safe_pytest.sh",
+        "--profile-ops",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=1020",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-fusion-full-v2/profile-s32768-b16-native/hardware.xml"
+      ],
+      "timeout_seconds": 1200,
+      "state": "running",
+      "started_at": 1791606849.594881
+    }
+  ],
+  "predecessor_unit": "qwen38-gdn-flat-layer-v1-20261010.service",
+  "predecessor_invocation": "a05780afd8804a82860a5162399ef5b2",
+  "hardware_started": true,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791606651.1373858,
+  "profiles_first": true,
+  "epilogue_first": false,
+  "release_audit": false,
+  "variant_configs": {
+    "native": "precision_single_step_shared_qk_bfp8_all.json",
+    "shared-qk": "precision_single_step_flat_prepare_epilogue_bfp8_all.json"
+  },
+  "fusion_followup": true,
+  "updated_at": "2026-10-10T04:34:09Z",
+  "predecessor": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "active_stage": "profile-s32768-b16-native"
+}

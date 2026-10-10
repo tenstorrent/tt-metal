@@ -1,0 +1,150 @@
+{
+  "captured_at": 1791605957.6333435,
+  "raw_responses_exported": false,
+  "files": {
+    "perf-priority-v1/queue.json": {
+      "bytes": 9429,
+      "sha256": "1103005751743a4af0706c8464e8678af20539c9945f4abf1a2a826132bd13fa"
+    },
+    "perf-priority-control-v1/source-manifest.json": {
+      "bytes": 21927,
+      "sha256": "8fb9b3357f4e749cf7cc1b348f869ee421454d6b2a8b5aaccd41e19d7eccd07f"
+    },
+    "perf-priority-control-v1/perf-launch.json": {
+      "bytes": 2042,
+      "sha256": "43b4cf31fddd7eee9a2a699aa2e695e7ab591d35fda372e7a0362321e53e7f5e"
+    },
+    "perf-priority-v1/native-before/sweep.csv": {
+      "bytes": 809,
+      "sha256": "2766216d2bfc812a257ca6c4d5ab645394af8c9eac307451fd96a0c5122b977e"
+    },
+    "perf-priority-v1/native-before/sweep.json": {
+      "bytes": 43831,
+      "sha256": "b12ad59cca9c25dbf72600fcccdd1a69cfaedcfb6002d023d0d13bbe89ace9c5"
+    },
+    "perf-priority-v1/native-before/hardware.xml": {
+      "bytes": 541,
+      "sha256": "f249493e1a4529251a1e0e6edd87a4f4448a3811748832f841b751b66b87a8c9"
+    },
+    "perf-priority-v1/shared-qk/sweep.csv": {
+      "bytes": 818,
+      "sha256": "8d1ca3bf30ac85313da8fb8a3a47691d6610ca7de8adf77c628469b431111dca"
+    },
+    "perf-priority-v1/shared-qk/sweep.json": {
+      "bytes": 43922,
+      "sha256": "3037f7cd62b1fe52431550364ec7dc4d86aef696ea3c6e1e6d0274ccec417a99"
+    },
+    "perf-priority-v1/shared-qk/hardware.xml": {
+      "bytes": 541,
+      "sha256": "58b4a028aa56801a0880b61831faeb2dc61a49a7e74c9d93bb06f6a834d9a48e"
+    },
+    "perf-priority-v1/native-after/sweep.csv": {
+      "bytes": 820,
+      "sha256": "30c3d5df562144724e4056846deccdadec27da213c01aebac03f94c5293f3df8"
+    },
+    "perf-priority-v1/native-after/sweep.json": {
+      "bytes": 43881,
+      "sha256": "28868371d73aa60d1c52b0ca983359b2243d90ec52eb8493398cd81b95746393"
+    },
+    "perf-priority-v1/native-after/hardware.xml": {
+      "bytes": 541,
+      "sha256": "3277375a7ca8115a7b375d34d5aec8a41dee2a3db322c8414cdb0383b1a43bfe"
+    },
+    "perf-priority-v1/comparison-native-before/comparison.json": {
+      "bytes": 4471,
+      "sha256": "929ed7fcc629ada46f7d1b848bb9170113145296ca7ab5b08793bc2485bfd08e"
+    },
+    "perf-priority-v1/comparison-native-before/comparison.csv": {
+      "bytes": 1186,
+      "sha256": "1fd1befcb948284ae1cd4221764663c3ef1a458209bbdf0673d38a7f9a076b9d"
+    },
+    "perf-priority-v1/comparison-native-after/comparison.json": {
+      "bytes": 4474,
+      "sha256": "e8118a5ffcf25ff96ae7208e7084e80f946eadec81ac561354d7c98a27607bef"
+    },
+    "perf-priority-v1/comparison-native-after/comparison.csv": {
+      "bytes": 1190,
+      "sha256": "dc21e498710c4de3c9b4215f68fc2f05f10429d414519538df749875692e575c"
+    },
+    "perf-priority-v1/control-drift/comparison.json": {
+      "bytes": 4484,
+      "sha256": "f9c9bc299b572d2beb0d68f2072141b0635f479f7387802882898bc3e8220011"
+    },
+    "perf-priority-v1/control-drift/comparison.csv": {
+      "bytes": 1200,
+      "sha256": "f7376652d10b279a7f64f50a63974366d17e3993ddd057aa76996c175f93faeb"
+    },
+    "perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/summary.json": {
+      "bytes": 2125,
+      "sha256": "8f9ff629f672f9b0ee8bbc0a4f1fe11ff20d35be008c6da7d0fec54902d9b5e8"
+    },
+    "perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/protocol.json": {
+      "bytes": 1472,
+      "sha256": "427fa15bd77ef57d716cc47511fbe241ec94e05d7285bed0f90cdeb202843103"
+    },
+    "perf-priority-v1/candidate-qualification/results/native-control/evaluation/gpqa/gpqa-responses.jsonl": {
+      "bytes": 78222,
+      "sha256": "290adce78539bac9b5232cae7adcfee69705fdd12d80a8d353b549d56386dffe"
+    },
+    "perf-priority-v1/candidate-qualification/results/native-g0/receipts/full-model.json": {
+      "bytes": 266513,
+      "sha256": "b312ee13ab364a10f2682d17adc097f1ce0261f26502a256f4ff992a27836e50"
+    },
+    "perf-priority-v1/candidate-qualification/results/native-g0/receipts/hardware.xml": {
+      "bytes": 548,
+      "sha256": "f54d670b835e4432a85f22d7962288e82e2bdad7fc3304513d60d07acd919120"
+    },
+    "perf-priority-v1/candidate-qualification/results/queue.json": {
+      "bytes": 27941,
+      "sha256": "814fde895943bc3314d3a0fb7ef31db2f2f6229effe3c553727443f01ab7cd5f"
+    },
+    "perf-priority-v1/candidate-qualification/results/unit.xml": {
+      "bytes": 154838,
+      "sha256": "cc589da5a1389e14a8995a20205c67265bc81b31bf65f01f510f0b4618ed8f66"
+    },
+    "gdn-flat-prepare-hardware-v2/prepare.json": {
+      "bytes": 41911,
+      "sha256": "01e511176eb66f08a8170631bcae1000979b1ff8f8c8470fc08f6438766a3f18"
+    },
+    "gdn-flat-prepare-hardware-v2/queue.json": {
+      "bytes": 1614,
+      "sha256": "35b9750f0e2cb95936c2c3be0ec6a25824a7ed0b3b06f9ab95ffae73061fa6ba"
+    },
+    "gdn-flat-prepare-hardware-v2/hardware.xml": {
+      "bytes": 11336,
+      "sha256": "dfbaefc85173fa7ce20713c278948721ccd11c0eccd8fd6b7ed9b24dd5ebe446"
+    },
+    "image-hardware-v4/synthetic-tool-roundtrip.json": {
+      "bytes": 2326,
+      "sha256": "eb193a33811e82d6860bb68291156affd1584946443c4ba5aaca1ea33159c2d7"
+    },
+    "image-hardware-v4/startup.log": {
+      "bytes": 355300,
+      "sha256": "1a497701d874da960d653ee4c0f4e23e178f3e9cc4597a6ca9d46deae2a75b5c"
+    },
+    "image-hardware-v4/server.log": {
+      "bytes": 449959,
+      "sha256": "bae4bb0dd09c20476dc54701a652920d9e1461813ab12c79bbd673277d45ef8f"
+    },
+    "image-hardware-v4/evaluation.log": {
+      "bytes": 423,
+      "sha256": "0f4e0e2329ae0aac9a92d786fe0ae792e46aa81695ee443b8df2a03bd9e423ec"
+    },
+    "image-hardware-v4/api.json": {
+      "bytes": 38755,
+      "sha256": "8bf3613b7a60275d30cb078f84d15226da42b2818f21681b4f4801aebb93b0c0"
+    },
+    "image-hardware-v4/reset.log": {
+      "bytes": 1504,
+      "sha256": "05ac40582583e89bf6a7621c0528b3557bf08ee00ed79761835b27454ab9513e"
+    },
+    "image-hardware-v4/status.json": {
+      "bytes": 3966,
+      "sha256": "bd0611e510db844090bc5f53076c18d120f9db57b26ae5109a4a7c73056df8da"
+    },
+    "gdn-flat-prepare-hardware-control-v2/run.log": {
+      "bytes": 22608,
+      "sha256": "3b19e861d941fa476cd26a8102d6522cd5c099104faa4b8c06f228080248a171"
+    }
+  }
+}

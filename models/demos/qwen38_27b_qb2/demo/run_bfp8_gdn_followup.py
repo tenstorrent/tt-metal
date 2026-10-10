@@ -21,9 +21,13 @@ POLICIES = {
     "native": "precision_accurate_decode_bfp8_all.json",
     "shared-qk": "precision_single_step_shared_qk_bfp8_all.json",
 }
+FUSION_POLICIES = {
+    "native": "precision_single_step_shared_qk_bfp8_all.json",
+    "shared-qk": "precision_single_step_flat_prepare_epilogue_bfp8_all.json",
+}
 
 
-def predecessor_ready(properties, receipt, invocation, *, clean_release=False):
+def predecessor_ready(properties, receipt, invocation, *, clean_release=False, layer_release=False):
     if properties.get("InvocationID") not in ("", invocation):
         raise ValueError("Predecessor invocation changed")
     if properties.get("MainPID") != "0" or properties.get("ActiveState") not in ("inactive", "failed"):
@@ -32,6 +36,24 @@ def predecessor_ready(properties, receipt, invocation, *, clean_release=False):
         return False
     if properties.get("LoadState") == "loaded" and properties.get("Result") != "success":
         raise ValueError("Predecessor exited unsuccessfully; inspect before using hardware")
+    if layer_release:
+        from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import BATCHES, compare
+
+        if (
+            not receipt
+            or receipt.get("state") != "completed"
+            or receipt.get("passed") is not True
+            or receipt.get("cleanup_completed") is not True
+            or receipt.get("candidate_recurrence") != "single_step_flat_prepare_epilogue"
+        ):
+            raise ValueError("Predecessor lacks passing flat-preparation layer qualification")
+        cases = receipt.get("cases", [])
+        if len(cases) != 3 * len(BATCHES):
+            raise ValueError("Incomplete layer qualification")
+        comparisons = [compare(cases[i : i + 3]) for i in range(0, len(cases), 3)]
+        if tuple(c["batch"] for c in comparisons) != BATCHES or comparisons != receipt.get("comparisons"):
+            raise ValueError("Layer comparison receipts disagree")
+        return True
     if clean_release:
         if (
             not receipt
@@ -56,9 +78,15 @@ def predecessor_ready(properties, receipt, invocation, *, clean_release=False):
     return True
 
 
-def validate_policies(model):
-    policies = [load_precision(model / "config" / name) for name in POLICIES.values()]
-    if tuple(p["decode_recurrence"] for p in policies) != ("native", "single_step_shared_qk"):
+def validate_policies(model, *, fusion=False):
+    selected = FUSION_POLICIES if fusion else POLICIES
+    policies = [load_precision(model / "config" / name) for name in selected.values()]
+    expected = (
+        ("single_step_shared_qk", "single_step_flat_prepare_epilogue")
+        if fusion
+        else ("native", "single_step_shared_qk")
+    )
+    if tuple(p["decode_recurrence"] for p in policies) != expected:
         raise ValueError("Wrong recurrence selection")
     if {k: v for k, v in policies[0].items() if k not in ("config_id", "decode_recurrence")} != {
         k: v for k, v in policies[1].items() if k not in ("config_id", "decode_recurrence")
@@ -84,6 +112,10 @@ def run(args):
     args.output.mkdir()
     status_path = args.output / "queue.json"
     model = args.source / "models/demos/qwen38_27b_qb2"
+    selected = FUSION_POLICIES if args.fusion else POLICIES
+    recurrence_policies = tuple(
+        load_precision(model / "config" / name)["decode_recurrence"] for name in selected.values()
+    )
     status = dict(
         state="waiting",
         steps=[],
@@ -98,6 +130,8 @@ def run(args):
         profiles_first=args.profiles_first,
         epilogue_first=args.epilogue_first,
         release_audit=args.after_clean_release,
+        variant_configs=selected,
+        fusion_followup=args.fusion,
     )
     manifest = json.loads(args.manifest.read_text())
 
@@ -162,12 +196,12 @@ def run(args):
 
     def profiles():
         for batch in (32, 16):
-            for label, recurrence in (("native", "native"), ("shared-qk", "single_step_shared_qk")):
+            for label, recurrence in zip(selected, recurrence_policies):
                 name = f"profile-s32768-b{batch}-{label}"
                 directory = args.output / name
                 profile_env = dict(
                     env,
-                    QWEN_PRECISION_CONFIG=str(model / "config" / POLICIES[label]),
+                    QWEN_PRECISION_CONFIG=str(model / "config" / selected[label]),
                     QWEN_BOUNDED_LAYER_PROFILE="1",
                     QWEN_PROFILE_CONTEXT="32768",
                     QWEN_PROFILE_BATCH=str(batch),
@@ -194,7 +228,7 @@ def run(args):
 
     try:
         verify_source()
-        validate_policies(model)
+        validate_policies(model, fusion=args.fusion)
         deadline = time.monotonic() + args.wait_timeout
         while True:
             if time.monotonic() >= deadline:
@@ -229,9 +263,34 @@ def run(args):
             receipt = json.loads(args.after_receipt.read_text()) if args.after_receipt.exists() else None
             status["predecessor"] = properties
             save(status_path, status)
-            if predecessor_ready(properties, receipt, args.after_invocation, clean_release=args.after_clean_release):
+            if predecessor_ready(
+                properties,
+                receipt,
+                args.after_invocation,
+                clean_release=args.after_clean_release,
+                layer_release=args.fusion,
+            ):
                 break
             time.sleep(20)
+        if args.fusion:
+            # Re-run the short layer gate on this exact frozen source, including
+            # formatting-only differences from the exploratory hardware run.
+            directory = args.output / "flat-layer"
+            stage_env = dict(
+                env,
+                QWEN_GDN_EPILOGUE_LAYER="1",
+                QWEN_GDN_LAYER_CANDIDATE="flat_prepare",
+                QWEN_GDN_LAYER_RECEIPT=str(directory / "layer.json"),
+                QWEN_PRECISION_CONFIG=str(model / "config" / selected["shared-qk"]),
+            )
+            stage("flat-layer", test_command("test_gdn_epilogue_layer.py", directory, 1200), stage_env, 1200)
+            layer_report = json.loads((directory / "layer.json").read_text())
+            predecessor_ready(
+                dict(MainPID="0", ActiveState="inactive", LoadState="not-found", InvocationID=""),
+                layer_report,
+                "",
+                layer_release=True,
+            )
         if args.profiles_first:
             profiles()
         if args.epilogue_first:
@@ -246,7 +305,7 @@ def run(args):
             )
             save_report(plan, directory)
             stage_env = dict(
-                env, QWEN_SWEEP_RESULTS=str(directory), QWEN_PRECISION_CONFIG=str(model / "config" / POLICIES[policy])
+                env, QWEN_SWEEP_RESULTS=str(directory), QWEN_PRECISION_CONFIG=str(model / "config" / selected[policy])
             )
             stage(name, test_command("test_galaxy_perf_sweep.py", directory, 3600), stage_env, 3600)
             measured = json.loads((directory / "sweep.json").read_text())
@@ -256,7 +315,7 @@ def run(args):
             args.output / "native-before/sweep.json",
             args.output / "native-after/sweep.json",
             variants=("native", "native"),
-            recurrence_policies=("native", "native"),
+            recurrence_policies=(recurrence_policies[0], recurrence_policies[0]),
             require_same_output=True,
         )
         status["native_control_stable_within_3_percent"] = control_stable(controls)
@@ -266,10 +325,11 @@ def run(args):
                 args.output / label / "sweep.json",
                 args.output / "shared-qk/sweep.json",
                 variants=("native", "shared-qk"),
-                recurrence_policies=("native", "single_step_shared_qk"),
+                recurrence_policies=recurrence_policies,
+                require_same_output=args.fusion,
             )
             render(comparison, args.output / ("comparison-" + label))
-        if not args.profiles_first:
+        if not args.profiles_first and not args.fusion:
             profiles()
         if args.qualify:
             # Reuse the accuracy-only runner's exact-source G0 and complete GPQA.
@@ -296,7 +356,7 @@ def run(args):
                 "--native-control-only",
                 "--accuracy-only",
                 "--control-precision",
-                POLICIES["shared-qk"],
+                selected["shared-qk"],
             ]
             stage("candidate-qualification", command, env, 21600)
             evaluation = json.loads(
@@ -327,4 +387,10 @@ if __name__ == "__main__":
     parser.add_argument("--after-clean-release", action="store_true")
     parser.add_argument("--profiles-first", action="store_true")
     parser.add_argument("--epilogue-first", action="store_true")
-    run(parser.parse_args())
+    parser.add_argument(
+        "--fusion", action="store_true", help="Compare qualified shared Q/K against direct preparation plus epilogue"
+    )
+    args = parser.parse_args()
+    if args.fusion and (args.epilogue_first or args.after_clean_release):
+        parser.error("Fusion follow-up uses its real-weight layer gate, without legacy epilogue/release flags")
+    run(args)

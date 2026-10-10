@@ -10,7 +10,9 @@ output directly with the opt-in fused epilogue.
 from models.demos.qwen38_27b_qb2.tt.gdn_step import op
 
 
-def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs=None, raw_output=False):
+def step_from_flat(
+    q, k, v, log_decay, beta, state, output, *, shared_qk_outputs=None, raw_output=False, flat_prepare_outputs=None
+):
     """Consume only token zero of [B,T,H*128] and update [B,HV,128,128].
 
     Q/K are raw convolution outputs, beta is already sigmoid-transformed, and
@@ -18,7 +20,8 @@ def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs
     FP32 row-major [B*HV,128] buffer retained for the complete trace lifetime.
     Optional shared_qk_outputs are two persistent FP32 row-major [B*HK,128]
     scratch tensors. raw_output skips head-major tilization for the fused
-    epilogue; the returned buffer remains owned by the caller."""
+    epilogue; the returned buffer remains owned by the caller. flat_prepare_outputs
+    optionally supplies persistent FP32 values/gates for direct tiled preparation."""
     import ttnn
 
     batch, time_rows, qwidth = q.shape
@@ -34,6 +37,36 @@ def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs
         or tuple(beta.shape) != tuple(log_decay.shape)
     ):
         raise ValueError("Unsupported single-token GDN model geometry")
+
+    flat_state = ttnn.reshape(state, [batch * value_heads, 128, 128])
+    if flat_state.buffer_address() != state.buffer_address():
+        raise ValueError("GDN state flattening must be a view, not a copy")
+
+    def finish():
+        if raw_output:
+            return output
+        head_major = ttnn.to_layout(ttnn.reshape(output, [batch * value_heads, 1, 128]), ttnn.TILE_LAYOUT)
+        return ttnn.reshape(head_major, [batch * value_heads, 32, 128], head_major.padded_shape)
+
+    if flat_prepare_outputs is not None:
+        from models.demos.qwen38_27b_qb2.tt.gdn_step.flat_prepare import prepare
+
+        if shared_qk_outputs is None or len(shared_qk_outputs) != 2 or len(flat_prepare_outputs) != 2:
+            raise ValueError("Direct preparation requires persistent Q/K and value/gate pairs")
+        # Preserve native exp and all recurrence arithmetic. Only the surrounding
+        # tilize/untilize/reshape/concat traffic is replaced by the direct reader.
+        decay = ttnn.exp(log_decay[:, :1, :])
+        prepare(q, k, v, decay, beta, *shared_qk_outputs, *flat_prepare_outputs)
+        op.step(
+            *shared_qk_outputs,
+            *flat_prepare_outputs,
+            flat_state,
+            output,
+            value_splits=4,
+            input_buffer_items=2,
+            qk_head_repeat=value_heads // heads,
+        )
+        return finish()
 
     def vector(tensor, count):
         row = ttnn.to_layout(tensor[:, :1, :], ttnn.ROW_MAJOR_LAYOUT)
@@ -51,9 +84,6 @@ def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs
     gates = ttnn.concat([decay, ttnn.typecast(beta[:, :1, :], ttnn.float32)], dim=1)
     gates = ttnn.to_layout(ttnn.permute(gates, [0, 2, 1]), ttnn.ROW_MAJOR_LAYOUT)
     gates = ttnn.pad(ttnn.reshape(gates, [batch * value_heads, 2]), [(0, 0), (0, 6)], 0.0)
-    flat_state = ttnn.reshape(state, [batch * value_heads, 128, 128])
-    if flat_state.buffer_address() != state.buffer_address():
-        raise ValueError("GDN state flattening must be a view, not a copy")
     # Real layer projection/gate tensors may reside in L1. The recurrence
     # descriptor intentionally addresses interleaved DRAM inputs, so preserve
     # that contract at this boundary. Already-DRAM operands need no copy.
@@ -78,7 +108,4 @@ def step_from_flat(q, k, v, log_decay, beta, state, output, *, shared_qk_outputs
             input_buffer_items=2,
             qk_head_repeat=value_heads // heads,
         )
-    if raw_output:
-        return output
-    head_major = ttnn.to_layout(ttnn.reshape(output, [batch * value_heads, 1, 128]), ttnn.TILE_LAYOUT)
-    return ttnn.reshape(head_major, [batch * value_heads, 32, 128], head_major.padded_shape)
+    return finish()

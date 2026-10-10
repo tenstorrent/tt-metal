@@ -1,0 +1,70 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "server_capacity": 16,
+  "data_parallel_size": 8,
+  "total_server_capacity": 128,
+  "checkpoint_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "dataset_revision": "633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+  "dataset_source": {
+    "transport": "validated_local_csv",
+    "path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/gpqa-data/gpqa_diamond.csv",
+    "git_blob": "7589e3e467d69a1dceb126a60c4108d6d4f1d166",
+    "sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305"
+  },
+  "harness_revision": "321e3bb68cb750a58c76606ab57832533302be73",
+  "choice_processing": "preserve_scientific_notation_v1",
+  "selection": "first 198 Diamond rows, choice shuffle seed 42",
+  "scope": "198/198 Diamond questions; 65536-token output budget",
+  "gpqa": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "thinking": true,
+    "max_output_tokens": 65536,
+    "concurrency": 128,
+    "accuracy_threshold": 0.892,
+    "selected_samples": 198,
+    "full_dataset": true
+  },
+  "performance": {
+    "shapes": [
+      [
+        128,
+        128,
+        128
+      ],
+      [
+        1024,
+        128,
+        128
+      ]
+    ],
+    "warmup": "one burst per shape",
+    "repeats": 2,
+    "temperature": 0,
+    "ignore_eos": true
+  },
+  "input_sha256": "1fea5e48b7d2faa1ee1257ee9de7f63a30d44b5150906311e447a9190365cf1c",
+  "run_start": "2026-10-10T01:30:54.812894+00:00",
+  "gpqa_result": {
+    "measurement_start": "2026-10-10T01:32:23.392191+00:00",
+    "measurement_end": "2026-10-10T02:38:17.847436+00:00",
+    "measured_s": 3954.455230001826,
+    "requests": 198,
+    "mean_ttft_ms": 23359.281604726224,
+    "mean_decode_tokens_per_s": 16.308942825003474,
+    "aggregate_output_tokens_per_s": 739.2156011331681,
+    "accuracy": 0.898989898989899,
+    "correct": 178,
+    "completed_samples": 198,
+    "dataset_samples": 198,
+    "full_dataset": true,
+    "concurrency": 128,
+    "max_output_tokens": 65536,
+    "accuracy_threshold": 0.892,
+    "truncated_samples": 5,
+    "truncated_correct": 0,
+    "passed": true
+  }
+}

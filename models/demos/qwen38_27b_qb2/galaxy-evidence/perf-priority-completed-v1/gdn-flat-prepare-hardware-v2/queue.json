@@ -1,0 +1,26 @@
+{
+  "state": "failed",
+  "cleanup_completed": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791588116.309421,
+  "updated_at": "2026-10-09T23:51:50Z",
+  "command": [
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/scripts/run_safe_pytest.sh",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py",
+    "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/pytest.ini",
+    "-vv",
+    "-s",
+    "--tb=short",
+    "--timeout=1200",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-v2/hardware.xml"
+  ],
+  "error": "CalledProcessError",
+  "detail": "Command '['/bin/bash', '/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/scripts/run_safe_pytest.sh', '/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py', '--rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2', '-c', '/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-source-v2/pytest.ini', '-vv', '-s', '--tb=short', '--timeout=1200', '--junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-flat-prepare-hardware-v2/hardware.xml']' returned non-zero exit status 1.",
+  "finished_at": 1791589910.393985
+}

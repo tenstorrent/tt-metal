@@ -1,0 +1,239 @@
+{
+  "captured_at": 1791606873.9346416,
+  "files": {
+    "gdn-fusion-full-control-v2/launch.json": {
+      "original_bytes": 1995,
+      "original_sha256": "9be825d65c7e95dd805320f517fdce7e51c553082bfdeec6820614efa8cc0e52"
+    },
+    "gdn-fusion-full-control-v2/run.log.gz": {
+      "original_bytes": 0,
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gdn-fusion-full-control-v2/preflight.log.gz": {
+      "original_bytes": 1826,
+      "original_sha256": "98eafc3d448eac6cecae0026565e6bb0d9a9e342eb656d0ab7b63e241805d542"
+    },
+    "gdn-fusion-full-control-v2/launch-unit.txt": {
+      "original_bytes": 81,
+      "original_sha256": "d94b050304c1bb54a2a38ed92d89b28d3243a939d181e9a7207fda234d48595a"
+    },
+    "gdn-fusion-full-control-v2/unit.xml.gz": {
+      "original_bytes": 157363,
+      "original_sha256": "4513ec489c792297965f6a76b73f8e57cf2cd88e0e7f953bbfdec1d4ce1bc581"
+    },
+    "gdn-fusion-full-control-v2/source-manifest.json": {
+      "original_bytes": 23848,
+      "original_sha256": "f62215159f31a9f8e31e9b8e17b8ed48ab87e4ecdc83df16bc2ae1fe2a6b07c5"
+    },
+    "gdn-fusion-full-v2/queue.json": {
+      "original_bytes": 4278,
+      "original_sha256": "e916016bfdb4b1b6eaa5c3fdc9c4d2234fe30e96be5b55ee89b683125832cc2f"
+    },
+    "gdn-fusion-full-v2/flat-layer/layer.json": {
+      "original_bytes": 142307,
+      "original_sha256": "1c71d81929e5fee603f318a3b0653013f3e8c6768de12f7ed4565e6ef332bff2"
+    },
+    "gdn-fusion-full-v2/flat-layer/hardware.xml.gz": {
+      "original_bytes": 539,
+      "original_sha256": "f5d8c6810dd6939a83af63f724ec01cb624639fe048a10af071e647d5fc9f90b"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/decoder.py.gz": {
+      "original_bytes": 51552,
+      "original_sha256": "febc847050e1c3534f2ca16763c4b9b006fc0b3a9782b5d66841488f163bcfef"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/model_adapter.py.gz": {
+      "original_bytes": 5421,
+      "original_sha256": "fec59b0656410d941cc9a60bbf01c6926b7aa46f21cdd60c973c3ad67b4521ac"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz": {
+      "original_bytes": 5161,
+      "original_sha256": "9b3ea645064ebfd5252a058d09c381cec12cb7afcb327c1f8011213401cc2519"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz": {
+      "original_bytes": 4477,
+      "original_sha256": "9ddd3761acf05a8991171976504a5ffd83c07607fa3b7a3abd5185e722d0dae7"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tt/gdn_step/workspace.py.gz": {
+      "original_bytes": 5145,
+      "original_sha256": "dc869e3ec4b779ea6a792f703a83ff4da531827e6514c4ea09705f2c37c6a716"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/config/precision_single_step_flat_prepare_epilogue_bfp8_all.json": {
+      "original_bytes": 1102,
+      "original_sha256": "f3756f10d8d939dc59628280d048f5ed72c66b9ba8b124b8b88c05f9b4696991"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 4677,
+      "original_sha256": "1ca809d7f8f32f4104a836fd9f07c1e8efb89af1482069b8599d8cca605a4914"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/gdn_epilogue_layer.py.gz": {
+      "original_bytes": 1702,
+      "original_sha256": "bde931b8202345ee76f277e185b6c8ff278c211cab9db65c4dee34827fff6743"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_flat_prepare.py.gz": {
+      "original_bytes": 9308,
+      "original_sha256": "8a39dcc70ca30b45b02db39b0e486cafea5817a29a68e2f410c3d242b2b2fb01"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/test_gdn_model_adapter.py.gz": {
+      "original_bytes": 11353,
+      "original_sha256": "190e2393254f9cd4c35f32c422d631e8cc08edccca7e8f3c01c27b63dc2dddd5"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 2139,
+      "original_sha256": "1062ecc8daa932eea6b872a3a28931f1dc9f04908fdaa22ce115a1df09df1426"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_bfp8_gdn_followup.py.gz": {
+      "original_bytes": 5365,
+      "original_sha256": "b3bf519777fbd4a9e66d8733515cf99aad11aa1c290471cf4e97be4f79ce9337"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py.gz": {
+      "original_bytes": 11456,
+      "original_sha256": "2b31932bb5a1e97d8f19b887576b2cd4f74390cc97ad325f2aab3d0d53607f30"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_epilogue_layer.py.gz": {
+      "original_bytes": 4571,
+      "original_sha256": "7052f65d601051b685771fb533c81c6e5eb87af3cb9cf00b3dc997b099dd789b"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_bfp8_gdn_followup.py.gz": {
+      "original_bytes": 17925,
+      "original_sha256": "9e2b1637231545c9cb07bd520eb47cebe98ff85b375fc6f7f489a02451fd6195"
+    },
+    "gdn-fusion-full-source-v2/models/demos/qwen38_27b_qb2/demo/run_gdn_flat_prepare.py.gz": {
+      "original_bytes": 4434,
+      "original_sha256": "5bb683457afe7efa72f9ac43d15abefbb32cf66c92d7591138247f5f6062a2cf"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/profile.json": {
+      "original_bytes": 20209,
+      "original_sha256": "b4cc3aa8422d67d78c578eb76788d8e775711d33fe56667964c140e80fb6a9cb"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/run.log.gz": {
+      "original_bytes": 63304,
+      "original_sha256": "b3e28b6ad72410f616c429540498a903315f96bff23702b838b3c807077c30a4"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/hardware.xml.gz": {
+      "original_bytes": 545,
+      "original_sha256": "bd4b7a4140bd3114a7bccf368205432a56dff65492d2e908305eb7fea99fd44f"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/reports/2026_10_10_04_34_06/ops_perf_results_2026_10_10_04_34_06.csv.gz": {
+      "original_bytes": 2665265,
+      "original_sha256": "e722f8879a54ce5788e4505ca8dc9d1555fa961b36041dbb14f0a80862dc0da4"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/zone_src_locations.log.gz": {
+      "original_bytes": 4851,
+      "original_sha256": "d7f83a866e9c34500b648456cbeba571de469b838045b9f6bcdd6dd54211994d"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/tracy_ops_data.csv.gz": {
+      "original_bytes": 1866127,
+      "original_sha256": "c59f262a97811a432e8b0b3a4e6f87413402f2585c1059bbe6ce0f612da99397"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/cpp_device_perf_report.csv": {
+      "original_bytes": 380804,
+      "original_sha256": "710afb43ea6e3579b9b83a7300fdb44adbce749c6752b4d6d96db2a528515332"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/tracy/.logs/new_zone_src_locations.log.gz": {
+      "original_bytes": 316789,
+      "original_sha256": "af8d5717174c3a7ad604883816c2610780c55203df2ddd4a77a90b154b881bcd"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/operations.csv": {
+      "original_bytes": 34551,
+      "original_sha256": "9fb2bab0424e9cdf078570d35f0c91d03da82d65bae8d2ee399c279ede158557"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/exclusive_stages.csv": {
+      "original_bytes": 7310,
+      "original_sha256": "703e7a7151b0ed15537997db386cb9d6d17329625a4561e0d3e5ea4b36ff534e"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.md": {
+      "original_bytes": 2971,
+      "original_sha256": "fc8ab0546ad42d96680460ca7ed436c1ab82b748ca1b33293efe157e42c68ddf",
+      "publication_transform": "trim surplus terminal blank lines",
+      "stored_sha256": "8c965d31468187bb78404737585cc6182c6a3168b8eb5e3f0b222b302ed1bb01",
+      "raw_copy": "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.raw.md.gz"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/profile-summary.json": {
+      "original_bytes": 167646,
+      "original_sha256": "edf3154f382ae3d9b6cae417ef66351446f03c268220c5e3b5d788472088d814"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/inclusive_stages.csv": {
+      "original_bytes": 8268,
+      "original_sha256": "d6486b5dd8dd901df528ec809809e4647c1cf3d94ca655f6f66777d9fffdb672"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/device_totals.csv": {
+      "original_bytes": 414,
+      "original_sha256": "615d24f843d7edffe114a14444dce76a8a1d4dd7ab7179c26f5ad2a0381124b0"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/profile.json": {
+      "original_bytes": 20173,
+      "original_sha256": "bbce56c7f7b242a189ba4f885b45226f04f17c7338d163d866cad8f8f7bf1cd8"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/run.log.gz": {
+      "original_bytes": 21108,
+      "original_sha256": "7b5d332f857868d4c3530c7010e3a0c9617ecf7f5e6153e2e7b310988455e46a"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/hardware.xml.gz": {
+      "original_bytes": 545,
+      "original_sha256": "456d07ddabdca884af117869885e7c51833bbd47aad8fbde2bcae8b1a42c409b"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/tracy/reports/2026_10_10_04_33_06/ops_perf_results_2026_10_10_04_33_06.csv.gz": {
+      "original_bytes": 3142189,
+      "original_sha256": "450f18f8a4cc7c737c47d7e02824cfe13b294832079cd5ef52b3ab25231acb57"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/zone_src_locations.log.gz": {
+      "original_bytes": 4851,
+      "original_sha256": "d99e8f29c6ea24fc69bddb93bb3e1600b8286ae2fd8a8352e45875b828a2728f"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/tracy_ops_data.csv.gz": {
+      "original_bytes": 2182247,
+      "original_sha256": "ce5be6de9e2d4a00aa29c779e327e7576fadead48e916ff547d70c067c5ef33c"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/cpp_device_perf_report.csv.gz": {
+      "original_bytes": 460344,
+      "original_sha256": "d65baae553c0d445b60b934cdcef5384892844674724e1b7e31e64158742b795"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/tracy/.logs/new_zone_src_locations.log.gz": {
+      "original_bytes": 347269,
+      "original_sha256": "8b5c8744c0d51d0b87de5a50b300210e94a8a143318d2493bc365f5a634bd74e"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/operations.csv": {
+      "original_bytes": 37766,
+      "original_sha256": "d68516b3c831e67839a80eeb84fde6c9e75d05b4f8d339f6fc1fa3fe034323e3"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/exclusive_stages.csv": {
+      "original_bytes": 7318,
+      "original_sha256": "3504d245905b9818c0184d5327ad9ff336f2cb9ae06b6595597846d2ce1a70bd"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.md": {
+      "original_bytes": 2976,
+      "original_sha256": "e5932161eba511380b927ae5a9e8fd6e00b1d021f4daff565cc0981f1e090207",
+      "publication_transform": "trim surplus terminal blank lines",
+      "stored_sha256": "f340a0d6e3172009667d17fe1312c2d3bcce7a8a03226724608439169b5eefff",
+      "raw_copy": "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.raw.md.gz"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/profile-summary.json": {
+      "original_bytes": 177493,
+      "original_sha256": "0f47955b246cb7123de16a01567a7e42f1c20abed48d060ade76fad2c5692825"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/inclusive_stages.csv": {
+      "original_bytes": 8286,
+      "original_sha256": "5442e1600e870140d10d3a06d23d33e0230c3aedd3a222d00548bd11bedd1ec8"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/device_totals.csv": {
+      "original_bytes": 414,
+      "original_sha256": "13038701d88c65dc868a90d251c018174e7d7c8b0f770e8fb72037407f369b46"
+    },
+    "gdn-fusion-full-v1/queue.json": {
+      "original_bytes": 2653,
+      "original_sha256": "60b385f7f2a2a75d8a90894cef56764fc7710249fe9064e554f8d23edfaf0b5a"
+    },
+    "units.txt": {
+      "original_bytes": 504,
+      "original_sha256": "b1817b312b54a04ec34389f0be7d36923f81ed96f63f2fe0373ca11d5706cc1b"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-native/analysis/report.raw.md.gz": {
+      "original_bytes": 2976,
+      "original_sha256": "e5932161eba511380b927ae5a9e8fd6e00b1d021f4daff565cc0981f1e090207"
+    },
+    "gdn-fusion-full-v2/profile-s32768-b32-shared-qk/analysis/report.raw.md.gz": {
+      "original_bytes": 2971,
+      "original_sha256": "fc8ab0546ad42d96680460ca7ed436c1ab82b748ca1b33293efe157e42c68ddf"
+    }
+  }
+}

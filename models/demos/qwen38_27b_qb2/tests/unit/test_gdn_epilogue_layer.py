@@ -45,10 +45,11 @@ def test_real_layer_gate_requires_fp32_reference_and_stable_controls(expect_erro
         compare(rows)
 
 
-def test_opt_in_policy_only_changes_recurrence_and_identifier():
+@pytest.mark.parametrize("recurrence", ["single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue"])
+def test_opt_in_policy_only_changes_recurrence_and_identifier(recurrence):
     config = Path(__file__).resolve().parents[2] / "config"
     control = load_precision(config / "precision_single_step_shared_qk_bfp8_all.json")
-    candidate = load_precision(config / "precision_single_step_shared_qk_epilogue_bfp8_all.json")
+    candidate = load_precision(config / f"precision_{recurrence}_bfp8_all.json")
     assert {key for key in control if candidate[key] != control[key]} == {"config_id", "decode_recurrence"}
     assert set(candidate["weight_groups"].values()) == {"bfloat8_b"}
     assert candidate["kv_cache_dtype"] == "bfloat8_b"
