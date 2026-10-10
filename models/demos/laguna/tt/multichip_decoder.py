@@ -301,6 +301,8 @@ class MultichipDecoder(OptimizedDecoder):
         # (attn_epilogue1.py); TT_LAGUNA_AE1=0 restores the op chain
         self._ae1 = _parse_binary_env("TT_LAGUNA_AE1", True)
         self._ap1_scaler = None
+        # attn_prologue1 also for the sequential-KV verify rows (2..8, DFlash); 0 keeps it batch-1 only
+        self._ap1_rows = _parse_binary_env("TT_LAGUNA_AP1_ROWS", True)
         if self._ap1 and self.D >= 1:
             from .attn_prologue1 import reduce_scaler
 
@@ -2048,14 +2050,13 @@ class MultichipDecoder(OptimizedDecoder):
         if (
             self._ap1
             and fold_g
-            and B == 1
-            and not sequential_kv_write
+            and ((B == 1 and not sequential_kv_write) or (1 < B <= 8 and sequential_kv_write and self._ap1_rows))
             and qkv.dtype == ttnn.bfloat16
             and cfg.head_dim == 128
             and cfg.rotary_dim in (64, 128)
         ):
-            # batch 1: head split + q/k RMSNorm + RoPE + the KV-write shards in one op (attn_prologue1.py) instead of
-            # ~16 small ops
+            # batch 1 (or the up-to-8-row DFlash verify): head split + q/k RMSNorm + RoPE + the KV-write shards in one
+            # op (attn_prologue1.py) instead of ~16 (11) small ops
             from .attn_prologue1 import attn_prologue1
 
             if rope_mats is None:
@@ -2076,6 +2077,7 @@ class MultichipDecoder(OptimizedDecoder):
                 cfg.eps,
                 self._kv_shard_memcfg(B),
                 self._kv_shard_memcfg(B, y0=4 if fused_kv else 0),
+                rows=B,
             )
         else:
             if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):

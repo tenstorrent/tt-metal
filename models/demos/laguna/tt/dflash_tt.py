@@ -856,11 +856,11 @@ def load_dflash_shared_weights(
     devices = mesh_device.get_num_devices()
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
-    def cached(name: str, build):
+    def cached(name: str, build, dtype=ttnn.bfloat16):
         return _cached_device_tensor(
             build,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
@@ -875,7 +875,11 @@ def load_dflash_shared_weights(
         )
         for index in range(config.num_aux_hidden_states)
     )
-    fc = cached("fc", lambda: shared["fc.weight"].float().t().contiguous())
+    # the [5H, H] fusion of the target's auxiliary rows (94 MB in BF16, read every round for the committed rows);
+    # TT_LAGUNA_DFLASH_FC_WDT=bf8 stores it as bfloat8_b (teacher-forced AIME24 acceptance 2.677 vs 2.667; the round
+    # time did not change: the update is not on the critical path)
+    fc_dtype = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("TT_LAGUNA_DFLASH_FC_WDT", "bf16")]
+    fc = cached("fc", lambda: shared["fc.weight"].float().t().contiguous(), fc_dtype)
     hidden_norm = cached("hidden_norm", lambda: shared["hidden_norm.weight"].float().reshape(1, 1, 1, h))
     final_norm = cached("norm", lambda: shared["norm.weight"].float().reshape(1, 1, 1, h))
     return DFlashTTSharedWeights(
