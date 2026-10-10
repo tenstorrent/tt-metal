@@ -36,6 +36,36 @@ def gdn_fused_decode_enabled():
 _fused_decode_logged = False
 
 
+def gdn_decode_step_op_enabled():
+    """QWEN36_GDN_DECODE_STEP_OP (default on): decode through ttnn.experimental.kda.gdn_decode_step (conv + gating +
+    recurrence + gated norm in one op, packed conv history). 0 reverts to the fused-batched / original paths."""
+    return os.environ.get("QWEN36_GDN_DECODE_STEP_OP", "1") == "1"
+
+
+def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
+    """rows: list of 4 torch [C] vectors ([q | k | v] channels of one device) -> [Nv, 4, 32, 32] bf16 packed head
+    tiles for gdn_decode_step: tile (h, s) holds rows[s]'s channels [q_hk | k_hk | v_h] (hk = h // rf) as 32-wide
+    chunks, chunk c in row 2c + parity (user b's history uses parity b & 1; taps are stored on both parities)."""
+    rf = Nv // Nk
+    kd = Nk * Dk
+    out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
+    for h in range(Nv):
+        hk = h // rf
+        for j, r in enumerate(rows):
+            r = r.reshape(-1).to(torch.bfloat16)
+            chunks = torch.cat(
+                [
+                    r[hk * Dk : (hk + 1) * Dk],
+                    r[kd + hk * Dk : kd + (hk + 1) * Dk],
+                    r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
+                ]
+            ).reshape(-1, 32)
+            n = chunks.shape[0]
+            for par in (0, 1) if both_parities else (parity,):
+                out[h, j, par : 2 * n + par : 2, :] = chunks
+    return out
+
+
 def _log_fused_decode_once(msg):
     """One info line per process (the layer is built 48x)."""
     global _fused_decode_logged
@@ -318,6 +348,28 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if gdn_decode_step_op_enabled() and hasattr(ttnn.experimental, "kda"):
+            # gdn_decode_step conv taps: per device the 4 taps packed into [Nv_tp, 4, 32, 32] head tiles (both
+            # parities), sharded on dim 0 -> each device holds its own [Nv_tp, 4, 32, 32].
+            nv_tp, nk_tp = nv // tp, nk // tp
+            C_tp = 2 * nk_tp * dk + nv_tp * dv
+            per_dev = torch.cat(
+                [
+                    pack_head_tiles(
+                        [taps[j][d * C_tp : (d + 1) * C_tp] for j in range(4)], nv_tp, nk_tp, dk, dv, both_parities=True
+                    )
+                    for d in range(tp)
+                ],
+                dim=0,
+            )
+            tw["conv_taps_packed"] = ttnn.from_torch(
+                per_dev,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
     return tw
 
 
@@ -457,6 +509,11 @@ class TPGatedDeltaNet:
         self._nea_mask = {}  # per-width [1, 32*B, Nv] fp32 -exp(A_log) at each user's live row, 0 elsewhere
         self._fused_decode = self._fused_decode_supported(args, tw)
         self._fused_batched = self._fused_decode and self._decode_B > 1
+        # gdn_decode_step decode op (QWEN36_GDN_DECODE_STEP_OP): conv + gating + recurrence + gated norm in ONE op over
+        # a packed conv history [Bmax, Nv, 4, 32, 32] (_conv_hist_packed, updated in place by the op). The RM
+        # history stays the canonical format of every non-decode writer; conversions are on-device embedding gathers.
+        self._conv_hist_packed = None
+        self._decode_op = self._decode_step_op_supported(args, tw)
         # Batched mode keeps TWO conv-state formats, one per decode width class (see prepare_decode_width):
         #   hist   _conv_hist_rm [Bmax, K-1, C] RM: read/written by the fused path (width <= SCAN_MAX)
         #   states conv_states[1..K-1] [1, Bmax, C] TILE: read/written by the original path (width > SCAN_MAX)
@@ -465,7 +522,31 @@ class TPGatedDeltaNet:
         # _conv_fmt names which formats are currently valid for the DECODE binding: "both" / "hist" / "states".
         # Whole-batch writers set "both"; partial writers (write_slot, remap_slots) write both formats for their rows
         # and leave it unchanged; prepare_decode_width(B) syncs if needed and sets it to the class it is about to run.
+        # "packed" (decode_op only): _conv_hist_packed is the authoritative history (the op advances it); RM hist and
+        # conv_states are stale. Every non-decode reader/writer first converts packed -> RM (_unpack_conv_hist).
         self._conv_fmt = "both"
+
+    def _decode_step_op_supported(self, args, tw):
+        if not gdn_decode_step_op_enabled() or not self._fused_batched:
+            return False
+        reasons = []
+        if not (1 < self._decode_B <= 32):
+            reasons.append(f"max_batch_size {self._decode_B} not in [2, 32]")
+        if self.K != 4 or self.Dk != self.Dv or self.Nv % self.Nk or 2 * self.Nv > 32 or self.Nv > 16:
+            reasons.append("unsupported GDN head geometry")
+        if self.qkvz_dim_tp != self.qkv_dim_tp + self.Nv * self.Dv:
+            reasons.append("qkvz_dim != qkv_dim + Nv*Dv")
+        if not hasattr(ttnn.experimental.kda, "gdn_decode_step"):
+            reasons.append("ttnn.experimental.kda.gdn_decode_step unavailable")
+        if not (self._fuse_ab and getattr(args, "proj_1d_decode", False)):
+            reasons.append("fused [qkv|z|a|b] 1D decode projection unavailable")
+        if "conv_taps_packed" not in tw:
+            reasons.append("conv_taps_packed missing from tw")
+        if reasons:
+            logger.info("[GDN] gdn_decode_step op NOT used: " + "; ".join(reasons))
+            return False
+        logger.info("[GDN] decode path: gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP=0 reverts)")
+        return True
 
     def _fused_scan_max_width(self):
         """Widest decode width (users) taking the fused chunk_gated_delta_rule: grid cores // Nv_tp (9 on a 11x10
@@ -556,7 +637,10 @@ class TPGatedDeltaNet:
             if _had_hist:
                 ttnn.copy(self._hist_zero_source(), self._conv_hist_rm)
             self._conv_fmt = "both"  # zeros in both formats
-            if self._fused_batched:
+            if self._decode_op:
+                self._ensure_conv_hist_packed()  # allocated once here (host write), before any trace capture
+                self._pack_tables()
+            if self._fused_batched and not self._decode_op:
                 # Persistent width constants (placement / selection matrices, zero blocks, masked -exp(A_log)),
                 # allocated here (host writes) so no decode width allocates inside a trace capture.
                 self._prepare_batched_widths()
@@ -777,7 +861,122 @@ class TPGatedDeltaNet:
             ttnn.deallocate(tile)
             ttnn.deallocate(row)  # view of tap: frees tap's buffer
 
+    # ------------------------------------------------------------------ #
+    # gdn_decode_step op: packed conv history + on-device conversions to / from the RM history.
+    # ------------------------------------------------------------------ #
+    def _ensure_conv_hist_packed(self):
+        """The persistent [_decode_B, Nv, 4, 32, 32] bf16 TILE packed history the op updates in place (zeros on first
+        use; host write -> allocate before any trace capture)."""
+        if self._conv_hist_packed is None:
+            self._conv_hist_packed = ttnn.from_torch(
+                torch.zeros(self._decode_B, self.Nv, 4, 32, 32, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._conv_hist_packed
+
+    def _pack_tables(self):
+        """Per-model uint32 index tables (+ a zero row) for the RM <-> packed embedding gathers. Both are slot-position
+        aware: packed row (b, h, s, r) with s = 1..3 and r = 2c + (b & 1) holds chunk c of [q_hk | k_hk | v_h] of RM
+        history row (b, s - 1); s = 0 / the other parity / r >= 2 * n_chunks are zero. (packed row 2c + (b&1) of tile
+        (b, h, s) is the only place the op reads history from.)"""
+        key = ("gdn_pack_tables", self._decode_B, self.Nv, self.Nk, self.Dk, self.Dv, self.K)
+
+        def make():
+            Bm, Nv, Nk, Dk, Dv, K = self._decode_B, self.Nv, self.Nk, self.Dk, self.Dv, self.K
+            rf = Nv // Nk
+            qn, vn = Dk // 32, Dv // 32  # 32-channel chunks per q/k head, per v head
+            cpr = (2 * Nk * Dk + Nv * Dv) // 32  # RM chunk rows per (b, history row)
+            nck = 2 * qn + vn  # chunks per head tile
+            n_rm = Bm * (K - 1) * cpr
+            zero = n_rm  # index of the appended zero row
+            kd32 = Nk * Dk // 32
+
+            def rm_chunk(h, c):
+                hk = h // rf
+                if c < qn:
+                    return hk * qn + c
+                if c < 2 * qn:
+                    return kd32 + hk * qn + (c - qn)
+                return 2 * kd32 + h * vn + (c - 2 * qn)
+
+            to_packed = torch.full((Bm, Nv, 4, 32), zero, dtype=torch.int64)
+            for b in range(Bm):
+                for h in range(Nv):
+                    for sl in range(1, 4):
+                        for c in range(nck):
+                            to_packed[b, h, sl, 2 * c + (b & 1)] = (b * (K - 1) + sl - 1) * cpr + rm_chunk(h, c)
+            to_rm = torch.zeros((Bm, K - 1, cpr), dtype=torch.int64)
+            for b in range(Bm):
+                for j in range(K - 1):
+                    for ch in range(cpr):
+                        if ch < kd32:  # q
+                            h, c = (ch // qn) * rf, ch % qn
+                        elif ch < 2 * kd32:  # k
+                            h, c = ((ch - kd32) // qn) * rf, qn + (ch - kd32) % qn
+                        else:  # v
+                            h, c = (ch - 2 * kd32) // vn, 2 * qn + (ch - 2 * kd32) % vn
+                        to_rm[b, j, ch] = ((b * Nv + h) * 4 + j + 1) * 32 + 2 * c + (b & 1)
+
+            def dev(t, dtype, layout):
+                return ttnn.from_torch(
+                    t,
+                    dtype=dtype,
+                    layout=layout,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+            return {
+                "to_packed": dev(to_packed.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+                "to_rm": dev(to_rm.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+                "zero_row": dev(torch.zeros(1, 32, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+                "cpr": cpr,
+            }
+
+        return self._shared_const(key, make)
+
+    def _pack_conv_hist(self):
+        """RM history -> packed history (in place into _conv_hist_packed): one embedding gather. Eager only (it must
+        not be captured into a decode trace: the op owns the packed history while the trace replays)."""
+        tab = self._pack_tables()
+        Bm, K, cpr = self._decode_B, self.K, tab["cpr"]
+        packed = self._ensure_conv_hist_packed()
+        w = ttnn.reshape(self._ensure_conv_hist(), (Bm * (K - 1) * cpr, 32))
+        w = ttnn.concat([w, tab["zero_row"]], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.embedding(tab["to_packed"], w, layout=ttnn.TILE_LAYOUT)  # [1, Bm*Nv*4*32, 32] -> tiles in order
+        ttnn.deallocate(w)
+        out = ttnn.reshape(out, (Bm, self.Nv, 4, 32, 32))
+        ttnn.copy(out, packed)
+        ttnn.deallocate(out)
+
+    def _unpack_conv_hist(self):
+        """packed history -> RM history (in place into _conv_hist_rm): one embedding gather. Eager only."""
+        tab = self._pack_tables()
+        Bm, K, C = self._decode_B, self.K, self.qkv_dim_tp
+        hist = self._ensure_conv_hist()
+        rm = ttnn.to_layout(self._conv_hist_packed, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.reshape(rm, (Bm * self.Nv * 4 * 32, 32))
+        out = ttnn.embedding(tab["to_rm"], w, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, Bm*(K-1)*C/32, 32]
+        out = ttnn.reshape(out, (Bm, K - 1, C))
+        ttnn.copy(out, hist)
+        ttnn.deallocate(out)
+        ttnn.deallocate(rm)
+
+    def _ensure_rm_hist_valid(self):
+        """Before any non-decode reader/writer of the RM history / conv_states: when the packed history is the
+        authoritative one, convert it back to RM (conv_states stays stale) and tag the format "hist"."""
+        if self._conv_fmt == "packed":
+            self._unpack_conv_hist()
+            self._conv_fmt = "hist"
+
     def _needed_conv_fmt(self, B):
+        if self._decode_op and not self.use_fused_recurrent_decode and B <= 32:
+            return "packed"
         return "hist" if B <= self._scan_max_b else "states"
 
     def _require_conv_fmt(self, need):
@@ -786,6 +985,15 @@ class TPGatedDeltaNet:
         since this step makes the other format stale; a valid-other-only state needs the sync hook."""
         if self._conv_fmt == need:
             return
+        if need == "packed":
+            if self._conv_fmt == "both":  # eager first step after a whole-batch writer: RM -> packed here
+                self._pack_conv_hist()
+                self._conv_fmt = "packed"
+                return
+        else:
+            self._ensure_rm_hist_valid()  # leaving the packed format: RM becomes the valid one ("hist")
+            if self._conv_fmt == need:
+                return
         if self._conv_fmt == "both":
             self._conv_fmt = need
             return
@@ -802,6 +1010,18 @@ class TPGatedDeltaNet:
             return False
         need = self._needed_conv_fmt(B)
         synced = False
+        if need == "packed":
+            if self._conv_fmt != "packed":
+                if self._conv_fmt == "states":
+                    self._sync_conv_hist_from_states()
+                self._pack_conv_hist()  # RM ("both" / "hist" / just synced from states) -> packed
+                synced = True
+            self._conv_fmt = "packed"
+            return synced
+        if self._conv_fmt == "packed":
+            self._unpack_conv_hist()
+            self._conv_fmt = "hist"
+            synced = True
         if self._conv_fmt not in (need, "both"):
             if need == "hist":
                 self._sync_conv_hist_from_states()
@@ -1132,6 +1352,59 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _forward_decode_step_op(self, x, decode_ar=None):
+        """Decode at width B (1 <= B <= _decode_B <= 32; state rows / slots [0:B]) through ONE op,
+        ttnn.experimental.kda.gdn_decode_step: causal conv (packed history, updated in place) + SiLU + q/k/v split +
+        gating (beta, g) + recurrence on rec_state rows [0:B] (in place) + gated RMSNorm * silu(z). Then the unchanged
+        out-proj + all-reduce. Needs the "packed" conv format (see _require_conv_fmt)."""
+        tw = self.tw
+        B = x.shape[-2]
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        assert 1 <= B <= self._decode_B == self.B
+        # the fused [qkv|z|a|b] decode projection (1D matmul) straight into L1; the op consumes the whole row.
+        qkvzab = tpc.matmul_1d_decode(
+            x,
+            tw["qkvz"],
+            self.args.gdn_qkvz_decode_1d_progcfg,
+            self.cfg_in,
+            out_memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
+        gated = ttnn.experimental.kda.gdn_decode_step(
+            qkvzab,
+            tw["dt_bias_fp32"],
+            tw["neg_exp_A_fp32"],
+            self.rec_state,
+            tw["norm_w_1d"],
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            scale=self.scale,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            conv_hist=self._conv_hist_packed,
+            conv_taps=tw["conv_taps_packed"],
+            qkvz_dim=self.qkvz_dim_tp,
+            fast_mode=True,
+        )  # [1, B, Nv*Dv] bf16
+        ttnn.deallocate(qkvzab)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial, keep_fp32=True)  # partial is bf16 here (as the fused paths)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def snapshot_fused_decode_state(self):
         """Host copy of the fused-decode conv history (None when the fused path is off). conv_states is NOT the
         decode conv state when the fused path is on, so a caller that snapshots/restores GDN state around a
@@ -1139,6 +1412,8 @@ class TPGatedDeltaNet:
         restore_fused_decode_state. Mirrors the demos' rec_state/conv_states host snapshot."""
         if not self._fused_decode or self._conv_hist_rm is None:
             return None
+        if self._conv_fmt == "packed":
+            self._unpack_conv_hist()  # RM becomes current too (fmt stays "packed")
         return ttnn.to_torch(self._conv_hist_rm, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
 
     def restore_fused_decode_state(self, snap):
@@ -1688,6 +1963,7 @@ class TPGatedDeltaNet:
         if self._hist_hook_active() and self._decode_B > 1:
             # Fused batched decode reads its conv history from the RM buffer: write ONLY row `slot` (the K-1 newest
             # taps, convs[1..K-1], oldest first) BEFORE the loop below consumes convs. Live rows are untouched.
+            self._ensure_rm_hist_valid()  # packed -> RM first (decode_op); the next prepare_decode_width re-packs
             self._write_conv_hist_slot(slot, convs)
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
@@ -1722,6 +1998,12 @@ class TPGatedDeltaNet:
             return
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         self._gather_indices(self.rec_state, idx, dim=0)
+        repack = self._conv_fmt == "packed"
+        if repack:
+            # Slot-position-aware: go through the RM history (never gather the packed tensor: the packed row parity
+            # is b & 1, so a moved slot may need the other parity), then re-pack so the format stays "packed".
+            self._unpack_conv_hist()
+            self._conv_fmt = "hist"
         hist_used = self._hist_hook_active() and self._decode_B > 1 and self._conv_hist_rm is not None
         if not hist_used:
             for m in range(self.K):
@@ -1735,6 +2017,9 @@ class TPGatedDeltaNet:
             for m in range(self.K):
                 self._gather_indices(self.conv_states[m], idx, dim=1)
             self._gather_indices(self._conv_hist_rm, idx, dim=0)
+        if repack:
+            self._pack_conv_hist()
+            self._conv_fmt = "packed"
         self._conv_win_stale = True
 
     def _gather_indices(self, buf, idx, dim):
@@ -1958,6 +2243,10 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+        if self._decode_op and not self.use_fused_recurrent_decode and B <= 32 and Bmax == self._decode_B:
+            # gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP): every width 1..Bmax on the packed conv history.
+            self._require_conv_fmt("packed")
+            return self._forward_decode_step_op(x, decode_ar)
         if self._fused_decode and Bmax == 1 and B == 1 and not self.use_fused_recurrent_decode:
             # (Spec decode sets use_fused_recurrent_decode: its verify advances conv_states + rec_state with the fused
             # recurrent op, so decode must stay on that path too -- the fused-conv decode below keeps its history in

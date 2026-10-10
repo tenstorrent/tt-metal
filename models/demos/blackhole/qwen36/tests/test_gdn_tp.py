@@ -1316,6 +1316,8 @@ def test_gdn_tp_fused_batched_decode(mesh_device, Bmax, widths, reset_seeds, ens
 
     def snapshot():
         """rec_state + the conv history in the format the current width class maintains (hist or conv_states)."""
+        if gb._conv_fmt == "packed":  # gdn_decode_step op: the packed history is authoritative -> RM (exact)
+            gb._unpack_conv_hist()
         if gb._conv_fmt == "states":
             hist = torch.stack([_mesh_cat0(mesh, gb.conv_states[m]).reshape(nd, Bmax, C) for m in (1, 2, 3)], dim=2)
         else:
@@ -1325,7 +1327,7 @@ def test_gdn_tp_fused_batched_decode(mesh_device, Bmax, widths, reset_seeds, ens
     for step, w in enumerate(widths):
         fused_class = w <= gb._scan_max_b
         gb.prepare_decode_width(w)  # eager in-place conv-format sync when the width class changed
-        assert gb._conv_fmt == ("hist" if fused_class else "states")
+        assert gb._conv_fmt == ("packed" if gb._decode_op else "hist" if fused_class else "states")
         rec_pre, hist_pre = snapshot()
         x = torch.randn(1, 1, w, args.dim, dtype=torch.bfloat16)
         out = ttnn.to_torch(gb.forward_decode(replicate_to_device(mesh, x)), mesh_composer=tp_composer(mesh))
@@ -1420,8 +1422,11 @@ def test_gdn_tp_fused_batched_decode_trace(mesh_device, Bmax, width, reset_seeds
         ttnn.copy(src, gb.rec_state)
         ttnn.deallocate(src)
         gb.restore_fused_decode_state(hist_seed)
+        gb.prepare_decode_width(width)  # restore leaves the RM history valid only: re-pack before the replay
 
     def state():
+        if gb._conv_fmt == "packed":
+            gb._unpack_conv_hist()
         return (
             ttnn.to_torch(gb.rec_state, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
             ttnn.to_torch(gb._conv_hist_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
