@@ -234,11 +234,19 @@ void process_and_sort_tiles(
         cb_expert_index_template.wait_front(Wt);
     }
     cb_biased_scores.wait_front(Wt);
+    if constexpr (!sort_index_lanes) {
+        // nothing else in the loop changes these, so one setup serves every pair
+        reconfig_data_format_srca(cb_biased_scores_id);
+        transpose_init(cb_biased_scores_id);
+        pack_reconfig_data_format(cb_sorted_group_scores_id);
+    }
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
         // transpose and unpack into dest regs
-        reconfig_data_format_srca(cb_biased_scores_id);
-        transpose_init(cb_biased_scores_id);
+        if constexpr (sort_index_lanes) {
+            reconfig_data_format_srca(cb_biased_scores_id);
+            transpose_init(cb_biased_scores_id);
+        }
         transpose_tile(cb_biased_scores_id, wt, 0);
         transpose_tile(cb_biased_scores_id, wt + 1, 1);
 
@@ -257,7 +265,9 @@ void process_and_sort_tiles(
         gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
 
         // pack sorted score tiles
-        pack_reconfig_data_format(cb_sorted_group_scores_id);
+        if constexpr (sort_index_lanes) {
+            pack_reconfig_data_format(cb_sorted_group_scores_id);
+        }
         cb_sorted_group_scores.reserve_back(1);
         tile_regs_commit();
         tile_regs_wait();
