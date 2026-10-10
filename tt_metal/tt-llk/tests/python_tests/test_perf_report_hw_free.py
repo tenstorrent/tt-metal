@@ -527,6 +527,30 @@ def _perf_run(tmp_path, monkeypatch, tag, bases, mean=10.0):
     combine_perf_reports()
 
 
+def test_every_chunk_of_a_module_keeps_its_rows(tmp_path, monkeypatch):
+    # With --dist worksteal one worker can run a module in several chunks, and each chunk's
+    # teardown writes the same per-worker CSV.
+    from helpers import llk_pytest_plugin
+
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", tmp_path)
+    monkeypatch.setattr(llk_pytest_plugin, "_REPORTS_WRITTEN", set())
+    path = tmp_path / "perf_x.gw0.csv"
+    path.write_text("tile_cnt\n99\n")  # left by an earlier session
+
+    def chunk(*tile_counts):
+        report = PerfReport()
+        if tile_counts:
+            report.append(pd.DataFrame({"tile_cnt": list(tile_counts)}))
+        return report
+
+    llk_pytest_plugin._dump_or_append(chunk(1, 2), path)
+    llk_pytest_plugin._dump_or_append(chunk(), path)  # every test of this chunk skipped
+    llk_pytest_plugin._dump_or_append(chunk(3), path)
+
+    assert pd.read_csv(path)["tile_cnt"].tolist() == [1, 2, 3]
+    assert not path.with_name(path.name + ".chunk").exists()
+
+
 def test_second_run_does_not_mix_into_the_first(tmp_path, monkeypatch):
     # The bug this layout exists to prevent: run 2 is narrower than run 1, so a
     # shared output directory kept run 1's perf_b/ alongside run 2's perf_a/ and

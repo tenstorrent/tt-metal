@@ -1243,7 +1243,8 @@ class TestConfig:
 
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
-        ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
+        ones that are timed; the alignment would cost the other kernels code space. Fused kernels skip the build
+        header and are not pinned; their perf runs (perf_fused.py) are skipped on every architecture.
         """
         if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
             return ""
