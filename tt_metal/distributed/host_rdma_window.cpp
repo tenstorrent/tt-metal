@@ -246,6 +246,17 @@ std::string RdmaWindow::flush(uint32_t peer_rank) {
     return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Win_flush", rc);
 }
 
+std::string RdmaWindow::sync() {
+    const int rc = MPI_Win_sync(impl_->win);
+    return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Win_sync", rc);
+}
+
+std::string RdmaWindow::poke_progress() {
+    int flag = 0;
+    const int rc = MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, impl_->comm, &flag, MPI_STATUS_IGNORE);
+    return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Iprobe", rc);
+}
+
 std::string RdmaWindow::barrier() {
     const int rc = MPI_Barrier(impl_->comm);
     return rc == MPI_SUCCESS ? std::string{} : mpi_error_text("MPI_Barrier", rc);

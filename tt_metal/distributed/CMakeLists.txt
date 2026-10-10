@@ -71,7 +71,7 @@ else()
 endif()
 
 # The host-to-host hop is MPI one-sided RMA and there is no version of it without one, so
-# these two follow USE_MPI while the device legs build unconditionally.
+# these follow USE_MPI while the device legs build unconditionally.
 if(USE_MPI)
     list(
         APPEND
@@ -79,6 +79,7 @@ if(USE_MPI)
         ${CMAKE_CURRENT_SOURCE_DIR}/host_rdma_window.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_h2h_socket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/erisc_h2h_socket.cpp
     )
 endif()
 
