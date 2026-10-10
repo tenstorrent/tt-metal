@@ -26,18 +26,21 @@ from models.demos.deepseek_v3_d_p.tt.v41.config import V41Config
 from models.demos.deepseek_v3_d_p.tt.v41.weights import checkpoint
 
 TRACE = os.environ.get("V41_PREFILL_TRACE", "/mnt/tt-data/sdawle/dsv41_golden/prefill_trace_n1200")
-SEQ = int(os.environ.get("V41_TEST_SEQ", "1024"))  # a multiple of 32 * sp
+SEQ = int(os.environ.get("V41_TEST_SEQ", "1024"))  # a multiple of 32 * sp (256 on 8 x 4)
 PCC = float(os.environ.get("V41_TEST_PCC", "0.99"))
+# the full galaxy by default: a 2 x 4 FABRIC_2D sub-mesh of a 32-chip galaxy fails the router handshake toward the chips
+# outside it (host 30, 2026-10-10: "Fabric Router Sync: Timeout ... on Device 1", also right after a glx reset)
+MESH = tuple(int(v) for v in os.environ.get("V41_TEST_MESH", "8,4").split(","))
 
 _MESH_CONFIGS = [
     pytest.param(
-        (2, 4),
+        MESH,
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         },
-        id="fabric2d-mesh-2x4",
+        id=f"fabric2d-mesh-{MESH[0]}x{MESH[1]}",
     ),
 ]
 
@@ -58,7 +61,8 @@ def _reference_attention(layers: list[int]):
     out = {}
     for lid in layers:
         t = torch.load(os.path.join(TRACE, f"layer_{lid}.pt"))
-        x_in, pre_in = t["x_in"][:SEQ].float(), t["pre_in"][:SEQ].float()
+        # the streams stay bf16 as in model.py (its bf16 Linears -- e.g. the indexer's wk -- reject an fp32 input)
+        x_in, pre_in = t["x_in"][:SEQ].to(torch.bfloat16), t["pre_in"][:SEQ].float()
         layer = model.layers[lid]
         with torch.inference_mode():
             h = layer.attn_norm(layer.hc_pre(x_in.unsqueeze(0), pre_in.unsqueeze(0)))
