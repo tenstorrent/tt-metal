@@ -477,19 +477,20 @@ Tensor requantize(
                 const int32_t in_zero_point,
                 const float out_scale,
                 const int32_t out_zero_point) {
-                // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
+                // q = round([(q - z_in) * s_in] / s_out) + z_out
                 const float scale_recip = in_scale / out_scale;
                 // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
                 // Int8 input is read via the UInt8 unpacker and unbiased in the SFPU as e = q + 128, so fold
                 // the extra -128 * scale_recip into the zero-point: e * scale_recip + zp with
-                // zp = out_zp - (z_in + 128) * scale_recip reproduces (q - z_in) * scale_recip + out_zp.
+                // zp = -(z_in + 128) * scale_recip reproduces (q - z_in) * scale_recip.
                 // (z_in + 128) is the effective zero-point expressed in the excess-128 input domain.
+                // The LLK rounds that and then adds out_zp, passed as the second parameter.
                 const float in_zero_point_biased =
                     (a_dtype == DataType::INT8) ? (in_zero_point + 128.0f) : static_cast<float>(in_zero_point);
-                const float zero_point = out_zero_point - (in_zero_point_biased * scale_recip);
+                const float zero_point = -(in_zero_point_biased * scale_recip);
 
-                const std::array post_activation{
-                    operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::ZERO_POINT, zero_point}};
+                const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
+                    operations::unary::UnaryOpType::ZERO_POINT, zero_point, static_cast<float>(out_zero_point)}};
                 return ttnn::prim::binary_ng(
                     input_tensor,
                     scale_recip,
