@@ -321,12 +321,22 @@ std::optional<TopologyPlacements> uncollapse_placements(
         // One placement per mesh axis only means something when axis i of the label is axis i of the mesh: the
         // distribution shape fits the mesh per axis and the coordinates walk a distribution-shaped block of it in
         // row-major order. A mapper whose mesh_shape_override does not fit distributes in row-major order over all
-        // devices instead, and per physical axis that layout has no placement.
+        // devices instead (DistributionMode::ROW_MAJOR), and per physical axis that layout has no placement.
+        //
+        // The coordinates can only be consulted when they are the distribution's. A device tensor's label carries
+        // its storage's coordinates -- every device of the mesh, since an op output's buffer spans the mesh whatever
+        // block its input occupied (update_output_tensor_topologies keeps each output's own coordinates) -- so for a
+        // sub-range distribution such as the (1, C) row that from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) builds
+        // on a 2-D mesh the coordinate list says nothing about where the block lies. The shape alone decides then:
+        // a shape that fits the mesh per axis was mapped as a block (DistributionMode::SUBMESH, with or without an
+        // offset), so its axes are the mesh's; one that does not fit was laid out row-major over the mesh.
         bool fits = true;
         for (size_t axis = 0; axis < mesh_dims; ++axis) {
             fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
         }
-        if (!fits || !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape)) {
+        const bool coordinates_are_the_distributions = in.mesh_coords().size() == distribution_shape.mesh_size();
+        if (!fits || (coordinates_are_the_distributions &&
+                      !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape))) {
             set_reason(fmt::format(
                 "tensor topology {} does not align with the axes of mesh {}: its coordinates are not a {}-shaped "
                 "block of the mesh in row-major order (a mapper whose mesh_shape_override does not fit the mesh "

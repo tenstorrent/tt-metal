@@ -79,7 +79,10 @@ std::optional<tt::tt_metal::TensorTopology> refuse(const std::string& what, Refu
 // is returned verbatim, provided its axes align with the mesh axes: its distribution shape fits the mesh per axis and
 // its coordinates walk a distribution-shaped block of the mesh in row-major order (an N-D mapper whose shape fits, with
 // or without an offset). A mapper whose mesh_shape_override does not fit distributes in row-major order over the whole
-// mesh, so axis i of its label is not axis i of the mesh and no per-axis edit describes it: not expandable. A
+// mesh, so axis i of its label is not axis i of the mesh and no per-axis edit describes it: not expandable. The
+// coordinates are only consulted when there are as many as the distribution has devices: a device tensor's label
+// lists its storage's coordinates (every device of the mesh, however small the block its input occupied), so a
+// sub-range label on a device tensor is judged by its shape alone -- it fits, so it was mapped as a block. A
 // collapsed 1-D label must cover the whole mesh in row-major order; Replicate expands to Replicate on every axis,
 // Shard{d} to Shard{d} on every axis of size > 1 (row-major hierarchical sharding) and Replicate on size-1 axes.
 // Anything else is not expandable: nullopt is returned and `reason` (if given) says why.
