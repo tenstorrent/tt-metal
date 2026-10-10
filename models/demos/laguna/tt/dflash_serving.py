@@ -340,6 +340,9 @@ class DFlashServedController:
         # adaptive depth (the serving adapter's verify_depth hook): only the first `depth` drafts are checked
         depth_hook = getattr(self, "verify_depth", None)
         depth = depth_hook() if depth_hook is not None else None
+        small = getattr(self, "verify_drafts_small", None)
+        if depth is not None and small and int(depth) <= int(small) < len(drafts):
+            drafts = drafts[:small]  # the serving adapter's smaller verify trace covers this depth
         verify_tokens = [known_bonus, *drafts]
         if self._stats_sync:
             entries_after_draft = self.core.mesh_device.num_program_cache_entries()

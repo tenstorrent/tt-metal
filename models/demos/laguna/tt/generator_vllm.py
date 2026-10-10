@@ -182,6 +182,9 @@ class LagunaForCausalLM:
     _DFLASH_VERIFY_TRACE = _DFLASH_SERVING_ENABLED and os.environ.get("TT_LAGUNA_DFLASH_TRACE", "1") == "1"
     # rows of the traced target verify: the known token + the first TT_LAGUNA_DFLASH_VERIFY_DRAFTS drafts (default 5)
     _DFLASH_VERIFY_ROWS = 1 + int(os.environ.get("TT_LAGUNA_DFLASH_VERIFY_DRAFTS", "5"))
+    # a second, smaller verify trace (rows) for rounds whose adaptive depth fits it: the 6-row trace's per-row work
+    # (attention per row, the all-reduces, KV writes) costs ~0.6-0.9 ms even when the MoE routes 1-3 rows. 0: off
+    _DFLASH_SMALL_VERIFY_ROWS = int(os.environ.get("TT_LAGUNA_DFLASH_SMALL_VERIFY", "3"))
     # traced DFlash verify picks each row's greedy token on device (logits padded to one 32-row tile, the batch-32
     # sampler) and reads back 16 ids instead of 16 x vocab logits (~3.2 MB) + a host argmax
     _DFLASH_DEVICE_ARGMAX = os.environ.get("TT_LAGUNA_DFLASH_DEVICE_ARGMAX", "1") == "1"
@@ -803,27 +806,36 @@ class LagunaForCausalLM:
     def _dflash_update_capture(self):
         """Compile and capture the ring update over the resident verify trace's auxiliary output buffer (after the
         verify capture: that buffer is the trace's own output)."""
-        st = getattr(self, "_dflash_update_state", None)
-        stv = getattr(self, "_verify_dec", {}).get("dflash")
-        if st is None or stv is None or stv.get("aux") is None:
-            return
         if os.environ.get("TT_LAGUNA_DFLASH_UPDATE_TRACE", "1") != "1":  # eager ring appends (A/B)
             return
-        self._dflash_update_body(st, stv["aux"])  # compile (place = 0, keep = 1: the rings are unchanged)
-        ttnn.synchronize_device(self.mesh_device)
-        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self._dflash_update_body(st, stv["aux"])
-        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
-        ttnn.synchronize_device(self.mesh_device)
-        st["tid"] = tid
+        captured = False
+        for key in ("dflash", "dflash_s"):
+            st = self._dflash_update_st(key)
+            stv = getattr(self, "_verify_dec", {}).get(key)
+            if st is None or stv is None or stv.get("aux") is None:
+                continue
+            self._dflash_update_body(st, stv["aux"])  # compile (the slots are the warmup's; the rings are scratch)
+            ttnn.synchronize_device(self.mesh_device)
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self._dflash_update_body(st, stv["aux"])
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            ttnn.synchronize_device(self.mesh_device)
+            st["tid"] = tid
+            captured = True
+        if not captured:
+            return
         self._dflash_controller.update_context = self._dflash_update_context
         print("[laguna dflash] warmup: context K/V ring update traced", flush=True)
 
-    def _dflash_update_stage(self, position):
+    def _dflash_update_st(self, key):
+        """The ring-update state of the verify trace ``key`` ("dflash" or the small "dflash_s")."""
+        return getattr(self, "_dflash_update_state" if key == "dflash" else "_dflash_update_state_s", None)
+
+    def _dflash_update_stage(self, position, key="dflash"):
         """Upload the ring-update inputs of a verify starting at ``position``: they write every verify row (only the
         committed ones become context, see DFlashTTProposalCache.ring_commit), so they do not wait for the verify."""
-        st = getattr(self, "_dflash_update_state", None)
-        stv = getattr(self, "_verify_dec", {}).get("dflash")
+        st = self._dflash_update_st(key)
+        stv = getattr(self, "_verify_dec", {}).get(key)
         if st is None or st.get("tid") is None or stv is None:
             return
         rows = int(stv["rows"])
@@ -843,14 +855,15 @@ class LagunaForCausalLM:
         """Controller hook after a verify: write the verify rows' K/V into the rings by replaying the update trace
         (the first ``committed`` become context). False (the controller then runs the eager update) unless the
         capture is the traced verify's buffer."""
-        st = getattr(self, "_dflash_update_state", None)
-        stv = getattr(self, "_verify_dec", {}).get("dflash")
-        if st is None or st.get("tid") is None or stv is None or verify_capture.hidden_states is not stv.get("aux"):
+        key = next((k for k, v in getattr(self, "_verify_dec", {}).items()
+                    if k.startswith("dflash") and verify_capture.hidden_states is v.get("aux")), None)  # fmt: skip
+        st = self._dflash_update_st(key) if key else None
+        if st is None or st.get("tid") is None:
             return False
         start, rows = int(verify_capture.start_position), int(verify_capture.row_count)
         if st.get("queued") != (start, rows):
             if st.get("staged") != (start, rows):
-                self._dflash_update_stage(start)
+                self._dflash_update_stage(start, key)
             ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         st["staged"] = st["queued"] = None
         cache = self._dflash_cache
@@ -870,23 +883,24 @@ class LagunaForCausalLM:
                 self._dflash_draft_launched = key
         return True
 
-    def _dflash_after_verify(self, position, rows):
+    def _dflash_after_verify(self, position, rows, key="dflash"):
         """While the verify runs: queue the ring update behind it and upload every draft variant's inputs (RoPE and
         mask after committing 1..rows rows; see _DFLASH_DRAFT_VARIANTS)."""
-        st = getattr(self, "_dflash_update_state", None)
+        st = self._dflash_update_st(key)
         variants = getattr(self, "_dflash_draft_variants", None)
-        if not variants or st is None or st.get("tid") is None or len(variants) != rows:
+        if not variants or st is None or st.get("tid") is None or len(variants) < rows:
             return
         if st.get("staged") != (position, rows):
-            self._dflash_update_stage(position)
+            self._dflash_update_stage(position, key)
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         st["queued"] = (position, rows)
         cache = self._dflash_cache
         q = int(cache.query_rows)
-        for c, sv in variants.items():
-            for key, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs_after(position, c + 1, rows, q)):
+        for c in range(rows):
+            sv = variants[c]
+            for name, t in zip(("cos_q", "sin_q", "mask"), cache.ring_query_inputs_after(position, c + 1, rows, q)):
                 host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device))
-                ttnn.copy_host_to_device_tensor(host, sv[key])
+                ttnn.copy_host_to_device_tensor(host, sv[name])
         self._dflash_variants_for = (position, rows)
 
     def close_dflash(self):
@@ -3214,10 +3228,11 @@ class LagunaForCausalLM:
         greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
         return greedy, capture
 
-    def _dflash_verify_alloc(self, kv_cache, num_blocks):
-        """Allocate and compile the 16-row DFlash target verify (embed -> 48 layers with the six auxiliary
-        hidden states -> LM-head shards) over persistent input buffers. No trace is resident yet."""
-        R = self._DFLASH_VERIFY_ROWS
+    def _dflash_verify_alloc(self, kv_cache, num_blocks, rows=None, tok32=None, active=None):
+        """Allocate and compile the R-row DFlash target verify (embed -> 48 layers with the six auxiliary
+        hidden states -> LM-head shards) over persistent input buffers. No trace is resident yet. tok32 / active:
+        share another verify's greedy-id output and active-rows input (the small verify)."""
+        R = int(rows or self._DFLASH_VERIFY_ROWS)
         g = self.gen
         tok = g._rep(torch.zeros([1, 1, 1, R], dtype=torch.int32), ttnn.uint32)
         cur = g._rep(torch.zeros([R], dtype=torch.int32), ttnn.int32)
@@ -3246,11 +3261,11 @@ class LagunaForCausalLM:
             last_pt_host_groups={},
         )
         if self._DFLASH_DEVICE_ARGMAX:
-            st["tok32"] = g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
+            st["tok32"] = tok32 if tok32 is not None else g._rep(torch.zeros([1, 1, 1, 32], dtype=torch.int32), ttnn.uint32)
         # rows the MoE routes (the first value; later rows get no experts): an adaptive-depth round checks fewer drafts
         # and reads fewer expert weights
-        st["active"] = g._rep(torch.full([1, 32], R, dtype=torch.int32), ttnn.uint32)
-        st["active_last"] = R
+        st["active"] = active if active is not None else g._rep(torch.full([1, 32], R, dtype=torch.int32), ttnn.uint32)
+        st["active_last"] = R if active is None else None
 
         def step():
             for layer in self.model.layers:
@@ -3390,7 +3405,7 @@ class LagunaForCausalLM:
             flush=True,
         )
 
-    def _dflash_verify_capture(self, st):
+    def _dflash_verify_capture(self, st, key="dflash"):
         ttnn.synchronize_device(self.mesh_device)
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         st["_step"]()
@@ -3398,14 +3413,17 @@ class LagunaForCausalLM:
         ttnn.synchronize_device(self.mesh_device)
         st["tid"] = tid
         st.pop("_step", None)
-        self._verify_dec["dflash"] = st
+        self._verify_dec[key] = st
         return st
 
     def _dflash_verify_replay(self, token_ids, pos, pt_host, rows_per_layer=None):
         """Replay the captured 16-row verify; None when this round cannot use it (other row count or
         page-table width), in which case the caller runs the eager verify."""
-        st = getattr(self, "_verify_dec", {}).get("dflash") if self._DFLASH_VERIFY_TRACE else None
         B = int(token_ids.shape[0])
+        key = "dflash"
+        if self._DFLASH_VERIFY_TRACE and B == self._DFLASH_SMALL_VERIFY_ROWS and "dflash_s" in getattr(self, "_verify_dec", {}):
+            key = "dflash_s"
+        st = getattr(self, "_verify_dec", {}).get(key) if self._DFLASH_VERIFY_TRACE else None
         if st is None or st.get("tid") is None or B != st["rows"]:
             return None
         hybrid = rows_per_layer is not None
@@ -3431,12 +3449,13 @@ class LagunaForCausalLM:
             if active != st["active_last"]:
                 ttnn.copy_host_to_device_tensor(self.gen._host(torch.full([1, 32], active, dtype=torch.int32), ttnn.uint32),
                                                 st["active"])  # fmt: skip
-                st["active_last"] = active
+                # a shared buffer (small verify) is written by either trace's round: re-upload next time
+                st["active_last"] = active if "dflash_s" not in self._verify_dec else None
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=False)
         # the context ring update's inputs (they write every verify row), uploaded while the verify runs; with draft
         # variants the update is queued now and every variant's inputs are uploaded too
-        self._dflash_update_stage(int(pos[0]))
-        self._dflash_after_verify(int(pos[0]), B)
+        self._dflash_update_stage(int(pos[0]), key)
+        self._dflash_after_verify(int(pos[0]), B, key)
         if "tok32" in st:
             greedy = [int(t) for t in self.gen._read_token(st["tok32"], B)]
         else:
@@ -4316,6 +4335,11 @@ class LagunaForCausalLM:
             if self._DFLASH_VERIFY_TRACE and "dflash" not in self._verify_dec:
                 width = int(num_blocks or self._max_blocks)
                 staged = self._dflash_verify_alloc(kv_cache, width)
+                staged_s = None
+                Rs = self._DFLASH_SMALL_VERIFY_ROWS
+                if 1 < Rs < int(staged["rows"]) and self._DFLASH_DRAFT_VARIANTS and self._dflash_cache.kv_ring:
+                    staged_s = self._dflash_verify_alloc(kv_cache, width, Rs, staged.get("tok32"), staged["active"])
+                    self._dflash_update_state_s = self._dflash_update_alloc()
                 # Everything that runs eagerly next to the resident trace must have run once BEFORE capture:
                 # its first call compiles programs and sets up collective (all_reduce) resources, and
                 # anything first allocated after capture can be overwritten by a replay (a 2nd draft round
@@ -4337,6 +4361,9 @@ class LagunaForCausalLM:
                     self._dflash_controller.draft_tokens = self._dflash_draft_tokens
                     self._dflash_controller.verify_depth = self._dflash_verify_depth
                 self._dflash_verify_capture(staged)
+                if staged_s is not None:
+                    self._dflash_verify_capture(staged_s, "dflash_s")
+                    self._dflash_controller.verify_drafts_small = Rs - 1
                 if self._DFLASH_DRAFT_TRACE and self._dflash_cache.kv_ring:
                     self._dflash_update_capture()
             print(
