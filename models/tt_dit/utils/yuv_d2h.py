@@ -69,7 +69,7 @@ def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None, input_pat
     return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, input_patch_size=input_patch_size)
 
 
-def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
+def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int, defer: bool = False):
     """Single-host H/W-sharded planes to the existing asynchronous DMA/reassembly path."""
     if ttnn.using_distributed_env():
         raise ValueError("direct YUV planes currently require a single host")
@@ -80,7 +80,7 @@ def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
     h, w = h_per * mesh_device.shape[0], w_per * mesh_device.shape[1]
     if not (0 < logical_h <= h and logical_h % 2 == 0 and 0 < logical_w <= w and logical_w % 2 == 0):
         raise ValueError("YUV crop must be positive, even, and inside the assembled planes")
-    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w)
+    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w, defer=defer)
 
 
 def _yuv_planar_d2h(
