@@ -1021,6 +1021,19 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.build_elfs()
+                dump = os.environ.get("LLK_EXP_MAPDUMP")  # experiment: report row key -> runtime bytes and ELF dir
+                if dump:
+                    import json as _json
+                    sweep = PerfConfig._build_sweep_frame({}, self.formats_config, self.unpack_to_dest, self.dest_acc,
+                                                          self.passed_templates, self.passed_runtimes)
+                    node = os.environ.get("PYTEST_CURRENT_TEST", "").split("::")[0].split("/")[-1].replace(".py", "")
+                    rec = {"module": node, "run_type": run_type.name, "key": [str(v) for v in sweep.iloc[0].tolist()],
+                           "cols": list(sweep.columns), "test": self.test_name, "variant": self.variant_id,
+                           "bytes": self.runtime_arguments_bytes().hex(),
+                           "nodeid": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+                           "elf_dir": str(self._layout_elf_dir(build=False))}
+                    with open(os.path.join(dump, f"map_{os.getpid()}.jsonl"), "a") as f:
+                        f.write(_json.dumps(rec) + "\n")
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
