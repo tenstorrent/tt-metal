@@ -151,3 +151,15 @@
   budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
+
+# Device-free manifest tests, manifest and schema validation using mock clusters.
+- id: fabric-cpu-manifest
+  name: fabric cpu manifest tests
+  cmd: ./tests/scripts/run_fabric_manifest_tests.sh
+  skus:
+    cpu_medium:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U0BRTUH9VE0 # Amogh Rajagopal
