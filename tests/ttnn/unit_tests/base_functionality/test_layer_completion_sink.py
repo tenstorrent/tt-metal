@@ -117,24 +117,31 @@ def test_sink_spins_until_ring_drains(builder):
 
 
 @pytest.mark.parametrize("builder", [lcs.build_layer_completion_sink, lcs.build_layer_completion_sink_v2])
-def test_sink_timeout_raises(monkeypatch, builder):
-    monkeypatch.setattr(lcs, "LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S", 0.05)
+def test_sink_waits_on_a_full_ring_and_warns_at_a_cadence(monkeypatch, builder):
+    """A full ring is backpressure, not an error: wait as long as it takes, one warning on entry and
+    one per LOG_EVERY_S while waiting, never a raise."""
     monkeypatch.setattr(lcs, "LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S", 0.02)
-    producer = FakeProducer(fail_first=10**9)  # never drains
+    monkeypatch.setattr(lcs, "LAYER_COMPLETION_PUSH_SPIN_SLEEP_S", 0.005)
+    warnings = []
+    monkeypatch.setattr(lcs.logger, "warning", lambda msg: warnings.append(msg))
+    producer = FakeProducer(fail_first=20)  # ~100 ms blocked at 5 ms per attempt
     sink = builder(producer, source_rank=RANK, num_layers=NUM_LAYERS)
 
-    with pytest.raises(RuntimeError, match="router not draining"):  # allow-pytest.raises: host-only, no device error
-        sink.layers_completed(**EVENT)
+    sink.layers_completed(**EVENT)
+
+    assert len(producer.attempts) == 21
+    assert 2 <= len(warnings) <= 8  # entry + a few cadence warnings, not one per attempt
+    assert warnings[0].startswith("[layer-completion] ring full")
 
 
 @pytest.mark.parametrize("builder", [lcs.build_layer_completion_sink, lcs.build_layer_completion_sink_v2])
-def test_sink_shutdown_aborts_spin(builder):
+def test_sink_shutdown_drops_the_message_and_returns(builder):
     producer = FakeProducer(fail_first=10**9)
     sink = builder(producer, source_rank=RANK, num_layers=NUM_LAYERS, is_shutdown=lambda: len(producer.attempts) >= 3)
 
-    with pytest.raises(RuntimeError, match="shutdown requested"):  # allow-pytest.raises: host-only, no device error
-        sink.layers_completed(**EVENT)
-    assert len(producer.attempts) == 3  # aborted promptly, not at the timeout
+    sink.layers_completed(**EVENT)  # no raise: the request loop exits on its own shutdown check
+
+    assert len(producer.attempts) == 3  # stopped waiting as soon as shutdown was seen
 
 
 # ---------------------------------------------------------------------------

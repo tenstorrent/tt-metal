@@ -50,51 +50,31 @@ prefill_runner.py. Kept dependency-light (stdlib + loguru — no ttnn) so the
 sinks are unit testable without importing the device stack.
 """
 
-import os
 import time
 from abc import ABC, abstractmethod
 
 from loguru import logger
 
-# When the completion ring is full, spin waiting for the router to drain rather than
-# dropping/failing immediately. Bounded so a genuinely stalled router still surfaces.
-LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
 LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
-LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001  # tiny yield so the spin doesn't peg a core
+LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
 
 
 def _push_with_spin(try_push, *, seq: int, is_shutdown) -> None:
-    """Push with bounded full-ring backpressure.
-
-    try_push() is a zero-arg callable returning bool. The ring is sized well
-    above in-flight depth; a full ring means the router thread is momentarily
-    behind. Spin (don't drop) for up to the timeout, logging on entry, every
-    LOG_EVERY_S while waiting, and on exit. Raises if the router never catches
-    up, or immediately if is_shutdown() reports an operator stop (SIGTERM).
-    """
+    """Full-ring backpressure: wait for the router to drain, warning on entry and every
+    LOG_EVERY_S. Only an operator shutdown ends the wait, dropping the message."""
     start = time.monotonic()
     next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-    logger.warning(
-        f"[layer-completion] ring full (seq={seq}); spinning up to "
-        f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
-    )
-    while True:
-        if try_push():
-            logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
-            return
+    logger.warning(f"[layer-completion] ring full (seq={seq}); waiting for the router to drain")
+    while not try_push():
         if is_shutdown():
-            raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
+            logger.warning(f"[layer-completion] shutdown while waiting on a full ring; dropped seq={seq}")
+            return
         now = time.monotonic()
-        if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
-            logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
-            raise RuntimeError(
-                f"layer-completion ring full (seq={seq}); router not draining after "
-                f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
-            )
         if now >= next_log:
-            logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
+            logger.warning(f"[layer-completion] still waiting on a full ring (seq={seq}) after {now - start:.0f}s")
             next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
         time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
+    logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
 
 
 class LayerCompletionSink(ABC):

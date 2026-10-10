@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -114,11 +115,25 @@ void LayerAckService::reader_loop() {
     const auto sockets = d2h_service_.get_sockets();
     TT_FATAL(!sockets.empty(), "LayerAckService: metadata-only D2HStreamService exposes no sockets");
 
-    // Full-ring backpressure: wait rather than drop, but stay responsive to stop().
+    // Full-ring backpressure: wait rather than drop, warning on entry and every 10 s; only stop() ends it.
     const auto push_blocking = [this](auto& queue, const auto& msg) {
+        std::optional<std::chrono::steady_clock::time_point> blocked_since;
+        auto next_log = std::chrono::steady_clock::time_point{};
         while (!queue->try_push(msg)) {
             if (!running_.load(std::memory_order_acquire)) {
                 return false;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (!blocked_since) {
+                blocked_since = now;
+            }
+            if (now >= next_log) {
+                log_warning(
+                    tt::LogOp,
+                    "LayerAckService: rank {} ring full for {} s; waiting for the router to drain",
+                    source_rank_,
+                    std::chrono::duration_cast<std::chrono::seconds>(now - *blocked_since).count());
+                next_log = now + std::chrono::seconds(10);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
