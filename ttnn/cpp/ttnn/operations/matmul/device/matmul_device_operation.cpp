@@ -2059,8 +2059,39 @@ void validate_matmul_mcast1d_config(
 
         TT_FATAL(!optional_bias.has_value(), "{}: Bias is not supported when using gather_in0.", config_name);
     } else {
+        // Factory contract: sharded in0 must sit at sub-device start, inside the cwsg rectangle,
+        // and hold at least div_up(M, per_core_M) shards (factory does max(num_cores_with_work, grid.num_cores())).
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
-        check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        if (input_tensor_a.is_sharded()) {
+            CoreCoord start_core = {0, 0};
+            if (attributes.sub_device_id.has_value()) {
+                auto sd_worker_cores = input_tensor_a.device()->worker_cores(
+                    tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
+                start_core = sd_worker_cores.bounding_box().start_coord;
+            }
+            const auto& cwsg = program_config.compute_with_storage_grid_size;
+            const CoreRange matmul_core_rect(
+                start_core, CoreCoord(start_core.x + cwsg.x - 1, start_core.y + cwsg.y - 1));
+            const uint32_t M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const uint32_t num_shards = tt::div_up(M, program_config.per_core_M);
+            const auto& shard_grid = input_tensor_a.shard_spec().value().grid;
+            const auto bb = shard_grid.bounding_box();
+            TT_FATAL(
+                bb.start_coord == start_core,
+                "{}: sharded in0 must start at sub-device origin {}, got {}",
+                config_name, start_core, bb.start_coord);
+            TT_FATAL(
+                matmul_core_rect.contains(bb),
+                "{}: sharded in0 bounding box {} must fit inside the factory work rectangle {}",
+                config_name, bb, matmul_core_rect);
+            TT_FATAL(
+                shard_grid.num_cores() >= num_shards,
+                "{}: sharded in0 has {} cores, need at least {} (= div_up(M, per_core_M))",
+                config_name, shard_grid.num_cores(), num_shards);
+        } else {
+            check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        }
         if (!attributes.global_cb.has_value()) {
             check_tensor_in_grid(input_tensor_b, device_grid_1d);
         }
