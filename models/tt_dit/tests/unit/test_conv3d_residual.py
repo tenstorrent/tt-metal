@@ -27,10 +27,11 @@ def _host(t):
         (256, 128, 128, 64),  # two C_in blocks: reducer path, two C_out blocks
     ],
 )
-def test_conv3d_residual(mesh_device, device_params, C_in, C_out, C_in_block, C_out_block):
+@pytest.mark.parametrize("H, W", [(10, 12), (9, 13)], ids=["full_blocks", "partial_blocks"])
+def test_conv3d_residual(mesh_device, device_params, C_in, C_out, C_in_block, C_out_block, H, W):
     mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     torch.manual_seed(0)
-    N, T, H, W = 1, 4, 10, 12
+    N, T = 1, 4
     x = torch.randn(N, T, H, W, C_in)
     conv = torch.nn.Conv3d(C_in, C_out, kernel_size=3, padding=(0, 1, 1))
     tt_x = _to_dev(x, mesh, ttnn.ROW_MAJOR_LAYOUT)
@@ -80,7 +81,5 @@ def test_conv3d_residual(mesh_device, device_params, C_in, C_out, C_in_block, C_
     ref = _host(ttnn.add(tt_res, plain))
     fused = _host(run(tt_res))
     diff = (fused - ref).abs()
-    print(
-        f"residual C_in={C_in} C_in_block={C_in_block}: max_abs={diff.max().item():.3e} exact={diff.eq(0).float().mean():.6f}"
-    )
-    assert diff.eq(0).float().mean() > 0.999 and diff.max() <= ref.abs().max() * 2**-7
+    print(f"residual C_in={C_in} H={H} W={W}: max_abs={diff.max().item():.3e} exact={diff.eq(0).float().mean():.6f}")
+    assert torch.equal(fused, ref)
