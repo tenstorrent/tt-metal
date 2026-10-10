@@ -28,44 +28,58 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
 
 ### Accuracy
 
-Next-token predictions vs the original model in fp32, over an AIME24 prompt plus a fixed 100-token answer (the
-128-token prompt is the same question cut short). Batch 32 shows the worst of 32 identical users.
-`tests/test_accuracy.py`, 2026-10-09.
+Laguna's next-token predictions vs the original model in fp32, over the AIME24 prompt (235 tokens, or cut to 128)
+plus a fixed 100-token answer; batch 32 is the worst of 32 identical users. "top-1, traced" is the same top-1 check
+through the traced decode path the server runs (token picked on device). `tests/test_accuracy.py`, 2026-10-09.
 
-| Measure | 235-token (AIME24), batch 1 | 235-token, batch 32 | 128-token (AIME24), batch 1 | 128-token, batch 32 | Bar |
-|---|---:|---:|---:|---:|---:|
-| top-1 | 0.98 | 0.99 | 0.96 | 0.95 | >= 0.90 |
-| top-5 | 1.00 | 1.00 | 1.00 | 1.00 | >= 0.98 |
-| top-100 | 1.00 | 1.00 | 1.00 | 1.00 | = 1.00 |
-| top-1, traced decode | 0.98 | 0.99 | 0.95 | 0.96 | >= 0.90 |
-| PCC of next-token scores, mean | 0.97 | 0.97 | 0.97 | 0.97 | >= 0.95 |
+| Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
+|---|---:|---:|---:|---:|---:|---:|
+| 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.98 | 0.97 |
+| 235 tokens | 32 | 0.99 | 1.00 | 1.00 | 0.99 | 0.97 |
+| 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.95 | 0.97 |
+| 128 tokens | 32 | 0.95 | 1.00 | 1.00 | 0.96 | 0.97 |
+| Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
 ### Performance
 
-Speed of light (SoL) is the roofline limit ([All About Transformer
-Inference](https://jax-ml.github.io/scaling-book/inference/), `demo/roofline.py`): decode reads the weights a token
-needs plus the KV cache at 2.05 TB/s; TTFT is the larger of reading the weights and doing the FLOPs at 2.88 PFLOP/s.
-Target = 50% of SoL. Measured with `demo/perf_direct.py` (no vLLM: device time plus reading the token back), 2026-10-09.
+Target = 50% of speed of light (SoL), the roofline limit from [All About Transformer
+Inference](https://jax-ml.github.io/scaling-book/inference/) computed by `demo/roofline.py`. Measured with
+`demo/perf_direct.py`: no vLLM, device time plus reading the token back, 2026-10-09 (DFlash 2026-10-10). Batch 32: 32 prompts arrive
+together; TTFT is the last user's; total decode throughput is 32x the per-user speed.
 
-Batch 1:
+Decode, tok/s per user (measured / target):
 
-| Input tokens | Decode SoL (tok/s) | Decode target | Decode measured | TTFT SoL | TTFT target | TTFT measured |
-|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 316 | 158 | 75.9 | 33 ms | 66 ms | 60.5 ms |
-| 1,024 | 313 | 157 | 73.6 | 33 ms | 66 ms | 140 ms |
-| 2,048 | 312 | 156 | 73.2 | 33 ms | 66 ms | 238 ms |
-| 4,096 | 310 | 155 | 72.2 | 33 ms | 66 ms | 386 ms |
-| 8,192 | 305 | 152 | 72.3 | 52 ms | 103 ms | 716 ms |
+| Input tokens | Batch 1 | Batch 32 |
+|---:|---:|---:|
+| 128 | 75.9 / 158 | 28.0 / 20 |
+| 1,024 | 73.6 / 157 | 26.4 / 20 |
+| 2,048 | 73.2 / 156 | 25.8 / 19 |
+| 4,096 | 72.2 / 155 | 23.5 / 19 |
+| 8,192 | 72.3 / 152 | 22.4 / 18 |
 
-Batch 32 (32 prompts arrive together; measured TTFT is the last user's, the mean in parentheses):
+Time to first token (measured / target):
 
-| Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured | Decode measured, all users (tok/s) | TTFT SoL | TTFT target | TTFT measured |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 41 | 20 | 28.0 | 896 | 33 ms | 66 ms | 0.42 s (0.42 s) |
-| 1,024 | 39 | 20 | 26.4 | 845 | 193 ms | 386 ms | 2.89 s (1.81 s) |
-| 2,048 | 39 | 19 | 25.8 | 826 | 392 ms | 783 ms | 5.82 s (3.27 s) |
-| 4,096 | 37 | 19 | 23.5 | 752 | 799 ms | 1.60 s | 11.6 s (6.19 s) |
-| 8,192 | 35 | 18 | 22.4 | 717 | 1.65 s | 3.31 s | 23.4 s (12.1 s) |
+| Input tokens | Batch 1 | Batch 32 |
+|---:|---:|---:|
+| 128 | 60.5 ms / 66 ms | 0.42 s / 0.066 s |
+| 1,024 | 140 ms / 66 ms | 2.89 s / 0.39 s |
+| 2,048 | 238 ms / 66 ms | 5.82 s / 0.78 s |
+| 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
+| 8,192 | 716 ms / 103 ms | 23.4 s / 3.31 s |
+
+DFlash speculative decoding, batch 1, real-text prompts (a "summarize this document" request; the draft model's
+guesses decide the speed):
+
+| Input tokens | Decode, tok/s | Draft tokens accepted per round |
+|---:|---:|---:|
+| 128 | 20.5 | 1.2 |
+| 1,024 | 22.4 | 1.5 |
+| 2,048 | 25.2 | 1.8 |
+| 4,096 | 25.1 | 1.8 |
+| 8,192 | 21.9 | 1.5 |
+
+DFlash is slower than normal decode for now: a round (draft 15 tokens, then check 16 in Laguna) takes ~105 ms and
+keeps ~2.5 tokens, while normal decode takes ~13 ms per token.
 
 ## Quick start
 
@@ -128,6 +142,7 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
 
 ```bash
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py   # performance tables, ~10 min
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash   # DFlash, ~4 min
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/roofline.py      # SoL and targets, no device
 python $MODEL_DIR/demo/perf_demo.py                                           # end to end through vLLM
 ```
@@ -138,10 +153,10 @@ Set in front of `serve_vllm.sh`; experimental ones also need `LAGUNA_ALLOW_EXPER
 
 | Feature | Variables | Notes |
 |---|---|---|
-| DFlash speculative decoding (experimental) | `TT_LAGUNA_DFLASH=1` | Draft model [`poolside/Laguna-S-2.1-DFlash`](https://huggingface.co/poolside/Laguna-S-2.1-DFlash); 1 greedy request at a time; currently slower than normal decode |
-| N-gram speculative decoding (experimental) | `TT_LAGUNA_SPEC_DECODE=1` | Guesses by repeating earlier text, no draft model; 1 greedy request at a time; not measured on this version |
-| Prefix caching (experimental) | `TT_LAGUNA_PREFIX_CACHE=1` | Reuses a repeated prompt prefix; 1 request at a time |
-| Concurrent requests | `LAGUNA_MAX_NUM_SEQS=N`, N up to 32 | All requests share one context pool (below) |
+| DFlash speculative decoding | `TT_LAGUNA_DFLASH=1` | experimental; draft [`Laguna-S-2.1-DFlash`](https://huggingface.co/poolside/Laguna-S-2.1-DFlash); 1 greedy request |
+| N-gram speculative decoding | `TT_LAGUNA_SPEC_DECODE=1` | experimental; 1 greedy request; not measured on this version |
+| Prefix caching | `TT_LAGUNA_PREFIX_CACHE=1` | experimental; 1 request |
+| Concurrent requests | `LAGUNA_MAX_NUM_SEQS=N` | N up to 32; shared context pool (below) |
 
 Context per request (one ~1.3M-token pool shared by all requests):
 
