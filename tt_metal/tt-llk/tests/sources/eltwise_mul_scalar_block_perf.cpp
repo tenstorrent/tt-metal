@@ -27,7 +27,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const auto& NUM_BLOCKS                 = params.NUM_BLOCKS;
+    const auto& NUM_TILES_IN_BLOCK         = params.NUM_TILES_IN_BLOCK;
+    const auto& TILE_SIZE_UNPACK_A         = params.TILE_SIZE_UNPACK_A;
+    const auto& TILE_SIZE_UNPACK_B         = params.TILE_SIZE_UNPACK_B;
+    const auto& buffer_A                   = params.buffer_A;
+    const auto& buffer_B                   = params.buffer_B;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -39,8 +47,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             TILE_NUM_FACES,
             TILE_NUM_FACES,
-            params.TILE_SIZE_UNPACK_A,
-            params.TILE_SIZE_UNPACK_B);
+            TILE_SIZE_UNPACK_A,
+            TILE_SIZE_UNPACK_B);
         _llk_unpack_AB_scalar_block_init_(ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
@@ -53,10 +61,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _perf_unpack_set_valid(ckernel::SrcB);
-                    for (std::uint32_t i = 0; i < params.NUM_TILES_IN_BLOCK; ++i)
+                    for (std::uint32_t i = 0; i < NUM_TILES_IN_BLOCK; ++i)
                     {
                         _perf_unpack_set_valid(ckernel::SrcA);
                     }
@@ -67,10 +75,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    _llk_unpack_AB_scalar_block_(
-                        L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]), L1_ADDRESS(params.buffer_B[block]), params.NUM_TILES_IN_BLOCK);
+                    _llk_unpack_AB_scalar_block_(L1_ADDRESS(buffer_A[block * NUM_TILES_IN_BLOCK]), L1_ADDRESS(buffer_B[block]), NUM_TILES_IN_BLOCK);
                 }
             }
         }
@@ -90,7 +97,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const auto& NUM_BLOCKS                 = params.NUM_BLOCKS;
+    const auto& NUM_TILES_IN_BLOCK         = params.NUM_TILES_IN_BLOCK;
+    const auto& DST_INDEX                  = params.DST_INDEX;
+#endif
+    LLK_ASSERT(
+        (DST_INDEX + NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "Scalar block must fit acquired DEST");
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -107,9 +122,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    for (std::uint32_t i = 0; i < params.NUM_TILES_IN_BLOCK; ++i)
+                    for (std::uint32_t i = 0; i < NUM_TILES_IN_BLOCK; ++i)
                     {
                         _perf_math_clear_valid(ckernel::SrcA);
                     }
@@ -121,9 +136,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
+                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
                 }
             }
         }
@@ -131,10 +146,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_math_wait_for_dest_available_<dest_sync>();
-                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(params.DST_INDEX, params.NUM_TILES_IN_BLOCK);
+                    _llk_math_eltwise_mul_scalar_block_<MATH_FIDELITY>(DST_INDEX, NUM_TILES_IN_BLOCK);
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
@@ -153,11 +168,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const auto& NUM_BLOCKS                 = params.NUM_BLOCKS;
+    const auto& NUM_TILES_IN_BLOCK         = params.NUM_TILES_IN_BLOCK;
+    const auto& DST_INDEX                  = params.DST_INDEX;
+    const auto& buffer_Res                 = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 1024);
-        _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT /* tile_size */);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
     }
@@ -170,12 +191,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(
-                            params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK + tile]));
+                            DST_INDEX + tile, L1_ADDRESS(buffer_Res[block * NUM_TILES_IN_BLOCK + tile]));
                     }
                 }
             }
@@ -184,13 +205,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (int block = 0; block < params.NUM_BLOCKS; ++block)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_packer_wait_for_math_done_();
-                    for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(
-                            params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK + tile]));
+                            DST_INDEX + tile, L1_ADDRESS(buffer_Res[block * NUM_TILES_IN_BLOCK + tile]));
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
