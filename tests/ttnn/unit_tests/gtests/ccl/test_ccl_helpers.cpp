@@ -1532,4 +1532,67 @@ TEST(TopologyUnion, UnionTopologyKeepsTheRankOfAShardedFirstOperand) {
         EXPECT_EQ(result.distribution_shape(), MeshShape(8));
         EXPECT_EQ(placements_of(result), (UnionPlacements{TopoReplicate{}}));
     }
-}
+
+    TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
+        // A hook-level refusal (a label the op cannot renumber into its output layout, a ring order no label carries)
+        // goes through the same handling as the helpers' own: nullopt in warn-only mode, TT_FATAL under strict mode,
+        // silent inside a CallerRelabelsScope -- so strict mode covers every "no honest label", not only the helpers'.
+        {
+            StrictCclTopologyScope warn_only(false);
+            EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Gather).has_value());
+            EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter).has_value());
+        }
+        StrictCclTopologyScope strict(true);
+        {
+            const topo::CallerRelabelsScope caller_relabels;
+            EXPECT_FALSE(topo::refuse("hook: intermediate", topo::RefusalFamily::Scatter).has_value());
+        }
+        const auto message = message_of([&] { topo::refuse("hook: no honest label", topo::RefusalFamily::Gather); });
+        EXPECT_NE(message.find("hook: no honest label"), std::string::npos) << message;
+        EXPECT_THROW(topo::refuse("hook: no honest label", topo::RefusalFamily::Scatter), std::runtime_error);
+    }
+
+    TEST(CclTopologyUtils, UncollapseJudgesASubRangeLabelOnADeviceTensorByItsShape) {
+        // A device tensor's label lists its storage's coordinates: every device of the mesh, however small the block
+        // its input occupied (an op output's buffer spans the mesh and update_output_tensor_topologies keeps each
+        // output's own coordinates). from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) on a 2x4 therefore reaches the
+        // ops as a (1, 4) distribution over eight coordinates, which no (1, 4)-shaped block matches. With more
+        // coordinates than the distribution has devices the shape decides alone: a shape that fits the mesh per axis
+        // was mapped as a block (its axes are the mesh's), one that does not fit was laid out row-major over the mesh.
+        const MeshShape mesh(2, 4);
+        const auto all = row_major_coords(mesh);
+        std::string reason;
+
+        const std::vector<TopoPlacement> row_placements{TopoReplicate{}, TopoShard{3}};
+        const auto row = topo::uncollapse_placements(nd_label(MeshShape(1, 4), row_placements, all), mesh, &reason);
+        ASSERT_TRUE(row.has_value()) << reason;
+        EXPECT_EQ(std::vector<TopoPlacement>(row->begin(), row->end()), row_placements);
+        const std::vector<TopoPlacement> column_placements{TopoShard{3}, TopoShard{2}};
+        const auto column =
+            topo::uncollapse_placements(nd_label(MeshShape(2, 1), column_placements, all), mesh, &reason);
+        ASSERT_TRUE(column.has_value()) << reason;
+        EXPECT_EQ(std::vector<TopoPlacement>(column->begin(), column->end()), column_placements);
+
+        // (4, 1) does not fit a 2x4 mesh (four chunks along an axis of two rows): the mapper laid it out row-major over
+        // row 0, so its axis 0 is the mesh's axis 1 and no per-axis edit describes it -- refused as before, whatever
+        // the coordinates say.
+        EXPECT_FALSE(
+            topo::uncollapse_placements(nd_label(MeshShape(4, 1), {TopoShard{3}, TopoReplicate{}}, all), mesh, &reason)
+                .has_value());
+        EXPECT_NE(reason.find("align"), std::string::npos) << reason;
+
+        // With exactly the distribution's coordinates (a host tensor straight from the mapper) the block check still
+        // applies: a (1, 4) row over four coordinates that are not a row is refused.
+        const std::vector<MeshCoordinate> not_a_row{
+            MeshCoordinate(0, 0), MeshCoordinate(1, 0), MeshCoordinate(0, 1), MeshCoordinate(1, 1)};
+        EXPECT_FALSE(topo::uncollapse_placements(nd_label(MeshShape(1, 4), row_placements, not_a_row), mesh, &reason)
+                         .has_value());
+        EXPECT_NE(reason.find("align"), std::string::npos) << reason;
+
+        // The ops' per-axis edits then apply: a broadcast along axis 1 of the (1, 4) row replicates it, keeping the
+        // distribution shape and the (storage) coordinates.
+        const auto broadcast =
+            topo::all_broadcast_output_topology(nd_label(MeshShape(1, 4), row_placements, all), 1, mesh, kRank);
+        ASSERT_TRUE(broadcast.has_value());
+        EXPECT_EQ(*broadcast, nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, all));
+    }
