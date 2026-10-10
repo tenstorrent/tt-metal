@@ -714,9 +714,17 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
 namespace llk_perf
 {
+#if defined(LLK_TRISC_MATH)
+extern "C" char __llk_init_body_end[]; // sections.ld
+#endif
+
 template <PerfRunType RUN_TYPE, typename F>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
+#if defined(LLK_TRISC_MATH)
+    // math's prefetch stops one line past INIT's body, so the wrong-path fetches after its ret do not hold both MSHRs
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = reinterpret_cast<std::uint32_t>(__llk_init_body_end) + 15;
+#endif
     const bool opened = !llk_profiler::is_buffer_full();
     if (opened)
     {
@@ -748,15 +756,29 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
     {
         llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
     }
+    ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
+#if defined(LLK_TRISC_MATH)
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = 0;
+#endif
 }
 } // namespace llk_perf
 
 namespace llk_perf
 {
+struct init_measurement_second_object // START_PERF_MEASURE("INIT")'s second object: math's head start runs once
+{
+    init_measurement_second_object()
+    {
+    }
+};
+
 struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measurement build: the trampoline opens the zone
 {
-    explicit init_measurement_no_zone(std::uint32_t)
+    explicit init_measurement_no_zone(std::uint32_t) // the top of INIT's body, where math's init starts as in trisck.cc
     {
+#if defined(LLK_TRISC_MATH)
+        ckernel::icache_prefetch_head_start();
+#endif
     }
 
     init_measurement_no_zone()
@@ -774,7 +796,7 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
     const std::conditional_t<                                                                                                                      \
         LLK_IS_TILE_LOOP_(zone_name),                                                                                                              \
         llk_profiler::zone_scoped<MARKER_ID(zone_name), true, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name))>,                 \
-        llk_perf::init_measurement_no_zone>                                                                                                        \
+        llk_perf::init_measurement_second_object>                                                                                                  \
         _zone_scoped_;
 #elif defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
