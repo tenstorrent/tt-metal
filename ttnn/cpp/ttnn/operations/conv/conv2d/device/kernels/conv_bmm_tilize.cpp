@@ -488,7 +488,7 @@ void kernel_main() {
                         uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
                         // The block run does not pay off for one-column subblocks over a short inner block.
-                        if constexpr (true) {
+                        if constexpr (out_subblock_w == 1 && in0_block_w < 4) {
                             PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
                                 start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles)));
                         } else {
@@ -565,7 +565,7 @@ void kernel_main() {
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
                         // As for the subblock pack, but with packer L1 accumulate the block run still pays off here.
-                        if constexpr (out_subblock_w == 1 && in0_block_w < 4 && !packer_l1_acc) {
+                        if constexpr (true) {
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, untilize_mode_out_cb_id);
                             }
