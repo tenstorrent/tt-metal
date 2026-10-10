@@ -342,7 +342,9 @@ def run_test_create_min_width_shard(
 @pytest.mark.parametrize("batch", (1, 8, 16, 32))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
-    ((8, 1, 128), (8, 4, 96), (16, 2, 64)),
+    # (10, 7, 32): 24 input cores (8x3). With overlap_coregrid=False the Q/V reader skips K from
+    # x=2 over 7 cores, so x has to carry into the next row.
+    ((8, 1, 128), (8, 4, 96), (16, 2, 64), (10, 7, 32)),
 )
 @pytest.mark.parametrize("overlap_coregrid", (True, False))
 def test_create_min_width_shard(
