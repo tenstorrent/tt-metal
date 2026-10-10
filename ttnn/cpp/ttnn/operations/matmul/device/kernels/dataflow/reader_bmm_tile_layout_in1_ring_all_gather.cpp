@@ -278,4 +278,11 @@ void kernel_main() {
     noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
+
+    // Restore NCRISC read_cmd_buf NOC_CTRL VC to firmware default (CUSTOM_VC above persists per-core across launches).
+    if constexpr (in1_is_dram_sharded) {
+        const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+        noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            dram_bank, in1_block_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+    }
 }
