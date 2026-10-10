@@ -403,6 +403,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tensto
 ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
+ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
+ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
@@ -526,6 +528,7 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
+tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
