@@ -10,7 +10,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"

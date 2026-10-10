@@ -11,7 +11,7 @@ Single parameterized test that verifies, for each instrumented API:
 3. The blocking wait actually blocked for at least the producer's delay.
 
 The remote-payload checks mirror SYNC_SIGNAL_NOC_ADDR in
-tt_metal/tools/profiler/synchronization_event_profiler.hpp; if that encoding moves, the
+tt_metal/hw/inc/internal/profiler/synchronization_event_profiler.hpp; if that encoding moves, the
 decoder below has to move with it.
 """
 
