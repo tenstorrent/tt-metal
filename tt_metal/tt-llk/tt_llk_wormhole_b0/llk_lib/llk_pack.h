@@ -340,6 +340,9 @@ inline void _llk_pack_hw_configure_(
     const bool narrow_tile          = false,
     const std::uint32_t relu_config = 0)
 {
+#if defined(LLK_EXP_NOP_PACK)
+    asm volatile("nop"); // experiment: INIT NOP
+#endif
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
@@ -383,6 +386,23 @@ inline void _llk_pack_init_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+#if defined(LLK_EXP_NOP_PACK_INIT) // experiment: N NOPs at the top of _llk_pack_init_ (the CI placement test's position)
+#if LLK_EXP_NOP_PACK_INIT >= 1
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 2
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 3
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 4
+    asm volatile("nop");
+#endif
+#endif
+#if defined(LLK_EXP_SIG_PACK_INIT) // experiment (initpad agent): N straight-line instructions of real work at the NOP position
+    asm volatile("addi sp, sp, -16\n\tsw t0, 0(sp)\n\t.rept %0\n\taddi t0, t0, 1\n\t.endr\n\tlw t0, 0(sp)\n\taddi sp, sp, 16" ::"i"(LLK_EXP_SIG_PACK_INIT));
+#endif
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
@@ -431,8 +451,14 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+#if defined(LLK_NK_NOP_PACK_LOOP) // experiment hook (nikola): N NOPs in every _llk_pack_ call, a real code change (faithfulness)
+#define LLK_NK_PL_XSTR_(x) #x
+#define LLK_NK_PL_XSTR(x)  LLK_NK_PL_XSTR_(x)
+    asm volatile(".rept " LLK_NK_PL_XSTR(LLK_NK_NOP_PACK_LOOP) "\n\tnop\n\t.endr");
+#endif
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
