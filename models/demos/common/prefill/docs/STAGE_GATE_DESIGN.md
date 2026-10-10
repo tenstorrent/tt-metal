@@ -471,11 +471,12 @@ stand-in until KVM supports dependent writes.
     This is the KVM's copy-in completion target: gate *i* is the u32 at `gate_base_addr + 4·i`.
   - `set_stage_gate(coord, gate, open)` / `is_stage_gate_open(coord, gate)`: host PCIe write/read,
     not CQ-ordered. For tests, bring-up before the KVM writes gates, and force-close on abort (I3).
-- Python: `create_pair` / `create_receiver` kwargs `num_stage_gates`, `stage_gate_slot_offset_bytes`,
-  `stage_gate_flags_offset_bytes`; `ttnn.D2DStageGateDescriptor`; `ttnn.STAGE_GATE_FLAG_CLOSE_ON_TRANSIT`,
-  `ttnn.STAGE_GATE_FLAG_BYPASS`.
+- Python: `create_pair` / `create_receiver` take `stage_gate=ttnn.D2DStageGateConfig(num_gates,
+  slot_id_offset_bytes, gate_flags_offset_bytes)`; `ttnn.D2DStageGateDescriptor`;
+  `ttnn.STAGE_GATE_FLAG_CLOSE_ON_TRANSIT`, `ttnn.STAGE_GATE_FLAG_BYPASS`. Word values and flag bits are
+  defined once in `ttnn/api/ttnn/tensor/d2d_stage_gate.hpp` (host- and kernel-includable).
 - Prefill runner (not yet wired): with the legacy-compatible record (§3.6 Draft A), pass
-  `stage_gate_slot_offset_bytes = 0` and `stage_gate_flags_offset_bytes = 16`, and publish the
+  `slot_id_offset_bytes = 0` and `gate_flags_offset_bytes = 16`, and publish the
   descriptors to the engine at bring-up next to the layer-ack channel / migration table.
 
 Kernel (`persistent_d2d_receiver.cpp`): the gate CT block sits after the backing-tensor accessor args
