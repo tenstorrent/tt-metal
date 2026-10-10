@@ -21,10 +21,19 @@ Through the vLLM server, batch 1, versus the first version of this branch (2026-
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
 - Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
-- Not met: batch-1 decode (83-88 vs 152-158 tok/s), batch-1 TTFT from 1K tokens up, batch-32 TTFT.
+- Unhittable on this machine: each needs less time than work that cannot be removed already takes.
+  - Batch-1 decode without DFlash (83-88 vs 152-158 tok/s): needs 6.3-6.6 ms per token; weight reads at the best
+    measured 357 GB/s (4.5 ms), 96 all-reduces (1.3 ms), attention (1.1 ms) and LM head (0.4 ms) already take 7.3 ms.
+  - Batch-1 TTFT from 1K tokens up (140 vs 66 ms at 1K): each chip reads all 64 local experts' weights every layer
+    (~42 ms), plus prefill collectives (~20 ms) and attention (~7 ms).
+  - Batch-32 TTFT (11.6 vs 1.60 s at 4K): prefill collectives alone take ~58 ms per 4K tokens, so for 32 prompts
+    they exceed the target at every length (0.46 / 0.93 / 1.86 / 3.7 s vs 0.39 / 0.78 / 1.60 / 3.31 s at 1K-8K). At
+    128 tokens the 32 prompts are one 4K-token prefill: 58 ms of collectives plus 31 ms of expert matmuls vs 66 ms.
 - DFlash speculative decoding reaches the batch-1 decode target at every input length over a 2048-token answer
   (188 / 200 / 194 / 202 / 160 vs 158 / 157 / 156 / 155 / 152 tok/s at 128 / 1K / 2K / 4K / 8K; over 1024 tokens at
   1K-4K, 3% short at 128 and 8K).
+  Over only the first 256 tokens the draft accepts 1.15-1.5 tokens per round on real text: even at the cost of a
+  1-row check every round (2.5 + 12.2 ms) that caps 1K / 2K / 8K at 152 / 153 / 146 tok/s, under target.
   About 7x faster than on 2026-10-09 (25 -> 171 tok/s on AIME24 and 21-25 -> 107-132 tok/s on real text over the
   first 256 tokens).
 
