@@ -34,5 +34,7 @@ namespace ttnn::prim {
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_memory_config,
-    bool round_scale_to_power_of_two);
+    bool round_scale_to_power_of_two,
+    uint32_t scale_block_w,
+    bool round_to_nearest_even);
 }  // namespace ttnn::prim

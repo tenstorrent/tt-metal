@@ -61,12 +61,14 @@ void kernel_main() {
     constexpr uint32_t output_e4m3_block_bytes = get_compile_time_arg_val(1);  // 128 (1 byte/elem)
     constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(4);      // H / 128 (full row width)
+    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(4);      // H / scale_block_w (scales per row)
     constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // per-row scratch footprint
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
+    constexpr uint32_t chunks_per_row = get_compile_time_arg_val(10);      // H / 128 (I/O chunks per row)
+    constexpr uint32_t chunk_scale_blocks = get_compile_time_arg_val(11);  // scales per chunk row (128/scale_block_w)
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
     constexpr uint32_t scale_bytes = sizeof(uint32_t);                // fp32 scale = one 32-bit word = 4 bytes
@@ -75,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                   // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE = faces_per_row * face_elems;  // fp32 stride per face row
 
-    constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<10>();
+    constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<12>();
     constexpr auto scale_args = TensorAccessorArgs<output_e4m3_accessor_args.next_compile_time_args_offset()>();
     const auto output_e4m3 = TensorAccessor(output_e4m3_accessor_args, output_e4m3_addr);
     const auto scale = TensorAccessor(scale_args, scale_addr);
@@ -87,7 +89,7 @@ void kernel_main() {
     // Persistent scale scratch (writer-private), reused across blocks / row-tiles.
     CoreLocalMem<volatile uint32_t> tok(cb_scale_scratch_obj.get_write_ptr());
 
-    uint32_t block_scales[tile_h];  // tile_h is compile-time constant
+    uint32_t block_scales[chunk_scale_blocks][tile_h];  // [scale block in chunk][row]
 
 #ifdef INPUT_TILE_LAYOUT
     constexpr uint32_t scale_page_words = scale_aligned_page_bytes / scale_bytes;
@@ -95,14 +97,16 @@ void kernel_main() {
 
     // Flush the accumulated scale rows for a row-tile over its owned column range [first_col, last_col].
     auto flush_scale = [&](uint32_t row_base, uint32_t n_rows, uint32_t first_col, uint32_t last_col) {
-        const uint32_t run_bytes = (last_col - first_col + 1) * scale_bytes;
+        // first_col/last_col are chunk columns; each chunk owns chunk_scale_blocks scale columns.
+        const uint32_t first_scale = first_col * chunk_scale_blocks;
+        const uint32_t run_bytes = (last_col - first_col + 1) * chunk_scale_blocks * scale_bytes;
         for (uint32_t row_in_tile = 0; row_in_tile < n_rows; ++row_in_tile) {
             noc.async_write(
                 use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
                 scale,
                 run_bytes,
-                {.offset_bytes = row_in_tile * scale_aligned_page_bytes + first_col * scale_bytes},
-                {.page_id = row_base + row_in_tile, .offset_bytes = first_col * scale_bytes});
+                {.offset_bytes = row_in_tile * scale_aligned_page_bytes + first_scale * scale_bytes},
+                {.page_id = row_base + row_in_tile, .offset_bytes = first_scale * scale_bytes});
         }
         noc.async_write_barrier();  // scratch is reused by the next row-tile
     };
@@ -112,8 +116,8 @@ void kernel_main() {
     uint32_t output_row_base = 0, real_rows = 0, owned_first_col = 0, owned_last_col = 0;
 
     for (uint32_t global_block = block_offset; global_block < global_block_end; ++global_block) {
-        const uint32_t row_tile = global_block / scale_blocks_per_row;
-        const uint32_t col_block = global_block % scale_blocks_per_row;
+        const uint32_t row_tile = global_block / chunks_per_row;
+        const uint32_t col_block = global_block % chunks_per_row;
 
         if (row_tile != current_row_tile) {
             if (current_row_tile != NO_ROW_TILE_OPEN) {
@@ -131,9 +135,13 @@ void kernel_main() {
         owned_last_col = col_block;
 
         cb_output_e4m3_obj.wait_front(tiles_per_block);
-        cb_scale_tiles_obj.wait_front(1);
-        extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales);
+        cb_scale_tiles_obj.wait_front(chunk_scale_blocks);
+        for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+            extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    cb_scale_tiles_obj.get_read_ptr() + sb * get_tile_size(cb_scale_tiles)),
+                block_scales[sb]);
+        }
 
         const uint32_t col_byte_offset = col_block * block_w;
         for (uint32_t row_in_tile = 0; row_in_tile < real_rows; ++row_in_tile) {
@@ -143,11 +151,14 @@ void kernel_main() {
                 output_e4m3_block_bytes,
                 {.offset_bytes = row_in_tile * output_e4m3_block_bytes},
                 {.page_id = output_row_base + row_in_tile, .offset_bytes = col_byte_offset});
-            tok[row_in_tile * scale_page_words + col_block] = block_scales[row_in_tile];
+            for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+                tok[row_in_tile * scale_page_words + col_block * chunk_scale_blocks + sb] =
+                    block_scales[sb][row_in_tile];
+            }
         }
         noc.async_write_barrier();  // drain e4m3 writes before the CB page is reused
         cb_output_e4m3_obj.pop_front(tiles_per_block);
-        cb_scale_tiles_obj.pop_front(1);
+        cb_scale_tiles_obj.pop_front(chunk_scale_blocks);
     }
 
     if (current_row_tile != NO_ROW_TILE_OPEN) {
@@ -156,7 +167,7 @@ void kernel_main() {
 #else
     constexpr uint32_t scale_row_bytes = scale_blocks_per_row * scale_bytes;
 
-    const uint32_t blocks_per_row = width / block_w;  // H / 128
+    const uint32_t blocks_per_row = width / block_w;  // H / 128 chunks
     const uint32_t total_blocks = num_rows * blocks_per_row;
     const uint32_t end_row = start_row + num_rows;
     uint32_t current_row = start_row;
@@ -168,9 +179,13 @@ void kernel_main() {
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
         cb_output_e4m3_obj.wait_front(tiles_per_block);
-        cb_scale_tiles_obj.wait_front(1);
-        extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales);
+        cb_scale_tiles_obj.wait_front(chunk_scale_blocks);
+        for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+            extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    cb_scale_tiles_obj.get_read_ptr() + sb * get_tile_size(cb_scale_tiles)),
+                block_scales[sb]);
+        }
 
         uint32_t br = 0;  // block-local row
         while (br < real_in_block && current_row < end_row) {
@@ -188,7 +203,9 @@ void kernel_main() {
                 {.page_id = current_row, .offset_bytes = current_col});
             // scale: stage this run's per-block scales into the token's scratch row.
             for (uint32_t g = 0; g < run; ++g) {
-                tok[block_idx_in_row + g] = block_scales[br + g];
+                for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+                    tok[(block_idx_in_row + g) * chunk_scale_blocks + sb] = block_scales[sb][br + g];
+                }
             }
             br += run;
             current_col += run * block_w;
@@ -206,7 +223,7 @@ void kernel_main() {
         }
         noc.async_write_barrier();  // drain this block's output_e4m3 writes before the CB page is reused
         cb_output_e4m3_obj.pop_front(tiles_per_block);
-        cb_scale_tiles_obj.pop_front(1);
+        cb_scale_tiles_obj.pop_front(chunk_scale_blocks);
     }
 #endif
 }

@@ -111,7 +111,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     // Plain scale tensor -> 0. Metadata entry -> skip the leading routing header:
     //   entry = [ x x x s1 s2 ... sn ]   (x = routing data, not ours; s = scales)
     //   scales_start_offset = scale_entry_length - scales_per_token   (n scales in the tail)
-    const uint32_t scales_per_token = H / block_w;  // H/128
+    const uint32_t scale_block_w = operation_attributes.scale_block_w;
+    const uint32_t chunk_scale_blocks = block_w / scale_block_w;  // scales per 128-chunk row
+    const uint32_t scales_per_token = H / scale_block_w;
     const uint32_t scale_entry_length = static_cast<uint32_t>(input_scale.logical_shape()[-1]);
     const uint32_t scales_start_offset =
         (token_count_aware && operation_attributes.scales_from_metadata) ? (scale_entry_length - scales_per_token) : 0;
@@ -199,10 +201,10 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     // Double-buffered so there is not stalling between the reader/compute/writer.
     make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);  // reused: tilized input
-    make_fp32_tile_cb(cb_scale_bcast_fp32_idx, 2 * block_ht);   // col0 = scale
+    make_fp32_tile_cb(cb_scale_bcast_fp32_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = scale, per scale block
     if (narrow_scales_to_bf16) {
         // bf16 datapath: scale narrowed to bf16 by the packer.
-        make_compute_tile_cb(cb_scale_bcast_bf16_idx, 2 * block_ht);
+        make_compute_tile_cb(cb_scale_bcast_bf16_idx, 2 * block_ht * chunk_scale_blocks);
     } else {
         // fp32 datapath: fp8 e4m3 -> fp32 row-major before tilize.
         make_fp32_tile_cb(cb_in_rm_fp32_idx, 2 * tiles_per_block);
@@ -266,7 +268,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_scale_bcast_fp32_idx,
         cb_scale_scratch_idx,
         input_e4m3_block_bytes,
-        block_ht,
+        chunk_scale_blocks,
         scale_aligned_page_bytes,
         tile_h,
         tile_w,
@@ -346,7 +348,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         tile_w,
         static_cast<uint32_t>(narrow_scales_to_bf16),
         cb_scale_bcast_bf16_idx,
-        cb_loop_count_idx};
+        cb_loop_count_idx,
+        chunk_scale_blocks};
 
     // HiFi2: bf16 datapath; HiFi4: fp32 datapath.
     const MathFidelity math_fidelity = narrow_scales_to_bf16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;

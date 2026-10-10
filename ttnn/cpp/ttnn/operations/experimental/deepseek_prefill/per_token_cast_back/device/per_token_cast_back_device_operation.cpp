@@ -143,6 +143,10 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         tile_w);
     TT_FATAL(
         fp8::BLOCK_W % tile_w == 0, "per_token_cast_back: tile width {} must divide BLOCK_W={}", tile_w, fp8::BLOCK_W);
+    const uint32_t sbw = attrs.scale_block_w;
+    TT_FATAL(
+        sbw == 32 || sbw == 64 || sbw == 128, "per_token_cast_back: scale_block_w must be 32, 64 or 128, got {}", sbw);
+    TT_FATAL(sbw % tile_w == 0, "per_token_cast_back: tile width {} must divide scale_block_w={}", tile_w, sbw);
     TT_FATAL(
         attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
@@ -176,21 +180,23 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
             "per_token_cast_back: e4m3 last dim ({}) must be a multiple of BLOCK_W ({})",
             H,
             fp8::BLOCK_W);
-        const uint32_t blocks_per_row = H / fp8::BLOCK_W;
+        const uint32_t blocks_per_row = H / sbw;
         TT_FATAL(
             H_scale >= blocks_per_row,
-            "per_token_cast_back: metadata last dim ({}) must be >= H/BLOCK_W ({}) to hold the scale tail",
+            "per_token_cast_back: metadata last dim ({}) must be >= H/scale_block_w ({}) to hold the scale tail",
             H_scale,
             blocks_per_row);
     } else {
         // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
         // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
         TT_FATAL(
-            H == H_scale * fp8::BLOCK_W,
-            "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
+            H % fp8::BLOCK_W == 0 && H == H_scale * sbw,
+            "per_token_cast_back: e4m3 last dim ({}) must be a multiple of {} and equal scale last dim ({}) * "
+            "scale_block_w ({})",
             H,
+            fp8::BLOCK_W,
             H_scale,
-            fp8::BLOCK_W);
+            sbw);
     }
 
     uint64_t folded_M = 1;
@@ -258,7 +264,8 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<Tensor>& expert_token_counts,
     const std::optional<Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
-    bool scales_from_metadata) {
+    bool scales_from_metadata,
+    uint32_t scale_block_w) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
@@ -266,7 +273,8 @@ ttnn::Tensor per_token_cast_back(
         .narrow_scales_to_bf16 = narrow_scales_to_bf16,
         .token_count_aware = token_count_aware,
         .experts_per_chip = experts_per_chip,
-        .scales_from_metadata = scales_from_metadata};
+        .scales_from_metadata = scales_from_metadata,
+        .scale_block_w = scale_block_w};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,

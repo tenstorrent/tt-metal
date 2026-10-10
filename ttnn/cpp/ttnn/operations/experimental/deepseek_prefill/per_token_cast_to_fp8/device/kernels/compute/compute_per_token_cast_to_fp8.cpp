@@ -29,6 +29,7 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/eltwise_unary/identity.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
@@ -58,6 +59,33 @@ inline void ceil_power_of_two_tile(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
+
+namespace ckernel::sfpu {
+
+// Round fp32 to the e4m3 mantissa grid (3 explicit bits) with round-to-nearest-even, so the
+// truncating fp8 packer then sees exact values. Same "add half-ulp - 1 + lsb, clear" bit trick as
+// float32_to_bf16_rne, at bit 20 instead of 16. Inputs are already scaled to |x| <= 448, so no
+// rounding reaches 480 (NaN in e4m3fn). e4m3 subnormals (|x| < 2^-6) keep packer truncation below
+// their coarser grid; at these scales that is < 2^-14.8 of the block amax.
+template <int ITERATIONS = 8>
+inline void calculate_round_to_e4m3_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+        sfpi::vUInt lsb = (bits >> 20) & 1;
+        bits = bits + 0x7ffffU + lsb;
+        bits = bits & 0xfff00000U;
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+inline void round_to_e4m3_rne_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_e4m3_rne, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
 #endif
 
 void kernel_main() {
@@ -80,10 +108,13 @@ void kernel_main() {
     constexpr uint32_t inv_448_bits = get_compile_time_arg_val(9);
 
     // Tile width from the tensor's tile spec.
-    constexpr uint32_t block_w = 128;  // BlockW
+    constexpr uint32_t block_w = 128;  // BlockW: the I/O chunk
     constexpr uint32_t tile_w = get_compile_time_arg_val(10);
     constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t scale_block_wt = get_compile_time_arg_val(12);  // tiles per scale block (1, 2 or 4)
+    constexpr bool round_to_nearest_even = get_compile_time_arg_val(13) != 0;
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
+    constexpr uint32_t chunk_scale_blocks = block_wt / scale_block_wt;  // scales per chunk row
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
 
@@ -148,46 +179,52 @@ void kernel_main() {
                 }
                 cb_abs.push_back(block_wt);
 
-                // reduce -> per-row max (col 0), accumulate, clamp, *1/448 -> scale (slot 0);
-                // copy to slot 1 and recip -> 1/scale (slot 1). One acquire produces both, so each
-                // block row's 1/scale is its own scale (no CB reload, which would always read row 0).
+                // Per scale block: reduce -> per-row max (col 0), collapse the block's tiles, clamp,
+                // *1/448 -> scale (slot 0); copy to slot 1 and recip -> 1/scale (slot 1). One acquire
+                // produces both, so each block row's 1/scale is its own scale (no CB reload, which would
+                // always read row 0). A 128 chunk holds chunk_scale_blocks scale blocks (1 for 128-wide).
                 cb_abs.wait_front(block_wt);
-                cb_scale_tiles.reserve_back(1);
-                cb_inv_scale_tiles.reserve_back(1);
-                tile_regs_acquire();
-                reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_tiles_id);
-                for (uint32_t k = 0; k < block_wt; ++k) {
-                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, k);
+                for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+                    cb_scale_tiles.reserve_back(1);
+                    cb_inv_scale_tiles.reserve_back(1);
+                    tile_regs_acquire();
+                    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_tiles_id);
+                    for (uint32_t k = 0; k < scale_block_wt; ++k) {
+                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+                            cb_abs_id, cb_scaler_id, sb * scale_block_wt + k, 0, k);
+                    }
+                    reduce_uninit();
+
+                    if constexpr (scale_block_wt > 1) {
+                        binary_max_tile_init();
+                        for (uint32_t i = 1; i < scale_block_wt; i++) {
+                            binary_max_tile(IDST0, i, IDST0);  // slot 0 = amax
+                        }
+                    }
+
+                    clamp_tile_init();
+                    clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(IDST0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
+                    if constexpr (round_scale_to_power_of_two) {
+                        // UE8M0-style scale: 2^ceil(log2(scale)), formed directly from the
+                        // float32 exponent and mantissa so power-of-two boundaries are exact.
+                        MATH((ceil_power_of_two_tile(IDST0)));
+                    }
+                    copy_dest_values_init();
+                    copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
+                    recip_tile_init();
+                    recip_tile(IDST1);  // slot 1 = 1/scale (col 0 valid; other cols unused by bcast)
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    pack_tile(IDST0, cb_scale_tiles_id);      // scale output
+                    pack_tile(IDST1, cb_inv_scale_tiles_id);  // 1/scale for the divide (same fp32 format)
+                    tile_regs_release();
+
+                    cb_scale_tiles.push_back(1);
+                    cb_inv_scale_tiles.push_back(1);
                 }
-                reduce_uninit();
-
-                binary_max_tile_init();
-                for (uint32_t i = 1; i < block_wt; i++) {
-                    binary_max_tile(IDST0, i, IDST0);  // slot 0 = amax
-                }
-
-                clamp_tile_init();
-                clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
-                binop_with_scalar_tile_init();
-                mul_unary_tile(IDST0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
-                if constexpr (round_scale_to_power_of_two) {
-                    // UE8M0-style scale: 2^ceil(log2(scale)), formed directly from the
-                    // float32 exponent and mantissa so power-of-two boundaries are exact.
-                    MATH((ceil_power_of_two_tile(IDST0)));
-                }
-                copy_dest_values_init();
-                copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
-                recip_tile_init();
-                recip_tile(IDST1);  // slot 1 = 1/scale (col 0 valid; other cols = 1/0 = inf, unused by bcast)
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile(IDST0, cb_scale_tiles_id);      // scale output
-                pack_tile(IDST1, cb_inv_scale_tiles_id);  // 1/scale for the divide (same fp32 format)
-                tile_regs_release();
-
-                cb_scale_tiles.push_back(1);
-                cb_inv_scale_tiles.push_back(1);
 
                 cb_abs.pop_front(block_wt);
             }
@@ -198,7 +235,7 @@ void kernel_main() {
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
             mul_bcast_cols_init(cb_tile_id, cb_inv_scale_tiles_id);
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
-            cb_inv_scale_tiles.wait_front(block_ht);
+            cb_inv_scale_tiles.wait_front(block_ht * chunk_scale_blocks);
             cb_output_e4m3.reserve_back(tiles_per_block);
             tile_regs_acquire();
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
@@ -207,8 +244,14 @@ void kernel_main() {
                         cb_tile_id,
                         cb_inv_scale_tiles_id,
                         block_h_idx * block_wt + k,
-                        block_h_idx,
+                        block_h_idx * chunk_scale_blocks + k / scale_block_wt,
                         block_h_idx * block_wt + k);
+                }
+            }
+            if constexpr (round_to_nearest_even) {
+                MATH((SFPU_UNARY_INIT(unused)));
+                for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                    MATH((round_to_e4m3_rne_tile(k)));
                 }
             }
             tile_regs_commit();
@@ -217,7 +260,7 @@ void kernel_main() {
             tile_regs_release();
             cb_output_e4m3.push_back(tiles_per_block);
             cb_tile.pop_front(tiles_per_block);
-            cb_inv_scale_tiles.pop_front(block_ht);
+            cb_inv_scale_tiles.pop_front(block_ht * chunk_scale_blocks);
             pack_untilize_uninit(cb_output_e4m3_id);
         }
     }

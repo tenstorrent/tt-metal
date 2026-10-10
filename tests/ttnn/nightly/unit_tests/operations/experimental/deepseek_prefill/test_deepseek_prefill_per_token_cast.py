@@ -460,3 +460,148 @@ def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata
         atol=1e-3,
         label=f"token-count-aware cast back {label} metadata={scales_from_metadata} out={output_dtype}",
     )
+
+
+# ---------------------------------------------------------------------------
+# scale_block_w (32 / 64 / 128) and round-to-nearest-even. Kimi-K3 dispatches its 3584-wide latent
+# as e4m3 with one fp32 scale per 32 elements (MXFP8 granularity). The I/O chunk stays 128 wide.
+# ---------------------------------------------------------------------------
+
+K3_LATENT = 3584
+SCALE_BLOCK_SHAPES = [
+    (30, 1152),  # partial tile-row
+    (PREFILL_CHUNK_TOKENS_PER_CHIP, K3_LATENT),  # K3 latent, one chip's chunk
+    (2, 3, 30, 1152),  # 4D + partial tile-row
+]
+
+
+def _ref_pow2_scale_blocks(x_fp32, block_w):
+    *leading, H = x_fp32.shape
+    amax = x_fp32.reshape(*leading, H // block_w, block_w).abs().amax(dim=-1).clamp(min=1e-4)
+    return torch.pow(2.0, torch.ceil(torch.log2(amax / E4M3_MAX)))
+
+
+def _e4m3_rtz(v):
+    """Truncate fp32 to the e4m3 grid (normals): clear the low 20 mantissa bits."""
+    bits = v.contiguous().view(torch.int32) & ~0xFFFFF
+    return bits.view(torch.float32)
+
+
+@pytest.mark.parametrize("round_to_nearest_even", [False, True], ids=["rtz", "rne"])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+@pytest.mark.parametrize("scale_block_w", [32, 64, 128], ids=lambda b: f"block_w{b}")
+@pytest.mark.parametrize("shape", SCALE_BLOCK_SHAPES, ids=lambda s: "x".join(map(str, s)))
+def test_cast_to_fp8_scale_block_w(device, shape, scale_block_w, input_layout, round_to_nearest_even):
+    torch.manual_seed(0)
+    # Per-block magnitudes spread over several octaves so a wrong block boundary changes the scale.
+    x = torch.randn(shape) * torch.pow(
+        2.0, torch.randint(-6, 6, shape[:-1] + (shape[-1] // 32, 1)).float()
+    ).repeat_interleave(32, -1).reshape(shape)
+    x = x.to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    q_tt, s_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt,
+        round_scale_to_power_of_two=True,
+        scale_block_w=scale_block_w,
+        round_to_nearest_even=round_to_nearest_even,
+    )
+    assert tuple(s_tt.shape) == tuple(shape[:-1]) + (shape[-1] // scale_block_w,)
+    s = ttnn.to_torch(s_tt).float()
+    # FP8_E4M3 has no to_torch on a single device: decode it with cast_back against unit scales.
+    ones_tt = ttnn.from_torch(
+        torch.ones(s.shape),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    q = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            q_tt, ones_tt, output_dtype=ttnn.float32, scale_block_w=scale_block_w
+        )
+    ).float()
+
+    ref_s = _ref_pow2_scale_blocks(x.float(), scale_block_w)
+    # pow2 scales are exact except where fp32 amax/448 sits on a power-of-two boundary (one step apart).
+    ratio = s / ref_s
+    assert torch.all((ratio == 1.0) | (ratio == 2.0) | (ratio == 0.5)), "scale off by more than one power of two"
+    exact_scale = (ratio == 1.0).float().mean().item()
+    assert exact_scale >= 0.999, f"only {exact_scale:.4%} of scales exact"
+
+    # Quantized bytes against the device's own scales (isolates rounding from scale selection).
+    scaled = x.float() / s.repeat_interleave(scale_block_w, dim=-1)
+    if round_to_nearest_even:
+        expected = scaled.to(torch.float8_e4m3fn).float()
+    else:
+        expected = _e4m3_rtz(scaled).to(torch.float8_e4m3fn).float()
+    normal = scaled.abs() >= 2.0**-6  # e4m3 subnormals keep packer truncation (documented)
+    match = (q[normal] == expected[normal]).float().mean().item()
+    logger.info(f"block_w={scale_block_w} rne={round_to_nearest_even} {input_layout}: e4m3 match {match:.6%}")
+    assert match >= 0.9999, f"e4m3 match {match:.4%} < 99.99%"
+
+    # Round trip through per_token_cast_back with the same block width.
+    back = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            q_tt, s_tt, output_dtype=ttnn.float32, scale_block_w=scale_block_w
+        )
+    ).float()
+    golden = q * s.repeat_interleave(scale_block_w, dim=-1)
+    assert_quality(
+        back, golden, pcc_threshold=0.99999, rtol=1e-6, atol=1e-30, label=f"cast_back block_w={scale_block_w}"
+    )
+    # Error vs the input: RNE <= half an e4m3 ulp (1/16 relative), RTZ < one ulp (1/8 relative).
+    rel = ((back - x.float()).abs() / x.float().abs().clamp(min=1e-30))[normal]
+    bound = 0.0625 if round_to_nearest_even else 0.125
+    assert (rel <= bound + 1e-6).float().mean().item() >= 0.9999
+    if round_to_nearest_even:
+        bias = ((back - x.float()) * x.float().sign())[normal].mean().item()
+        logger.info(f"rne signed bias {bias:.3e}")
+
+
+@pytest.mark.parametrize("scale_block_w", [32, 128], ids=lambda b: f"block_w{b}")
+def test_token_count_aware_cast_back_scale_block_w(device, scale_block_w):
+    """Metadata-tail scales with a K3-shaped metadata row (3 routing words + H/scale_block_w scales)."""
+    torch.manual_seed(0)
+    H = K3_LATENT
+    counts = [37, 0, 64, 5, 130]
+    experts_per_chip = len(counts)
+    num_routed_experts = 2 * experts_per_chip
+    table = [2 * s + 1 for s in range(experts_per_chip)]
+    region = [0] * num_routed_experts
+    tok = [0] * num_routed_experts
+    off = 0
+    for slot, c in enumerate(counts):
+        g = table[slot]
+        region[g], tok[g] = off, c
+        off += _ceil_tile(c)
+    capacity = 1024
+    e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    scales = torch.pow(2.0, torch.randint(-8, 4, (capacity, H // scale_block_w)).float())
+    meta = torch.full((capacity, 3 + H // scale_block_w), 0x0BADF00D, dtype=torch.int32)
+    meta[:, 3:] = scales.contiguous().view(torch.int32)
+    out = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            _make_e4m3_from_torch(e4m3, device=device),
+            None,
+            token_count_aware=True,
+            expert_region_offsets=create_u32_tensor(device, region),
+            expert_token_counts=create_u32_tensor(device, tok),
+            global_expert_idx_table=create_u32_tensor(device, table),
+            experts_per_chip=experts_per_chip,
+            output_dtype=ttnn.float32,
+            metadata=ttnn.from_torch(
+                meta,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            scale_block_w=scale_block_w,
+        )
+    ).float()
+    golden = e4m3.float() * scales.repeat_interleave(scale_block_w, dim=-1)
+    # e4m3 subnormals are not decoded exactly by the unpacker (same mask as test_token_count_aware_cast_back).
+    normal = e4m3.float()[:off].abs() > 2.0**-6
+    assert torch.equal(out[:off][normal], golden[:off][normal]), "count-aware metadata-tail dequant mismatch"

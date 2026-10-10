@@ -30,7 +30,7 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
 }
 
-ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
+ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape, uint32_t scale_block_w) {
     const auto rank = input_shape.size();
     const uint32_t H = static_cast<uint32_t>(input_shape[rank - 1]);
     ttsl::SmallVector<uint32_t> dims;
@@ -38,7 +38,7 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
     for (size_t i = 0; i + 1 < rank; ++i) {
         dims.push_back(static_cast<uint32_t>(input_shape[i]));
     }
-    dims.push_back(H / fp8::BLOCK_W);
+    dims.push_back(H / scale_block_w);
     return ttnn::Shape(std::move(dims));
 }
 
@@ -120,6 +120,15 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         H,
         fp8::BLOCK_W);
     TT_FATAL(folded_M > 0, "per_token_cast_to_fp8: M must be > 0");
+    TT_FATAL(
+        attrs.scale_block_w == 32 || attrs.scale_block_w == 64 || attrs.scale_block_w == 128,
+        "per_token_cast_to_fp8: scale_block_w must be 32, 64 or 128, got {}",
+        attrs.scale_block_w);
+    TT_FATAL(
+        attrs.scale_block_w % tile_w == 0,
+        "per_token_cast_to_fp8: tile width {} must divide scale_block_w={}",
+        tile_w,
+        attrs.scale_block_w);
 }
 
 void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_hit(
@@ -140,7 +149,7 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
             attrs.output_memory_config));
 
     tt::tt_metal::TensorSpec scale_spec(
-        scale_output_shape(input_shape),
+        scale_output_shape(input_shape, attrs.scale_block_w),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -180,10 +189,15 @@ namespace ttnn::prim {
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_memory_config,
-    bool round_scale_to_power_of_two) {
+    bool round_scale_to_power_of_two,
+    uint32_t scale_block_w,
+    bool round_to_nearest_even) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_memory_config = output_memory_config, .round_scale_to_power_of_two = round_scale_to_power_of_two};
+        .output_memory_config = output_memory_config,
+        .round_scale_to_power_of_two = round_scale_to_power_of_two,
+        .scale_block_w = scale_block_w,
+        .round_to_nearest_even = round_to_nearest_even};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -24,6 +24,8 @@ struct PerTokenCastBackParams {
     // When true, `input_scale` is the dispatch metadata tensor: per-token fp32 scales are read from its
     // row tail (bit-stored as int32) instead of a plain FLOAT32 (M, H/128) scale tensor.
     bool scales_from_metadata = false;
+    // Elements per scale (32, 64 or 128). The I/O chunk stays 128 wide; a chunk row holds 128/scale_block_w scales.
+    uint32_t scale_block_w = 128;
 };
 
 struct PerTokenCastBackInputs {

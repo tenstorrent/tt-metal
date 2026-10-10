@@ -71,6 +71,8 @@ KernelIds build_kernels_and_cbs(
     const tt::tt_metal::CoreRangeSet& all_cores,
     uint32_t scale_scratch_bytes,
     bool round_scale_to_power_of_two,
+    uint32_t scale_block_w,
+    bool round_to_nearest_even,
     const std::map<std::string, std::string>& defines) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -94,7 +96,11 @@ KernelIds build_kernels_and_cbs(
     constexpr uint32_t block_ht = 1;             // BlockHt: one tile-height batch
     const uint32_t tiles_per_block = block_ht * block_wt;
 
-    const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
+    // A 128-wide chunk carries chunk_scale_blocks = 128 / scale_block_w scales per row.
+    const uint32_t scale_block_wt = scale_block_w / tile_w;       // tiles per scale block
+    const uint32_t chunk_scale_blocks = block_w / scale_block_w;  // scales per chunk row
+    const uint32_t scale_blocks_per_row = H / scale_block_w;      // scales per row
+    const uint32_t chunks_per_row = H / fp8::BLOCK_W;             // 128-wide chunks per row
     const uint32_t in_elem_bytes = input.element_size();
     const uint32_t input_block_bytes = block_w * in_elem_bytes;      // reader CT[1]; ROW_MAJOR-only
     const uint32_t output_e4m3_block_bytes = block_w;                // one 128-element row, 1 byte/elem
@@ -137,8 +143,8 @@ KernelIds build_kernels_and_cbs(
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
     make_fp32_tile_cb(cb_scaler_idx, 1);                      // reduce scaler (1.0), reader-filled
     make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
-    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);      // col0 = scale
-    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);  // col0 = 1/scale
+    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);      // col0 = scale, per scale block
+    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
@@ -182,7 +188,9 @@ KernelIds build_kernels_and_cbs(
         tile_h,
         tile_w,
         face_h,
-        face_w};
+        face_w,
+        chunks_per_row,
+        chunk_scale_blocks};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
     ids.writer = CreateKernel(
@@ -212,7 +220,9 @@ KernelIds build_kernels_and_cbs(
         clamp_max_bits,
         inv_448_bits,
         tile_w,
-        static_cast<uint32_t>(round_scale_to_power_of_two)};
+        static_cast<uint32_t>(round_scale_to_power_of_two),
+        scale_block_wt,
+        static_cast<uint32_t>(round_to_nearest_even)};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     ids.compute = CreateKernel(
@@ -241,7 +251,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const auto [M, H] = fold_M_H(input_shape);  // M = rows, H = width (last dim)
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
-    const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // 128-wide column-blocks per row
+    const uint32_t chunks_per_row = H / fp8::BLOCK_W;  // 128-wide column chunks per row (the work unit)
     const uint32_t scale_page_bytes = output_scale.buffer()->aligned_page_size();
 
     // Work-split unit, scale-scratch size, and kernel define differ by layout. TILE also needs a bit of
@@ -261,7 +271,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         rows_per_plane = static_cast<uint32_t>(input_shape[input_shape.size() - 2]);  // R = rows in one [R,H] plane
         const uint32_t num_planes = M / rows_per_plane;        // trailing [R,H] planes (1 for a 2D input)
         row_tiles_per_plane = div_up(rows_per_plane, tile_h);  // tile-rows per plane (R padded up to tile_h)
-        total_units = num_planes * row_tiles_per_plane * scale_blocks_per_row;  // total 128-wide blocks
+        total_units = num_planes * row_tiles_per_plane * chunks_per_row;  // total 128-wide chunks
         scale_scratch_bytes = tile_h * scale_page_bytes;  // one plane's tile-row = tile_h scale rows
         defines = {{"INPUT_TILE_LAYOUT", "1"}};
     } else {
@@ -286,6 +296,8 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         all_cores,
         scale_scratch_bytes,
         attrs.round_scale_to_power_of_two,
+        attrs.scale_block_w,
+        attrs.round_to_nearest_even,
         defines);
 
     const uint32_t src_addr = input.buffer()->address();
@@ -307,7 +319,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                 core,
                 {dst_e4m3_addr, dst_scale_addr, offset, num_blocks, rows_per_plane, row_tiles_per_plane});
         } else {
-            num_blocks = div_up(core_units * scale_blocks_per_row, tile_h);  // core_units = rows; last may be partial
+            num_blocks = div_up(core_units * chunks_per_row, tile_h);  // core_units = rows; last may be partial
             SetRuntimeArgs(program, k.reader, core, {src_addr, num_blocks, offset, core_units, H});
             SetRuntimeArgs(program, k.writer, core, {dst_e4m3_addr, dst_scale_addr, num_blocks, offset, core_units, H});
         }
