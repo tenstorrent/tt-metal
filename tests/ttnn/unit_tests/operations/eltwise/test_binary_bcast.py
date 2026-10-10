@@ -4739,6 +4739,84 @@ def test_binary_sharded_output_uneven(device):
     assert_with_pcc(torch_output, result)
 
 
+# The native L1-sharded path aliases each sharded operand's buffer as a CB and pairs the input shard on
+# each core with the output shard on the same core, with no data movement. It used to be taken whenever
+# the core grids matched (tensor-tensor) or the ShardSpecs matched (tensor-scalar), so an output with a
+# different layout, shard shape or orientation on the same cores came back permuted (#58467). Those
+# cases now take the TensorAccessor path; the same-config control stays on the aliased path.
+def _l1_sharded(layout, shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation))
+
+
+_COL_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+_GRID_2x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+_SAME_GRID_DIFFERENT_SPEC_CASES = [
+    pytest.param(
+        (128, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        _l1_sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 32], _COL_4),
+        id="same_grid_height_to_width",
+    ),
+    pytest.param(
+        (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 64], _GRID_2x2),
+        id="same_shard_spec_height_to_block",
+    ),
+    pytest.param(
+        (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2, ttnn.ShardOrientation.COL_MAJOR),
+        id="row_major_to_col_major",
+    ),
+    pytest.param(
+        (128, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        id="same_config_control",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, in_mc, out_mc", _SAME_GRID_DIFFERENT_SPEC_CASES)
+@pytest.mark.parametrize("scalar_b", [False, True], ids=["tensor_tensor", "tensor_scalar"])
+def test_binary_sharded_same_grid_different_spec(device, shape, in_mc, out_mc, scalar_b):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    if scalar_b:
+        out = ttnn.add(tx, 1.5, memory_config=out_mc)
+        golden = x + 1.5
+    else:
+        y = torch.randn(shape, dtype=torch.bfloat16)
+        ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+        out = ttnn.add(tx, ty, memory_config=out_mc)
+        golden = x + y
+    assert out.memory_config() == out_mc
+    assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(out), ulp_threshold=2)
+
+
+# Same defect through a preallocated output: its memory config, not the inputs', decides the layout.
+@pytest.mark.parametrize("shape, in_mc, out_mc", _SAME_GRID_DIFFERENT_SPEC_CASES)
+def test_binary_sharded_same_grid_different_spec_output_tensor(device, shape, in_mc, out_mc):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    y = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=out_mc,
+    )
+    ttnn.add(tx, ty, output_tensor=out)
+    assert out.memory_config() == out_mc
+    assert_with_ulp(expected_result=x + y, actual_result=ttnn.to_torch(out), ulp_threshold=2)
+
+
 def test_multiply_bfloat8_b_bcast_scalarsharded(device):
     """
     Test case reproducing the ttnn.multiply PCC failure from SD model.
