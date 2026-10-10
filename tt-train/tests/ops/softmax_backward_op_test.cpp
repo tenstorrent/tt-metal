@@ -5,9 +5,13 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <umd/device/cluster.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -169,6 +173,78 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
         .grad_max = 10.0F,
     };
     run_softmax_backward_case(test_case, GetParam(), s_device);
+}
+
+TEST_F(SoftmaxBackwardOpTest, LiveL1PressureReplansCachedProgram) {
+    constexpr uint32_t height = 96;
+    constexpr uint32_t width = 1024;
+    constexpr uint32_t page_size = 2048;
+    constexpr uint64_t target_headroom = 96ULL * 1024ULL;
+    constexpr uint64_t streaming_two_slot_bytes = 55296ULL;
+    constexpr uint64_t full_row_one_slot_bytes = 202752ULL;
+
+    const std::array<size_t, 4> shape = {1, 1, height, width};
+    xt::xarray<float> y = xt::ones<float>(shape) * (1.0F / static_cast<float>(width));
+    xt::xarray<float> grad = xt::empty<float>(shape);
+    for (size_t i = 0; i < grad.size(); ++i) {
+        grad.data()[i] = (i % 2U == 0U) ? 1.0F : -1.0F;
+    }
+    const xt::xarray<float> expected = y * grad;
+    auto y_tt = to_device_tensor(y, s_device, ttnn::DataType::BFLOAT16);
+    auto grad_tt = to_device_tensor(grad, s_device, ttnn::DataType::BFLOAT16);
+    const tt::tt_metal::CoreRangeSet one_core(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 0)));
+
+    s_device->enable_program_cache();
+    s_device->clear_program_cache();
+    auto clear_result = ttml::metal::softmax_backward(y_tt, grad_tt, 3, one_core);
+    tt::tt_metal::distributed::Synchronize(*s_device, std::nullopt);
+    const size_t clear_entries = s_device->num_program_cache_entries();
+
+    const auto& allocator = s_device->allocator();
+    const uint64_t allocator_base = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t current_ceiling = s_device->lowest_occupied_compute_l1_address().value_or(
+        static_cast<tt::tt_metal::DeviceAddr>(s_device->l1_size_per_core()));
+    if (current_ceiling <= allocator_base + target_headroom) {
+        GTEST_SKIP() << "device starts with only " << current_ceiling - allocator_base
+                     << " bytes of contiguous L1 headroom";
+    }
+    const uint64_t pages_per_bank =
+        tt::div_up(current_ceiling - allocator_base - target_headroom, static_cast<uint64_t>(page_size));
+    const uint64_t resident_size = pages_per_bank * allocator->get_num_banks(tt::tt_metal::BufferType::L1) * page_size;
+    auto resident = tt::tt_metal::distributed::MeshBuffer::create(
+        tt::tt_metal::distributed::ReplicatedBufferConfig{.size = resident_size},
+        {.page_size = page_size, .buffer_type = tt::tt_metal::BufferType::L1},
+        s_device);
+
+    const auto pressured_ceiling = s_device->lowest_occupied_compute_l1_address();
+    ASSERT_TRUE(pressured_ceiling.has_value());
+    const uint64_t pressured_headroom = *pressured_ceiling - allocator_base;
+    if (pressured_headroom <= streaming_two_slot_bytes || pressured_headroom >= full_row_one_slot_bytes) {
+        GTEST_SKIP() << "could not establish discriminating L1 headroom; got " << pressured_headroom << " bytes";
+    }
+
+    ttnn::Tensor pressured_result;
+    EXPECT_NO_THROW(pressured_result = ttml::metal::softmax_backward(y_tt, grad_tt, 3, one_core));
+    tt::tt_metal::distributed::Synchronize(*s_device, std::nullopt);
+    const size_t pressured_entries = s_device->num_program_cache_entries();
+    EXPECT_GT(pressured_entries, clear_entries) << "live-L1-derived streaming plan was absent from the cache key";
+
+    auto pressured_result_again = ttml::metal::softmax_backward(y_tt, grad_tt, 3, one_core);
+    tt::tt_metal::distributed::Synchronize(*s_device, std::nullopt);
+    EXPECT_EQ(s_device->num_program_cache_entries(), pressured_entries)
+        << "unchanged live L1 plan should reuse the streaming program";
+
+    resident.reset();
+    auto clear_result_again = ttml::metal::softmax_backward(y_tt, grad_tt, 3, one_core);
+    tt::tt_metal::distributed::Synchronize(*s_device, std::nullopt);
+    EXPECT_EQ(s_device->num_program_cache_entries(), pressured_entries)
+        << "releasing L1 pressure should reuse the original full-row program";
+
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(pressured_result), expected, 0.0F, 0.0F));
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(pressured_result_again), expected, 0.0F, 0.0F));
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(clear_result), expected, 0.0F, 0.0F));
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(clear_result_again), expected, 0.0F, 0.0F));
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
