@@ -80,11 +80,12 @@ class UnpackerAB(Unpacker):
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
             return (
                 "{\n"
                 + bfd_program
                 + f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
-                "(bfd_a, bfd_b, 1);\n}\n"
+                f"(bfd_a, bfd_b, {tensor_shape}, 1);\n}}\n"
             )
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
@@ -103,7 +104,8 @@ class UnpackerAB(Unpacker):
     ) -> str:
         if compute_unit.broadcast_type != BroadcastType.None_:
             tile_id_b = block.tile_id_src_b
-            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b});\n"
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b}, {tensor_shape});\n"
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b}, {tensor_shape});\n"

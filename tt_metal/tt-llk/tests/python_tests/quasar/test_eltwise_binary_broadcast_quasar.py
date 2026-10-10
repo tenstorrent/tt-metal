@@ -96,38 +96,6 @@ def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-# face_r_dim < 8 programs broadcast MOP inner loop 0 and the test hangs.
-_BROADCAST_MATH_ROWS = 8
-
-
-def skip_if_quasar_binary_broadcast_unsupported(
-    tile_dimensions, math_fidelity, acc_to_dest
-) -> None:
-    """Skip broadcast cases the reverted full-tile kernels cannot run. See #57902."""
-    tile_shape = construct_tile_shape(tile_dimensions)
-    if tile_shape.face_r_dim < _BROADCAST_MATH_ROWS:
-        pytest.skip(
-            "Quasar eltwise binary broadcast math MOP inner loop is 0 when "
-            f"face_r_dim={tile_shape.face_r_dim} < {_BROADCAST_MATH_ROWS} "
-            f"(tile {list(tile_dimensions)}). See tenstorrent/tt-metal#57902"
-        )
-    if tuple(tile_dimensions) != (32, 32):
-        pytest.skip(
-            "Quasar eltwise binary broadcast unpack and dest addressing are "
-            f"32x32-only after reverting tiny-tile support (tile {list(tile_dimensions)}). "
-            "See tenstorrent/tt-metal#57902"
-        )
-    # EN_DST_ACC is hard-wired to non-LoFi, so pairwise accumulation at LoFi
-    # cannot be requested. HiFi with acc_to_dest=False is still a single-tile
-    # multiply; odd tile counts have no True mode, and skipping them drops HiFi.
-    if bool(acc_to_dest) and math_fidelity == MathFidelity.LoFi:
-        pytest.skip(
-            "Quasar eltwise binary broadcast cannot accumulate into dest at LoFi "
-            f"(requested acc_to_dest={acc_to_dest}, "
-            f"math_fidelity={math_fidelity.name}). See tenstorrent/tt-metal#57902"
-        )
-
-
 def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
     tile_sizes = (
         select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
@@ -156,11 +124,7 @@ def binary_broadcast_input_dimensions(
     return generate_reduced_input_dimensions(dest_acc, dest_sync, tile_shape)
 
 
-def binary_broadcast_acc_to_dest_modes(
-    input_dimensions, tile_dimensions, *, is_perf=False
-):
-    if is_perf and tuple(tile_dimensions) == (1, 32) and input_dimensions[0] == 1:
-        return [False]
+def binary_broadcast_acc_to_dest_modes(input_dimensions, tile_dimensions):
     return valid_acc_to_dest(input_dimensions, tile_dimensions)
 
 
@@ -204,7 +168,7 @@ def binary_broadcast_math_fidelities(format, math_op):
         )
     ),
     acc_to_dest=lambda input_dimensions, tile_dimensions: binary_broadcast_acc_to_dest_modes(
-        input_dimensions, tile_dimensions, is_perf=False
+        input_dimensions, tile_dimensions
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -228,9 +192,6 @@ def test_eltwise_binary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    skip_if_quasar_binary_broadcast_unsupported(
-        tile_dimensions, math_fidelity, acc_to_dest
-    )
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)

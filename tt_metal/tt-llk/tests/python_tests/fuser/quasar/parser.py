@@ -141,7 +141,6 @@ _eltwise_checks = [
     _no_transpose_mismatch,
     *eltwise_unpacker_rules,
     NO_BROADCAST_REUSE_DEST,
-    NO_BROADCAST_ACC_TO_DEST,
 ]
 
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
