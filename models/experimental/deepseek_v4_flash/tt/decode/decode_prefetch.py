@@ -177,16 +177,17 @@ def q_a_ring_specs() -> list:
     ]
 
 
-def tp_gate_up_layout(tp_size: int, K: int, N: int) -> dict:
+def tp_gate_up_layout(tp_size: int, K: int, N: int, layouts: dict = DECODE_LAYOUTS) -> dict:
     """Per-rank shared-expert gate/up: column-parallel ``N = I / tp_size``, full-width (no
     ``n_blocks``), i.e. ``N // 64`` B cores -- 8 of them at TP4's ``I = 2048``.
 
-    Checks that ``K`` and the local ``N`` are the ones that cut implies (a ``[K, N]`` weight),
-    since a config it does not describe would otherwise reach the device mis-sharded. That
-    8-receiver cut matches no ring, so at TP4 the shared expert's gate/up keep
-    ``use_prefetcher=False`` (see :class:`~.moe.DeepSeekV4SparseMoeBlock`).
+    Checks that ``K`` and the local ``N`` are the ones the ``shared_gate_proj`` cut in
+    ``layouts`` implies (a ``[K, N]`` weight), since a config it does not describe would
+    otherwise reach the device mis-sharded. That 8-receiver cut matches no ring, so at TP4 the
+    shared expert's gate/up keep ``use_prefetcher=False`` (see
+    :class:`~.moe.DeepSeekV4SparseMoeBlock`).
     """
-    full = DECODE_LAYOUTS["shared_gate_proj"]
+    full = layouts["shared_gate_proj"]
     if full["N"] % tp_size:
         raise ValueError(f"shared expert N={full['N']} is not divisible by tp_size={tp_size}")
     expected = {"K": full["K"], "N": full["N"] // tp_size}

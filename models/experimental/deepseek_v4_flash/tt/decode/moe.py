@@ -173,7 +173,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             # q_a's 32-receiver ring. A private GCB on those cores also collides with
             # fused_hyperconnection static CBs on (0,0), so they stay on DRAM->L1.
             # Down only cuts K and stays on 64 cores.
-            gate_up_layout = tp_gate_up_layout(tp_size, hidden, local_inter)
+            gate_up_layout = tp_gate_up_layout(tp_size, hidden, local_inter, layouts=self.decode_layouts)
             down_layout = {"K": local_inter, "N": hidden}
             gate_up_prefetch = {"use_prefetcher": False}
         self.gate_proj = LinearDecode(

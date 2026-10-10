@@ -75,6 +75,33 @@ class DeepSeekV41MLP(DeepSeekV4MLP):
     clamp_swiglu = True
 
 
+def fused_experts_config(config, system_config=None, tp_size: int = 1):
+    """``(config, system_config)`` as V4's experts take them at V4.1's shapes: ``I`` zero-padded
+    so each of the ``tp_size`` ranks gets a multiple of ``_I_ALIGN``, and the hidden row cut over
+    ``D / 64`` cores (see :class:`DeepSeekV41PreloadedExperts`)."""
+    align = _I_ALIGN * tp_size
+    padded = -(-config.moe_intermediate_size // align) * align
+    sys_cfg = system_config or active_system_config()
+    sys_cfg = dataclasses.replace(
+        sys_cfg, moe=dataclasses.replace(sys_cfg.moe, fused_num_cores=config.hidden_size // _fused_hidden(1))
+    )
+    return SimpleNamespace(**{**vars(config), "moe_intermediate_size": padded}), sys_cfg
+
+
+def padded_expert_provider(provider, intermediate: int, padded: int):
+    """``provider`` with each expert's ``I`` zero-padded from ``intermediate`` to ``padded``:
+    zero rows after both gate and up, zero columns after down."""
+    pad = padded - intermediate
+
+    def padded_provider(e: int):
+        gate_up, down = provider(e)
+        zeros = gate_up.new_zeros(pad, gate_up.shape[1])
+        gate, up = gate_up.split(intermediate)
+        return torch.cat([gate, zeros, up, zeros]), torch.nn.functional.pad(down, (0, pad))
+
+    return padded_provider
+
+
 class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
     """V4's resident ``fused_experts`` experts at V4.1's shapes.
 
@@ -84,32 +111,25 @@ class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
     ``silu(0) * 0 = 0`` and zero down columns add nothing, so the padding is exact. It costs
     ~11% more expert bytes (~8.5 GB per layer at bfloat4_b).
 
+    ``tp_size > 1`` gives each rank of the 1xTP ``device`` an ``I / TP`` slice, as V4 does, which
+    the op needs in whole multiples of 512 too: at TP4 ``I`` is padded to 4096, 1024 per rank
+    (~3.4 GB per rank and layer at bfloat4_b). The pad sits at the end of gate and of up, so the
+    last ranks' slices are mostly zeros.
+
     ``provider(e) -> (gate_up [2I, D], down [D, I])`` is V4's contract, unpadded (see
     :func:`~...config.expert_provider`).
     """
 
-    def __init__(self, config, provider, device, dtype=None, cache=None, system_config=None):
-        intermediate = config.moe_intermediate_size
-        padded = -(-intermediate // _I_ALIGN) * _I_ALIGN
-        pad = padded - intermediate
-
-        def padded_provider(e: int):
-            gate_up, down = provider(e)
-            zeros = gate_up.new_zeros(pad, gate_up.shape[1])
-            gate, up = gate_up.split(intermediate)
-            return torch.cat([gate, zeros, up, zeros]), torch.nn.functional.pad(down, (0, pad))
-
-        sys_cfg = system_config or active_system_config()
-        sys_cfg = dataclasses.replace(
-            sys_cfg, moe=dataclasses.replace(sys_cfg.moe, fused_num_cores=config.hidden_size // _fused_hidden(1))
-        )
+    def __init__(self, config, provider, device, dtype=None, cache=None, system_config=None, tp_size: int = 1):
+        fused_config, sys_cfg = fused_experts_config(config, system_config, tp_size)
         super().__init__(
-            SimpleNamespace(**{**vars(config), "moe_intermediate_size": padded}),
-            padded_provider,
+            fused_config,
+            padded_expert_provider(provider, config.moe_intermediate_size, fused_config.moe_intermediate_size),
             device,
             dtype=dtype,
             cache=cache,
             system_config=sys_cfg,
+            tp_size=tp_size,
         )
 
 
@@ -117,12 +137,25 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
     """V4's MoE block with the V4.1 router and shared expert, decoded through ``matmul_decode``.
 
     ``weights`` comes from :func:`~...config.moe_weights` and ``experts`` is a
-    :class:`DeepSeekV41PreloadedExperts`. ``weight_dtype`` is the shared expert's: bfloat8_b by
-    default, since at bfloat4_b its error is larger than the routed experts'.
+    :class:`DeepSeekV41PreloadedExperts` built at the same ``tp_size``. ``weight_dtype`` is the
+    shared expert's: bfloat8_b by default, since at bfloat4_b its error is larger than the routed
+    experts'. Under TP the router is replicated, the shared expert's ``I`` is split like the
+    routed experts' (576 per rank at TP4), and the summed partials are all-reduced, as in V4.
     """
 
     router_cls = DeepSeekV41TopKRouter
     shared_expert_cls = DeepSeekV41MLP
 
-    def __init__(self, config, weights: dict, device, experts, cache=None, weight_dtype=ttnn.bfloat8_b):
-        super().__init__(config, weights, device, experts, cache=cache, weight_dtype=weight_dtype, matmul_decode=True)
+    def __init__(self, config, weights: dict, device, experts, cache=None, weight_dtype=ttnn.bfloat8_b, tp_size=1):
+        if experts.tp_size != tp_size:
+            raise ValueError(f"the experts were built for TP{experts.tp_size}, not TP{tp_size}")
+        super().__init__(
+            config,
+            weights,
+            device,
+            experts,
+            cache=cache,
+            weight_dtype=weight_dtype,
+            tp_size=tp_size,
+            matmul_decode=True,
+        )
