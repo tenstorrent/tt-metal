@@ -5,7 +5,9 @@
 fabric_all_gather's plan (groups, port placement under each link's Ethernet core, fabric connections, fence).
 
 Input per chip: [1, 1, G * Sb, W] bf16 TILE (block j = rows j Sb ..), DRAM interleaved; output per chip p: block p of
-the sum over the group's G chips, [1, 1, Sb, W]. The group is a line along `cluster_axis` (chip p = position p).
+the sum over the group's G chips, [1, 1, Sb, W]. The group is a line along `cluster_axis` (chip p = position p), or
+with `cluster_axis=None` one snake line over the whole mesh (fabric_all_gather's): block b is then chip b's in row-major
+chip order, whatever its position along the snake (every block index below is the data block of a line position).
 
 Per chip p, per direction and per link, one *port* core (reader NCRISC / compute / sender BRISC):
   toward p+1 it sends the partial sums of blocks G-1, G-2, ..., p+1 (farthest first); toward p-1 blocks 0, 1, ..., p-1.
@@ -451,12 +453,24 @@ def _incs(chunks, inc_every):
     return -(-chunks // inc_every) if chunks else 0
 
 
-def _blocks(p, G, d):
-    """Blocks port d of line position p sends, in order (farthest first): [(block, slot at the receiver)]."""
+def _blocks(p, G, d, blk):
+    """Blocks port d of line position p sends, in order (farthest first): [(block, slot at the receiver)]. blk[j]: the
+    data block of line position j (its chip's row-major rank in the group; j itself along a mesh axis)."""
     if d == "fwd":
-        return [(j, j) for j in range(G - 1, p, -1)]
-    blocks = list(range(0, p))
-    return [(j, G if j == p - 1 else j) for j in blocks]
+        return [(blk[j], blk[j]) for j in range(G - 1, p, -1)]
+    return [(blk[j], G if j == p - 1 else blk[j]) for j in range(0, p)]
+
+
+def _line_blocks(chips, coord):
+    """The data block of every position of coord's line: walk back to the line start, then forward."""
+    start = coord
+    while chips[start]["rings"][0]["prev"] is not None:
+        start = chips[start]["rings"][0]["prev"]
+    blk, c = [], start
+    while c is not None:
+        blk.append(chips[c]["out"])
+        c = chips[c]["rings"][0]["next"]
+    return blk
 
 
 def create_mesh_program_descriptor(
@@ -489,6 +503,8 @@ def create_mesh_program_descriptor(
     for coord, ch in chips.items():
         rg = ch["rings"][0]
         p = rg["p"]
+        blk = _line_blocks(chips, coord)
+        assert blk[p] == ch["out"], (coord, p, blk)
         program = ttnn.ProgramDescriptor()
         ports, finals = ch["ports"], ch["finals"]
         cbs = []
@@ -505,7 +521,7 @@ def create_mesh_program_descriptor(
         pr_rt, ps_rt, pc_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for (j, d, l), core in ports.items():
             peer = rg["next"] if d == "fwd" else rg["prev"]
-            blocks = _blocks(p, G, d) if peer is not None else []
+            blocks = _blocks(p, G, d, blk) if peer is not None else []
             up = rg["prev"] if d == "fwd" else rg["next"]
             relay = up is not None and len(blocks) > 0
             full = _chunks_per_shard(blk_pages, l, stride, num_banks, run_pages)
@@ -558,8 +574,8 @@ def create_mesh_program_descriptor(
                 blk_pages,
                 first,
                 fstride,
-                p,
-                p,
+                blk[p],
+                blk[p],
                 G,
                 has_f,
                 has_b,
@@ -655,6 +671,7 @@ def _with_final_cores(mesh_device, chips, num_links):
 def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=None, placement="auto"):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] bf16 TILE, DRAM interleaved, a partial per chip) over each line
     along `cluster_axis`: chip p gets block p of the sum, [1, 1, Sb, W] (the layout ttnn.reduce_scatter(dim=2) gives).
+    cluster_axis=None: one snake line over the whole mesh; chip d (row-major) gets block d.
     """
     mesh_device = input_tensor.device()
     key = (id(mesh_device), cluster_axis, num_links, placement)
