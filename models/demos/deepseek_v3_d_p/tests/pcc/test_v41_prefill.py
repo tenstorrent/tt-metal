@@ -90,9 +90,9 @@ def test_v41_prefill_vs_model_py(mesh_device, device_params):
         cfg,
         checkpoint(),
         max_seq_len=-(-S // CHUNK) * CHUNK,
-        chunk_tokens=min(CHUNK, -(-S // (32 * sp)) * 32 * sp),
+        chunk_tokens=min(CHUNK, -(-S // (V41Prefill.CHUNK_ALIGN * sp)) * V41Prefill.CHUNK_ALIGN * sp),
         n_layers=N_LAYERS,
-        kv_only_layer=cfg.first_decoder_layer if N_LAYERS == cfg.first_decoder_layer else None,
+        kv_only=N_LAYERS == cfg.first_decoder_layer,
         weight_cache_path=CACHE,
     )
     host = EngramHost(max_seq_len=S + 64, table_dir=os.environ.get("DSV41_ENGRAM_TABLE_DIR") or None)

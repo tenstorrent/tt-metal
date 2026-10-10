@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -40,6 +41,10 @@ def _first_device(t) -> torch.Tensor:
 
 
 class V41Prefill:
+    CHUNK_ALIGN = (
+        64  # tokens per chip: a multiple of the MoE routing's 64-core masked_bincount grid (and of TILE / ratio)
+    )
+
     def __init__(
         self,
         mesh_device,
@@ -49,7 +54,7 @@ class V41Prefill:
         max_seq_len: int,
         chunk_tokens: int,
         n_layers: int | None = None,
-        kv_only_layer: int | None = None,
+        kv_only: bool = True,
         sp_axis: int = 0,
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
@@ -58,13 +63,17 @@ class V41Prefill:
         load_routed_from_cache: bool = False,
     ):
         self.mesh, self.cfg, self.ck = mesh_device, cfg, ck
+        weight_cache_path = Path(weight_cache_path) if weight_cache_path else None  # the modules join it with `/`
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp, self.tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
         self.chunk = int(chunk_tokens)
-        assert self.chunk % (ttnn.TILE_SIZE * self.sp) == 0 and self.chunk % 2 == 0, self.chunk
+        # 64 tokens per chip per step: the MoE's masked_bincount splits each chip's tokens over a 64-core grid
+        assert self.chunk % (self.CHUNK_ALIGN * self.sp) == 0, (self.chunk, self.CHUNK_ALIGN * self.sp)
         self.max_seq_len = int(max_seq_len)
         self.n_layers = cfg.first_decoder_layer if n_layers is None else int(n_layers)
-        self.kv_only_layer = cfg.first_decoder_layer if kv_only_layer is None else kv_only_layer
+        self.kv_only_layer = (
+            cfg.first_decoder_layer if kv_only else None
+        )  # layer 20: the decoder's shared KV + index keys
         S_l = self.chunk // self.sp
         self.rotary_emb = DeepseekV4RotaryEmbedding(v41_hf_config(cfg, max_seq=self.max_seq_len))
         mk = dict(sp_axis=sp_axis, tp_axis=tp_axis, topology=topology)

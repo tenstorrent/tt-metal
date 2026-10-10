@@ -51,6 +51,17 @@ class LazyExperts(Sequence):
         return self._last[1]
 
 
+def _routed_cache_complete(path: Path, layer: int, experts_per_chip: int, dtype) -> bool:
+    """Every routed-expert .tensorbin of this layer in THIS dtype (``TtRoutedExpert.check_cache_complete`` globs without the
+    dtype, so a BFP8 cache would pass for a BFP4 build and load-cache mode would then convert empty tensors)."""
+    tag = {ttnn.bfloat8_b: "BFLOAT8_B", ttnn.bfloat4_b: "BFLOAT4_B"}[dtype]
+    return all(
+        (path / f"layer_{layer}.routed_expert.local_{i}_{proj}_dtype_{tag}_layout_TILE.tensorbin").exists()
+        for i in range(experts_per_chip)
+        for proj in ("gate", "up", "down")
+    )
+
+
 def build_v41_moe(
     mesh_device,
     cfg,
@@ -91,6 +102,10 @@ def build_v41_moe(
         mesh_config.dispatch_group_size,
         dispatch_buffer_capacity_factor,
     )
+    if not load_routed_from_cache and weight_cache_path is not None:
+        load_routed_from_cache = _routed_cache_complete(
+            Path(weight_cache_path), layer, experts_per_chip, routed_expert_weights_dtype
+        )
     routed = None if load_routed_from_cache else LazyExperts(ck, layer, n_experts)
     shared = {
         "gate_proj": w["ffn.shared_experts.w1.weight"].float(),

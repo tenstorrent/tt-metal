@@ -43,16 +43,23 @@ def swiglu_clamp_activations(limit: float):
     return (None, None)
 
 
+def _subblock_w(n_tiles: int, cap: int = 8) -> int:
+    """The widest output subblock <= ``cap`` that divides the per-core width (8 for every 2048-wide model; DeepSeek-V4.1's
+    2304 / tp 4 = 18 tiles -> 6, since 8 does not divide 18)."""
+    return max(w for w in range(1, cap + 1) if n_tiles % w == 0)
+
+
 def get_bh_program_configs(
     per_core_M: int, gate_n_tiles: int, down_n_tiles: int, *, gate_activation=_SILU, up_activation=None
 ):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
+    gate_sub, down_sub = _subblock_w(gate_n_tiles), _subblock_w(down_n_tiles)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_sub,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -63,7 +70,7 @@ def get_bh_program_configs(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_sub,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -74,7 +81,7 @@ def get_bh_program_configs(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=down_sub,
         per_core_M=per_core_M,
         per_core_N=down_n_tiles,
         fuse_batch=False,
@@ -92,7 +99,7 @@ def get_wh_program_configs(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=_subblock_w(gate_n_tiles),
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -103,7 +110,7 @@ def get_wh_program_configs(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=_subblock_w(gate_n_tiles),
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
