@@ -730,3 +730,87 @@ def test_cp_layer_major(mesh_device, seq_len, reset_seeds):
         logger.info(f"CP_S6 user {u['slot']}: {res[u['slot']]}")
     model.tt_ccl.close()
     assert not bad, "\n".join(bad)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+@pytest.mark.parametrize("seq_len", [16384])
+def test_cp_slot_coverage(mesh_device, seq_len, reset_seeds):
+    """One layer-major CP prefill of the same prompt in slots 0, 8, 16 and 31 (one user per mesh column), with the
+    device page tables llama_model builds (the user's row on its owner column slot // 8, -1 on the others) and
+    disjoint blocks per user. Each slot must give the slot-0 result: last-token logits (all 32 devices) and the
+    owner column's K / V cache contents in the user's blocks (8 rows) torch.equal. The prefill must not write the
+    KV cache outside the owner column: on every column, the blocks of the users of the other columns (row 0 device)
+    are unchanged (the cache is column-local and block ids repeat across columns in serving)."""
+    model, _, _ = _one_layer_model(mesh_device, seq_len)
+    attn = model.layers[0].attention
+    rot = model.get_or_create_prefill_rot_mats()
+    nb = seq_len // 64
+    slots = [0, 8, 16, 31]
+    torch.manual_seed(7)
+    xh = torch.randn(1, 1, seq_len, cp.HIDDEN).to(torch.bfloat16)
+    users = []
+    for k, slot in enumerate(slots):
+        blocks = torch.arange(k * nb, (k + 1) * nb)
+        pt_host = torch.full((COLS, nb), -1, dtype=torch.int32)
+        pt_host[slot // ROWS] = blocks.int()
+        pt = ttnn.from_torch(
+            pt_host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=(ROWS, COLS)),
+        )
+        users.append(dict(slot=slot, col=slot // ROWS, blocks=blocks, pt=pt))
+
+    def owner_cache(u):
+        out = []
+        for t in attn.layer_past:
+            d = ttnn.get_device_tensors(t)
+            out.append(torch.stack([ttnn.to_torch(d[r * COLS + u["col"]])[u["blocks"]] for r in range(ROWS)]))
+        return out
+
+    def foreign_blocks():
+        """Row-0 device of each column: the blocks of the users of the other columns, K and V."""
+        res = {}
+        for c in range(COLS):
+            idx = torch.cat([u["blocks"] for u in users if u["col"] != c])
+            res[c] = [ttnn.to_torch(ttnn.get_device_tensors(t)[c])[idx] for t in attn.layer_past]
+        return res
+
+    before = foreign_blocks()
+    lm = [
+        dict(
+            h=cp.model_entry(model, _x_natural(mesh_device, xh, ttnn.bfloat16)),
+            user_id=u["slot"],
+            page_table=u["pt"],
+            last_idx=seq_len - 1,
+        )
+        for u in users
+    ]
+    windows = cp.layer_major_prefill(model, lm, rot, None)
+    ttnn.synchronize_device(mesh_device)
+    res = {}
+    for u, win in zip(users, windows):
+        lg = model.process_output_prefill_logits(win, last_token_idx=(seq_len - 1) % cp.EXIT_WINDOW)
+        res[u["slot"]] = dict(logits=[ttnn.to_torch(d) for d in ttnn.get_device_tensors(lg[0])], cache=owner_cache(u))
+    after = foreign_blocks()
+    ref = res[slots[0]]
+    bad = []
+    for u in users:
+        r = res[u["slot"]]
+        nl = sum(int(torch.equal(a, b)) for a, b in zip(r["logits"], ref["logits"]))
+        nc = sum(int(torch.equal(a, b)) for a, b in zip(r["cache"], ref["cache"]))
+        nz = sum(int(torch.count_nonzero(t) > 0) for t in r["cache"])
+        line = f"slot {u['slot']} (column {u['col']}): logits equal {nl}/32, K/V cache equal {nc}/2, nonzero {nz}/2"
+        logger.info(f"CP_SLOTS {line}")
+        if nl != 32 or nc != 2 or nz != 2:
+            bad.append(line)
+    for c in range(COLS):
+        same = sum(int(torch.equal(a, b)) for a, b in zip(before[c], after[c]))
+        logger.info(f"CP_SLOTS column {c}: other columns' blocks unchanged {same}/2")
+        if same != 2:
+            bad.append(f"column {c}: other columns' user blocks written ({same}/2 unchanged)")
+    model.tt_ccl.close()
+    assert not bad, "\n".join(bad)
