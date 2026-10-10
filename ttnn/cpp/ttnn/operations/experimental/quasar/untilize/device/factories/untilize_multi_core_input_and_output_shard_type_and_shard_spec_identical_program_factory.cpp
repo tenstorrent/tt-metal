@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "untilize_multi_core_program_factory.hpp"
 
 #include <filesystem>
 
@@ -54,24 +55,15 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t num_blocks_per_core = shard_height / tile_height;
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_core;
 
-    // Staged path: 4 reader threads copy the input shard into an ALL-pattern ring in sub-blocks of
-    // sub_block_tiles (the widest divisor of the block that fits in half-sync DEST), compute untilizes
-    // even and odd blocks into separate one-row-per-entry DFBs, and one single-thread writer kernel per
-    // DFB copies the rows into the output shard. All sides use implicit sync. Every reader thread must
-    // copy at least one sub-block, since the DFB's final-credit barrier waits for all of a kernel's
-    // threads.
-    constexpr uint32_t num_reader_threads = 4;
-    const uint32_t dest_limit = fp32_dest_acc_en ? 4 : 8;
-    uint32_t sub_block_tiles = 1;
-    for (uint32_t w = std::min(dest_limit, num_tiles_per_block); w > 0; --w) {
-        if (num_tiles_per_block % w == 0) {
-            sub_block_tiles = w;
-            break;
-        }
-    }
+    // Staged path: 4 reader threads copy the input shard into an ALL-pattern ring by sub-block,
+    // compute untilizes even and odd blocks into separate one-row-per-entry DFBs, and one
+    // single-thread writer kernel per DFB copies the rows into the output shard. All sides use
+    // implicit sync.
+    constexpr uint32_t num_reader_threads = kUntilizeNumReaderThreads;
+    const uint32_t sub_block_tiles =
+        untilize_split_sub_block_tiles(num_tiles_per_block, num_blocks_per_core, fp32_dest_acc_en);
     const uint32_t row_bytes = shard_width * output.element_size();
-    const bool staged = row_bytes % hal::get_l1_alignment() == 0 &&
-                        num_blocks_per_core * (num_tiles_per_block / sub_block_tiles) >= num_reader_threads;
+    const bool staged = row_bytes % hal::get_l1_alignment() == 0 && sub_block_tiles != 0;
 
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};    // legacy c_0
@@ -192,7 +184,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             {"per_core_block_tile_cnt", num_tiles_per_block},
             {"sub_block_tiles", sub_block_tiles},
             {"block_rows", tile_height}};
-        compute.runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}};
+        compute.runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "last_block_rows"}};
     }
 
     Group<KernelSpec> kernels = {reader, writer, compute};
@@ -219,7 +211,10 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
                 writer_node_args, core, {{"num_blocks", (num_blocks_per_core + 1) / 2}, {"first_block", 0}});
             AddRuntimeArgsForNode(
                 writer_odd_node_args, core, {{"num_blocks", num_blocks_per_core / 2}, {"first_block", 1}});
-            compute_node_args["per_core_block_cnt"][core] = num_blocks_per_core;
+            AddRuntimeArgsForNode(
+                compute_node_args,
+                core,
+                {{"per_core_block_cnt", num_blocks_per_core}, {"last_block_rows", tile_height}});
         } else {
             reader_node_args["num_tiles_per_core"][core] = num_tiles_per_shard;
             writer_node_args["num_units"][core] = num_tiles_per_shard;

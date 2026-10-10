@@ -5,7 +5,8 @@
 // Untilize with two output DFBs: even blocks go to dfb::out and odd blocks to dfb::out_odd, so two
 // single-thread writer kernels drain them in parallel. Each output entry is one row of the block, so
 // a writer moves whole entries with implicit sync. The input DFB holds sub_block_tiles-wide
-// sub-blocks, one per wait.
+// sub-blocks, one per wait. The core's last block pushes only its last_block_rows real rows; nothing
+// is packed after it, so its padding rows are simply never posted.
 
 #include <cstdint>
 
@@ -14,6 +15,7 @@
 
 void kernel_main() {
     const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    const uint32_t last_block_rows = get_arg(args::last_block_rows);
     if (per_core_block_cnt == 0) {
         return;
     }
@@ -41,7 +43,7 @@ void kernel_main() {
             pack_untilize_block<sub_block_tiles, block_tiles>(dfb::in, 1, out_id, b);
             in.pop_front(sub_block_tiles);
         }
-        out.push_back(block_rows);
+        out.push_back(r == per_core_block_cnt - 1 ? last_block_rows : block_rows);
         pack_untilize_uninit(out_id);
     }
 }
