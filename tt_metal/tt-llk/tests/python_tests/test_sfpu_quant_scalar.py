@@ -6,8 +6,6 @@ SFPU quant, requant and dequant with a per-tensor scale in both LLK forms of the
 against one host reference over whole-number results, fractions, ties and both saturation ends.
 """
 
-import struct
-
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -27,10 +25,6 @@ _QUANT_FORMATS = {
 
 _ZERO_POINT = 3.0
 _SCALE = 0.25
-
-
-def _float_bits(x: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", x))[0]
 
 
 def _stimuli(quant_op: str, exact: bool, seed: int) -> torch.Tensor:

@@ -2022,8 +2022,6 @@ class QUANT_SCALAR_CFG(TemplateParameter):
     _FORMS = {"tile": 0, "scalar": 1}
 
     def convert_to_cpp(self) -> str:
-        import struct
-
         def bits(x: float) -> int:
             return struct.unpack("<I", struct.pack("<f", x))[0]
 
