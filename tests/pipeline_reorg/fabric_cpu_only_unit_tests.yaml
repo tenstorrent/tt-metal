@@ -67,7 +67,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
   skus:
     cpu_medium:
-      timeout: 36
+      timeout: 20
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -91,7 +91,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 32
+      timeout: 48
   team: scaleout
   budget_type: unit
   arch: wormhole_b0

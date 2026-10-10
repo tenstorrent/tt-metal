@@ -2865,10 +2865,15 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Try each candidate in order (best first)
     for (size_t global_idx : selection.candidates) {
-        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
-        if (host_cap_active && global_idx < global_to_host.size()) {
-            const int grp = global_to_host[global_idx];
-            if (grp >= 0 && !occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
+        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap. A candidate
+        // past the label vector or labelled < 0 is unlabelled (in no host group, e.g. spans hosts) and is
+        // not usable under the cap -- the same rule the SAT encoder applies (topology_solver_sat.cpp).
+        if (host_cap_active) {
+            const int grp = global_idx < global_to_host.size() ? global_to_host[global_idx] : -1;
+            if (grp < 0) {
+                continue;
+            }
+            if (!occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
                 continue;  // would exceed at-most-k occupied host groups
             }
         }
@@ -3332,11 +3337,15 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::enumerate_mappings(
                 return;
             }
 
-            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
-            if (host_cap_active && global_idx < global_to_host.size()) {
-                const int grp = global_to_host[global_idx];
-                if (grp >= 0 && !occupied_host_groups.contains(grp) &&
-                    occupied_host_groups.size() >= host_group_cap) {
+            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap. A candidate
+            // past the label vector or labelled < 0 is unlabelled (in no host group, e.g. spans hosts) and is
+            // not usable under the cap -- the same rule the SAT encoder applies (topology_solver_sat.cpp).
+            if (host_cap_active) {
+                const int grp = global_idx < global_to_host.size() ? global_to_host[global_idx] : -1;
+                if (grp < 0) {
+                    continue;
+                }
+                if (!occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
                     continue;  // would exceed at-most-k occupied host groups
                 }
             }

@@ -2803,6 +2803,14 @@ bool build_sat_placement_constraints(
             // Skip it: the unconstrained solve already yields the only (all-hosts-full) packing.
             if (k < host_seat_groups.size()) {
                 constraints.set_max_same_rank_groups_used(k);
+                log_info(
+                    tt::LogFabric,
+                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es), "
+                    "capacity {}/host); seats spanning hosts are unusable while the cap holds",
+                    k,
+                    host_seat_groups.size(),
+                    pools.size(),
+                    capacity);
             }
         }
     }
@@ -3352,6 +3360,12 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         MappingResult<MeshId, const Candidate*> r = master_solve_->next(/*drop_cap=*/false);
         if (!r.success) {
             r = master_solve_->next(/*drop_cap=*/true);
+            if (r.success) {
+                log_info(
+                    tt::LogFabric,
+                    "SAT joint placement: no placement under the HARD host-count cap at this pool size; placed with "
+                    "the cap dropped (meshes may now span more hosts / use cross-host seats)");
+            }
         }
         return r;
     };
