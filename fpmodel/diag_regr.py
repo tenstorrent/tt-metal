@@ -16,7 +16,8 @@ for name, (_, _, term) in M.CONSTANTS.items():
     if term and name not in p:
         M.OFF.add(term)
 e = pd.read_csv(enum, low_memory=False).drop_duplicates(KEY, keep="last")
-e = e[(e.status == "ok") & e.case.map(lambda c: any(s in c for s in pats))].reset_index(drop=True)
+e = e[(e.status == "ok") & e.per_core_M.notna() & e.family.isin(["2d", "1d_in0", "1d_in1", "reuse"])]
+e = e[e.case.map(lambda c: any(s in c for s in pats))].reset_index(drop=True)
 e["arch_"] = arch
 e = M.annotate(e)
 b, g, pr = R.base_parts(e, p)

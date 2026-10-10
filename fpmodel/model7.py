@@ -57,6 +57,7 @@ EXPERIMENTAL = {
     "wfam": "each factory's output writer reaches its own share of the DRAM write bandwidth (relative to 2D; Kt=1 sweeps: Reuse ~1.3x, 1D in1 ~0.7x, 1D in0 ~0.45x)",
     "wfamw": "as wfam, but the factory penalty ramps in with the core's output block width (narrow blocks write at the 2D rate; write-rate sweep)",
     "reusewov": "Reuse writes each output subblock as soon as it is packed: the block's compute hides its write, only the last subblock's write is exposed",
+    "reusetail": "Reuse blocks that don't divide evenly over the cores leave a last round on fewer cores: its K steps share DRAM and links among fewer readers",
     "unpack": "the unpacker loads sbh in0 + sbw in1 tiles per matmul_block inner step; at low fidelity it, not math, bounds a subblock",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
@@ -242,7 +243,10 @@ def geometry(d):
     g["rd1"] = np.select([is2d, in0, in1, reuse], [C2, P0, 1, rcores], 0.0)  # cores reading in1 from memory
     obh = np.where(reuse, np.minimum(pcM, Mt), obh)
     obw = np.where(reuse, pcN, obw)
-    g["nob"] = np.where(reuse, np.ceil(rblocks / rcores) * bsf, bloop * np.ceil(pcM / obh) * np.ceil(pcN / obw))
+    rounds = np.ceil(rblocks / rcores)
+    g["rrounds"], g["rbsf"] = rounds, bsf
+    g["rtail"] = np.where(reuse, (rblocks - (rounds - 1) * rcores) / rcores, 1.0)  # active-core fraction, last round
+    g["nob"] = np.where(reuse, rounds * bsf, bloop * np.ceil(pcM / obh) * np.ceil(pcN / obw))
     g["nK"] = np.ceil(Kt / kb)
     g["dbuf"] = np.where(reuse, True, bloop * g["nK"] > 1)
     g["bloop"] = np.where(reuse | (fam == "multicore"), 1.0, bloop)
@@ -364,9 +368,11 @@ def predict(g, p, parts=False):
     if on("bank"):
         chip = np.maximum(chip, np.maximum(da / (dram * ea), db / (dram * eb)))
     read = np.maximum(np.maximum(step0, step1), chip)
+    shared = chip  # the chip-wide part of the read bound: scales with the number of cores reading at once
     if on("link"):
         lk = g["link"] * (np.where(g["fam"] == "reuse", p["reuse_link"], 1.0) if on("reusesync") else 1.0)
         read = np.maximum(read, lk / (s["noc_Bpc"] * p["link_eff"]))
+        shared = np.maximum(shared, lk / (s["noc_Bpc"] * p["link_eff"]))
         if on("linkmc"):  # the most multicast-loaded link at the multicast efficiency
             read = np.maximum(read, g["link_mc"] / (s["noc_Bpc"] * p["link_eff_mc"]))
 
@@ -441,6 +447,13 @@ def predict(g, p, parts=False):
         core = core + np.where(g["bloop"] > 1, g["bloop"] * p["batch_fixed"], 0.0)
     if on("reuseovl"):  # one pipeline over all of the core's blocks: K steps of every block back to back
         stream = read + (g["nob"] * nK - 1) * np.maximum(read, comp) + comp + g["nob"] * (epi + write + pad)
+        if on("reusetail"):  # the last round's K steps at the tail's share of the chip-wide bound
+            ft = g["rtail"]  # Reuse reads without multicast: each core fetches its own blocks
+            f0 = fetch(b0, g["src_a"], g["rd0"] * ft, ea, cg0, g["tb_a"])
+            f1 = fetch(b1, g["src_b"], g["rd1"] * ft, eb, cg1, g["tb_b"])
+            read_t = np.maximum(np.maximum(f0, f1), shared * ft)
+            nt = g["rbsf"] * nK
+            stream = stream - nt * (np.maximum(read, comp) - np.maximum(read_t, comp))
         core = np.where(g["fam"] == "reuse", stream, core)
 
     # MultiCore: one output tile at a time, every input tile read with its own barrier

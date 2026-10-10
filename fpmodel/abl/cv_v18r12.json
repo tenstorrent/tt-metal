@@ -1,0 +1,672 @@
+{
+ "ablate": "full+wfam",
+ "sets": {
+  "wh_designed": {
+   "regret": 1.0536,
+   "p95_regret": 1.249,
+   "regr": 19,
+   "bins": [
+    2,
+    12,
+    2,
+    3
+   ],
+   "worst": 2.59
+  },
+  "wh_target": {
+   "regret": 1.0475,
+   "p95_regret": 1.21,
+   "regr": 1,
+   "bins": [
+    0,
+    0,
+    1,
+    0
+   ],
+   "worst": 1.328
+  },
+  "bh_designed": {
+   "regret": 1.0453,
+   "p95_regret": 1.242,
+   "regr": 43,
+   "bins": [
+    18,
+    18,
+    4,
+    3
+   ],
+   "worst": 2.542
+  },
+  "wh_fresh1": {
+   "regret": 1.0295,
+   "p95_regret": 1.121,
+   "regr": 2,
+   "bins": [
+    0,
+    2,
+    0,
+    0
+   ],
+   "worst": 1.149
+  },
+  "wh_miss2": {
+   "regret": 1.0537,
+   "p95_regret": 1.177,
+   "regr": 5,
+   "bins": [
+    1,
+    4,
+    0,
+    0
+   ],
+   "worst": 1.241
+  },
+  "wh_sharded": {
+   "regret": 1.018,
+   "p95_regret": 1.06,
+   "regr": 2,
+   "bins": [
+    0,
+    0,
+    0,
+    2
+   ],
+   "worst": 1.794
+  },
+  "wh_kdepth": {
+   "regret": 1.0718,
+   "p95_regret": 1.317,
+   "regr": 9,
+   "bins": [
+    2,
+    6,
+    0,
+    1
+   ],
+   "worst": 1.532
+  },
+  "wh_cov1": {
+   "regret": 1.05,
+   "p95_regret": 1.281,
+   "regr": 6,
+   "bins": [
+    2,
+    3,
+    1,
+    0
+   ],
+   "worst": 1.453
+  },
+  "wh_cov2": {
+   "regret": 1.0504,
+   "p95_regret": 1.142,
+   "regr": 3,
+   "bins": [
+    3,
+    0,
+    0,
+    0
+   ],
+   "worst": 1.07
+  },
+  "wh_cov3": {
+   "regret": 1.0542,
+   "p95_regret": 1.138,
+   "regr": 1,
+   "bins": [
+    0,
+    1,
+    0,
+    0
+   ],
+   "worst": 1.153
+  },
+  "wh_cov4": {
+   "regret": 1.0582,
+   "p95_regret": 1.287,
+   "regr": 7,
+   "bins": [
+    2,
+    3,
+    2,
+    0
+   ],
+   "worst": 1.282
+  },
+  "wh_wbench": {
+   "regret": 1.0368,
+   "p95_regret": 1.229,
+   "regr": 12,
+   "bins": [
+    2,
+    8,
+    2,
+    0
+   ],
+   "worst": 1.257
+  },
+  "bh_draws": {
+   "regret": 1.0162,
+   "p95_regret": 1.112,
+   "regr": 96,
+   "bins": [
+    38,
+    48,
+    7,
+    3
+   ],
+   "worst": 1.844
+  },
+  "bh_kt1": {
+   "regret": 1.0434,
+   "p95_regret": 1.19,
+   "regr": 3,
+   "bins": [
+    2,
+    1,
+    0,
+    0
+   ],
+   "worst": 1.146
+  },
+  "bh_wbench": {
+   "regret": 1.0231,
+   "p95_regret": 1.178,
+   "regr": 5,
+   "bins": [
+    1,
+    4,
+    0,
+    0
+   ],
+   "worst": 1.167
+  },
+  "bh_cov1": {
+   "regret": 1.0487,
+   "p95_regret": 1.239,
+   "regr": 7,
+   "bins": [
+    3,
+    4,
+    0,
+    0
+   ],
+   "worst": 1.22
+  },
+  "wh_draws": {
+   "regret": 1.0134,
+   "p95_regret": 1.089,
+   "regr": 83,
+   "bins": [
+    40,
+    29,
+    5,
+    9
+   ],
+   "worst": 1.917
+  },
+  "wh_fin1": {
+   "regret": 1.0434,
+   "p95_regret": 1.221,
+   "regr": 14,
+   "bins": [
+    5,
+    6,
+    1,
+    2
+   ],
+   "worst": 1.763
+  },
+  "bh_fin1": {
+   "regret": 1.0437,
+   "p95_regret": 1.193,
+   "regr": 9,
+   "bins": [
+    4,
+    4,
+    1,
+    0
+   ],
+   "worst": 1.252
+  },
+  "wh_fin2": {
+   "regret": 1.0425,
+   "p95_regret": 1.199,
+   "regr": 17,
+   "bins": [
+    10,
+    4,
+    2,
+    1
+   ],
+   "worst": 1.516
+  },
+  "bh_fin2": {
+   "regret": 1.0487,
+   "p95_regret": 1.286,
+   "regr": 11,
+   "bins": [
+    5,
+    6,
+    0,
+    0
+   ],
+   "worst": 1.186
+  }
+ },
+ "pairacc": 0.939,
+ "med_err": 0.087,
+ "kbias": {
+  "kb1": -0.014,
+  "kb2-8": 0.015,
+  "kb>8": 0.01
+ },
+ "constants": {
+  "dram_eff": {
+   "wh": {
+    "value": 0.7692,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.7781,
+    "fold_spread": 1.065,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "noc_eff": {
+   "wh": {
+    "value": 0.959,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.6775,
+    "fold_spread": 1.016,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "l1_frac": {
+   "wh": {
+    "value": 0.7679,
+    "fold_spread": 1.022,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 1.3626,
+    "fold_spread": 1.063,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "lat_dram": {
+   "wh": {
+    "value": 352.352,
+    "fold_spread": 1.002,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 519.1863,
+    "fold_spread": 1.017,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "lat_l1": {
+   "wh": {
+    "value": 282.282,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 403.113,
+    "fold_spread": 1.04,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "launch_us": {
+   "wh": {
+    "value": 0.5005,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.9563,
+    "fold_spread": 1.105,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "tile_rt": {
+   "wh": {
+    "value": 603.3306,
+    "fold_spread": 1.036,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 668.5855,
+    "fold_spread": 1.109,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "link_eff": {
+   "wh": {
+    "value": 0.7704,
+    "fold_spread": 1.006,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.9165,
+    "fold_spread": 1.034,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "bank_frac": {
+   "wh": {
+    "value": 0.1968,
+    "fold_spread": 1.103,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.4,
+    "fold_spread": 1.081,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "burst_KB": {
+   "wh": {
+    "value": 318.4411,
+    "fold_spread": 1.048,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 519.9426,
+    "fold_spread": 1.124,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "rl_init": {
+   "wh": {
+    "value": 339.66,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 158.0564,
+    "fold_spread": 1.026,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "u2d": {
+   "wh": {
+    "value": 99.9,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 81.2286,
+    "fold_spread": 1.052,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "lat_mcast": {
+   "wh": {
+    "value": 56.0925,
+    "fold_spread": 1.33,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 293.1529,
+    "fold_spread": 1.039,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "ack_rx": {
+   "wh": {
+    "value": 11.6144,
+    "fold_spread": 1.046,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 8.7231,
+    "fold_spread": 1.027,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "pack_Bpc": {
+   "wh": {
+    "value": 29.1451,
+    "fold_spread": 1.01,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 43.9134,
+    "fold_spread": 1.007,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "call": {
+   "wh": {
+    "value": 23.0637,
+    "fold_spread": 1.033,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 3.055,
+    "fold_spread": 1.41,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "lat_write": {
+   "wh": {
+    "value": 212.2576,
+    "fold_spread": 1.049,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 227.4028,
+    "fold_spread": 1.031,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "sfpu_tile": {
+   "wh": {
+    "value": 1210.4519,
+    "fold_spread": 1.036,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 1160.6769,
+    "fold_spread": 1.067,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "issue": {
+   "wh": {
+    "value": 38.038,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 47.3062,
+    "fold_spread": 1.009,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "mc_eff0": {
+   "wh": {
+    "value": 1.0,
+    "fold_spread": 1.0,
+    "pinned": false,
+    "at_bound": true
+   },
+   "bh": {
+    "value": 1.0,
+    "fold_spread": 1.0,
+    "pinned": false,
+    "at_bound": true
+   }
+  },
+  "mc_eff_rx": {
+   "wh": {
+    "value": 0.0069,
+    "fold_spread": 1.048,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.0003,
+    "fold_spread": 23.247,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "noc_eff_cc": {
+   "wh": {
+    "value": 0.4805,
+    "fold_spread": 1.0,
+    "pinned": true,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.4543,
+    "fold_spread": 1.076,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "reuse_link": {
+   "wh": {
+    "value": 0.8324,
+    "fold_spread": 1.03,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.8013,
+    "fold_spread": 1.031,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "dram_w_eff": {
+   "wh": {
+    "value": 0.3076,
+    "fold_spread": 1.017,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.6718,
+    "fold_spread": 1.012,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "wf_reuse": {
+   "wh": {
+    "value": 1.9927,
+    "fold_spread": 1.128,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 1.2562,
+    "fold_spread": 1.032,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "wf_in0": {
+   "wh": {
+    "value": 0.6861,
+    "fold_spread": 1.016,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.6079,
+    "fold_spread": 1.022,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "wf_in1": {
+   "wh": {
+    "value": 0.6913,
+    "fold_spread": 1.012,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.5894,
+    "fold_spread": 1.021,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "lat_shard": {
+   "wh": {
+    "value": 366.9568,
+    "fold_spread": 1.089,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 441.4514,
+    "fold_spread": 1.085,
+    "pinned": false,
+    "at_bound": false
+   }
+  },
+  "pad_elem": {
+   "wh": {
+    "value": 4.2784,
+    "fold_spread": 1.032,
+    "pinned": false,
+    "at_bound": false
+   },
+   "bh": {
+    "value": 0.7521,
+    "fold_spread": 1.064,
+    "pinned": false,
+    "at_bound": false
+   }
+  }
+ }
+}

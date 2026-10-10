@@ -51,6 +51,7 @@ def subset(g, m):
 
 def fit(d, rows, p0=None):
     x = d.iloc[rows]
+    x = x[x.origin != "legacy"]  # legacy is for acceptance only: never fitting data
     g = geometry(x)
     pid = pd.factorize(x.problem_id)[0]
     w = 1.0 / np.sqrt(np.bincount(pid)[pid])
