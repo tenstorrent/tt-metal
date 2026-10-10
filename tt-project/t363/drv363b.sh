@@ -1,12 +1,13 @@
 #!/bin/bash
-# drv363b: A/B-only rerun after job 468 failed in the test's latent loader (seed0.pt is a tensor, not a dict).
+# drv363b: A/B-only rerun after job 468 failed in the test's latent loader (seed0.pt is a tensor, not a dict),
+# built at the t48 tip so arm A is the land target as is.
 # t363 driver on blx01 (no device work itself): (1) build t363/b = reflink of t48 at ba3636df5ee + t363 test files;
 # (2) one broker sweep job per layer (s2_res s3_res s3_chg s1_res), T=2/4 blockings that fit L1, -t 600 each
 # (unmeasured), rerun once on a drop; (3) pick winners (>= 3% faster); (4) if any, one A/B full-decode job;
 # (5) delete jit and b. Marker t363/drv363.done.
 set -o pipefail
 F=/var/tmp/fasth3; D=$F/t363; B=$D/b; M=$D/drv363b.done; L=$D/drv363b.log; R=$D/res
-REV=ba3636df5ee
+REV=20b40f459a9  # ttp/t48-ltx25-integrated tip: the A/B runs on the land target
 trap 'rc=$?; echo "exit=$rc $(date -u +%T)" >> $L; [ -e $M ] || echo "DRIVER_EXIT rc=$rc" > $M' EXIT
 log() { echo "$(date -u '+%F %T') $*" >> $L; }
 fail() { log "FAIL $*"; rm -rf $D/jit $B; echo "FAIL $*" > $M; exit 1; }
@@ -16,13 +17,15 @@ use=$(df --output=pcent / | tail -1 | tr -dc 0-9); log "start df / $use%"; [ "$u
 gb=$(timeout 120 du -sxBG $F | cut -f1 | tr -dc 0-9); log "footprint ${gb}G"; [ "${gb:-999}" -le 138 ] || fail "footprint ${gb}G"
 
 # (1) build
-if [ ! -r $B/ttnn/ttnn/_ttnn.so ]; then
+# A finished build leaves a stamp: a killed copy of t48 also has a _ttnn.so (job 473 ran on such a tree).
+if [ "$(cat $B/.t363_built 2>/dev/null)" != "$REV" ]; then
   rm -rf $B
   cp -a --reflink=always $F/t48 $B || fail "copy rc=$?"
   rm -rf $B/build $B/build_Release $B/python_env $B/tmp
-  ( cd $B && git checkout -q -f $REV && git submodule update --init --recursive -q && git clean -fdq ) >> $L 2>&1 || fail "checkout rc=$?"
+  ( cd $B && timeout 600 git fetch -q origin ttp/t48-ltx25-integrated && git checkout -q -f $REV && git submodule update --init --recursive -q && git clean -fdq ) >> $L 2>&1 || fail "checkout rc=$?"
   ( cd $B && timeout 5400 ./build_metal.sh --build-type Release ) > $D/build.log 2>&1; rc=$?
   log "build rc=$rc"; [ $rc = 0 ] || { tail -40 $D/build.log > $R/build_tail.log; fail "build rc=$rc"; }
+  echo $REV > $B/.t363_built
 fi
 cp $D/bruteforce_conv3d_sweep_ltx.py $D/test_vae_ltx_blk_ab_4x8.py $B/models/tt_dit/tests/models/ltx/ || fail "test copy"
 log "checkout $(git -C $B log -1 --format='%h %s' | cut -c1-80) dirty=$(git -C $B status --porcelain | tr '\n' ' ')"
