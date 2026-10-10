@@ -5,6 +5,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include <numbers>
+#include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -377,9 +378,17 @@ std::vector<Tensor> ldexp_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
+
+    // The 2^b is the right operand of the multiply that reads it, so it needs no
+    // dispatch of its own. The scaling by ln2 stays a multiply: as an SFPU
+    // activation on bfloat16 the constant is rounded into the operand and the
+    // answer moves.
+    const std::array two_to_the = {EltwiseUnaryWithParam{UnaryOpType::RPOW, 2.0f}};
     Tensor tpow_o =
-        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0f, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, other, std::nullopt, output_memory_config, std::nullopt, {}, {}, two_to_the);
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
         input_a,
@@ -401,21 +410,31 @@ std::vector<Tensor> logaddexp_bw(
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
+    // The exp is the subtract's post-activation and the reciprocal is the right
+    // operand of the multiply that reads it, so neither needs a dispatch. The
+    // add of 1 stays a binary op: as an SFPU activation on bfloat16 the constant
+    // is rounded into the operand and the answer moves.
+    const std::array to_exp = {EltwiseUnaryWithParam{UnaryOpType::EXP, 0.0f}};
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+
     Tensor opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::subtract(other, input_a, std::nullopt, output_mem_config, std::nullopt, to_exp),
         1,
         std::nullopt,
         output_mem_config);
     Tensor grad_a =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, opexp, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_a);
     opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::subtract(input_a, other, std::nullopt, output_mem_config, std::nullopt, to_exp),
         1,
         std::nullopt,
         output_mem_config);
     Tensor grad_b =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, opexp, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -431,22 +450,31 @@ std::vector<Tensor> logaddexp2_bw(
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
+
+    // 2 to the difference is the subtract's post-activation and the reciprocal is the right
+    // operand of the multiply that reads it. The add of 1 stays a binary op: as an SFPU
+    // activation on bfloat16 the constant is rounded into the operand and the answer moves.
+    const std::array to_two_to_the = {EltwiseUnaryWithParam{UnaryOpType::RPOW, 2.0f}};
+
     Tensor oppow = ttnn::add(
-        ttnn::rpow(ttnn::subtract(other, input_a, std::nullopt, output_memory_config), 2, output_memory_config),
+        ttnn::subtract(other, input_a, std::nullopt, output_memory_config, std::nullopt, to_two_to_the),
         1,
         std::nullopt,
         output_memory_config);
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
     Tensor grad_a =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, oppow, std::nullopt, output_memory_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_a);
     oppow = ttnn::add(
-        ttnn::rpow(ttnn::subtract(input_a, other, std::nullopt, output_memory_config), 2, output_memory_config),
+        ttnn::subtract(input_a, other, std::nullopt, output_memory_config, std::nullopt, to_two_to_the),
         1,
         std::nullopt,
         output_memory_config);
     Tensor grad_b =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, oppow, std::nullopt, output_memory_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_b);
     return grad;
 }
