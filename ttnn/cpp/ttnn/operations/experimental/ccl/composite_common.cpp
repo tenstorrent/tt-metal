@@ -506,6 +506,14 @@ ttnn::Tensor composite_all_to_all(
         tensor.deallocate();
     }
 
+    // TensorTopology: no relabel site in this composite. prim::all_broadcast over the whole mesh labels every copy
+    // Replicate on every axis (ccl_topology_utils), so each slice carries whatever label mesh_partition gives it;
+    // the concat above takes the union of those identical labels and the layout / dtype / memory-config conversions
+    // below carry their input's label. The result is therefore labelled by mesh_partition alone: once its
+    // compute_output_topologies labels a whole-mesh slice `{N}, [Shard{out_dim}]`, the all_to_all result reads the
+    // same (out_dim scattered in device order, in_dim re-gathered); without that hook the slices keep
+    // all_broadcast's Replicate label, which over-claims (every device holds a distinct out_dim piece).
+
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
         temp_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::TILE);

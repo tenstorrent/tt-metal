@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "reduce_scatter_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -95,6 +96,29 @@ ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation
         create_device_tensor(output_specs.at(1), tensor_args.input_tensor.device()));
     ttnn::Tensor intermediate_tensor = create_device_tensor(output_specs.at(0), tensor_args.input_tensor.device());
     return {intermediate_tensor, output_tensor};
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReduceScatterDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // One label per Tensor of create_output_tensors, in its order: {intermediate, output}. The intermediate is
+    // device-local scratch and keeps the input's label (the reduce_scatter_minimal_async convention); the output
+    // takes the helper's label, Shard{dim} on `cluster_axis` (the rules are documented on
+    // reduce_scatter_output_topology in ccl_topology_utils.hpp). `dim` is normalised by the host wrapper, but a
+    // uint32 that wrapped negative passes compute_output_specs' output_shape[dim] (Shape::operator[] takes an
+    // int32_t and normalises it from the end) and would reach the helper before validation rejects it: the guard
+    // skips the helper for that one case. A refusal (nullopt, already logged by the helper) and the guard alike keep
+    // the input's label on both tensors, stated explicitly: {} would hand the framework the union over every tensor
+    // argument, the caller's optional_output_tensor included.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    if (operation_attributes.dim >= input_tensor.logical_shape().rank()) {
+        return {input_topology, input_topology};
+    }
+    auto output_topology =
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+            .value_or(input_topology);
+    return {input_topology, std::move(output_topology)};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterDeviceOperation::tensor_return_value_t>

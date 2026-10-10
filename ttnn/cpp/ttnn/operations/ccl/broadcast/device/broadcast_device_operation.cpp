@@ -52,6 +52,30 @@ Tensor BroadcastDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, tensor_args.input_tensor.device());
 }
 
+std::vector<tt::tt_metal::TensorTopology> BroadcastDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Every device along the broadcast line ends up holding the sender's bytes. The op only ever runs on a tensor
+    // that spans the sender's line: every non-sender waits on the semaphore the sender's line multicast raises
+    // (BroadcastProgramFactory::create_at, `wait_output_semaphore = !is_sender`), so a device off that line would
+    // never be signalled. The honest label is therefore the input's label with Replicate on the broadcast axis
+    // (`cluster_axis`) and every other axis kept verbatim -- those axes are trivial for any input the op accepts --
+    // or Replicate on every axis when the whole (1-D) distribution is the line. Stated directly rather than through
+    // the helper's per-axis edit, so no refusal is possible (the helper would reject a 1-D sub-range label such as
+    // `{4}, [Shard{3}]` on a 2x4 mesh as not covering the mesh, which is a perfectly good broadcast input).
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto placements = input_topology.placements();
+    const auto& cluster_axis = operation_attributes.cluster_axis;
+    if (cluster_axis.has_value() && *cluster_axis < placements.size()) {
+        placements[*cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    } else {
+        for (auto& placement : placements) {
+            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    }
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(placements), input_topology.mesh_coords())};
+}
+
 Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
