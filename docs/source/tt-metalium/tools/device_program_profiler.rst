@@ -39,7 +39,7 @@ First, include the necessary header in your kernel file:
 
 .. code-block:: c++
 
-    #include <tools/profiler/kernel_profiler.hpp>
+    #include <api/debug/kernel_profiler.hpp>
 
 Then, wrap the code you want to measure with the macro:
 
@@ -94,7 +94,7 @@ The kernel code in ``kernels/full_buffer.cpp`` uses ``DeviceZoneScopedN`` to pro
     // SPDX-License-Identifier: Apache-2.0
 
     #include <cstdint>
-    #include <tools/profiler/kernel_profiler.hpp>
+    #include <api/debug/kernel_profiler.hpp>
 
     void kernel_main() {
         for (int i = 0; i < LOOP_COUNT; i ++)
