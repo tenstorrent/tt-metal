@@ -382,8 +382,9 @@ class TtMoe(LightweightModule):
                 128,
             ), f"fp8_scale_block must be 0, 32, 64 or 128, got {fp8_scale_block}"
             assert self.routed_emb_dim % 128 == 0, f"routed_emb_dim {self.routed_emb_dim} must be a multiple of 128"
-            # 3 routing words + the fp32 scale(s) (bit-stored in the int32 metadata tail).
-            dispatch_metadata_len = 3 + (1 if fp8_scale_block == 0 else self.routed_emb_dim // fp8_scale_block)
+            # Per-row: 3 routing words + the fp32 row scale (bit-stored in the int32 metadata tail). Block scales
+            # travel in each dispatched row's tail instead ([H e4m3 | H/block fp32]), so metadata stays 3 words.
+            dispatch_metadata_len = 4 if fp8_scale_block == 0 else 3
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -941,9 +942,13 @@ class TtMoe(LightweightModule):
                 routed_x,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                round_to_nearest_even=True,
+                round_to_nearest_even=False,  # packer truncation, no SFPU rounding pass
+                pack_scales_in_row=not self.fp8_per_row,
                 **self._fp8_block_kw,
             )
+            if not self.fp8_per_row:
+                # Block scales are packed into each row's tail; dispatch moves the packed rows as plain payload.
+                dispatch_scales = None
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
         if self.overlap_shared_expert_with_dispatch:
@@ -971,7 +976,8 @@ class TtMoe(LightweightModule):
         mem_mark("after_dispatch")
         if self.dispatch_fp8:
             ttnn.deallocate(dispatch_input)
-            ttnn.deallocate(dispatch_scales)
+            if dispatch_scales is not None:
+                ttnn.deallocate(dispatch_scales)
         dispatch_input = dispatch_scales = None
         if DEBUG_LOGGING_ENABLED:
             logger.debug(
@@ -1037,6 +1043,20 @@ class TtMoe(LightweightModule):
             # Fused DQ1: the routed expert reads the e4m3 rows directly and rescales its gate/up accumulators by
             # each token's scale (word 3 of the dispatch metadata) in compute.
             expert_row_scales = metadata
+        elif self.dispatch_fp8 and not self.fp8_per_row:
+            # DQ1 (block scales, standalone): unpack [H e4m3 | H/block fp32] rows back to bf16. The row-tail path
+            # has no count-aware mode yet, so this converts the whole buffer.
+            dispatched_fp8 = dispatched_buffer
+            dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                dispatched_fp8,
+                None,
+                output_dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                scales_in_row_tail=True,
+                **self._fp8_block_kw,
+            )
+            mem_mark("after_dq1")
+            ttnn.deallocate(dispatched_fp8)
         elif self.dispatch_fp8:
             # DQ1: dequantize the dispatched fp8 rows back to bf16 for the routed experts, reading the
             # scales from the metadata tail. Runs after the sub-device clear: it uses the full grid.
@@ -1098,7 +1118,7 @@ class TtMoe(LightweightModule):
                 expert_outputs,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 round_scale_to_power_of_two=True,
-                round_to_nearest_even=True,
+                round_to_nearest_even=False,  # packer truncation, no SFPU rounding pass
                 **self._fp8_block_kw,
                 token_count_aware=True,
                 expert_region_offsets=tt_expert_region_offsets,
