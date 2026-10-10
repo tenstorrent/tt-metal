@@ -528,6 +528,65 @@ TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
     expect_tables_equal(original, restored);
 }
 
+TEST(KvChunkAddressTableProtobuf, SetStridedRowMatchesUnrolledAuthoring) {
+    // A block-cyclic layout authored row-by-row with set_strided_row() (no unrolled grid) exports
+    // the same runs and reads back the same as the identical layout authored chunk-by-chunk.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kBanks = 8;
+    constexpr uint32_t kChunks = 64;  // 8 full periods
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 2, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    auto addr = [](uint32_t slot, uint32_t layer, uint32_t i) {
+        const uint64_t row_base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+        return row_base + (i % kBanks) * 0x2000ULL + (i / kBanks) * 0x30000ULL;
+    };
+
+    KvChunkAddressTable unrolled(std::map<std::string, KvChunkAddressTableConfig>{{"kv", cfg}});
+    auto grp_a = unrolled.add_device_group({make_proto_fnid(0, 0)});
+    auto grp_b = unrolled.add_device_group({make_proto_fnid(0, 1)});
+    KvChunkAddressTable strided(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    strided.add_device_group({make_proto_fnid(0, 0)});
+    strided.add_device_group({make_proto_fnid(0, 1)});
+    ASSERT_EQ(strided.compression(0), ChunkCompression::kStridedRows);
+
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            // Device group alternates every 4 chunks, so it varies per residue.
+            for (uint32_t i = 0; i < kChunks; i++) {
+                unrolled.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr = addr(slot, layer, i),
+                        .size_bytes = 512,
+                        .device_group_index = (i / 4) % 2 ? grp_b : grp_a});
+            }
+            std::vector<uint64_t> bases;
+            std::vector<int64_t> strides;
+            std::vector<DeviceGroupIndex> groups;
+            for (uint32_t r = 0; r < kBanks; r++) {
+                bases.push_back(addr(slot, layer, r));
+                strides.push_back(static_cast<int64_t>(addr(slot, layer, r + kBanks) - addr(slot, layer, r)));
+                groups.push_back((r / 4) % 2 ? grp_b : grp_a);
+            }
+            strided.set_strided_row(layer, slot, 512, bases, strides, groups);
+        }
+    }
+
+    expect_tables_equal(unrolled, strided);
+    EXPECT_EQ(export_to_protobuf(unrolled).size(), export_to_protobuf(strided).size());
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_unrolled;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_strided;
+    ASSERT_TRUE(pb_unrolled.ParseFromString(export_to_protobuf(unrolled)));
+    ASSERT_TRUE(pb_strided.ParseFromString(export_to_protobuf(strided)));
+    pb_unrolled.clear_origin_host();
+    pb_strided.clear_origin_host();
+    EXPECT_EQ(pb_unrolled.SerializeAsString(), pb_strided.SerializeAsString());
+    expect_tables_equal(strided, import_from_protobuf(pb_strided.SerializeAsString()));
+}
+
 TEST(KvChunkAddressTableProtobuf, ShardedRowRunsRoundTrip) {
     // SP-sharded row: 4 devices each own a contiguous 5-chunk block of every 20-chunk span,
     // and each device round-robins its own chunks over 8 banks. The row switches device group
