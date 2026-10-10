@@ -28,6 +28,8 @@ constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kOutputBufferIdx = 0;
 
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
+constexpr auto kScratchCbIndex = tt::CBIndex::c_1;
+constexpr uint32_t kScratchBytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);
 
 }  // namespace
 
@@ -126,6 +128,8 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     [[maybe_unused]] auto cb_dataflow = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    [[maybe_unused]] auto cb_scratch =
+        create_circular_buffer_bytes(program, all_cores, kScratchCbIndex, data_format, kScratchBytes, kScratchBytes);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -148,7 +152,8 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     CrossEntropyBackwardKernels kernels;
     {
-        std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+        std::vector<uint32_t> reader_compile_time_args{
+            block_size, Wt, tensor_shape[-2], tensor_shape[-1], Ht, input.padded_shape()[-2]};
         tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
         kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
     }
