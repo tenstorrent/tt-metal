@@ -22,7 +22,8 @@
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
- *     when input is Tf32 format. Only applicable for ELWMUL operations.
+ *     when input is Tf32 format. Only applicable for ELWMUL operations. ELWMUL runs at LoFi when both Src formats
+ *     are 8-bit int (Int8/UInt8, incl. _2x), regardless of this value.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor shape
  * @param operand_B: Logical dataflow buffer id for input B
@@ -46,16 +47,19 @@ inline void llk_math_eltwise_binary_init(
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
-    if constexpr (src_b_bcast_type == BroadcastType::NONE) {
-        _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
-    } else {
-        static_assert(
-            binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
-            "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
-        _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A);
-    }
+    with_effective_math_fidelity<effective_math_fidelity>(srcA_format, srcB_format, [&](auto fidelity) {
+        constexpr MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+            _llk_math_eltwise_binary_init_<eltwise_binary_type, programmed_math_fidelity, binary_reuse_dest>(
+                tensor_shape_A, acc_to_dest);
+        } else {
+            static_assert(
+                binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
+                "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
+            _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, programmed_math_fidelity>(
+                tensor_shape_A);
+        }
+    });
 }
 
 /**
@@ -106,7 +110,8 @@ inline void llk_math_eltwise_binary(std::uint32_t dst_index, [[maybe_unused]] co
  * @tparam is_fp32_dest_acc_en: Unused tparam; only for API compatibility.
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
  *     when input is Tf32 format. Unused tparam; only for API compatibility. Fidelity is programmed by
- *     @ref llk_math_eltwise_binary_init, which runs ELWADD/ELWSUB at LoFi regardless of this value.
+ *     @ref llk_math_eltwise_binary_init, which runs ELWADD/ELWSUB, and ELWMUL on two 8-bit int
+ *     operands, at LoFi regardless of this value.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB.
  *     The MOVD2A/B instruction copies a face from dest to the source register before each MOP run.
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the number of faces

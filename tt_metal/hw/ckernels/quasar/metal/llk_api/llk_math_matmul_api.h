@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -15,7 +16,8 @@
 * @brief Initialize matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA
 
 * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when
-* math is in Fp32 format
+* math is in Fp32 format. LoFi is programmed when both Src formats are 8-bit int (Int8/UInt8, incl. _2x),
+* regardless of this value.
 * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
 * @param operandB: Logical dataflow buffer identifier for input 1 (-> SrcA)
 * @param ct_dim: number of tiles in the column dimension for a matrix multiply
@@ -72,16 +74,19 @@ inline void llk_math_matmul_init(
             srcA_format, srcB_format);
     }
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
-    if (src_2x) {
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
-            ct_dim, rt_dim, src_b_shape, src_a_shape);
-    } else {
-        LLK_ASSERT(
-            ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
-            "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(
-            ct_dim, rt_dim, src_b_shape, src_a_shape);
-    }
+    with_effective_math_fidelity<math_fidelity>(srcA_format, srcB_format, [&](auto fidelity) {
+        constexpr ckernel::MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if (src_2x) {
+            _llk_math_matmul_init_<programmed_math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
+                ct_dim, rt_dim, src_b_shape, src_a_shape);
+        } else {
+            LLK_ASSERT(
+                ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
+                "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
+            _llk_math_matmul_init_<programmed_math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(
+                ct_dim, rt_dim, src_b_shape, src_a_shape);
+        }
+    });
 }
 
 /**
@@ -102,9 +107,8 @@ inline void llk_math_matmul_init(
 inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const bool deviated =
-        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
-        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
+    const bool deviated = (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
+                          (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
     if (!deviated) {
         return;
     }
