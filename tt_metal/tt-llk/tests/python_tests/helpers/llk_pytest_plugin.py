@@ -29,6 +29,7 @@ driver that lives outside ``tests/sources/``.
 """
 
 import atexit
+import collections
 import datetime
 import json
 import logging
@@ -326,6 +327,19 @@ def pytest_addoption(parser):
         const="_USE_DEFAULT_PATH",  # Value when flag is used without argument
         default=None,  # Value when flag is not used at all
         help="Path to where the test order, per runner should be stored to, default path is the same folder as LLK repo",
+    )
+
+    parser.addoption(
+        "--perf-splits",
+        type=int,
+        default=None,
+        help="Number of perf shards.",
+    )
+    parser.addoption(
+        "--perf-group",
+        type=int,
+        default=None,
+        help="1-based perf shard to run.",
     )
 
     parser.addoption(
@@ -715,6 +729,25 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _split_by_cost(config, items):
+    splits, group = config.getoption("--perf-splits"), config.getoption("--perf-group")
+    if not splits:
+        return
+    costs_path = Path(__file__).resolve().parents[2] / "perf_split_costs.json"
+    costs = json.loads(costs_path.read_text())[os.environ["CHIP_ARCH"].lower()]
+    modules = [item.path.stem for item in items]
+    count = collections.Counter(modules)
+    weights = [costs.get(m, 1.0) / count[m] for m in modules]
+    share = sum(weights) / splits
+    selected, deselected, done = [], [], 0.0
+    for item, weight in zip(items, weights):
+        shard = min(int((done + weight / 2) / share), splits - 1) + 1
+        (selected if shard == group else deselected).append(item)
+        done += weight
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
 def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
@@ -757,6 +790,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _split_by_cost(config, items)
     _restore_test_order(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
