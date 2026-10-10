@@ -189,6 +189,7 @@ def test_pipeline_distilled(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            report_model="ltx-2.3-fast-i2v" if image_path else "ltx-2.3-fast-t2v",
         )
 
     vbench_thresholds_by_height = {

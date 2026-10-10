@@ -122,6 +122,7 @@ def test_pipeline_two_stages(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            report_model="ltx-2.3-pro-i2v",
         )
 
     if no_prompt:

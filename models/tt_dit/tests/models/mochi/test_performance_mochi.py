@@ -278,6 +278,9 @@ def test_mochi_pipeline_performance(
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("mochi", total_times[-1], num_frames)
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],

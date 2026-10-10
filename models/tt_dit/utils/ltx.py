@@ -91,11 +91,27 @@ def default_ltx_gemma() -> str:
 
 
 def print_ltx_timing_table(
-    pipeline, *, label, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
+    pipeline,
+    *,
+    label,
+    num_frames,
+    height,
+    width,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    topology,
+    output_path,
+    prompt,
+    report_model=None,
 ):
     timings = getattr(pipeline, "last_timings", None)
     if not timings:
         return
+    if report_model:
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate(report_model, sum(secs for _, secs in timings), num_frames)
 
     mesh = tuple(mesh_shape)
     topo = str(topology).split(".")[-1]

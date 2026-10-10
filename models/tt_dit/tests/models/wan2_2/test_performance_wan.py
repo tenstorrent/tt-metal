@@ -442,6 +442,13 @@ def test_pipeline_performance(
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
             (4, 32): "BH_QG",
         }
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate(
+            "wan-2.2-i2v" if model_type == "i2v" else "wan-2.2-t2v",
+            total_times[-1],
+            num_frames,
+        )
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
