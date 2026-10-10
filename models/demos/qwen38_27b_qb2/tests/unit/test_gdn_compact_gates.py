@@ -89,10 +89,10 @@ class CompactGateTests(unittest.TestCase):
             v = SimpleNamespace(shape=(1, batch, 1536))
             gates = -torch.arange(1, batch * 12 + 1, dtype=torch.float32).reshape(1, batch, 12) / 100
             output = object()
-            prepared = []
+            prepared, recurrence = [], []
             with patch.dict(sys.modules, {"ttnn": fake}), patch.object(
                 flat_prepare, "prepare", lambda *a, **k: prepared.append((a, k))
-            ), patch.object(op, "step", lambda *a, **k: None):
+            ), patch.object(op, "step", lambda *a, **k: recurrence.append(k)):
                 result = model_adapter.step_from_flat(
                     q,
                     q,
@@ -105,12 +105,14 @@ class CompactGateTests(unittest.TestCase):
                     flat_prepare_outputs=(object(), object()),
                     compact_qkv=True,
                     compact_gates=True,
+                    resident_state=True,
                     raw_output=True,
                 )
             self.assertIs(result, output)
             self.assertTrue(torch.equal(observed[-1], gates))
             self.assertTrue(torch.equal(prepared[0][0][3], gates.exp()))
             self.assertTrue(prepared[0][1]["compact_gates"])
+            self.assertTrue(recurrence[0]["resident_state"])
 
     def test_candidate_flags_reject_inconsistent_layouts(self):
         fake = SimpleNamespace()
@@ -120,6 +122,10 @@ class CompactGateTests(unittest.TestCase):
                     from_packed(SimpleNamespace(shape=(1, 16, 4160)), None, None, compact=flag)
             with self.assertRaises(ValueError):
                 model_adapter.step_from_flat(None, None, None, None, None, None, None, compact_gates=True)
+
+    def test_resident_adapter_rejects_unprepared_public_inputs(self):
+        with self.assertRaisesRegex(ValueError, "compact direct-preparation"):
+            model_adapter.step_from_flat(None, None, None, None, None, None, None, resident_state=True)
 
     def test_valid_report_does_not_promote_model(self):
         result = validate_report(receipt())

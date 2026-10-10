@@ -19,7 +19,12 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import save
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE, validate_long_horizon
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
+    BASELINE,
+    CANDIDATE,
+    COMBINED_GDN_POLICY,
+    validate_long_horizon,
+)
 from models.demos.qwen38_27b_qb2.tests.test_gdn_epilogue_layer import changing_input_comparison
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
@@ -37,13 +42,16 @@ def test_compact_gdn_long_horizon():
     torch.set_num_threads(8)
     source = Path(__file__).resolve().parents[1]
     checkpoint = checkpoint_path()
-    precision = load_precision(source / f"config/precision_{CANDIDATE}_bfp8_all.json")
+    mode = os.getenv("QWEN_COMPACT_COMBINED", "0")
+    assert mode in ("0", "1"), "Unknown combined GDN experiment mode"
+    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if mode == "1" else (BASELINE, CANDIDATE)
+    precision = load_precision(source / f"config/precision_{candidate}_bfp8_all.json")
     report = dict(
         state="opening",
         passed=False,
         cleanup_completed=False,
-        baseline=BASELINE,
-        candidate=CANDIDATE,
+        baseline=baseline,
+        candidate=candidate,
         cases=[],
         source_sha256=model_source_hashes(source),
         precision=precision,
@@ -76,7 +84,7 @@ def test_compact_gdn_long_horizon():
             report.update(state="changing_inputs", active_batch=batch)
             save(path, report)
             started = time.monotonic()
-            case = changing_input_comparison(layer, mesh, batch, updates=4096)
+            case = changing_input_comparison(layer, mesh, batch, updates=4096, policies=(baseline, candidate))
             case["test_duration_s"] = time.monotonic() - started
             report["cases"].append(case)
             save(path, report)
@@ -94,7 +102,9 @@ def test_compact_gdn_long_horizon():
                     ttnn.close_mesh_device(parent)
             report["cleanup_completed"] = parent is not None
             if report["state"] == "completed":
-                report.update(validation=validate_long_horizon(report), passed=True)
+                report.update(
+                    validation=validate_long_horizon(report, baseline=baseline, candidate=candidate), passed=True
+                )
         finally:
             report["finished_at"] = time.time()
             save(path, report)

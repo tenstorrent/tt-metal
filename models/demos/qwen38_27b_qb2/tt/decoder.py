@@ -26,6 +26,8 @@ from models.demos.qwen38_27b_qb2.tt.gdn_frontend.op import convolution as compac
 from models.demos.qwen38_27b_qb2.tt.gdn_step.gates import from_packed as gdn_gates_from_packed
 from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
+    COMBINED_GDN_POLICY,
+    COMPACT_GDN_POLICIES,
     SHARED_QK_POLICIES,
     SINGLE_STEP_POLICIES,
     DecodeWorkspace,
@@ -286,8 +288,8 @@ class Qwen38Decoder(LightweightModule):
                     c.linear_num_value_heads,
                     shared_qk_heads=c.linear_num_key_heads if recurrence in SHARED_QK_POLICIES else None,
                     fused_epilogue=uses_fused_epilogue(recurrence, 16),
-                    flat_prepare=recurrence in ("single_step_flat_prepare_epilogue", "single_step_compact_gdn"),
-                    compact_frontend=recurrence == "single_step_compact_gdn",
+                    flat_prepare=recurrence in ("single_step_flat_prepare_epilogue", *COMPACT_GDN_POLICIES),
+                    compact_frontend=recurrence in COMPACT_GDN_POLICIES,
                     compact_pool=getattr(self, "compact_gdn_pool", None),
                 )
             self.gdn_decode_workspace.prepare(batch_size)
@@ -872,7 +874,7 @@ class Qwen38Decoder(LightweightModule):
     def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False, compact_qkv=False, compact_gates=False):
         b, hv = q.shape[1 if compact_qkv else 0], self.config.linear_num_value_heads
         recurrence = self.policy.get("decode_recurrence", "native")
-        if compact_qkv and (not decode or recurrence != "single_step_compact_gdn" or b not in (16, 32)):
+        if compact_qkv and (not decode or recurrence not in COMPACT_GDN_POLICIES or b not in (16, 32)):
             raise ValueError("Compact QKV is restricted to the experimental B16/B32 decode policy")
         if compact_gates and not compact_qkv:
             raise ValueError("Compact gates require the compact decode path")
@@ -886,10 +888,12 @@ class Qwen38Decoder(LightweightModule):
             )
             if uses_fused_epilogue(recurrence, b):
                 options["raw_output"] = True
-            if recurrence in ("single_step_flat_prepare_epilogue", "single_step_compact_gdn"):
+            if recurrence in ("single_step_flat_prepare_epilogue", *COMPACT_GDN_POLICIES):
                 options["flat_prepare_outputs"] = self.gdn_decode_workspace.flat_outputs(b)
             if compact_qkv:
                 options["compact_qkv"] = True
+                if recurrence == COMBINED_GDN_POLICY:
+                    options["resident_state"] = True
             if compact_gates:
                 options["compact_gates"] = True
             return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b), **options)
@@ -934,7 +938,9 @@ class Qwen38Decoder(LightweightModule):
         packed = self._linear(x, "linear_attn.packed", keep_sharded=True)
         packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
         packed = ttnn.reshape(packed, [1, batch, 4160])
-        compact_gates = self.policy.get("compact_gdn_gates", False)
+        compact_gates = self.policy.get("decode_recurrence") == COMBINED_GDN_POLICY or self.policy.get(
+            "compact_gdn_gates", False
+        )
         g, beta = gdn_gates_from_packed(packed, self.a_neg, self.dt_bias, compact=compact_gates)
         compact_gdn_convolution(packed, state.conv, self.conv_taps, (q, k, v), compact_input=True)
         output = self._delta_recurrence(
@@ -969,7 +975,7 @@ class Qwen38Decoder(LightweightModule):
             b, t = x.shape[-2], 1
         else:
             b, t, _ = x.shape
-        if decode and self.policy.get("decode_recurrence") == "single_step_compact_gdn" and b in (16, 32):
+        if decode and self.policy.get("decode_recurrence") in COMPACT_GDN_POLICIES and b in (16, 32):
             return self._delta_compact(x, state, b)
         c = self.config
         h, hv, d = c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim

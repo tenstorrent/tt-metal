@@ -16,7 +16,7 @@ from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_captu
 from models.demos.qwen38_27b_qb2.demo.run_compact_gdn import compare_sweeps
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
 from models.demos.qwen38_27b_qb2.demo.run_overnight_qualification import run as qualify
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE, COMBINED_GDN_POLICY
 from models.demos.qwen38_27b_qb2.tests.full_trace_profile import ARTIFACT_BUDGET, collect
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import predecessor_ready
 from models.demos.qwen38_27b_qb2.tests.sweep_recovery import normalized_configuration, resume_measurements
@@ -25,8 +25,10 @@ POLICY = "precision_single_step_compact_gdn_bfp8_all.json"
 MODEL_PREFIX = "models/demos/qwen38_27b_qb2/"
 
 
-def measured_win(directory, receipt, manifest):
+def measured_win(directory, receipt, manifest, *, baseline=BASELINE, candidate=CANDIDATE):
     """Recompute the comparison from raw arms; status booleans alone are insufficient."""
+    if (baseline, candidate) not in ((BASELINE, CANDIDATE), (CANDIDATE, COMBINED_GDN_POLICY)):
+        raise ValueError("Unsupported compact measurement policy pair")
     arms = {name: json.loads((directory / name / "sweep.json").read_text()) for name in ("before", "compact", "after")}
     sources = {
         name.removeprefix(MODEL_PREFIX): digest
@@ -35,9 +37,11 @@ def measured_win(directory, receipt, manifest):
     }
     if not sources:
         raise ValueError("Measured model manifest is empty")
-    for name, recurrence in (("before", BASELINE), ("compact", CANDIDATE), ("after", BASELINE)):
+    for name, recurrence in (("before", baseline), ("compact", candidate), ("after", baseline)):
         arm = arms[name]
         policy = MODEL_PREFIX + f"config/precision_{recurrence}_bfp8_all.json"
+        if policy not in manifest:
+            raise ValueError("Measured policy is missing from the frozen manifest")
         expected = dict(sources, effective_precision_override=manifest[policy])
         if arm.get("source_sha256") != expected or arm["precision"]["decode_recurrence"] != recurrence:
             raise ValueError("Measured source or recurrence differs from frozen compact manifest")
@@ -86,6 +90,9 @@ def verify_model_source(source, compact_manifest):
 
 
 def run(args):
+    combined = getattr(args, "combined", False)
+    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if combined else (BASELINE, CANDIDATE)
+    policy = f"precision_{candidate}_bfp8_all.json"
     args.output.mkdir()
     status_path = args.output / "queue.json"
     status = dict(
@@ -98,7 +105,7 @@ def run(args):
         promoted_to_serving=False,
         predecessor_unit=args.after_unit,
         predecessor_invocation=args.after_invocation,
-        policy=POLICY,
+        policy=policy,
         hardware_lock="/tmp/tt-device.lock",
         started_at=time.time(),
     )
@@ -158,7 +165,9 @@ def run(args):
             if predecessor_ready(props, receipt, args.after_invocation):
                 break
             time.sleep(20)
-        winning, comparisons = measured_win(args.compact_results, receipt, original_manifest)
+        winning, comparisons = measured_win(
+            args.compact_results, receipt, original_manifest, baseline=baseline, candidate=candidate
+        )
         status["compact_comparisons"] = comparisons
         if not winning:
             status.update(state="completed", cleanup_completed=True, skipped_reason="No >=1% B16/32K measured win")
@@ -176,7 +185,7 @@ def run(args):
                 tau_root=None,
                 delivery_source=None,
                 native_control_only=True,
-                control_precision=POLICY,
+                control_precision=policy,
                 accuracy_only=True,
             )
         )
@@ -186,6 +195,9 @@ def run(args):
             raise ValueError("Qualification did not complete and release owned serving workers")
         status.update(gpqa=evaluation["gpqa"], accuracy_passed=qualification["passed"])
         save(status_path, status)
+        if getattr(args, "skip_profile", False):
+            status.update(state="completed", cleanup_completed=True, profile_skipped=True)
+            return
         # A completed low score remains useful evidence: keep the diagnostic
         # profile, but never label that policy qualified or promote it.
         args.profile_output.mkdir()
@@ -200,8 +212,8 @@ def run(args):
         ):
             env.pop(key, None)
         env.update(
-            QWEN_PRECISION_CONFIG=str(model / "config" / POLICY),
-            QWEN_PROFILE_RECURRENCE="single_step_compact_gdn",
+            QWEN_PRECISION_CONFIG=str(model / "config" / policy),
+            QWEN_PROFILE_RECURRENCE=candidate,
             QWEN_PROFILE_CONTEXT="32768",
             QWEN_PROFILE_BATCH="16",
             QWEN_FULL_TRACE_PROFILE="1",
@@ -246,7 +258,7 @@ def run(args):
             if (
                 not report.get("passed")
                 or not report.get("cleanup_completed")
-                or report.get("precision", {}).get("decode_recurrence") != "single_step_compact_gdn"
+                or report.get("precision", {}).get("decode_recurrence") != candidate
                 or sum(int(s.get("tests", 0)) for s in suites) != 1
                 or any(int(s.get(k, 0)) for s in suites for k in ("failures", "errors", "skipped"))
             ):
@@ -281,6 +293,10 @@ if __name__ == "__main__":
         "compact-results",
     ):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--combined", action="store_true")
+    parser.add_argument(
+        "--skip-profile", action="store_true", help="Run qualification only after the measured gain gate"
+    )
     parser.add_argument("--after-unit", required=True)
     parser.add_argument("--after-invocation", required=True)
     run(parser.parse_args())

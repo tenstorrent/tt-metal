@@ -1,0 +1,8 @@
+{
+  "MainPID": "479502",
+  "Result": "success",
+  "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/qwen38-gdn-combined-v1-20261010.service",
+  "LoadState": "loaded",
+  "ActiveState": "active",
+  "InvocationID": "15bebec92d7649909517ba9a4a5a3778"
+}

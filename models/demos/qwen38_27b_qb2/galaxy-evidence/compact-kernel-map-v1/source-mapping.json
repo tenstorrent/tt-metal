@@ -1,0 +1,45 @@
+{
+  "captured_at": "2026-10-10T22:03:07.415369+00:00",
+  "kernels": [
+    {
+      "kernel_hash": "6860069656320669842",
+      "stage": "convolution",
+      "generated_path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache11918982545861993843/kernels/Kernel_Source_Code/6860069656320669842/chlkc_math.cpp",
+      "generated_sha256": "cd6b49df7bdbbc4c53ad582a5429e890c11567fcf161ed572777c0415071374b",
+      "inline_sha256": "dd70841da8058264a5ef179516e4a79123a170797e75fa4a936559c6ad4b1259",
+      "frozen_source": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+      "exact_source_match": true,
+      "retained_generated_source": "convolution-chlkc_math.cpp.gz"
+    },
+    {
+      "kernel_hash": "4661025558761494470",
+      "stage": "prepare",
+      "generated_path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache11918982545861993843/kernels/Kernel_Source_Code/4661025558761494470/chlkc_math.cpp",
+      "generated_sha256": "8ea55ada80bc68f17c0d94b6eef454cd8a2d6fbc26cf9ac8342c1723efe1267b",
+      "inline_sha256": "704da02098c3fb0a266b5f9b788bfa22660390c9dfeee53058dc259a4e36a105",
+      "frozen_source": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+      "exact_source_match": true,
+      "retained_generated_source": "prepare-chlkc_math.cpp.gz"
+    },
+    {
+      "kernel_hash": "17084414253584832726",
+      "stage": "recurrence",
+      "generated_path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache11918982545861993843/kernels/Kernel_Source_Code/17084414253584832726/chlkc_math.cpp",
+      "generated_sha256": "8994615293883485f098e74a310e96909d99fd9eaaa3909fdb7a5047917b66f0",
+      "inline_sha256": "30bee4ee33369eb8a5e1ca9bd296447cf5ede963181b39ffea5f21f62e9d85a4",
+      "frozen_source": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+      "exact_source_match": true,
+      "retained_generated_source": "recurrence-chlkc_math.cpp.gz"
+    },
+    {
+      "kernel_hash": "7273627570779443425",
+      "stage": "epilogue",
+      "generated_path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache11918982545861993843/kernels/Kernel_Source_Code/7273627570779443425/chlkc_math.cpp",
+      "generated_sha256": "c2fa2fdc5a0d50f17985d1a9f7e7fdf8e1ce3785b19f630abe09ff4014a56b56",
+      "inline_sha256": "3a39084a98fe666c314dfc38a7fe9b006e1bd1b1146a94360f98f11aa2861112",
+      "frozen_source": "/home/ttuser/qwen38-artifacts-20261007/compact-gdn-source-v3",
+      "exact_source_match": true,
+      "retained_generated_source": "epilogue-chlkc_math.cpp.gz"
+    }
+  ]
+}

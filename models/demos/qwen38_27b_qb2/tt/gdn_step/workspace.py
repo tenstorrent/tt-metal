@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Persistent scratch independent of request state; compact L1 can be replica-shared."""
 
+COMBINED_GDN_POLICY = "single_step_compact_gdn_resident_gates"
+COMPACT_GDN_POLICIES = ("single_step_compact_gdn", COMBINED_GDN_POLICY)
+
 SINGLE_STEP_POLICIES = (
     "single_step",
     "single_step_shared_qk",
     "single_step_shared_qk_epilogue",
     "single_step_flat_prepare_epilogue",
-    "single_step_compact_gdn",
+    *COMPACT_GDN_POLICIES,
 )
 SHARED_QK_POLICIES = SINGLE_STEP_POLICIES[1:]
 EPILOGUE_POLICIES = SINGLE_STEP_POLICIES[2:]

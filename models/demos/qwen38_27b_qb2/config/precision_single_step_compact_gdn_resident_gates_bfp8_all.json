@@ -1,0 +1,40 @@
+{
+  "config_id": "decoder_bfp8_hifi2_compact_gdn_resident_gates",
+  "weight_groups": {
+    "attention": "bfloat8_b",
+    "output": "bfloat8_b",
+    "gate": "bfloat8_b",
+    "up": "bfloat8_b",
+    "down": "bfloat8_b",
+    "head": "bfloat8_b"
+  },
+  "compute_fidelities": {
+    "attention": "HiFi2",
+    "output": "HiFi2",
+    "gate": "HiFi2",
+    "up": "HiFi2",
+    "down": "HiFi2",
+    "head": "HiFi2"
+  },
+  "fp32_dest_acc_en": true,
+  "layer_exceptions": {},
+  "activation_dtype": {
+    "attention": "bfloat16",
+    "mlp": "bfloat16"
+  },
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "recurrent_dtype": "float32",
+  "convolution_dtype": "bfloat16",
+  "sensitive_compute_fidelity": "HiFi4",
+  "token_dtype": "uint32",
+  "max_context": 262144,
+  "final_norm_compute_fidelity": "HiFi2",
+  "decode_attention": "accurate_full_tile",
+  "decode_recurrence": "single_step_compact_gdn_resident_gates"
+}

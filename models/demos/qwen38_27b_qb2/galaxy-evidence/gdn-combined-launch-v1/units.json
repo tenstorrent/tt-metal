@@ -1,0 +1,16 @@
+{
+  "qwen38-gdn-combined-v1-20261010.service": {
+    "MainPID": "479502",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "15bebec92d7649909517ba9a4a5a3778"
+  },
+  "qwen38-gdn-combined-followup-v1-20261010.service": {
+    "MainPID": "479505",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "8e20a69d96884f5a8f9346d08d638e64"
+  }
+}

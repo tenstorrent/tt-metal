@@ -83,7 +83,7 @@ def step(
     buffers get new runtime addresses. generic_op's descriptor adapter copies
     the complete runtime arguments on cache hits; its regression is exercised
     with two independently allocated tensor sets in the hardware test.
-    resident_state is an unqualified opt-in compute experiment; no model policy
+    resident_state is an opt-in compute experiment; the combined model policy
     selects it. It preserves reader/writer ownership but uses full DEST sync.
     """
     compute_source = compute_variant(

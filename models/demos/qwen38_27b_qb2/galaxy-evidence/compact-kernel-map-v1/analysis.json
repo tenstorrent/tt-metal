@@ -1,0 +1,483 @@
+{
+  "state": "completed",
+  "csv_sha256": "a9f1cde108a9ab05065330f811373fb442da03621b2fb30eeb50023130f215e9",
+  "scope": "Qualified compact B16/32K TP4 full profile; 48 GDN layers, four ranks, three replays",
+  "whole_step_profiler_overhead_fraction": 0.044290434395271694,
+  "physical_dram_counters": false,
+  "additive_wall_time": false,
+  "total_generic_kernel_median_ms": 9.184540499999999,
+  "stages": [
+    {
+      "stage": "recurrence",
+      "calls_per_rank_replay": 48,
+      "median_kernel_ms": 4.4050925,
+      "median_reader_ms": 4.403525,
+      "median_writer_ms": 3.64295,
+      "median_compute_ms": 4.3685054999999995,
+      "rank_replays": [
+        {
+          "device": 0,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 4.404706,
+          "reader_ms": 4.40307,
+          "writer_ms": 3.644601,
+          "compute_ms": 4.368099
+        },
+        {
+          "device": 0,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 4.406366,
+          "reader_ms": 4.404837,
+          "writer_ms": 3.642593,
+          "compute_ms": 4.369816
+        },
+        {
+          "device": 0,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 4.405082,
+          "reader_ms": 4.40343,
+          "writer_ms": 3.641634,
+          "compute_ms": 4.368505
+        },
+        {
+          "device": 4,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 4.407983,
+          "reader_ms": 4.406505,
+          "writer_ms": 3.644288,
+          "compute_ms": 4.371525
+        },
+        {
+          "device": 4,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 4.40724,
+          "reader_ms": 4.405608,
+          "writer_ms": 3.645472,
+          "compute_ms": 4.370703
+        },
+        {
+          "device": 4,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 4.40544,
+          "reader_ms": 4.403829,
+          "writer_ms": 3.645781,
+          "compute_ms": 4.368823
+        },
+        {
+          "device": 8,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 4.405103,
+          "reader_ms": 4.40362,
+          "writer_ms": 3.643299,
+          "compute_ms": 4.368506
+        },
+        {
+          "device": 8,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 4.407573,
+          "reader_ms": 4.406108,
+          "writer_ms": 3.642601,
+          "compute_ms": 4.3711
+        },
+        {
+          "device": 8,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 4.404695,
+          "reader_ms": 4.403179,
+          "writer_ms": 3.644221,
+          "compute_ms": 4.368135
+        },
+        {
+          "device": 12,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 4.403648,
+          "reader_ms": 4.401985,
+          "writer_ms": 3.63406,
+          "compute_ms": 4.367031
+        },
+        {
+          "device": 12,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 4.402365,
+          "reader_ms": 4.400714,
+          "writer_ms": 3.631547,
+          "compute_ms": 4.365812
+        },
+        {
+          "device": 12,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 4.401969,
+          "reader_ms": 4.400234,
+          "writer_ms": 3.633693,
+          "compute_ms": 4.365407
+        }
+      ]
+    },
+    {
+      "stage": "epilogue",
+      "calls_per_rank_replay": 48,
+      "median_kernel_ms": 2.853128,
+      "median_reader_ms": 2.852099,
+      "median_writer_ms": 1.886988,
+      "median_compute_ms": 2.737778,
+      "rank_replays": [
+        {
+          "device": 0,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 2.851161,
+          "reader_ms": 2.850136,
+          "writer_ms": 1.885184,
+          "compute_ms": 2.736088
+        },
+        {
+          "device": 0,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 2.851381,
+          "reader_ms": 2.850395,
+          "writer_ms": 1.885551,
+          "compute_ms": 2.736265
+        },
+        {
+          "device": 0,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 2.850694,
+          "reader_ms": 2.849753,
+          "writer_ms": 1.886263,
+          "compute_ms": 2.737124
+        },
+        {
+          "device": 4,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 2.855222,
+          "reader_ms": 2.854181,
+          "writer_ms": 1.887019,
+          "compute_ms": 2.737798
+        },
+        {
+          "device": 4,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 2.854719,
+          "reader_ms": 2.853765,
+          "writer_ms": 1.886008,
+          "compute_ms": 2.736705
+        },
+        {
+          "device": 4,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 2.852324,
+          "reader_ms": 2.851192,
+          "writer_ms": 1.886759,
+          "compute_ms": 2.737733
+        },
+        {
+          "device": 8,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 2.854136,
+          "reader_ms": 2.853234,
+          "writer_ms": 1.888429,
+          "compute_ms": 2.739285
+        },
+        {
+          "device": 8,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 2.853041,
+          "reader_ms": 2.85212,
+          "writer_ms": 1.886957,
+          "compute_ms": 2.737758
+        },
+        {
+          "device": 8,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 2.8527,
+          "reader_ms": 2.851773,
+          "writer_ms": 1.887904,
+          "compute_ms": 2.738936
+        },
+        {
+          "device": 12,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 2.853215,
+          "reader_ms": 2.852078,
+          "writer_ms": 1.88807,
+          "compute_ms": 2.739138
+        },
+        {
+          "device": 12,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 2.857324,
+          "reader_ms": 2.856159,
+          "writer_ms": 1.891065,
+          "compute_ms": 2.742138
+        },
+        {
+          "device": 12,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 2.856528,
+          "reader_ms": 2.855486,
+          "writer_ms": 1.889833,
+          "compute_ms": 2.74065
+        }
+      ]
+    },
+    {
+      "stage": "convolution",
+      "calls_per_rank_replay": 48,
+      "median_kernel_ms": 0.9958865,
+      "median_reader_ms": 0.9957739999999999,
+      "median_writer_ms": 0.8553109999999999,
+      "median_compute_ms": 0.977535,
+      "rank_replays": [
+        {
+          "device": 0,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.997018,
+          "reader_ms": 0.996906,
+          "writer_ms": 0.856213,
+          "compute_ms": 0.978656
+        },
+        {
+          "device": 0,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.995715,
+          "reader_ms": 0.995593,
+          "writer_ms": 0.855107,
+          "compute_ms": 0.977372
+        },
+        {
+          "device": 0,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.997997,
+          "reader_ms": 0.997858,
+          "writer_ms": 0.857377,
+          "compute_ms": 0.979689
+        },
+        {
+          "device": 4,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.996013,
+          "reader_ms": 0.99588,
+          "writer_ms": 0.855494,
+          "compute_ms": 0.977623
+        },
+        {
+          "device": 4,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.993893,
+          "reader_ms": 0.993764,
+          "writer_ms": 0.853261,
+          "compute_ms": 0.975576
+        },
+        {
+          "device": 4,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.992243,
+          "reader_ms": 0.992122,
+          "writer_ms": 0.851572,
+          "compute_ms": 0.973861
+        },
+        {
+          "device": 8,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.998745,
+          "reader_ms": 0.998661,
+          "writer_ms": 0.858104,
+          "compute_ms": 0.980416
+        },
+        {
+          "device": 8,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.997332,
+          "reader_ms": 0.997249,
+          "writer_ms": 0.856743,
+          "compute_ms": 0.979022
+        },
+        {
+          "device": 8,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.99576,
+          "reader_ms": 0.995668,
+          "writer_ms": 0.855128,
+          "compute_ms": 0.977447
+        },
+        {
+          "device": 12,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.996597,
+          "reader_ms": 0.996473,
+          "writer_ms": 0.856129,
+          "compute_ms": 0.978283
+        },
+        {
+          "device": 12,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.991959,
+          "reader_ms": 0.991783,
+          "writer_ms": 0.85146,
+          "compute_ms": 0.973676
+        },
+        {
+          "device": 12,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.994659,
+          "reader_ms": 0.994522,
+          "writer_ms": 0.853996,
+          "compute_ms": 0.976323
+        }
+      ]
+    },
+    {
+      "stage": "prepare",
+      "calls_per_rank_replay": 48,
+      "median_kernel_ms": 0.9308654999999999,
+      "median_reader_ms": 0.930748,
+      "median_writer_ms": 0.6202465,
+      "median_compute_ms": 0.781856,
+      "rank_replays": [
+        {
+          "device": 0,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.930563,
+          "reader_ms": 0.930455,
+          "writer_ms": 0.621217,
+          "compute_ms": 0.781583
+        },
+        {
+          "device": 0,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.930923,
+          "reader_ms": 0.930805,
+          "writer_ms": 0.619083,
+          "compute_ms": 0.781936
+        },
+        {
+          "device": 0,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.930771,
+          "reader_ms": 0.930612,
+          "writer_ms": 0.619765,
+          "compute_ms": 0.781754
+        },
+        {
+          "device": 4,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.930808,
+          "reader_ms": 0.930691,
+          "writer_ms": 0.620217,
+          "compute_ms": 0.781776
+        },
+        {
+          "device": 4,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.931789,
+          "reader_ms": 0.931664,
+          "writer_ms": 0.621139,
+          "compute_ms": 0.782842
+        },
+        {
+          "device": 4,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.931633,
+          "reader_ms": 0.931515,
+          "writer_ms": 0.621194,
+          "compute_ms": 0.782751
+        },
+        {
+          "device": 8,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.930656,
+          "reader_ms": 0.930533,
+          "writer_ms": 0.621273,
+          "compute_ms": 0.781703
+        },
+        {
+          "device": 8,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.930482,
+          "reader_ms": 0.93037,
+          "writer_ms": 0.619538,
+          "compute_ms": 0.781575
+        },
+        {
+          "device": 8,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.930378,
+          "reader_ms": 0.930271,
+          "writer_ms": 0.619135,
+          "compute_ms": 0.781439
+        },
+        {
+          "device": 12,
+          "replay_session": 1,
+          "calls": 48,
+          "kernel_ms": 0.931114,
+          "reader_ms": 0.930989,
+          "writer_ms": 0.620276,
+          "compute_ms": 0.782181
+        },
+        {
+          "device": 12,
+          "replay_session": 2,
+          "calls": 48,
+          "kernel_ms": 0.932012,
+          "reader_ms": 0.931859,
+          "writer_ms": 0.620137,
+          "compute_ms": 0.783017
+        },
+        {
+          "device": 12,
+          "replay_session": 3,
+          "calls": 48,
+          "kernel_ms": 0.931381,
+          "reader_ms": 0.931271,
+          "writer_ms": 0.620406,
+          "compute_ms": 0.782388
+        }
+      ]
+    }
+  ]
+}

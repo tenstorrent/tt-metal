@@ -23,7 +23,14 @@ from models.demos.qwen38_27b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 
-def changing_input_comparison(layer, mesh, batch, *, updates=64):
+def changing_input_comparison(
+    layer,
+    mesh,
+    batch,
+    *,
+    updates=64,
+    policies=("single_step_flat_prepare_epilogue", "single_step_compact_gdn"),
+):
     """Two independent sessions, changing tokens, same real BFP8 weights.
 
     Both traces own separate recurrent/history allocations created before
@@ -46,8 +53,9 @@ def changing_input_comparison(layer, mesh, batch, *, updates=64):
         for _ in range(4)
     ]
     slots, traces = [], []
+    original_recurrence = layer.policy["decode_recurrence"]
     try:
-        for recurrence in ("single_step_flat_prepare_epilogue", "single_step_compact_gdn"):
+        for recurrence in policies:
             layer.policy["decode_recurrence"] = recurrence
             state = layer.allocate_state(batch_size=batch)
             x = ttnn.clone(sources[0])
@@ -106,7 +114,7 @@ def changing_input_comparison(layer, mesh, batch, *, updates=64):
     finally:
         for trace in traces:
             ttnn.release_trace(mesh, trace)
-        layer.policy["decode_recurrence"] = "single_step_compact_gdn"
+        layer.policy["decode_recurrence"] = original_recurrence
 
 
 @pytest.mark.skipif(os.getenv("QWEN_GDN_EPILOGUE_LAYER") != "1", reason="explicit allocated-Galaxy experiment")

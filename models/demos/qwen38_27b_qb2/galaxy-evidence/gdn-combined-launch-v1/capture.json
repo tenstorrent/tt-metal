@@ -1,0 +1,65 @@
+{
+  "captured_at": "2026-10-10T22:03:07.415369+00:00",
+  "files": {
+    "receipts/gdn-combined-control-v1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/launch.json",
+      "uncompressed_bytes": 2215,
+      "uncompressed_sha256": "078d8e0220573d538758e6f78fb09c20ffbbb93e18c9d1fc5524c679ebc72c66"
+    },
+    "receipts/gdn-combined-control-v1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/launch-unit.json",
+      "uncompressed_bytes": 272,
+      "uncompressed_sha256": "dc94f62f3a5b1ff123cb0acf871be6b3368fa6ebb1a5b399d8673ed301334e1d"
+    },
+    "receipts/gdn-combined-control-v1/source-manifest.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/source-manifest.json",
+      "uncompressed_bytes": 37359,
+      "uncompressed_sha256": "b5d10e783350fa6e8d2b1f50298006f30b2fd6e114e745bd8638a4ce1a946e5a"
+    },
+    "receipts/gdn-combined-control-v1/preflight.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/preflight.log",
+      "uncompressed_bytes": 2108,
+      "uncompressed_sha256": "2cb55eaa1cf9f71a71a1582c25901da538a9c584399a4e009eb47c69dede9f20"
+    },
+    "receipts/gdn-combined-control-v1/unit.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/unit.xml",
+      "uncompressed_bytes": 227545,
+      "uncompressed_sha256": "973f37d2022cb904e28b19fea961bb83f23828b26b9c1ba3afa72208a6c800c9"
+    },
+    "receipts/gdn-combined-control-v1/run.log.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-control-v1/run.log",
+      "uncompressed_bytes": 34189,
+      "uncompressed_sha256": "f6e5fa4568e5f6c07cafd32da091366155365e106c01f3a0d8728f187d481324"
+    },
+    "receipts/gdn-combined-followup-control-v1/launch.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-followup-control-v1/launch.json",
+      "uncompressed_bytes": 2278,
+      "uncompressed_sha256": "ff5ce74ed5764223bf1704910fc7259344ecc073084672b3cbdf47e2834cd2e0"
+    },
+    "receipts/gdn-combined-followup-control-v1/launch-unit.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-followup-control-v1/launch-unit.json",
+      "uncompressed_bytes": 281,
+      "uncompressed_sha256": "93b695a22377934f12d4af7ecf04b9c01d230d8197d0479bef678253020beb50"
+    },
+    "receipts/gdn-combined-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/queue.json",
+      "uncompressed_bytes": 2661,
+      "uncompressed_sha256": "ca31a238cebcea6ddb1d428560e601506fb06a6375020984d20e368f00627b9c"
+    },
+    "receipts/gdn-combined-v1/combined-4k/long-horizon.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/combined-4k/long-horizon.json",
+      "uncompressed_bytes": 38203,
+      "uncompressed_sha256": "2bb9472b9e9b988123400594ae2c37a7e15d98da6d1ac143b7c03301ac43fbff"
+    },
+    "receipts/gdn-combined-v1/combined-4k/hardware.xml.gz": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-v1/combined-4k/hardware.xml",
+      "uncompressed_bytes": 551,
+      "uncompressed_sha256": "c1c72c0105b26959fdc11625c98462a0fe73e90eb5c2c9397d24b7d99b016af2"
+    },
+    "receipts/gdn-combined-followup-v1/queue.json": {
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/gdn-combined-followup-v1/queue.json",
+      "uncompressed_bytes": 705,
+      "uncompressed_sha256": "6baa37b8dda6759c3365ccd0bd8b0397652346d2e0c3af8e63a1baa539fc53e9"
+    }
+  }
+}

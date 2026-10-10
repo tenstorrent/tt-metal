@@ -15,20 +15,23 @@ from models.demos.qwen38_27b_qb2.tests.sweep_report import make_plan, summarize
 from models.demos.qwen38_27b_qb2.tests.unit.test_compact_gdn_queue import arms
 
 
-def evidence(tmp_path, gain=1.2):
+def evidence(tmp_path, gain=1.2, *, combined=False):
+    baseline, candidate = (
+        (queue.CANDIDATE, queue.COMBINED_GDN_POLICY) if combined else (queue.BASELINE, queue.CANDIDATE)
+    )
     source = tmp_path / "source"
     manifest = {}
     for name in (
         "tt/model.py",
         "config/precision.json",
-        *(f"config/precision_{r}_bfp8_all.json" for r in (queue.BASELINE, queue.CANDIDATE)),
+        *(f"config/precision_{r}_bfp8_all.json" for r in (baseline, candidate)),
     ):
         path = source / queue.MODEL_PREFIX / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(name)
         manifest[queue.MODEL_PREFIX + name] = hashlib.sha256(path.read_bytes()).hexdigest()
     data = arms()
-    for name, recurrence in (("before", queue.BASELINE), ("compact", queue.CANDIDATE), ("after", queue.BASELINE)):
+    for name, recurrence in (("before", baseline), ("compact", candidate), ("after", baseline)):
         report = make_plan(batches=(16,), input_lengths=(32768, 16384))
         report.update(
             state="completed",
@@ -202,3 +205,14 @@ def test_controller_orders_qualification_and_matching_profiles(tmp_path, monkeyp
     else:
         assert calls == ["qualify", "unprofiled", "profiled"]
         assert result["accuracy_passed"] is score_passes
+
+
+def test_combined_measurement_cannot_be_mistaken_for_the_old_policy_pair(tmp_path, expect_error):
+    args, receipt, manifest = evidence(tmp_path, combined=True)
+    with expect_error(ValueError, ".*"):
+        queue.measured_win(args.compact_results, receipt, manifest)
+    winning, comparisons = queue.measured_win(
+        args.compact_results, receipt, manifest, baseline=queue.CANDIDATE, candidate=queue.COMBINED_GDN_POLICY
+    )
+    assert winning and len(comparisons) == 2
+    assert all(not r["gpqa_qualified"] for r in comparisons)

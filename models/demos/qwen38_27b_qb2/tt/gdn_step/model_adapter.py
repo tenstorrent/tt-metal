@@ -24,6 +24,7 @@ def step_from_flat(
     flat_prepare_outputs=None,
     compact_qkv=False,
     compact_gates=False,
+    resident_state=False,
 ):
     """Consume only token zero of [B,T,H*128] and update [B,HV,128,128].
 
@@ -38,6 +39,8 @@ def step_from_flat(
 
     if type(compact_qkv) is not bool or type(compact_gates) is not bool:
         raise ValueError("compact_qkv and compact_gates must be Boolean")
+    if type(resident_state) is not bool or (resident_state and not compact_qkv):
+        raise ValueError("Resident state requires the compact direct-preparation path")
     if compact_gates and not compact_qkv:
         raise ValueError("Compact gates require compact Q/K/V")
     if len(q.shape) != 3:
@@ -100,6 +103,7 @@ def step_from_flat(
             value_splits=4,
             input_buffer_items=2,
             qk_head_repeat=value_heads // heads,
+            **({"resident_state": True} if resident_state else {}),
         )
         return finish()
 

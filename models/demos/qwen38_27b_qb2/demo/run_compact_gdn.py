@@ -15,7 +15,13 @@ from pathlib import Path
 from models.demos.qwen38_27b_qb2.demo.run_b16_followup import passing_test, summarize_b16
 from models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile import run_capture
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import environment, save
-from models.demos.qwen38_27b_qb2.tests.compact_gdn import BASELINE, CANDIDATE, CASES
+from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
+    BASELINE,
+    CANDIDATE,
+    CASES,
+    COMBINED_GDN_POLICY,
+    validate_long_horizon,
+)
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue import predecessor_ready
 from models.demos.qwen38_27b_qb2.tests.gdn_epilogue_layer import compare
 from models.demos.qwen38_27b_qb2.tests.sweep_report import make_plan, save_report
@@ -93,6 +99,9 @@ def run(args):
         target_tsu=30,
         speculative_decoding=False,
     )
+    combined = getattr(args, "combined", False)
+    baseline, candidate = (CANDIDATE, COMBINED_GDN_POLICY) if combined else (BASELINE, CANDIDATE)
+    status.update(baseline_recurrence=baseline, candidate_recurrence=candidate)
     model = args.source / "models/demos/qwen38_27b_qb2"
     manifest = json.loads(args.manifest.read_text())
 
@@ -186,28 +195,45 @@ def run(args):
             if predecessor_ready(props, receipt, args.after_invocation):
                 break
             time.sleep(20)
-        directory = stage(
-            "epilogue",
-            "test_compact_gdn_epilogue.py",
-            dict(QWEN_COMPACT_EPILOGUE="1", QWEN_COMPACT_EPILOGUE_RECEIPT=str(args.output / "epilogue/epilogue.json")),
-            3600,
-        )
-        report = passing_test(directory, "epilogue.json", len(CASES))
-        if [(r["batch"], r["placement"], tuple(r["mode"])) for r in report["cases"]] != CASES:
-            raise ValueError("Compact epilogue coverage differs from frozen plan")
-        directory = stage(
-            "layer",
-            "test_gdn_epilogue_layer.py",
-            dict(
-                QWEN_GDN_EPILOGUE_LAYER="1",
-                QWEN_GDN_LAYER_CANDIDATE="compact",
-                QWEN_GDN_LAYER_RECEIPT=str(args.output / "layer/layer.json"),
-            ),
-            3600,
-        )
-        validate_layer(json.loads((directory / "layer.json").read_text()))
+        if combined:
+            directory = stage(
+                "combined-4k",
+                "test_compact_gdn_long_horizon.py",
+                dict(
+                    QWEN_COMPACT_LONG_HORIZON="1",
+                    QWEN_COMPACT_COMBINED="1",
+                    QWEN_COMPACT_LONG_HORIZON_RECEIPT=str(args.output / "combined-4k/long-horizon.json"),
+                ),
+                1800,
+            )
+            status["combined_validation"] = validate_long_horizon(
+                json.loads((directory / "long-horizon.json").read_text()), baseline=baseline, candidate=candidate
+            )
+        else:
+            directory = stage(
+                "epilogue",
+                "test_compact_gdn_epilogue.py",
+                dict(
+                    QWEN_COMPACT_EPILOGUE="1", QWEN_COMPACT_EPILOGUE_RECEIPT=str(args.output / "epilogue/epilogue.json")
+                ),
+                3600,
+            )
+            report = passing_test(directory, "epilogue.json", len(CASES))
+            if [(r["batch"], r["placement"], tuple(r["mode"])) for r in report["cases"]] != CASES:
+                raise ValueError("Compact epilogue coverage differs from frozen plan")
+            directory = stage(
+                "layer",
+                "test_gdn_epilogue_layer.py",
+                dict(
+                    QWEN_GDN_EPILOGUE_LAYER="1",
+                    QWEN_GDN_LAYER_CANDIDATE="compact",
+                    QWEN_GDN_LAYER_RECEIPT=str(args.output / "layer/layer.json"),
+                ),
+                3600,
+            )
+            validate_layer(json.loads((directory / "layer.json").read_text()))
         arms = {}
-        for name, recurrence in (("before", BASELINE), ("compact", CANDIDATE), ("after", BASELINE)):
+        for name, recurrence in (("before", baseline), ("compact", candidate), ("after", baseline)):
             directory = args.output / name
             save_report(make_plan(1, batches=(16,), input_lengths=(32768, 16384)), directory)
             stage(
@@ -227,7 +253,14 @@ def run(args):
             summarize_b16(arms[name])
         comparisons = compare_sweeps(arms)
         save(args.output / "comparison.json", dict(rows=comparisons, full_model_measured=True, gpqa_qualified=False))
-        status.update(state="completed", cleanup_completed=True, comparisons=comparisons)
+        # Independently reconcile source/policy/prompt fingerprints and the raw
+        # accounting before treating the timed arms as a matched experiment.
+        from models.demos.qwen38_27b_qb2.demo.run_compact_followup import measured_win
+
+        winning, _ = measured_win(
+            args.output, dict(comparisons=comparisons), manifest, baseline=baseline, candidate=candidate
+        )
+        status.update(state="completed", cleanup_completed=True, comparisons=comparisons, measured_win=winning)
     except BaseException as error:
         status.update(state="failed", error=type(error).__name__, detail=str(error)[:3000])
         raise
@@ -240,6 +273,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("task", "source", "weights", "output", "manifest", "after-receipt"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument(
+        "--combined", action="store_true", help="Compare resident state plus compact gates to qualified compact GDN"
+    )
     parser.add_argument("--after-unit", required=True)
     parser.add_argument("--after-invocation", required=True)
     run(parser.parse_args())

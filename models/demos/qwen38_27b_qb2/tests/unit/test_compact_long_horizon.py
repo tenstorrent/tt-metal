@@ -6,6 +6,7 @@ import pytest
 from models.demos.qwen38_27b_qb2.tests.compact_gdn import (
     BASELINE,
     CANDIDATE,
+    COMBINED_GDN_POLICY,
     changing_input_checkpoints,
     validate_long_horizon,
 )
@@ -68,3 +69,15 @@ def test_incomplete_or_invalid_boundary_evidence_rejected(corruption, expect_err
         value["cases"].pop()
     with expect_error(ValueError, "Long-horizon"):
         validate_long_horizon(value)
+
+
+def test_combined_boundary_requires_its_explicit_policy_pair(expect_error):
+    value = report()
+    value.update(baseline=CANDIDATE, candidate=COMBINED_GDN_POLICY)
+    with expect_error(ValueError, "policies differ"):
+        validate_long_horizon(value)
+    assert validate_long_horizon(value, baseline=CANDIDATE, candidate=COMBINED_GDN_POLICY)[
+        "exact_boundary_comparison_passed"
+    ]
+    with expect_error(ValueError, "Unsupported"):
+        validate_long_horizon(value, baseline=BASELINE, candidate=COMBINED_GDN_POLICY)

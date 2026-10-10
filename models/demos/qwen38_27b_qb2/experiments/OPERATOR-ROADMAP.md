@@ -330,3 +330,19 @@ combined model measurement remains required. The compact-versus-flat 4096-update
 B16/B32 test also passed. All queued tests are complete. These incremental gains
 do not meet 30 TSU; larger attention/GDN dataflow changes remain necessary.
 [Exact measurements and limitations](../galaxy-evidence/gdn-followup-results-v1/README.md).
+
+## Combined model validation and exact GDN attribution, 22:03 UTC
+
+The combined resident-state/compact-gate policy passed 4096-step B16/B32 exact
+integration checks. Full-model B16/32K and 16K before/candidate/after timing is
+running persistently; conditional eight-replica G0/API/GPQA follows only a clean
+>=1% primary-workload gain. Estimated 0.94-ms saving / 20.42 TSU is unmeasured.
+[Launch and frozen source](../galaxy-evidence/gdn-combined-launch-v1/README.md).
+
+Exact cached-source matching resolves the compact profile's custom stages:
+recurrence 4.405 ms, epilogue 2.853 ms, convolution 0.996 ms, preparation 0.931 ms.
+Next epilogue hypothesis: avoid clearing unused padding for compact output while
+retaining all public-output padding guarantees; estimated 1-2-ms full-step
+opportunity, requiring poison/wrap/replay correctness and matched timing.
+This is source-backed scope, not an implemented or measured speedup.
+[Attribution and reproducible analysis](../galaxy-evidence/compact-kernel-map-v1/README.md).

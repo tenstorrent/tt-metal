@@ -2244,3 +2244,23 @@ measured 66.985 -> 58.346 us (1.148x), projecting 0.415 ms. Each projects about 
 state still misses the state-bandwidth-floor-plus-10-us P1 target. No candidate
 was promoted. All three units are terminal; combined whole-model validation is
 still needed. [Final receipts](../galaxy-evidence/gdn-followup-results-v1/README.md).
+
+## October 10, 22:00-22:05 UTC: combined model integration and deeper profile attribution
+
+- Added explicit `single_step_compact_gdn_resident_gates` selection through the
+  model, scratch allocation and adapter. Existing policy/precision defaults and
+  prefill stay unchanged. B16/B32 alone select the combined path; smaller decode
+  buckets retain the existing fallback. CPU preflight: 693 passed, one skipped,
+  95 subtests. Pre-commit checks passed after normal formatting.
+- Launched the bounded persistent combined controller and conditional G0/API/GPQA
+  follower from immutable source/manifest. The combined 4096-step B16/B32 hardware
+  test passed with exact state/history/projected outputs and clean teardown.
+  Full before/candidate/after measurements at 32K and 16K then began.
+  [Exact commands and evidence](../galaxy-evidence/gdn-combined-launch-v1/README.md).
+- Matched all four generic compute hashes to exact cached generated source.
+  The CSV attributes 4.405 ms recurrence, 2.853 ms epilogue, 0.996 ms convolution,
+  and 0.931 ms direct preparation. Reproduced all 48 calls per stage across four
+  ranks and three replays, reconciling the earlier generic total. Padding clear
+  in the epilogue is a new source-backed optimization hypothesis (estimated
+  1-2 ms, not measured); it is not in the running candidate.
+  [Source proof and analyzer](../galaxy-evidence/compact-kernel-map-v1/README.md).

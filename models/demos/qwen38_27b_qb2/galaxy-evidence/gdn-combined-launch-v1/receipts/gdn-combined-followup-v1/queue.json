@@ -1,0 +1,22 @@
+{
+  "state": "waiting",
+  "steps": [],
+  "cleanup_completed": false,
+  "hardware_started": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "predecessor_unit": "qwen38-gdn-combined-v1-20261010.service",
+  "predecessor_invocation": "15bebec92d7649909517ba9a4a5a3778",
+  "policy": "precision_single_step_compact_gdn_resident_gates_bfp8_all.json",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "started_at": 1791669607.6124866,
+  "updated_at": "2026-10-10T22:02:47Z",
+  "predecessor": {
+    "MainPID": "479502",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "15bebec92d7649909517ba9a4a5a3778"
+  }
+}

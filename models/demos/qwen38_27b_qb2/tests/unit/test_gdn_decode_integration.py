@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Decode selection and scratch lifetime; numerical validation requires hardware."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +10,12 @@ import torch
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import decoder
-from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import CompactScratch, DecodeWorkspace
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import (
+    COMBINED_GDN_POLICY,
+    COMPACT_GDN_POLICIES,
+    CompactScratch,
+    DecodeWorkspace,
+)
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 
@@ -136,7 +142,7 @@ def test_compact_l1_pool_is_shared_only_within_one_serialized_stack(monkeypatch,
 
 @pytest.mark.parametrize(
     "recurrence",
-    ["single_step", "single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue", "single_step_compact_gdn"],
+    ["single_step", "single_step_shared_qk_epilogue", "single_step_flat_prepare_epilogue", *COMPACT_GDN_POLICIES],
 )
 def test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step(monkeypatch, recurrence):
     calls = []
@@ -202,7 +208,8 @@ def test_recurrence_policy_is_explicit_and_backward_compatible(expect_error):
 @pytest.mark.parametrize(
     "batch,decode,selected", [(16, True, True), (32, True, True), (8, True, False), (16, False, False)]
 )
-def test_compact_gdn_only_selected_for_explicit_decode_buckets(batch, decode, selected):
+@pytest.mark.parametrize("recurrence", COMPACT_GDN_POLICIES)
+def test_compact_gdn_only_selected_for_explicit_decode_buckets(batch, decode, selected, recurrence):
     class OrdinaryPath(Exception):
         pass
 
@@ -210,7 +217,7 @@ def test_compact_gdn_only_selected_for_explicit_decode_buckets(batch, decode, se
         raise OrdinaryPath()
 
     layer = SimpleNamespace(
-        policy={"decode_recurrence": "single_step_compact_gdn"},
+        policy={"decode_recurrence": recurrence},
         config=SimpleNamespace(linear_num_key_heads=4, linear_num_value_heads=12, linear_key_head_dim=128),
         _delta_compact=lambda x, state, b: (state, b),
         _linear=ordinary,
@@ -358,3 +365,42 @@ def test_flat_prepare_policy_selects_preallocated_buffers_and_retains_fallback(m
             **({"raw_output": True} if batch in (16, 32) else {}),
         )
     ]
+
+
+def test_combined_artifact_keeps_qualified_precision_and_changes_only_decode_policy():
+    config = Path(__file__).resolve().parents[2] / "config"
+    before = load_precision(config / "precision_single_step_compact_gdn_bfp8_all.json")
+    after = load_precision(config / f"precision_{COMBINED_GDN_POLICY}_bfp8_all.json")
+    assert {k: v for k, v in before.items() if k not in ("config_id", "decode_recurrence")} == {
+        k: v for k, v in after.items() if k not in ("config_id", "decode_recurrence")
+    }
+    assert decoder_policy(after, 0)["decode_recurrence"] == COMBINED_GDN_POLICY
+
+
+@pytest.mark.parametrize("batch", [1, 8, 16, 32])
+def test_combined_resident_kernel_only_receives_prepared_compact_buckets(monkeypatch, batch):
+    captured = []
+    scratch = object()
+    monkeypatch.setattr(decoder, "step_from_flat", lambda *a, **k: captured.append(k) or scratch)
+    compact = batch in (16, 32)
+    layer = SimpleNamespace(
+        config=SimpleNamespace(linear_num_value_heads=12),
+        policy={"decode_recurrence": COMBINED_GDN_POLICY},
+        gdn_decode_workspace=SimpleNamespace(
+            output=lambda b: scratch,
+            shared_qk=lambda b: None,
+            flat_outputs=lambda b: None,
+        ),
+    )
+    inputs = [torch.zeros(1, batch, w) if compact else torch.zeros(batch, 32, w) for w in (512, 512, 1536, 12, 12)]
+    result = decoder.Qwen38Decoder._delta_recurrence(
+        layer,
+        *inputs,
+        SimpleNamespace(recurrent=object()),
+        decode=True,
+        compact_qkv=compact,
+        compact_gates=compact,
+    )
+    assert result is scratch
+    assert captured[0].get("resident_state", False) is compact
+    assert captured[0].get("compact_gates", False) is compact
