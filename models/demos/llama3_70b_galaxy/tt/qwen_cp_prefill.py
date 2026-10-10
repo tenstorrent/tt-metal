@@ -319,11 +319,16 @@ def _mmc(m, k, n, sh, sw, gx=7, gy=10):
     )
 
 
-# Best of the job139 variants at the B shapes (M = S/4 = 10240).
-QKV_CFG = _mmc(8, 8, 4, 2, 2)  # 1.420 ms (today's cfg 1.541)
-FF13_CFG = _mmc(8, 8, 10, 1, 5)  # 2.584 ms LoFi (today's cfg 2.928)
+# Configs at the B shapes (M = S/4 = 10240). The K block sets the accumulation order and stays at the job139 pick;
+# M block / subblock from cpb_sweep.py jobs 163-164 (torch.equal-level: sha1 of all 32 device outputs equal to the
+# job139 configs; host wall per call, 8 back-to-back calls): QKV m8k8n4 s2x2 1.349 -> 1.311 ms, FF1/FF3 m8k8n10
+# s1x5 2.375 -> 2.047 ms, FF2 m8k10n8 s1x4 3.441 -> 3.358 ms, WO m16k8n4 s2x2 1.202 -> 1.183 ms. An N block that is
+# not a multiple of 5 (FF1/FF3) changes the bits; M block and subblock do not.
+QKV_CFG = _mmc(16, 8, 4, 1, 4)
+FF13_CFG = _mmc(16, 8, 10, 4, 2)
 FF13_FP32_CFG = _mmc(8, 8, 8, 1, 4)  # HiFi2 fp32 acc fallback, 3.725 ms
-FF2_CFG = _mmc(8, 10, 8, 1, 4)  # 3.667 ms
+FF2_CFG = _mmc(16, 10, 4, 1, 4)
+WO_CFG = _mmc(16, 8, 8, 1, 4)
 
 
 def ff13_fp32_acc() -> bool:
@@ -437,7 +442,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
     o = ttnn.experimental.minimal_matmul(
         input_tensor=cat,
         weight_tensor=w["wo"],
-        config=mc["WO_PREFILL_MINIMAL_PROGCFG"](S),
+        config=WO_CFG,
         dtype=ttnn.bfloat8_b,
         compute_kernel_config=attn.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
