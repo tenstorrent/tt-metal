@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import VOCAB, DSV41DeviceHead
-from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
+from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler, SamplerTraces
 from models.demos.gpt_oss.config import mesh_4x8
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
@@ -376,3 +376,74 @@ def test_device_sampler_cost(mesh_device):
         f"SAMPLER_COST T={T} J={J} levels={L} levels_k={LK}: " + ", ".join(f"{k}: {v:.3f} ms" for k, v in res.items()),
         flush=True,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {"l1_small_size": 16384, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 256 << 20},
+            id="ring",
+        )
+    ],
+    indirect=True,
+)
+@torch.no_grad()
+def test_device_sampler_topk_path_greedy_rows_and_trace_selection(mesh_device):
+    """A step with greedy rows (top_k 0 / temperature 0 rows are flagged greedy) next to rows with top_k <= kcand takes the top-k path (``set_params`` -> ``fast``) and its greedy rows are the exact argmax
+    (the lowest index of tied maxima, like torch); a row with top_k off or above kcand selects the full-vocabulary trace; both traces replayed through ``SamplerTraces``.
+    """
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    T = 8
+    B = rows * T
+    mc, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    smp = DSV41DeviceSampler(md, mc, ccl, T, J=16, levels=3, levels_k=4)
+    prm = smp.alloc_params()
+    g = torch.Generator().manual_seed(11)
+    lg = torch.randn(B, VOCAB, generator=g) * 3
+    lg[5, 70000] = lg[5].max() + 1.0  # a unique maximum in the middle of a column
+    lg[6, :] = 2.0  # constant row: argmax = 0
+    lg[7, 100] = lg[7, 129000] = lg[7].max() + 2.0  # tied maxima: the lowest index wins
+    logits = ttnn.from_torch(
+        lg.reshape(1, 1, B, VOCAB),
+        device=md,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(2, 3), mesh_shape=(rows, cols)),
+    )
+    out = {}
+
+    def body(fast):
+        out[fast] = smp.run(logits, prm, fast)
+
+    for fast in (False, True):
+        body(fast)
+    ttnn.synchronize_device(md)
+    traces = SamplerTraces(smp)
+    traces.capture(body)
+
+    def read(fast):
+        return torch.cat(
+            [ttnn.to_torch(ttnn.get_device_tensors(out[fast])[r * cols]).reshape(-1) for r in range(rows)]
+        ).long()
+
+    greedy = (torch.arange(B) % 2 == 0).float()
+    for ks, want_fast in ((20.0, True), (0.0, False), (64.0, False)):
+        k = torch.where(greedy > 0, torch.zeros(B), torch.full((B,), ks))
+        smp.set_params(torch.full((B,), 1 / 0.6), k, torch.full((B,), 0.95), torch.rand(B), greedy)
+        assert smp.fast == want_fast, (ks, smp.fast)
+        traces.replay()
+        got = read(smp.fast)
+        ref = lg.argmax(-1)
+        sel = greedy > 0
+        assert torch.equal(got[sel], ref[sel]), (ks, got[sel][:8], ref[sel][:8])
+        samp_rows = ~sel
+        assert bool((got[samp_rows] >= 0).all() and (got[samp_rows] < VOCAB).all())
+        if ks == 20.0:  # sampled rows draw inside the exact top-20 set
+            top = lg.topk(20, dim=-1).indices
+            for b in torch.nonzero(samp_rows).flatten().tolist():
+                assert int(got[b]) in top[b].tolist(), (b, int(got[b]))
+    traces.release()

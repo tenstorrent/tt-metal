@@ -16,7 +16,7 @@ Because the nucleus is a threshold set, no sort is needed; the draw in vocabular
 the resolution of the threshold search: tokens whose scaled logit lies within (range / J**levels) of the exact boundary may be kept or dropped wrongly. The top-k count search resolves one level more than the
 top-p mass search (``levels_k``): on a flat row the k-th and (k+1)-th largest scaled logits are closer than range / J**levels, which kept k + 1 tokens in ~20% of the cases (tests/test_device_sampler*.py).
 
-Rows with 0 < top_k <= ``kcand`` (32) take a second, much cheaper path (``forward_topk``, ~0.7 ms at 8 users per mesh row, ~1.1 ms at 32, against ~3.8 / ~9.5 ms): the kept set lives in the ``kcand`` largest logits of each
+Rows with 0 < top_k <= ``kcand`` (32) take a second, much cheaper path (``forward_topk``, ~1.1 ms at 8 users per mesh row, ~1.8 ms at 32, against ~3.8 / ~9.5 ms; greedy rows keep the exact full-vocabulary argmax): the kept set lives in the ``kcand`` largest logits of each
 mesh column, so the top-k set, the nucleus and the draw are computed exactly over those 8 * kcand candidates (no search, no resolution band). ``set_params`` selects it for a step when every sampled row qualifies
 (``DSV41DeviceSampler.fast``); a step with a row without top_k (or top_k > kcand) replays the full-vocabulary trace. ``SamplerTraces`` holds the two traces.
 
@@ -158,6 +158,35 @@ class DSV41DeviceSampler:
         )
         return self._allsum(part)
 
+    def _greedy(self, logits, with_min):
+        """Global max (and min) of every row and its greedy token (the lowest index of the maximum, like torch.argmax), exact over the whole vocabulary: [1,1,T,1] each."""
+        T, cols, shard = self.T, self.cols, self.shard
+        mx = ttnn.max(logits, dim=-1, keepdim=True)
+        idx = ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
+        idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
+        parts = [mx, idxf] + ([ttnn.min(logits, dim=-1, keepdim=True)] if with_min else [])
+        n = len(parts)
+        small = self.mc.allgather(ttnn.concat(parts, dim=-1), self.ccl, axis=1, dim=3)  # [1,1,T,cols*n]
+        small = ttnn.reshape(small, [1, T, cols, n])
+        mx_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 0], [1, T, cols, 1]), [1, 1, T, cols])
+        ix_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 1], [1, T, cols, 2]), [1, 1, T, cols])
+        M = ttnn.max(mx_all, dim=-1, keepdim=True)
+        mn_g = None
+        if with_min:
+            mn_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 2], [1, T, cols, 3]), [1, 1, T, cols])
+            mn_g = ttnn.min(mn_all, dim=-1, keepdim=True)
+        best = ttnn.typecast(
+            ttnn.to_layout(
+                ttnn.argmax(ttnn.to_layout(mx_all, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True), ttnn.TILE_LAYOUT
+            ),
+            ttnn.float32,
+        )
+        tok_greedy = ttnn.add(
+            ttnn.multiply(best, float(shard)),
+            ttnn.sum(ttnn.multiply(ttnn.eq(best, self.col_ids), ix_all), dim=-1, keepdim=True),
+        )
+        return M, mn_g, tok_greedy
+
     def run(self, logits, params, fast):
         """The sampler body of a variant: ``fast`` = ``forward_topk`` (rows with 0 < top_k <= kcand), else ``forward`` (full vocabulary)."""
         return self.forward_topk(logits, params) if fast else self.forward(logits, params)
@@ -208,11 +237,8 @@ class DSV41DeviceSampler:
         tgt = ttnn.multiply(u, ttnn.sum(w_col, dim=2, keepdim=True))
         cond = ttnn.multiply(ttnn.le(before, tgt), ttnn.gt(w_col, 0.0))
         tok_s = ttnn.subtract(ttnn.max(ttnn.multiply(cond, ttnn.add(i_col, 1.0)), dim=2, keepdim=True), 1.0)
-        # greedy: the first (lowest id) maximum
-        big = float(1 << 17)
-        tok_g = ttnn.subtract(
-            big, ttnn.max(ttnn.multiply(ttnn.ge(v_col, M), ttnn.subtract(big, i_col)), dim=2, keepdim=True)
-        )
+        # greedy rows: the exact argmax of the full rows (a bf16 tie of more than kcand logits could hide the lowest index of a maximum from the candidates)
+        tok_g = ttnn.reshape(self._greedy(logits, with_min=False)[2], [T, 1, 1, 1])
         tok = ttnn.add(ttnn.multiply(greedy, tok_g), ttnn.multiply(ttnn.subtract(1.0, greedy), tok_s))
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
 
@@ -226,28 +252,7 @@ class DSV41DeviceSampler:
 
             ttnn.synchronize_device(self.md)
             self._t = time.perf_counter()
-        # global max / min of the row and the greedy token (first max wins, like torch)
-        mx = ttnn.max(logits, dim=-1, keepdim=True)
-        mn = ttnn.min(logits, dim=-1, keepdim=True)
-        idx = ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
-        idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
-        small = self.mc.allgather(ttnn.concat([mx, idxf, mn], dim=-1), self.ccl, axis=1, dim=3)  # [1,1,T,cols*3]
-        small = ttnn.reshape(small, [1, T, cols, 3])
-        mx_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 0], [1, T, cols, 1]), [1, 1, T, cols])
-        ix_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 1], [1, T, cols, 2]), [1, 1, T, cols])
-        mn_all = ttnn.reshape(ttnn.slice(small, [0, 0, 0, 2], [1, T, cols, 3]), [1, 1, T, cols])
-        M = ttnn.max(mx_all, dim=-1, keepdim=True)
-        mn_g = ttnn.min(mn_all, dim=-1, keepdim=True)
-        best = ttnn.typecast(
-            ttnn.to_layout(
-                ttnn.argmax(ttnn.to_layout(mx_all, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True), ttnn.TILE_LAYOUT
-            ),
-            ttnn.float32,
-        )
-        tok_greedy = ttnn.add(
-            ttnn.multiply(best, float(shard)),
-            ttnn.sum(ttnn.multiply(ttnn.eq(best, self.col_ids), ix_all), dim=-1, keepdim=True),
-        )
+        M, mn_g, tok_greedy = self._greedy(logits, with_min=True)
         self._mark("greedy_part")
         if self.stop == "greedy_part":
             return tok_greedy
