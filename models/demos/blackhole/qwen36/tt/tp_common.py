@@ -72,6 +72,17 @@ def _roundup(a, b):
     return b * math.ceil(a / b)
 
 
+def aliases(a, b):
+    """Whether two handles name the same device buffer (a metadata re-view, not a copy).
+
+    Returns True when the address is unavailable, so the caller skips the extra free: that leaks a
+    copy at worst and never double-frees an alias."""
+    try:
+        return a.buffer_address() == b.buffer_address()
+    except Exception:  # pragma: no cover
+        return True
+
+
 def _find_largest_divisor(n, max_div=8):
     for d in range(max_div, 0, -1):
         if n % d == 0:

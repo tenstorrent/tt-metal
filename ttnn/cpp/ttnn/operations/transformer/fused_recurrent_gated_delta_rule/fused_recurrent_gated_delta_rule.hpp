@@ -31,6 +31,9 @@ namespace ttnn::transformer {
  *   state       present iff (output_final_state || output_per_token_state):
  *                 output_per_token_state -> [B, T, HV, K, V]  (state AFTER each token; verify slots)
  *                 else                    -> [B, HV, K, V]     (final state only)
+ *
+ * "Ring" mode (initial_state_block_idx): in-place per-head initial-state select; see the Python binding for the
+ * contract.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -40,6 +43,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const ttnn::Tensor& beta,
     std::optional<float> scale = std::nullopt,
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
+    const std::optional<ttnn::Tensor>& initial_state_block_idx = std::nullopt,
     bool output_final_state = false,
     bool output_per_token_state = false,
     bool use_qk_l2norm = false,
