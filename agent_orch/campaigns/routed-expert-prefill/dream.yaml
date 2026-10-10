@@ -5,6 +5,7 @@ machine: local          # 4x BH p300c visible; the test uses 1 chip
 
 editable:
   - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/*
+  - tt_metal/hw/ckernels/blackhole/*
 brief: brief.md
 rules:
   - "Keep the math fidelity and approximation settings of the baseline: MathFidelity::LoFi, math_approx_mode=false, fp32_dest_acc_en as passed in. Do not enable approximate SFPU modes the baseline does not use."

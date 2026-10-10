@@ -29,6 +29,10 @@ Everything editable is under `ttnn/cpp/ttnn/operations/experimental/deepseek_pre
 - the device-op, types, op wrapper and nanobind files
 Kernels are JIT-compiled at run time; host files need a rebuild.
 
+The Blackhole LLK compute APIs (`tt_metal/hw/ckernels/blackhole/`: matmul, tilize, pack/unpack, SFPU) are
+also editable. They are shared by every op, so keep changes behind defines or new functions that only this
+op's kernels use, and keep the existing APIs' behavior unchanged.
+
 ## What is measured
 `tests/ttnn/nightly/unit_tests/operations/fused/test_routed_expert_prefill.py`: 9 cases, one per production
 model (DeepSeek-V3, Kimi-K2.7, Kimi-K3 latent, GLM-5.3, Mistral-Small-4, DeepSeek-V4 Flash/Pro, MiniMax-M3,
