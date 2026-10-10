@@ -11,10 +11,14 @@ then fire prompts from another terminal with demo/batching_client.py, e.g.
 
     python models/demos/gemma4_d_p/demo/batching_client.py compare
 
-Modes, switchable at any time (requests already running keep the mode they were admitted with):
-- batched (continuous batching): every active request (up to DEMO_SLOTS) gets its next chunk in one traced step: 2k
-  for most, 8k for one prompt that is a multiple of 8k at a time (see PACK), so it is not slowed to 2k chunks by the
-  short ones;
+Modes, switchable at any time (requests already running keep the mode they were admitted with; new ones wait until
+they finish):
+- batched (continuous batching): each traced step has up to DEMO_SLOTS 2k lanes; every active request (up to
+  DEMO_SLOTS) gets one and the spare ones go to requests with chunks left (see Scheduler._plan). A lone 8k prompt
+  runs as one step of four 2k lanes, four 2k prompts as one step of one lane each. Every chunk is 2k, so every
+  request's KV has the 2k layout;
+- batched + 8k lane (DEMO_WIDE_LANE=1): as batched, but one prompt at a time that is a multiple of 8k takes an
+  8k-wide lane instead (mixed-width steps, more traces), which runs it at native 8k-chunk speed;
 - serial 8k / 4k / 2k: one request at a time in arrival order at a fixed chunk size, the way an unbatched server runs
   (serial 8k is today's default). As in the serving producer, the last chunk is padded to the full chunk size, so a
   2k prompt costs a whole 8k step under serial 8k.
@@ -24,7 +28,7 @@ The server draws the lanes of each step and every request's queue / prefill / to
 are host wall clock around each step (staging + trace replay).
 
 Env: DEMO_PORT (default 8765), DEMO_SLOTS (requests in flight, default 4), DEMO_CAPACITY (max prompt tokens, default
-65536), DEMO_PACK (default 1).
+65536), DEMO_WIDE_LANE (default 0).
 """
 
 import collections
@@ -54,18 +58,17 @@ from models.demos.gemma4_d_p.tt.attention import operations as attention_operati
 
 CHUNK = 2048
 MID = 4096  # serial 4k's chunk
-WIDE = 8192  # serial 8k's chunk, and pack's wide lane
-# Pack (DEMO_PACK, default on): in batching mode too, one prompt that is a multiple of 8k at a time takes an 8k-wide
-# lane next to up to DEMO_SLOTS - 1 2k lanes (mixed-width steps, one trace per layout), so it keeps 8k chunks while
-# short ones batch beside it. DEMO_PACK=0: every batched request takes 2k lanes.
-PACK = os.environ.get("DEMO_PACK", "1") == "1"
+WIDE = 8192  # serial 8k's chunk, and the 8k lane's width
+# The 8k lane (DEMO_WIDE_LANE=1 adds the "batched + 8k lane" mode): one prompt that is a multiple of 8k at a time
+# takes an 8k-wide lane next to up to DEMO_SLOTS - 1 2k lanes (mixed-width steps, one trace per layout).
+WIDE_LANE = os.environ.get("DEMO_WIDE_LANE", "0") == "1"
 
 
 def step_layouts(num_slots):
     """Every step layout the scheduler can produce, widest first (the compile order). A layout is the lanes' widths
     in order; the trace is keyed by it alone, slots and prefixes are staged per step."""
     layouts = [(WIDE,)]
-    if PACK:
+    if WIDE_LANE:
         layouts += [(WIDE,) + (CHUNK,) * (n - 1) for n in range(num_slots, 1, -1)]
     return layouts + [(MID,)] + [(CHUNK,) * n for n in range(num_slots, 0, -1)]
 
@@ -73,8 +76,10 @@ def step_layouts(num_slots):
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 600_000_000))
 COLORS = ["cyan", "magenta", "green", "yellow", "blue", "red", "bright_cyan", "bright_magenta"]
 BATCHED = "batched"
+BATCHED_WIDE = "batched + 8k lane"
 SERIAL_CHUNKS = {"serial 8k": WIDE, "serial 4k": MID, "serial 2k": CHUNK}  # mode -> its fixed chunk size
-MODES = (*SERIAL_CHUNKS, BATCHED)
+BATCHED_MODES = (BATCHED, BATCHED_WIDE) if WIDE_LANE else (BATCHED,)
+MODES = (*SERIAL_CHUNKS, *BATCHED_MODES)
 
 
 @dataclass
@@ -107,10 +112,18 @@ class Request:
         )
 
 
-def _chunk(request):
-    """The request's next chunk; a last chunk shorter than its width is padded, as the serving producer pads it."""
-    tokens = request.tokens[request.done : request.done + request.width]
-    return torch.cat([tokens, tokens.new_zeros(request.width - len(tokens))])
+def _lanes(request, n):
+    """The request's next n chunks as lanes (slot, start, tokens); a last chunk shorter than the request's width is
+    padded, as the serving producer pads it."""
+    lanes = []
+    for start in range(request.done, request.done + n * request.width, request.width):
+        tokens = request.tokens[start : start + request.width]
+        lanes.append((request.slot, start, torch.cat([tokens, tokens.new_zeros(request.width - len(tokens))])))
+    return lanes
+
+
+def _chunks_left(request):
+    return -(-(len(request.tokens) - request.done) // request.width)
 
 
 def _bar(fraction, width, full="█", empty="░"):
@@ -165,7 +178,9 @@ class Scheduler:
             self.waiting.extend(first)
             while not self.incoming.empty():
                 self.waiting.append(self.incoming.get_nowait())
-            limit = self.num_slots if self.mode == BATCHED else 1
+            if any(r.mode != self.mode for r in self.active):
+                return  # after a mode switch, the requests of the old mode finish first
+            limit = self.num_slots if self.mode in BATCHED_MODES else 1
             free = [s for s in range(self.num_slots) if all(r.slot != s for r in self.active)]
             admitted = []
             while self.waiting and len(self.active) + len(admitted) < limit and free:
@@ -174,19 +189,41 @@ class Scheduler:
                 admitted.append(request)
             # A width is fixed for a request's life: the 8k lane, when free, goes to the longest new prompt that is a
             # multiple of 8k; a long prompt that finds it taken runs at 2k. An 8k prompt holds it for one step only.
-            if self.mode == BATCHED:
+            if self.mode == BATCHED_WIDE:
                 fits = [r for r in admitted if len(r.tokens) % WIDE == 0]
-                if fits and PACK and not any(r.width == WIDE for r in self.active):
+                if fits and not any(r.width == WIDE for r in self.active):
                     max(fits, key=lambda r: len(r.tokens)).width = WIDE
-            else:
-                for request in admitted:  # one at a time, at the mode's chunk size (see _chunk for the last one)
+            elif self.mode in SERIAL_CHUNKS:
+                for request in admitted:  # one at a time, at the mode's chunk size (see _lanes for the last one)
                     request.width = SERIAL_CHUNKS[self.mode]
             self.active.extend(admitted)
 
+    def _plan(self):
+        """[(request, lanes it gets)] for the next step.
+
+        Serial: the one active request, one chunk. Batched: up to num_slots lanes. There are never more active
+        requests than lanes, so each gets one lane (the 8k lane counts as one), and the spare lanes go to requests
+        with chunks left, in turn: a lone prompt takes every lane, and a long one never makes a short one wait a step.
+        self.active rotates by one each step, so the spare lanes alternate between long prompts.
+        """
+        if self.active[0].mode in SERIAL_CHUNKS:  # _admit never mixes modes
+            return [(self.active[0], 1)]
+        plan = [[request, 1] for request in self.active]
+        free = self.num_slots - len(plan)
+        for entry in plan:
+            if entry[0].width != WIDE and free:
+                extra = min(free, _chunks_left(entry[0]) - 1)
+                entry[1] += extra
+                free -= extra
+        self.active.append(self.active.pop(0))
+        return plan
+
     def _step(self):
+        with self.lock:
+            plan = self._plan()
         # The wide lane first: every captured mixed layout is (8192, 2048, ...).
-        ordered = sorted(self.active, key=lambda r: r.width != WIDE)  # stable: the 2k lanes keep their order
-        lanes = [(r.slot, r.done, _chunk(r)) for r in ordered]
+        plan.sort(key=lambda entry: entry[0].width != WIDE)  # stable: the 2k lanes keep their order
+        lanes = [lane for request, n in plan for lane in _lanes(request, n)]
         assert StepRunner.layout(lanes) in self.layouts, f"layout {StepRunner.layout(lanes)} was not captured"
         t0 = time.perf_counter()
         replay_ms = self.runner.step(lanes)
@@ -194,10 +231,10 @@ class Scheduler:
         logger.info(f"[demo] step lanes={len(lanes)} total={step_s * 1000:.1f}ms replay={replay_ms:.1f}ms")
         with self.lock:
             self.busy_s += step_s
-            self.tokens_done += sum(min(r.width, len(r.tokens) - r.done) for r in self.active)  # padding not counted
-            self.steps.append(([(r.color, r.label) for r in self.active], step_s * 1000))
-            for request in list(self.active):
-                request.done += request.width
+            self.steps.append(([(r.color, r.label) for r, n in plan for _ in range(n)], step_s * 1000))
+            for request, n in plan:
+                self.tokens_done += min(n * request.width, len(request.tokens) - request.done)  # padding not counted
+                request.done += n * request.width
                 if request.done >= len(request.tokens):
                     request.finished = time.perf_counter()
                     self.active.remove(request)
@@ -267,8 +304,8 @@ class Scheduler:
             steps, active, waiting, recent = list(self.steps), list(self.active), list(self.waiting), list(self.recent)
             tokens_done, busy_s = self.tokens_done, self.busy_s
         mode = (
-            Text("continuous batching ON", style="bold green")
-            if self.mode == BATCHED
+            Text(f"continuous batching ON ({self.mode})", style="bold green")
+            if self.mode in BATCHED_MODES
             else Text(f"continuous batching OFF: one request at a time, {self.mode} chunks", style="bold yellow")
         )
         rate = tokens_done / busy_s if busy_s else 0.0
@@ -306,7 +343,9 @@ def _handler(scheduler):
                 request.event.wait()
                 self._reply(request.result(), 503 if request.error else 200)
             elif self.path == "/mode":
-                if body.get("mode") not in MODES:
+                if "mode" not in body:
+                    return self._reply({"mode": scheduler.mode, "modes": MODES, "batched_modes": BATCHED_MODES})
+                if body["mode"] not in MODES:
                     return self._reply({"error": f"mode must be one of {MODES}"}, 400)
                 scheduler.mode = body["mode"]
                 self._reply({"mode": scheduler.mode})
