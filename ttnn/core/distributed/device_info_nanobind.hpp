@@ -20,7 +20,8 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-// Python bindings for the experimental device query API (tt-metalium/experimental/mesh_device.hpp).
+// Python bindings for the experimental device query API (tt-metalium/experimental/mesh_device.hpp), exposed as methods
+// on MeshDevice so call sites already look like the graduated API; only the tags are experimental.
 // C++ stays template-based: each tag gets one InfoTag object that carries the type-erased calls for it, and the tags
 // come from experimental::info::all_tags, so adding a property needs no change here.
 namespace ttnn::distributed::device_info {
@@ -74,8 +75,9 @@ void bind_tags(
         ...);
 }
 
-// Adds `info` (the tags), `get_info` and `get_info_per_device` to the experimental module.
-inline void bind_device_info(nb::module_& m_experimental) {
+// Adds the tags to the experimental module as `info`, and `get_info` / `get_info_per_device` to MeshDevice.
+inline void bind_device_info(
+    nb::module_& m_experimental, nb::class_<tt::tt_metal::distributed::MeshDevice>& nb_mesh_device) {
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshDevice;
 
@@ -100,12 +102,11 @@ inline void bind_device_info(nb::module_& m_experimental) {
                 List[InfoTag]: The tags, in declaration order.
         )doc");
 
-    m_experimental.def(
+    nb_mesh_device.def(
         "get_info",
         [](MeshDevice& mesh, const InfoTag& info, const std::optional<MeshCoordinate>& coord) -> nb::object {
             return coord ? info.at(mesh, *coord) : info.uniform(mesh);
         },
-        nb::arg("mesh_device"),
         nb::arg("info"),
         nb::arg("coord") = nb::none(),
         R"doc(
@@ -115,8 +116,8 @@ inline void bind_device_info(nb::module_& m_experimental) {
             device. With ``coord``, returns the value for the device at that coordinate.
 
             Args:
-                mesh_device (MeshDevice): The mesh.
-                info (InfoTag): The property, for example ``info.l1_alignment``.
+                info (InfoTag): The property, for example ``ttnn.experimental.info.l1_alignment``. The tags are
+                    experimental and may change.
                 coord (MeshCoordinate, optional): Query one device instead of the whole mesh.
 
             Returns:
@@ -125,27 +126,22 @@ inline void bind_device_info(nb::module_& m_experimental) {
             Raises:
                 RuntimeError: If ``coord`` is outside the mesh's shape or names a device this rank does not
                     drive, if the mesh has no local devices, or if the local devices report different values.
-
-            Experimental API; may change.
         )doc");
 
-    m_experimental.def(
+    nb_mesh_device.def(
         "get_info_per_device",
         [](MeshDevice& mesh, const InfoTag& info) -> nb::object { return info.per_device(mesh); },
-        nb::arg("mesh_device"),
         nb::arg("info"),
         R"doc(
             Query a device property for every device this rank drives.
 
             Args:
-                mesh_device (MeshDevice): The mesh.
-                info (InfoTag): The property, for example ``info.l1_alignment``.
+                info (InfoTag): The property, for example ``ttnn.experimental.info.l1_alignment``. The tags are
+                    experimental and may change.
 
             Returns:
                 Dict[MeshCoordinate, Any]: The value for each local device. Devices owned by other ranks are not
-                included; use ``mesh_device.get_view().is_local(coord)`` to tell which ones those are.
-
-            Experimental API; may change.
+                included; use ``get_view().is_local(coord)`` to tell which ones those are.
         )doc");
 }
 

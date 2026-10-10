@@ -1656,7 +1656,7 @@ void py_module(nb::module_& mod) {
                 RuntimeError: If ``mesh_coord`` is outside the mesh's shape, or names a device this
                     rank does not drive.
         )doc");
-    device_info::bind_device_info(m_experimental);
+    device_info::bind_device_info(m_experimental, nb_mesh_device);
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
     ttnn::pipeline_module::bind_pipeline_builder(m_experimental);
 }

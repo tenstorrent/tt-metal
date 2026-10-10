@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The experimental device query API (``ttnn.experimental.info``): the uniform, per-coordinate and per-device forms,
-the tag objects, and the errors."""
+"""The experimental device query API (``MeshDevice.get_info`` with ``ttnn.experimental.info`` tags): the uniform,
+per-coordinate and per-device forms, the tag objects, and the errors."""
 
 import pytest
 
@@ -36,39 +36,39 @@ def test_unknown_tag_is_an_attribute_error():
 
 
 def test_uniform_values_match_the_hal(mesh_device):
-    l1_alignment = info.get_info(mesh_device, info.l1_alignment)
+    l1_alignment = mesh_device.get_info(info.l1_alignment)
     assert type(l1_alignment) is int
     assert l1_alignment == ttnn._ttnn.device.get_l1_alignment()
 
-    dram_alignment = info.get_info(mesh_device, info.dram_alignment)
+    dram_alignment = mesh_device.get_info(info.dram_alignment)
     assert type(dram_alignment) is int
     assert dram_alignment == ttnn._ttnn.device.get_dram_alignment()
 
-    arch = info.get_info(mesh_device, info.architecture)
+    arch = mesh_device.get_info(info.architecture)
     assert isinstance(arch, ttnn.Arch)
 
-    name = info.get_info(mesh_device, info.architecture_name)
+    name = mesh_device.get_info(info.architecture_name)
     assert isinstance(name, str)
     assert name == ttnn.get_arch_name()
 
 
 def test_coordinate_form_matches_uniform_form(mesh_device):
-    expected = info.get_info(mesh_device, info.l1_alignment)
+    expected = mesh_device.get_info(info.l1_alignment)
     rows, cols = list(mesh_device.shape)
     last = ttnn.MeshCoordinate(rows - 1, cols - 1)
-    assert info.get_info(mesh_device, info.l1_alignment, ttnn.MeshCoordinate(0, 0)) == expected
-    assert info.get_info(mesh_device, info.l1_alignment, coord=last) == expected
+    assert mesh_device.get_info(info.l1_alignment, ttnn.MeshCoordinate(0, 0)) == expected
+    assert mesh_device.get_info(info.l1_alignment, coord=last) == expected
 
 
 def test_per_device_has_one_entry_per_local_device(mesh_device):
-    expected = info.get_info(mesh_device, info.l1_alignment)
-    per_device = info.get_info_per_device(mesh_device, info.l1_alignment)
+    expected = mesh_device.get_info(info.l1_alignment)
+    per_device = mesh_device.get_info_per_device(info.l1_alignment)
     assert isinstance(per_device, dict)
     assert len(per_device) == mesh_device.get_num_devices()
     assert all(isinstance(coord, ttnn.MeshCoordinate) for coord in per_device)
     assert all(value == expected for value in per_device.values())
 
-    per_device_arch = info.get_info_per_device(mesh_device, info.architecture)
+    per_device_arch = mesh_device.get_info_per_device(info.architecture)
     assert all(isinstance(value, ttnn.Arch) for value in per_device_arch.values())
 
 
@@ -76,9 +76,9 @@ def test_per_device_has_one_entry_per_local_device(mesh_device):
 def test_out_of_bounds_coordinate_names_the_property(mesh_device, tag_name):
     outside = ttnn.MeshCoordinate(list(mesh_device.shape)[0], 0)
     with pytest.raises(RuntimeError, match=f"Cannot query {tag_name} at"):
-        info.get_info(mesh_device, getattr(info, tag_name), outside)
+        mesh_device.get_info(getattr(info, tag_name), outside)
 
 
 def test_a_string_is_not_a_tag(mesh_device):
     with pytest.raises(TypeError):
-        info.get_info(mesh_device, "l1_alignment")
+        mesh_device.get_info("l1_alignment")
