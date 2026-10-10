@@ -1305,8 +1305,16 @@ def main() -> None:
     if sequence and world_size > 1:
         raise RuntimeError("PREFILL_PRODUCER_SLOT_TRACES_SEQUENCE is single-rank only")
     rounds = sequence or [None]
+    # PREFILL_MIGRATION_PAIRS_SEQUENCE="0:0;0:1;..." (tt-blaze DS41F-0037, continuous multi-user): round i migrates with the
+    # i-th pair list, so one prefill slot can feed a different decode slot every round
+    pair_seq = [e.strip() for e in os.environ.get("PREFILL_MIGRATION_PAIRS_SEQUENCE", "").split(";") if e.strip()]
+    if pair_seq and len(pair_seq) != len(rounds):
+        raise RuntimeError(f"PREFILL_MIGRATION_PAIRS_SEQUENCE has {len(pair_seq)} entries for {len(rounds)} round(s)")
     round_summaries = []
     for round_idx, trace_spec in enumerate(rounds, 1):
+        if pair_seq:
+            os.environ["PREFILL_MIGRATION_PAIRS"] = pair_seq[round_idx - 1]
+            logger.info(f"[migration_driver] round {round_idx}: pairs {pair_seq[round_idx - 1]}")
         if trace_spec is not None:
             if round_idx > 1:
                 _wait_consumer_ack(driver.done_file, float(os.environ.get("PREFILL_ROUND_ACK_TIMEOUT_S", "7200")))
