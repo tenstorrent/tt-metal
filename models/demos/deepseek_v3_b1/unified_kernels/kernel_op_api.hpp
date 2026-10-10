@@ -10,17 +10,17 @@
 inline constexpr bool is_ncrisc = true;
 inline constexpr bool is_brisc = false;
 inline constexpr bool is_trisc = false;
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #elif defined(COMPILE_FOR_BRISC)
 inline constexpr bool is_ncrisc = false;
 inline constexpr bool is_brisc = true;
 inline constexpr bool is_trisc = false;
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #elif defined(COMPILE_FOR_TRISC)
 inline constexpr bool is_ncrisc = false;
 inline constexpr bool is_brisc = false;
 inline constexpr bool is_trisc = true;
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/blank.h"
 #endif
 
