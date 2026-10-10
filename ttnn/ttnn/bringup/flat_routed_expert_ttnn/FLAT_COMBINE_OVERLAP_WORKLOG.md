@@ -501,6 +501,13 @@ Decided on device from the counts; part of `flat_schedule_defines`, so combine's
 Worked: Kimi balanced -5.3% (its flat is faster unpinned than the global pin 0 run, 1103 vs 1138 us), the others
 within ~1% (noise); hot experts (~27x the mean) stay pinned. Not sensitive to the ratio between 4 and 8.
 
+**Baseline re-measured on the current code.** The pin rule speeds up flat, and the pipelined reads (6.14) speed up
+combine, on the non-overlapped path too, so the baseline moves with them (flat on 110 cores then combine,
+`FLAT_CMB_NO_OVERLAP=1 MIMO_FL_ROWS=0,9`): flat 901.0 / 1054.9 / 630.3 / 1054.6 + combine 443.9 / 630.0 / 319.2 /
+541.8 = **1344.9 / 1684.9 / 949.4 / 1596.4 us**. Against it the overlap is **-5.5% / +1.2% / -6.2% / -8.4%**: part of
+the earlier "overlap gains" were improvements to flat and combine themselves. From here on compare against the
+baseline measured on the same code.
+
 ## 7. What did not work / dead ends
 - Unified: writer-side weight prefetch (+3%), GU_IL v1 without pipelining (no gain), noinline pipelined loop.
 - Flat on 88 / 99 cores with the default planner for 64-column models: np 2 fallback, hot expert +45..60% flat time.
