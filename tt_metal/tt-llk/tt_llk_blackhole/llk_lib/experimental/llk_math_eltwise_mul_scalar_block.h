@@ -17,8 +17,9 @@ namespace ckernel
 /**
  * @brief Program the address modifiers of the scalar block multiply and reset the counters.
  *
- * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply; above LoFi ADDR_MOD_6 steps the fidelity counter on
- * the last multiply of a phase. Other inits may reprogram either slot, so a kernel that runs one in between re-runs this.
+ * ADDR_MOD_7 steps SrcA and DEST by one 8-row group per multiply; above LoFi ADDR_MOD_6 ends a phase on its last multiply,
+ * back to the tile start at the next fidelity phase. Other inits may reprogram either slot, so a kernel that runs one in
+ * between re-runs this.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_scalar_block_init_.
@@ -36,9 +37,9 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
     if constexpr (is_high_fidelity(math_fidelity))
     {
         addr_mod_t {
-            .srca     = {.incr = 0},
-            .srcb     = {.incr = 0},
-            .dest     = {.incr = 0},
+            .srca     = {.incr = 0, .clr = 1},
+            .srcb     = {.incr = 0, .clr = 1},
+            .dest     = {.incr = 0, .clr = 1},
             .fidelity = {.incr = 1},
         }
             .set(ADDR_MOD_6);
@@ -51,8 +52,8 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
 /**
  * @brief Multiply block_size whole 32x32 tiles in SrcA by the scalar in SrcB into DEST tiles dst_index onward.
  *
- * Above LoFi the 8 multiplies per tile run once per fidelity phase, the last one stepping the fidelity counter through
- * ADDR_MOD_6, as the standard binary multiply does at the same math_fidelity.
+ * Above LoFi the 8 multiplies per tile run once per fidelity phase, the last one starting the next phase through
+ * ADDR_MOD_6, so the products are those of the standard binary multiply at the same math_fidelity.
  *
  * @tparam math_fidelity: Fidelity phases of the multiply, must match the init.
  * @param dst_index: DEST tile of the first product.
@@ -80,9 +81,9 @@ inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, c
         }
         else
         {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
             for (std::uint32_t phase = 0; phase < kPhases; ++phase)
             {
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 for (std::uint32_t op = 0; op < kOpsPerTile - 1; ++op)
                 {
                     TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_ALL, ADDR_MOD_7, 0);
