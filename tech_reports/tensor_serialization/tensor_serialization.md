@@ -11,6 +11,7 @@
   - [3.1 FlatBuffer Schema](#31-flatbuffer-schema)
   - [3.2 File Layout](#32-file-layout)
   - [3.3 Replicated Shards](#33-replicated-shards)
+  - [3.4 Schema Version and Legacy Files](#34-schema-version-and-legacy-files)
 - [4. Multi-Host Support](#4-multi-host-support)
 - [5. Best Practices](#5-best-practices)
 - [6. Understanding Cache Hits and Misses](#6-understanding-cache-hits-and-misses)
@@ -104,6 +105,7 @@ The `.tensorbin` file format follows a simple structure:
 
 **Key characteristics:**
 - Fixed 8-byte header containing the size of the FlatBuffer metadata
+- From schema version 1 on, the FlatBuffer region opens with its root offset followed by the file identifier `TTNB` (file bytes 12 to 16)
 - FlatBuffer region is aligned to 8 bytes for safe memory-mapped access
 - Data region immediately follows the metadata and is guaranteed to be 8-byte aligned
 - Individual tensor buffers are aligned according to their element size
@@ -115,6 +117,14 @@ The 8-byte alignment guarantee enables efficient memory-mapped file loading usin
 The header records the tensor's topology (distribution shape, per-axis `Shard`/`Replicate` placements and the mesh coordinate of every shard). Shards whose coordinates differ only along `Replicate` axes are written once: every record in such a group points at the same data buffer, so a tensor replicated across 32 devices costs one copy on disk rather than 32.
 
 The topology is a label, and the writer checks it against the data before trusting it. Replicas in a group must have the same size and, by default, the same bytes; a labelled coordinate must hold a shard (unless it lives on another host in a `LOCAL` multi-host dump); and every populated local shard must be covered by the label. A tensor that fails any of these checks makes `dump_tensor` throw before the output file is created, so a rejected dump leaves no file behind. The usual cause is a tensor whose topology was relabelled by an operation without describing how the shards were actually produced; relabel it with `Tensor.update_tensor_topology` before dumping. The byte comparison costs one `memcmp` per replica and can be turned off with the `verify_replicated_shards_on_dump` entry of `ttnn.CONFIG` (for example `TTNN_CONFIG_OVERRIDES='{"verify_replicated_shards_on_dump": false}'`) when replicas are known to legitimately differ; the first replica is then the one written.
+
+### 3.4 Schema Version and Legacy Files
+
+`tensor.fbs` declares the file identifier `TTNB` and a `schema_version` field on the root `Tensor` table. `kTensorFileSchemaVersion` in `ttnn/core/tensor/flatbuffer/tensor_file_layout.hpp` is the version the writer records and lists what each value guarantees: version 1 means the identifier is present, the topology is always recorded, and the writer checked it against the shards as described in section 3.3. A reader loads every version up to its own and rejects a file written by a newer tt-metal, naming both versions.
+
+On load the recorded topology is checked against the shard records: one placement per distribution dimension, one mesh coordinate per distribution position, records in the same replica group pointing at the same data, and every record covered by the label. A file that fails is rejected as corrupt; the writer's own checks mean it cannot produce one. A file whose topology lists coordinates that have no record, which is what a `LOCAL`-mode dump from one host of a multi-host job looks like, loads with those coordinates unpopulated and logs a warning, since the file does not say which mode wrote it.
+
+Files written before the topology field existed (September 2025, #29158) record no topology and carry neither the identifier nor the version. They load as they always did, labelled fully replicated. For a file with a single shard buffer that label is correct. For a file that holds several distinct buffers the placement is unknowable, so the loader logs a warning with the buffer count: the shards load intact, but the label is wrong for anything that reads it, and a re-dump under it is rejected by the replica check of section 3.3. Set the right label with `Tensor.update_tensor_topology` and re-dump to record it. A file that records schema version 1 or later but no topology is rejected, since every writer of those versions records one.
 
 ## 4. Multi-Host Support
 
