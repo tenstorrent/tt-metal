@@ -2193,6 +2193,30 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
         )
 
 
+@dataclass
+class SFPU_DROPOUT_PROBE(TemplateParameter):
+    """Dropout parameters for sources/sfpu_dropout_test.cpp: the 31-bit PRNG threshold, the scale
+    as fp32 bits, whether an eltwise binary init precedes the body, and whether the tile runs as one
+    32-row call (VectorMode::None) instead of four 8-row calls."""
+
+    dropout_binary_init_before: bool = False
+    dropout_one_call: bool = False
+    dropout_probability: int = 0
+    dropout_scale_bits: int = 0x3F800000  # 1.0f
+    dropout_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool DROPOUT_BINARY_INIT_BEFORE = {'true' if self.dropout_binary_init_before else 'false'};",
+                f"constexpr bool DROPOUT_ONE_CALL = {'true' if self.dropout_one_call else 'false'};",
+                f"constexpr std::uint32_t DROPOUT_PROBABILITY = {self.dropout_probability}u;",
+                f"constexpr std::uint32_t DROPOUT_SCALE_BITS = {self.dropout_scale_bits}u;",
+                f"constexpr std::uint32_t DROPOUT_SEED = {self.dropout_seed}u;",
+            ]
+        )
+
+
 # SFPU_MISC_OPERATION values of sources/sfpu_misc_perf.cpp; keep the two in step.
 SFPU_MISC_OPERATIONS = {
     "rand": 0,

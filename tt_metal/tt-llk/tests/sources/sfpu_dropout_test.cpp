@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Driver for calculate_dropout (llk_sfpu/ckernel_sfpu_dropout.h) with a deterministic outcome: probability 0 keeps
-// every element, INT_MAX drops every one. DROPOUT_BINARY_INIT_BEFORE runs the eltwise binary init before the body.
+// every element, INT_MAX drops every one. DROPOUT_BINARY_INIT_BEFORE runs the eltwise binary init before the body,
+// DROPOUT_ONE_CALL issues the tile as one 32-row call, as the Blackhole dropout_tile does.
 
 #include <cstdint>
 
@@ -17,6 +18,7 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
+static constexpr std::uint32_t DST_INDEX   = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -67,24 +69,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // dropout_kernel_init: the unary SFPU init for the dropout op and the PRNG seed.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::dropout>();
-    sfpu::dropout_init<false>(DROPOUT_SEED);
+    sfpu::dropout_init<false /*APPROXIMATION_MODE*/>(DROPOUT_SEED);
+
+    constexpr int DROPOUT_ITERATIONS         = DROPOUT_ONE_CALL ? 32 : 8;
+    constexpr VectorMode DROPOUT_VECTOR_MODE = DROPOUT_ONE_CALL ? VectorMode::None : VectorMode::RC;
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_math_wait_for_dest_available_<DST_SYNC>();
 
+        if constexpr (DROPOUT_BINARY_INIT_BEFORE)
+        {
+            // The previous tile's binary init replaced the datacopy MOP and address modifiers.
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                DataCopyType::A2D,
+                is_fp32_dest_acc_en,
+                BroadcastType::NONE,
+                false /* is_int_fpu_en */,
+                PackMode::Default>(TILE_NUM_FACES, formats.math);
+        }
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            0 /* dst_index */, formats.math, formats.math);
+            DST_INDEX, formats.math, formats.math);
 
         if constexpr (DROPOUT_BINARY_INIT_BEFORE)
         {
             // The init alone reprograms the address modifiers; no binary instruction is issued.
             _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
-                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* math_fidelity */);
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* acc_to_dest */);
         }
 
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_dropout<false, 8>, 0 /* dst_index */, VectorMode::RC, DROPOUT_PROBABILITY, DROPOUT_SCALE_BITS);
+            sfpu::calculate_dropout<false /*APPROXIMATION_MODE*/, DROPOUT_ITERATIONS>, DST_INDEX, DROPOUT_VECTOR_MODE, DROPOUT_PROBABILITY, DROPOUT_SCALE_BITS);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
@@ -109,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[tile]));
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }
 }
