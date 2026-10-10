@@ -70,6 +70,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
+from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
@@ -79,7 +80,7 @@ from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Tr
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
@@ -357,6 +358,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
     },
@@ -465,6 +467,10 @@ class MiniMaxH3Output:
     @property
     def audio_seconds(self) -> float:
         return self.audio.shape[-1] / self.sampling_rate
+
+
+def _skip_decode_warm() -> bool:
+    return os.environ.get("MINIMAX_H3_WARMUP_SKIP_DECODE_WARM", "0") == "1"
 
 
 def _is_host_rank() -> bool:
@@ -708,11 +714,17 @@ class MiniMaxH3Pipeline:
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
+            # The video VAE decoder needs most of DRAM, so the ref2va reference encoders yield to it and reload
+            # on demand via `MiniMaxH3Vae._ensure_loaded`.
+            self._vae.decoder.register_coresident_exclusions(
+                *(module for module in self._vae.modules if module is not self._vae.decoder)
+            )
 
         if self.coresident:
             self._prepare_transformer()
         self._prepare_text_encoder()
         self._prepare_audio_decoder()
+        dram_probe.register(self)
 
         if warmup:
             self._warmup_on_init()
@@ -1098,6 +1110,18 @@ class MiniMaxH3Pipeline:
         Every call runs the encoder; with the default co-residency the weights are already on
         device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
+        # The conditioner's CCL manager caches a ping-pong pair per presentation length for the life of the
+        # process; the returned taps are fresh tensors, so the pairs can go the moment the encode is done.
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            return self._encode_prompt_device(prompt, keyframes=keyframes, references=references)
+
+    def _encode_prompt_device(
+        self,
+        prompt: str,
+        *,
+        keyframes: Sequence[Image.Image] = (),
+        references: Sequence[MiniMaxH3PreparedReference] = (),
+    ) -> tuple[ttnn.Tensor, torch.Tensor]:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if keyframes and references:
@@ -1535,7 +1559,7 @@ class MiniMaxH3Pipeline:
             t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
             audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
             self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
-            encoder = MiniMaxH3AudioEncoder(
+            self._audio_encoder = MiniMaxH3AudioEncoder(
                 encoder_dim=config["encoder_dim"],
                 encoder_rates=tuple(config["encoder_rates"]),
                 latent_dim=config["latent_dim"],
@@ -1547,29 +1571,44 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
                 split_mode="weight",
             )
+            self._register_audio_module_residency(self._audio_encoder)
+        encoder = self._audio_encoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {
-                    k: v
-                    for k, v in converted.items()
-                    if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
-                }
+        def read_state() -> dict[str, torch.Tensor]:
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {
+                k: v
+                for k, v in converted.items()
+                if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
+            }
 
-            cache.load_model(
-                encoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_encoder = encoder
-        return self._audio_encoder
+        # No-op while resident; reloads from the device-weight cache after the DiT or the video VAE
+        # decoder evicted it (non-coresident presets).
+        cache.load_model(
+            encoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return encoder
+
+    def _register_audio_module_residency(self, module: Module) -> None:
+        """Non-coresident presets: the audio VAE halves yield to the DiT and the video VAE decoder.
+
+        Both are only needed outside the denoise and the video decode (the encoder before, the decoder
+        after), and the DRAM they hold is what the bucketed DiT's top rung is missing. They never evict
+        anything themselves: whatever is resident when they reload has room for them.
+        """
+        if self.coresident:
+            return
+        self._transformer.register_coresident_exclusions(module)
+        self._vae.decoder.register_coresident_exclusions(module)
 
     def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
@@ -1651,7 +1690,8 @@ class MiniMaxH3Pipeline:
                     batch_shard_axis = other
                 else:
                     logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
-            decoder = MiniMaxH3AudioDecoder(
+
+            self._audio_decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
                 decoder_dim=config["decoder_dim"],
@@ -1667,40 +1707,43 @@ class MiniMaxH3Pipeline:
                 act_mode="fused",
                 batch_shard_axis=batch_shard_axis,
             )
+            self._register_audio_module_residency(self._audio_decoder)
+        decoder = self._audio_decoder
 
-            def read_state() -> dict[str, torch.Tensor]:
-                """Only the decoder's half of the converted checkpoint.
+        def read_state() -> dict[str, torch.Tensor]:
+            """Only the decoder's half of the converted checkpoint.
 
-                `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
-                `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
-                existing tests load it with `strict=False`. Filtering to the two prefixes this module
-                owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
-                through the same `cache.load_model` path as everything else.
-                """
-                converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
-                return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
+            `convert_minimax_h3_audio_state_dict` returns both halves (`encoder.*`,
+            `pre_block.*`, `mean_proj.*`, `logs_proj.*` belong to the encoder), which is why the
+            existing tests load it with `strict=False`. Filtering to the two prefixes this module
+            owns keeps the load *strict* -- so a renamed key still fails -- and lets this go
+            through the same `cache.load_model` path as everything else.
+            """
+            converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
+            return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
 
-            cache.load_model(
-                decoder,
-                model_name=MODEL_NAME,
-                # The audio precision levers change the module's parameter set, so they are part of
-                # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder"
-                + weights_variant(
-                    decoder.split_mode,
-                    decoder.max_c_in_block,
-                    decoder.pack_bands,
-                    act_mode=decoder.act_mode,
-                    polyphase=decoder.polyphase_ups,
-                ),
-                parallel_config=self.vae_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                dtype="fp32",
-                get_torch_state_dict=read_state,
-            )
-            self._audio_decoder = decoder
-        return self._audio_decoder
+        # No-op while resident; reloads after the DiT / video VAE decoder evicted it (see
+        # `_register_audio_module_residency`).
+        cache.load_model(
+            decoder,
+            model_name=MODEL_NAME,
+            # The audio precision levers change the module's parameter set, so they are part of
+            # the cache key -- read off the module so the key cannot drift from what was built.
+            subfolder="audio_decoder"
+            + weights_variant(
+                decoder.split_mode,
+                decoder.max_c_in_block,
+                decoder.pack_bands,
+                act_mode=decoder.act_mode,
+                polyphase=decoder.polyphase_ups,
+            ),
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=read_state,
+        )
+        return decoder
 
     @property
     def audio_sampling_rate(self) -> int:
@@ -1959,7 +2002,11 @@ class MiniMaxH3Pipeline:
         vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        with self._track_cache_misses(on_event, "vae_encode"):
+        with (
+            self._track_cache_misses(on_event, "vae_encode"),
+            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self._audio_ccl_transient(),
+        ):
             condition_rows, audio_condition_rows = encode_references(
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
@@ -2063,6 +2110,7 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
+        dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
@@ -2083,8 +2131,9 @@ class MiniMaxH3Pipeline:
 
         with self._track_cache_misses(on_event, "audio"):
             audio = self._decode_audio(
-                self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
+                self._prepare_audio_decoder(), audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
+        dram_probe.report("end of request (after audio decode)")
 
         self._log(f"program cache misses: {self.last_program_cache_misses}")
         yuv = self.vae_output_type == "yuv420"
@@ -2208,11 +2257,20 @@ class MiniMaxH3Pipeline:
         self.trace_audio = False
         self._log_generation = False
         try:
-            if self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
-            self._warm_audio_decode()
-            self._warm_prompt_encoder()
+            # The ladder walk goes first: it is the only stage that can run out of DRAM (each rung's
+            # forced request binds the DiT's buffers and compiles its own decodes on the way), and on a
+            # memory-tight mesh an OOM should surface minutes after launch, not after the compile-only
+            # warms below have run for half an hour. Those only compile programs and cache a few MB of
+            # filter constants, so the DRAM picture at each rung is the same either way.
             fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): skip the decode length/canvas warms
+            # (the audio length warm has hung on this mesh).
+            if not _skip_decode_warm():
+                if self.vae_output_type == "yuv420":
+                    self._warm_vae_decode()
+                self._warm_audio_decode()
+            self._warm_prompt_encoder()
+            # Every program is compiled by now; traces are captured last.
             self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
             self.trace_audio = trace_audio
@@ -2239,6 +2297,8 @@ class MiniMaxH3Pipeline:
             shrink = rung not in overrides
             request = overrides.get(rung, shrunk)
             if bucket is None or not bucket.warm:
+                # A rung whose forced request does not fit raises the allocator's "Out of Memory" here,
+                # before dispatch: the first unfittable rung ends the warmup.
                 request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
                 if request is None:
                     continue
@@ -2423,6 +2483,17 @@ class MiniMaxH3Pipeline:
         frames = sorted({get_num_frames(duration) for duration in MINIMAX_H3_DURATIONS_S})
         return [torch.zeros(2, channels, audio_latent_num_frames(num_frames)) for num_frames in frames]
 
+    def _audio_ccl_transient(self):
+        """Scope that frees the audio VAE's CCL ping-pong pairs on exit, on untraced non-persistent presets.
+
+        The audio decoder gathers through `audio_ccl_manager`, whose cache is keyed by shape and never
+        evicts, so the pairs outlive the decoder's own eviction and starve the DiT's top rung. The reference
+        audio encoder shares the manager. Traced presets keep the pairs their captures replay.
+        """
+        if self.audio_ccl_manager is None or self.use_persistent_ccl_buffers or self.trace_audio:
+            return nullcontext()
+        return self.audio_ccl_manager.transient_ping_pong_buffers()
+
     def _warm_audio_decode(self) -> None:
         """Compile the audio decode at every served length, strictly before trace capture."""
         decoder = self._prepare_audio_decoder()
@@ -2437,7 +2508,8 @@ class MiniMaxH3Pipeline:
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            decoder(latents)
+            with self._audio_ccl_transient():
+                decoder(latents)
         self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _capture_audio(self, trace_audio: bool) -> None:
@@ -2557,6 +2629,10 @@ class MiniMaxH3Pipeline:
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
+        with self.encoder_ccl_manager.transient_ping_pong_buffers():
+            self._warm_vision_merge_lengths(seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host)
+
+    def _warm_vision_merge_lengths(self, seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host) -> None:
         for seq_len in tqdm.tqdm(
             seq_lens,
             desc="Warming vision merge sequence lengths",
@@ -2699,14 +2775,34 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
-        transformer.prepare_static_sources(
-            prompt_1BLP=prompt_device,
-            prompt_len=l_len,
-            condition_video_1BKC=self._tt_cond_video.value,
-            condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
-            prompt_cap=caps.prompt,
-            traced=traced,
+        # The refiner / projection pass runs its collectives outside the step loop's transient scope below;
+        # on untraced non-persistent presets its cap-sized all-gather pairs would stay cached for the life of
+        # the process and starve the VAE decoder. Free them here; traced presets keep what a capture replays.
+        static_transient = (
+            self.ccl_manager.transient_ping_pong_buffers()
+            if not (self.use_persistent_ccl_buffers or self.trace_denoise)
+            else nullcontext()
         )
+        with static_transient:
+            try:
+                transformer.prepare_static_sources(
+                    prompt_1BLP=prompt_device,
+                    prompt_len=l_len,
+                    condition_video_1BKC=self._tt_cond_video.value,
+                    condition_audio_1BKC=self._tt_cond_audio.value if self.task == "ref2va" else None,
+                    prompt_cap=caps.prompt,
+                    traced=traced,
+                )
+            except RuntimeError as err:
+                if "Out of Memory" in str(err):
+                    dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
+                raise
+            ttnn.synchronize_device(self.mesh_device)
+        # The refiner has consumed the prompt (its rows now live in the source table); nothing reads
+        # `prompt_embeds` after this point, but as a caller's local it would stay pinned in the middle of
+        # the heap through the whole denoise and decode, where the DiT's pairs and activations need to fit.
+        ttnn.deallocate(prompt_device)
+        dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
         row_adaln = adaln_indices(layout.token_tags, row_slot)
         state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
@@ -2792,22 +2888,28 @@ class MiniMaxH3Pipeline:
                 )
             ):
                 t_step = time.time()
-                video_velocity, audio_velocity = transformer(
-                    video_1BVC=self._tt_video.value,
-                    audio_1BAC=self._tt_audio.value,
-                    assembly_indices=state.assembly_idx.value,
-                    video_out_indices=self._tt_video_out_idx.value,
-                    audio_out_indices=self._tt_audio_out_idx.value,
-                    timestep=self._tt_timestep.value,
-                    adaln_indices=state.adaln.value,
-                    timestep_indices=state.tsi.value,
-                    rope_cos=state.rope_cos.value,
-                    rope_sin=state.rope_sin.value,
-                    logical_n=self._tt_logical_n.value,
-                    pad_to=rung,
-                    traced=traced,
-                    **tilerow_kwargs,
-                )
+                try:
+                    video_velocity, audio_velocity = transformer(
+                        video_1BVC=self._tt_video.value,
+                        audio_1BAC=self._tt_audio.value,
+                        assembly_indices=state.assembly_idx.value,
+                        video_out_indices=self._tt_video_out_idx.value,
+                        audio_out_indices=self._tt_audio_out_idx.value,
+                        timestep=self._tt_timestep.value,
+                        adaln_indices=state.adaln.value,
+                        timestep_indices=state.tsi.value,
+                        rope_cos=state.rope_cos.value,
+                        rope_sin=state.rope_sin.value,
+                        logical_n=self._tt_logical_n.value,
+                        pad_to=rung,
+                        traced=traced,
+                        **tilerow_kwargs,
+                    )
+                except RuntimeError as err:
+                    if "Out of Memory" in str(err):
+                        # The forward's locals are gone by now; this is the resident set that remains.
+                        dram_probe.report(f"after OOM in step {i + 1}, rung {rung} (forward unwound)")
+                    raise
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_video.value, video_velocity)
@@ -2818,6 +2920,8 @@ class MiniMaxH3Pipeline:
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
+                if i == 0:
+                    dram_probe.report(f"after step 1, rung {rung}")
                 t_step = time.time() - t_step
                 if i == 0:
                     t_first = t_step
@@ -2949,6 +3053,7 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents, traced=self.trace_audio)
+        with self._audio_ccl_transient():
+            waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)

@@ -1200,6 +1200,27 @@
   team: models
   budget_type: unit
 
+# Mock-device memory gate: MiniMax-H3 ref2va's full warmup on a mock WH 4x8 mesh; see the test's docstring.
+- name: Minimax H3 Ref2VA Memory Test
+  cmd: |
+    export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    unset HF_HUB_OFFLINE
+    export TT_DIT_ALLOW_HF_DOWNLOAD=1
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1
+    export MINIMAX_H3_DRAM_PROBE=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
+    pytest --timeout 5100 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+  model: minimax-h3
+  skus:
+    wh_llmbox:
+      timeout: 90
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
 #   cmd: |

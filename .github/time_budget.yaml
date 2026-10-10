@@ -381,7 +381,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 155
+    wh_llmbox: 245
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65

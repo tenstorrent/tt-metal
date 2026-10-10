@@ -17,8 +17,9 @@ from PIL import Image
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ....pipelines.minimax_h3.packing import padded_sequence_length
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline, select_bucket
 from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     artifact_dir,
@@ -158,12 +159,16 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     )
 
 
-# Per-case padded sequence length, asserted so a case cannot silently drift off its probed shape.
-_EXPECTED_PADDED_LEN = {"one_image": 39936, "video_with_sound": 81664, "mixed": 83968}
+# Per-case packed (logical) sequence length, asserted so a case cannot silently drift off its probed shape.
+# The packing decides this; the padded length is then whatever the preset's ladder (or, unbucketed, the
+# SP alignment) makes of it, and is checked against the pipeline's own resolver below rather than pinned.
+# Probed 2026-10-06 on the Wormhole 4x8 (mock and silicon agree) with the fractal image and the gate's
+# reference clip at REFERENCE_MEDIA; a different clip changes the two video cases.
+_EXPECTED_LOGICAL_LEN = {"one_image": 39655, "video_with_sound": 75474, "mixed": 77404}
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize("case", list(_EXPECTED_PADDED_LEN), ids=list(_EXPECTED_PADDED_LEN))
+@pytest.mark.parametrize("case", list(_EXPECTED_LOGICAL_LEN), ids=list(_EXPECTED_LOGICAL_LEN))
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_end_to_end(case, mesh_device, reset_seeds):
     """Full ref2va generation per reference case (one_image / video_with_sound / mixed): geometry
@@ -188,9 +193,19 @@ def test_ref2va_end_to_end(case, mesh_device, reset_seeds):
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
+    seq_len = pipeline.last_seq_len
     assert (
-        pipeline.last_seq_len.padded == _EXPECTED_PADDED_LEN[case]
-    ), f"{case} ran at padded_len {pipeline.last_seq_len.padded}, not the probed {_EXPECTED_PADDED_LEN[case]}"
+        seq_len.logical == _EXPECTED_LOGICAL_LEN[case]
+    ), f"{case} packed to {seq_len.logical} rows, not the probed {_EXPECTED_LOGICAL_LEN[case]}"
+    expected_padded = (
+        select_bucket(seq_len.logical, pipeline.bucket_ladder)
+        if pipeline.bucket_denoise
+        else padded_sequence_length(seq_len.logical, pipeline.sp_factor)
+    )
+    assert seq_len.padded == expected_padded, (
+        f"{case} ran at padded_len {seq_len.padded}, but {seq_len.logical} rows resolve to {expected_padded} "
+        f"({'ladder ' + str(pipeline.bucket_ladder) if pipeline.bucket_denoise else f'SP alignment {pipeline.sp_factor}'})"
+    )
 
     frames = to_uint8_frames(output)
     # Artifacts before the checks, so a failing check still leaves frames to inspect.
