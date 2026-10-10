@@ -23,6 +23,7 @@ ProgramDescriptor MoeAgRoutePlanDeviceOperation::ProgramFactory::create_descript
     const uint32_t EPC = args.experts_per_chip, NG = lmap.logical_shape()[-1];
     const uint32_t K = idx.logical_shape()[-1], T = rm_rows(idx);
     const uint32_t npr = round_up((T + R - 1) / R, token_align(K));  // 64 B aligned y_slot blocks
+    const uint32_t EPCA = round_up(EPC, 4u);                         // the kernel's 16 B aligned array stride (words)
 
     const CoreRangeSet cores(CoreRange({0, 0}, {7, 7}));
     auto* device = idx.device();
@@ -33,11 +34,11 @@ ProgramDescriptor MoeAgRoutePlanDeviceOperation::ProgramFactory::create_descript
     desc.cbs.push_back(scratch_cb(0, std::max(64u, npr * IDX_STRIDE), cores));
     desc.cbs.push_back(scratch_cb(1, NG * 4, cores));
     desc.cbs.push_back(scratch_cb(2, round_up(R * 4, 64), cores));
-    desc.cbs.push_back(scratch_cb(3, round_up(3 * EPC * 4, 64), cores));
+    desc.cbs.push_back(scratch_cb(3, round_up(3 * EPCA * 4, 64), cores));
     desc.cbs.push_back(scratch_cb(4, std::max(64u, round_up(npr * K * 4, 64)), cores));
     desc.cbs.push_back(scratch_cb(5, round_up(T, 32) * 4, cores));
     desc.cbs.push_back(scratch_cb(6, 2 * NG * 4, cores));
-    desc.cbs.push_back(scratch_cb(7, round_up(EPC * 4 + 16, 64), cores));
+    desc.cbs.push_back(scratch_cb(7, round_up(EPCA * 4 + 16, 64), cores));
 
     auto kernel =
         kernel_desc("route_plan.cpp", cores, {R, EPC, NG, K, IDX_STRIDE, p0.x, p0.y, p1.x, p1.y}, dm_config(0, 0));
