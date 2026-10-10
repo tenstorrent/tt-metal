@@ -606,6 +606,65 @@ def test_scatter_reduction(
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 
+def test_scatter_program_cache_dtype_variants(device):
+    # The reader kernels take their input and index element types as compile-time args, so two calls
+    # that differ only in dtype must never share a cached program: a hit compiled for another dtype
+    # would read the wrong element width and scatter garbage. Same shapes throughout, so dtype (and
+    # reduction) is the only thing that can tell the cache entries apart. ROW_MAJOR keeps scatter the
+    # only program in the cache.
+    input_shape, dim, index_and_source_shape = [8, 300], -1, [8, 200]
+    layout = ttnn.Layout.ROW_MAJOR
+    configs = [
+        (ttnn.bfloat16, ttnn.uint16, None),
+        (ttnn.bfloat16, ttnn.int32, None),
+        (ttnn.bfloat16, ttnn.uint32, None),
+        (ttnn.float32, ttnn.uint16, None),
+        (ttnn.float32, ttnn.int32, None),
+        # bfloat16 with a reduction takes the separate bf16 reduction program factory
+        (ttnn.bfloat16, ttnn.uint16, "add"),
+        (ttnn.bfloat16, ttnn.int32, "add"),
+        (ttnn.float32, ttnn.int32, "add"),
+    ]
+
+    def run_and_check(input_dtype, index_dtype, reduction, seed):
+        torch.manual_seed(seed)
+        torch_dtype = select_torch_dtype(input_dtype)
+        torch_input = torch.randn(input_shape, dtype=torch_dtype)
+        torch_index = rand_scatter_index(index_and_source_shape, dim, input_shape[dim], torch.int64)
+        torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+
+        ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+        ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+        ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+        if reduction is None:
+            torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+            ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+        else:
+            torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+            ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+        assert torch_result_from_ttnn.shape == torch_result.shape
+        assert torch_result_from_ttnn.dtype == torch_result.dtype
+        if torch_dtype is torch.float32:
+            assert_allclose(torch_result_from_ttnn, torch_result, atol=0.1, rtol=1e-2)
+        else:
+            assert_allclose(torch_result_from_ttnn, torch_result)
+
+    # first pass: every configuration is a distinct program
+    for i, (input_dtype, index_dtype, reduction) in enumerate(configs):
+        entries_before = device.num_program_cache_entries()
+        run_and_check(input_dtype, index_dtype, reduction, seed=i)
+        assert device.num_program_cache_entries() == entries_before + 1, (input_dtype, index_dtype, reduction)
+
+    # second pass, in reverse so no hit follows its own miss: all hits, fresh data, still correct
+    num_entries = device.num_program_cache_entries()
+    for i, (input_dtype, index_dtype, reduction) in reversed(list(enumerate(configs))):
+        run_and_check(input_dtype, index_dtype, reduction, seed=100 + i)
+        assert device.num_program_cache_entries() == num_entries, (input_dtype, index_dtype, reduction)
+
+
 @pytest.mark.parametrize("index_dtype, max_index", [(ttnn.uint16, 2**16), (ttnn.uint8, 2**8)])
 def test_scatter_reduction_bf16_narrow_index_multi_chunk(index_dtype, max_index, device):
     # Regression: a narrow index dtype wrapped the chunk offset, reducing indices twice.
