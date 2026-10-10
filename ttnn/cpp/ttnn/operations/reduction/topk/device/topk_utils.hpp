@@ -44,6 +44,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     uint32_t l1_size,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
+    bool tree_merge,
     uint32_t tile_width = 32);
 
 bool verify_multi_core_cost(
@@ -55,6 +56,7 @@ bool verify_multi_core_cost(
     uint32_t l1_size,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
+    bool tree_merge,
     uint32_t tile_width = 32);
 
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);

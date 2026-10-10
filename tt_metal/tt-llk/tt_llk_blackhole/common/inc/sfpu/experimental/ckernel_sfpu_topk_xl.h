@@ -2715,6 +2715,27 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
+/**
+ * @brief Sort each 64 row column of a K=1024 tile in place; every column must be bitonic.
+ * @tparam K: Sequence length, values = <1024>
+ * @param dst_index: Dest tile index.
+ * @param ascending: Sort direction of every column.
+ * @note Call _topk_xl_init_<1024, true> first. Overwrites replay slots [0, 16) and issues no CLR_AB, so do not
+ *       pair it with the SrcB dummy valid of _topk_xl_rebuild_.
+ */
+template <std::uint32_t K>
+inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool ascending)
+{
+    static_assert(K == 1024, "K must be 1024: the column rebuild sorts the 64 row columns of one tile");
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    for (int col = 0; col < 2; col++)
+    {
+        canonical_big_block_with_replay<2>(ascending);
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+}
+
 // =============================================================================
 //  Index injection / extraction
 // =============================================================================
