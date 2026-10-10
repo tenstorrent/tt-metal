@@ -247,7 +247,10 @@ class DSV41PagedStepState:
     (design doc section 2 lists the compact [P, 64] alternative for > 100k contexts). ``with_indexer``: also the indexer inputs (128-wide query / key
     rope rows, entry index of the key write, valid length)."""
 
-    def __init__(self, attn, max_pos=None, with_indexer=False, per_user_valid=False):
+    def __init__(self, attn, max_pos=None, with_indexer=False, per_user_valid=False, share_tables=None):
+        """``share_tables``: another step state of the same layer kind (same rope tables, same ``max_pos`` / ``with_indexer``): its device tables are used instead of uploading a copy (the tables
+        are replicated on every device, ~110 MiB/bank over the three kinds at a 131072 context; the spec runner's step states only differ in ``T``).
+        """
         self.per_user_valid = (
             per_user_valid  # ragged batches: every user has its own number of valid entries (own position)
         )
@@ -256,6 +259,14 @@ class DSV41PagedStepState:
         self.with_indexer = with_indexer and self.ratio > 0
         Pn = max_pos or attn.cos_tab.shape[0]
         self.max_pos = Pn
+        if share_tables is not None:
+            assert (share_tables.max_pos, share_tables.ratio, share_tables.with_indexer) == (
+                Pn,
+                self.ratio,
+                self.with_indexer,
+            ), "shared rope tables of another layer kind / length"
+            self.t = share_tables.t
+            return
         pos = torch.arange(Pn)
         c, s = attn._rope_inputs(pos)
         rep = ttnn.ReplicateTensorToMesh(self.md)

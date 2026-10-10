@@ -187,10 +187,18 @@ class SpecRunner:
                 lv.moe.warmup()  # compile pass with the L1 hole (semaphore placement), before any trace exists
                 first = False
             if key not in groups:
+                src = model.step_groups.get(
+                    key
+                )  # the decode model's tables of this kind (same rope, same length): shared, not uploaded again
                 groups[key] = DSV41PagedStepState(
-                    v, max_pos=self.max_pos, with_indexer=model.use_indexer, per_user_valid=model.use_indexer
+                    v,
+                    max_pos=self.max_pos,
+                    with_indexer=model.use_indexer,
+                    per_user_valid=model.use_indexer,
+                    share_tables=src if src is not None and src.max_pos == self.max_pos else None,
                 )
             layers.append((L, lv, key))
+        model.log_dram("spec: after layer views + step states")
         emb = copy.copy(model.dec.embedding)
         emb.pre = ttnn.from_torch(
             torch.tensor([1.0, 0.0, 0.0, 0.0]).repeat(self.T, 1, 1, 1),
@@ -206,6 +214,7 @@ class SpecRunner:
         else:
             sh = _Shards()
             stage_w = [load_mtp_stage(i, sh) for i in range(3)]
+            win = model.step_groups.get(0)  # window-only layers: plain RoPE, the same tables as the drafter's
             Uc = (
                 U if BLOCK * U <= 32 else 4
             )  # the drafter's token rows (5 per user) must stay <= 32 per mesh row: chunks of 4 users share weights
@@ -220,9 +229,11 @@ class SpecRunner:
                 users_per_row=Uc,
                 n=n,
                 max_pos=self.max_pos,
+                share_rope=win.t if win is not None and win.max_pos == self.max_pos else None,
             )
             self.drafter = self.drafter_root = base if Uc == U else ChunkedDrafter(base, U // Uc)
             del stage_w
+        model.log_dram("spec: after drafter")
         self.siblings, self.round_ms, self.conf = [], None, None
         self.dec = SpecDecoder(
             self.md, layers, emb, model.head, self.drafter, model.dec.engram, step_states=groups, n=n

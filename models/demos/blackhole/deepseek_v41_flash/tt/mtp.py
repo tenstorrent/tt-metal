@@ -424,7 +424,10 @@ class DraftAttention(_PagedMixin, DSV41Attention):
 class DraftState:
     """Position tables of the drafter: RoPE rows (plain RoPE, theta 10000), ring slot of a verify position, frontier mask of the draft block."""
 
-    def __init__(self, md, attn, U, n, max_pos=256):
+    def __init__(self, md, attn, U, n, max_pos=256, share_rope=None):
+        """``share_rope``: the step-state tables ``{"C", "S"}`` of the decode model's window-only layers (plain RoPE, theta 10000: the drafter's ``rope_freqs(0, max_pos)``), same ``max_pos``: used
+        instead of two more [max_pos, 512] bf16 tables (replicated on every device: 2 KiB / position); the negated sine is taken from the gathered rows (no third table).
+        """
         self.md, self.U, self.n = md, U, n
         self.T_d, self.T_v = BLOCK * U, U * n
         self.attn = attn
@@ -439,8 +442,12 @@ class DraftState:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
         )
-        c, s = attn._rope_inputs(pos)
-        self.t = {"C": up(c), "S": up(s), "nS": up(-s), "ring": up((pos % RING).reshape(P, 1) * torch.ones(1, 32))}
+        self.t = {"ring": up((pos % RING).reshape(P, 1) * torch.ones(1, 32))}
+        if share_rope is not None:
+            self.t["C"], self.t["S"] = share_rope["C"], share_rope["S"]
+        else:
+            c, s = attn._rope_inputs(pos)
+            self.t["C"], self.t["S"] = up(c), up(s)
         mask = torch.full((P, L_D), -1e9)
         for f in range(P):
             for sl in range(RING):
@@ -475,11 +482,8 @@ class DraftState:
 
     def _gather(self, pos, T):
         idx = ttnn.typecast(ttnn.reshape(pos, [T, 1]), ttnn.uint32)
-        return {
-            "Ch": self._rows("C", idx, [1, T, 1, HEAD_DIM]),
-            "Sh": self._rows("S", idx, [1, T, 1, HEAD_DIM]),
-            "nSh": self._rows("nS", idx, [1, T, 1, HEAD_DIM]),
-        }, idx
+        sh = self._rows("S", idx, [1, T, 1, HEAD_DIM])
+        return {"Ch": self._rows("C", idx, [1, T, 1, HEAD_DIM]), "Sh": sh, "nSh": ttnn.neg(sh)}, idx
 
     def build_draft(self, f_rows):
         """f_rows: int32 [T_d] row-major, the frontier position (position of the last verified input token) of every draft row's user."""
@@ -523,7 +527,18 @@ class DraftState:
 # ---------------------------------------------------------------------------------------------------- the drafter
 class DSparkDrafter:
     def __init__(
-        self, md, mesh_config, ccl, stage_w, embed_weight, head, users_per_row=4, n=2, bfp8_main=True, max_pos=256
+        self,
+        md,
+        mesh_config,
+        ccl,
+        stage_w,
+        embed_weight,
+        head,
+        users_per_row=4,
+        n=2,
+        bfp8_main=True,
+        max_pos=256,
+        share_rope=None,
     ):
         """stage_w: [load_mtp_stage(0), (1), (2)]; embed_weight: the backbone's device embedding table [vocab, 5120] (bf16 row-major, replicated);
         head: the backbone's ``DSV41DeviceHead`` (tied LM head weight + sampling); n = verify rows per user (1 + k)."""
@@ -546,7 +561,7 @@ class DSparkDrafter:
         _l1v(md, "drafter init start")
         self.attn = [DraftAttention(md, mesh_config, ccl, w["attn"], freqs, U, n) for w in stage_w]
         _l1v(md, "after attn x3")
-        self.state = DraftState(md, self.attn[0], U, n, max_pos=max_pos)
+        self.state = DraftState(md, self.attn[0], U, n, max_pos=max_pos, share_rope=share_rope)
         _l1v(md, "after state")
         self.layers, bufs = [], None
         for a, w in zip(self.attn, stage_w):
