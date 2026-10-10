@@ -7,9 +7,9 @@ eight per DEST section."""
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, PerfRunType
-from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
+from helpers.llk_params import DestAccumulation, DestSync
+from helpers.param_config import DEST_SYNC_TILE_LIMITS, parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -22,7 +22,7 @@ from helpers.test_variant_parameters import (
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
-TILES_PER_SECTION = 8
+TILES_PER_SECTION = DEST_SYNC_TILE_LIMITS[DestSync.Half]
 
 
 @pytest.mark.perf
@@ -31,15 +31,11 @@ def test_perf_eltwise_unary_datacopy_custom(perf_report, num_tiles):
     # parametrize hands a single axis as a one-element tuple
     if isinstance(num_tiles, tuple):
         (num_tiles,) = num_tiles
+    assert num_tiles % TILES_PER_SECTION == 0, "the tiles fill whole DEST sections"
     configuration = PerfConfig(
         "sources/eltwise_unary_datacopy_custom_perf.cpp",
         InputOutputFormat(BF16, BF16),
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         runtimes=[
             TILE_COUNT(num_tiles),
             NUM_FACES(4),
