@@ -412,8 +412,8 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     //
     // Tile layout in Dest: each tile occupies 64 dest-address units (4 faces
     // x 16 addr/face). Each SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes,
-    // so advancing dst_reg by +2 between iterations walks one face's eight
-    // 4-row x 8-col blocks (= one full call site, ITERATIONS == 8).
+    // so advancing dst_reg by +2 between iterations walks the 4-row x 8-col
+    // blocks, eight per face: a call covers ITERATIONS blocks (8 = a face, 32 = a tile).
     //
     // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_quant_int32_<APPROXIMATION_MODE,
@@ -467,8 +467,8 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute
-    // (the input cast doesn't touch LREG1 so reordering is safe), replay the
+    // Per iteration: hoist the TT_SFPLOADs (no scale load under SCALAR_SCALE)
+    // ahead of the recorded compute (the input cast doesn't touch LREG1), replay the
     // recorded body, then SFPSTORE under ADDR_MOD_6 which auto-advances
     // dst_reg by 2 for the next iteration.
 #pragma GCC unroll 8
@@ -559,7 +559,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     [[maybe_unused]] const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute,
+    // Per iteration: hoist the TT_SFPLOADs (no scale load under SCALAR_SCALE) ahead of the recorded compute,
     // replay the body, then SFPSTORE under ADDR_MOD_6 which auto-advances
     // dst_reg by 2 for the next iteration.
 #pragma GCC unroll 8
