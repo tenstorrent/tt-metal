@@ -62,7 +62,11 @@ void kernel_main() {
     constexpr uint32_t mt = get_compile_time_arg_val(16);
     constexpr uint32_t pcd = get_compile_time_arg_val(17);
     constexpr uint32_t ht = get_compile_time_arg_val(18);
+#ifdef SE_HU
+    static_assert(hbuf <= 8);
+#else
     static_assert(hbuf <= 4);
+#endif
     const uint32_t gath_ids[4] = {
         get_compile_time_arg_val(19),
         get_compile_time_arg_val(20),
@@ -98,6 +102,9 @@ void kernel_main() {
     constexpr uint32_t num_e_dyn = get_compile_time_arg_val(22);
     SeDyn dyn;
     se_dyn_load<num_e_dyn>(dyn, 10 + n_gu, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+#ifdef SE_HU
+    se_dyn_units(dyn);  // h units: every unit is a virtual expert here (MT = the unit's row tiles)
+#endif
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t num_v = dyn.num_v;
     uint32_t y_a = 0, y_s = 0;  // (active expert, sub-block) of output out_done
@@ -126,7 +133,7 @@ void kernel_main() {
         .bank_base_address = get_arg_val<uint32_t>(6), .page_size = 2048, .data_format = DataFormat::Float16_b};
 #endif
     const uint32_t col0 = get_arg_val<uint32_t>(7);
-#ifdef SE_Y_RM
+#if defined(SE_Y_RM) && !defined(SE_Y_NC)
     SeYRmWriter<out_cb, pcd, mt, ht> yw(get_arg_val<uint32_t>(6), col0);
 #endif
     const uint32_t done_words = get_arg_val<uint32_t>(8);
@@ -134,7 +141,15 @@ void kernel_main() {
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
     volatile tt_l1_ptr uint32_t* harr = sem(harr_sem_id);
     volatile tt_l1_ptr uint32_t* hsfree = sem(hsfree_sem_id);
+#ifdef SE_HU
+    volatile tt_l1_ptr uint32_t* gath[8];
+    for (uint32_t b = 0; b < 8; ++b) {
+        gath[b] = sem(SE_HU_GATH[b]);
+    }
+    (void)gath_ids;
+#else
     volatile tt_l1_ptr uint32_t* gath[4] = {sem(gath_ids[0]), sem(gath_ids[1]), sem(gath_ids[2]), sem(gath_ids[3])};
+#endif
     volatile tt_l1_ptr uint32_t* done_sem = sem(done_sem_id);
     const uint64_t pred_free = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(hsfree_sem_id));
     const uint64_t succ_harr = get_noc_addr(sxy >> 16, sxy & 0xFFFF, get_semaphore(harr_sem_id));
@@ -199,7 +214,9 @@ void kernel_main() {
 #else
         constexpr bool x_ready = true;
 #endif
-#ifdef SE_Y_RM
+#if defined(SE_Y_RM) && defined(SE_Y_NC)
+        out_done = num_v;  // (the y writes are se6_dw.cpp's)
+#elif defined(SE_Y_RM)
         yw.issue(dyn);
         if (yw.retire(dyn)) {
             ++out_done;

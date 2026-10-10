@@ -111,7 +111,9 @@ void kernel_main() {
     constexpr uint32_t h_all_tiles = (ncc / groups) * np * mt;  // the group's h: NCC / G cores x NP K-tiles, MT rows
     constexpr uint32_t half_bytes = h_all_tiles * h_tile_bytes;
     constexpr uint32_t h_piece_bytes = half_bytes / h_pieces;
-#ifdef SE_GU_ONLY
+#if defined(SE_GU_ONLY) && defined(SE_HU)
+    static_assert(hbuf >= 1 && hbuf <= 8);
+#elif defined(SE_GU_ONLY)
     static_assert(hbuf >= 1 && hbuf <= 4);
 #else
     static_assert(hbuf == 1 || hbuf == 2);
@@ -205,6 +207,18 @@ void kernel_main() {
     uint32_t x_pub = 0, x_cons = 0, x_rep = 0;
     uint32_t x_iss[2] = {0, 0}, x_fwd[2] = {0, 0};
     uint32_t h_sent = 0, h_pending = 0, h_pub = 0;
+#ifdef SE_HU
+    // h units: sub-block h_sent goes out unit by unit (unit h_uu of it, h_ug units over all); (h_a, h_s) is its entry
+    // and sub-block in the schedule; units_of gives a sub-block's units (its row tiles holding tokens, in SE_HU)
+    constexpr uint32_t hu = SE_HU;
+    constexpr uint32_t unit_bytes = (ncc / groups) * np * hu * h_tile_bytes;  // one down h buffer
+    uint32_t h_uu = 0, h_ug = 0, h_a = 0, h_s = 0;
+    auto units_of = [&](uint32_t a, uint32_t s_) {
+        const uint32_t left = dyn.cnt[a] - s_ * mt * 32;
+        const uint32_t rt = left >= mt * 32 ? mt : (left + 31) / 32;
+        return (rt + hu - 1) / hu;
+    };
+#endif
     uint32_t out_done = 0, out_popped = 0, go_sent = 0;
 
     uint32_t iters = 0;
@@ -344,6 +358,47 @@ void kernel_main() {
                 *hfree = x_rep;  // the chain head's DRAM reader
             }
         }
+#ifdef SE_HU
+        // Unit u of h goes into the down heads' unit buffer u % HBUF once every down core is done with unit u - HBUF;
+        // this core's NP K-tiles of it (rows h_uu * HU.. of each, [p][m] in h_local) land at K-tiles CG * NP + p of
+        // the buffer ([K][HU rows]).
+        if (!h_pending && h_sent < num_v && *go_sem + hbuf >= h_ug + 1 &&
+            cb_pages_available_at_front(h_local_cb, mt * np)) {
+            const uint32_t src = get_read_ptr(h_local_cb);
+            const uint32_t dst = (h_ug % hbuf) * unit_bytes + cg * np * hu * h_tile_bytes;
+            for (uint32_t hd = 0; hd < nh; ++hd) {
+                const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
+                const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
+                for (uint32_t p = 0; p < np; ++p) {
+                    noc_async_write(
+                        src + (p * mt + h_uu * hu) * h_tile_bytes,
+                        bc_h + dst + p * hu * h_tile_bytes,
+                        hu * h_tile_bytes,
+                        noc_index,
+                        h_vc);
+                }
+            }
+            h_pending = 1;
+        }
+        if (h_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
+            const uint32_t gid = SE_HU_GATH[h_ug % hbuf];
+            for (uint32_t hd = 0; hd < nh; ++hd) {
+                const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
+                noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(gid)), 1);
+            }
+            ++h_ug;
+            if (++h_uu == units_of(h_a, h_s)) {
+                cb_pop_front(h_local_cb, mt * np);
+                ++h_sent;
+                h_uu = 0;
+                if (++h_s == dyn.subs[h_a]) {
+                    h_s = 0;
+                    ++h_a;
+                }
+            }
+            h_pending = 0;
+        }
+#else
         if (!h_pending && h_sent < num_v && *go_sem + hbuf >= h_sent + 1 &&
             cb_pages_available_at_front(h_local_cb, mt * np)) {
             const uint32_t src = get_read_ptr(h_local_cb);
@@ -392,6 +447,7 @@ void kernel_main() {
             ++h_sent;
             h_pending = 0;
         }
+#endif
 #ifndef SE_GU_ONLY
         if (h_pub < num_v && harr >= (h_pub + 1) * h_pieces && h_cons == h_pub) {
             cb_push_back(h_all_cb, h_all_tiles);
