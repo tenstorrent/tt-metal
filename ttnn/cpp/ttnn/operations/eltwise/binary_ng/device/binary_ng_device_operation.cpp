@@ -300,6 +300,26 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
         output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
 }
 
+namespace {
+// where with a scalar may pair a bfloat16 predicate with a float32 tensor, or the reverse, when both
+// are tiled and the last two dims match. That case runs eltwise_where_no_bcast.cpp, whose CopyTile
+// elements reconfigure the srcA data format for each operand, as the SFPU multiply kernel already does
+// for this pair. A subtile broadcast can run one of the broadcast where kernels instead, which switch
+// operands with copy_init alone and leave the unpacker data format as it was, so broadcasts keep the
+// rejection. Row-major operands go through the row-major readers, which no test runs with this pair,
+// so they keep it too.
+bool is_where_mixed_float_supported(
+    BinaryOpType op, SubtileBroadcastType subtile_broadcast_type, const Tensor& tensor_a, const Tensor& tensor_b) {
+    const bool is_where = op == BinaryOpType::WHERE_TTS || op == BinaryOpType::WHERE_TST;
+    const bool tiled = tensor_a.layout() == Layout::TILE && tensor_b.layout() == Layout::TILE;
+    const DataType dtype_a = tensor_a.dtype();
+    const DataType dtype_b = tensor_b.dtype();
+    const bool float32_bfloat16 = (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32) ||
+                                  (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16);
+    return is_where && subtile_broadcast_type == SubtileBroadcastType::NONE && tiled && float32_bfloat16;
+}
+}  // namespace
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -350,7 +370,9 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(
             ttnn::operations::binary::utils::is_dtype_combination_supported(
-                attributes.binary_op_type, input_tensor_a.dtype(), dtype_b),
+                attributes.binary_op_type, input_tensor_a.dtype(), dtype_b) ||
+                is_where_mixed_float_supported(
+                    attributes.binary_op_type, attributes.subtile_broadcast_type, input_tensor_a, *input_tensor_b),
             "Mixed dtype is not supported for binary operation {}, dtype A: {}, dtype B: {}",
             attributes.binary_op_type,
             input_tensor_a.dtype(),
