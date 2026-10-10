@@ -14,6 +14,7 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
+#include <stdexcept>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
 
@@ -33,6 +34,20 @@ auto check_32_chips() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
     auto all_chips = cluster_desc->get_all_chips();
     return all_chips.size() == 32;
+}
+
+TEST(RingShiftHostTest, OmittedAxisUsesTheOnlyNonSingletonMeshDimension) {
+    using tt::tt_metal::distributed::MeshShape;
+    using ttml::ttnn_fixed::distributed::detail::resolve_ring_shift_cluster_axis;
+
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(1, 4), std::nullopt), 1U);
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(4, 1), std::nullopt), 0U);
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(4), std::nullopt), 0U);
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(1, 1), std::nullopt), 0U);
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(2, 4), 0U), 0U);
+    EXPECT_EQ(resolve_ring_shift_cluster_axis(MeshShape(2, 4), 1U), 1U);
+    EXPECT_THROW(resolve_ring_shift_cluster_axis(MeshShape(2, 4), std::nullopt), std::runtime_error);
+    EXPECT_THROW(resolve_ring_shift_cluster_axis(MeshShape(2, 4), 2U), std::runtime_error);
 }
 
 class GalaxyRingShiftTest : public ::testing::Test {
@@ -87,7 +102,7 @@ static void TestRingShift(
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
     const auto tt_tensor =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = autograd::create_tensor(tt_tensor);
+    auto tensor = autograd::create_tensor(tt_tensor, /* requires_grad */ test_backward_grad);
 
     // Get original sharded tensors for comparison
     const auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});
@@ -127,6 +142,10 @@ static void TestRingShift(
 
     // Optionally test backward gradient flow
     if (test_backward_grad) {
+        ASSERT_TRUE(tensor->get_requires_grad());
+        ASSERT_TRUE(shifted_tensor->get_requires_grad());
+        ASSERT_TRUE(shifted_tensor->get_node().has_value());
+
         const auto grad_seed = rng();
         xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
             std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, 0.0F, 1.0F, grad_seed);
@@ -201,6 +220,11 @@ TEST_F(GalaxyRingShiftTest, ForwardWithGradient) {
 TEST_F(GalaxyRingShiftTest, BackwardWithGradient) {
     TestRingShift(
         1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Backward, /*test_backward_grad=*/true);
+}
+
+TEST_F(GalaxyRingShiftTest, ForwardAlongRowsWithGradient) {
+    TestRingShift(
+        8, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward, /*test_backward_grad=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardBig) {
