@@ -37,6 +37,9 @@ constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
+// SFPSHFT mod1 for VD = VC >> imm12, arithmetic (ARG_IMM | ARITHMETIC | ARG_IMM_USE_VC).
+constexpr std::uint32_t SFPSHFT_MOD1_ARITH_IMM_FROM_VC = 7;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
@@ -199,8 +202,8 @@ inline void calculate_typecast_fp32_to_int32() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         // result = 0
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
-        // s = in >> 31 (arithmetic shift: SFPSHFT mod1 = ARG_IMM | ARITHMETIC | ARG_IMM_USE_VC)
-        TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG4, 7);
+        // s = in >> 31
+        TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG4, SFPSHFT_MOD1_ARITH_IMM_FROM_VC);
 
         // exp = in.Exp (LaneEnabled = exp >= 0)
         TTI_SFPEXEXP(
@@ -312,6 +315,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         // 32-bit Dest: macro 1 (init_typecast_uint16_to_fp32) loads the INT32 word, masks it with LREG1 at delay 1
         // and stores it as FP32 at delay 3; the explicit SFPCAST of the row before fills the slot in between.
         static_assert(ITERATIONS % 4 == 0, "the four-register rotation takes a multiple of four rows");
+        static_assert(ITERATIONS <= 32, "at most a tile, so the loop unrolls fully and the last trip's branch folds");
         constexpr int r0 = p_sfpu::LREG0;
         constexpr int r1 = p_sfpu::LREG2;
         constexpr int r2 = p_sfpu::LREG3;

@@ -470,9 +470,9 @@ ALWI void typecast_tile(uint32_t idst) {
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Please refer to documentation for any_init. is_fp32_dest_acc_en must match the typecast_tile calls the init serves.
  */
-template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
+template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void typecast_tile_init() {
     constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
@@ -523,7 +523,7 @@ ALWI void typecast_tile_init() {
         out_format == DataFormat::UInt16) {
 #if defined(ARCH_BLACKHOLE)
         // The Blackhole init programs the macro's store for the Dest mode.
-        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX, DST_ACCUM_MODE)));
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX, is_fp32_dest_acc_en)));
 #else
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint16, (APPROX)));
 #endif
