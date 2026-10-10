@@ -206,6 +206,14 @@ extern "C" std::uint32_t _start1() {
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+#if defined(UCK_CHLKC_UNPACK)
+    // Reset every tile counter on this Neo, in case they are in some invalid sticky state left from previous
+    // program runs.
+    for (uint32_t tc = 0; tc < dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc++) {
+        ckernel::trisc::tile_counters[tc].f.reset = 1;
+    }
+    asm volatile("fence" ::: "memory");
+#endif
     *trisc_run = RUN_SYNC_MSG_DONE;
     setup_isr_csrs();
     enable_cc_stack();

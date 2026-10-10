@@ -308,6 +308,11 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
+        // program runs.
+        g_remapper_configurator.clear_all_pairs();
+        g_remapper_configurator.write_all_pairs();
+
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
             mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
