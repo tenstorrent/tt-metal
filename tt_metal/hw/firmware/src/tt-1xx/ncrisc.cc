@@ -10,7 +10,7 @@
 #include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
