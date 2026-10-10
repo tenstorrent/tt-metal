@@ -324,3 +324,15 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// experiment hook (nikola, 67d5f45f2a1): N NOPs in math_matmul's pack thread after INIT, before the TILE_LOOP zone
+#if defined(LLK_NK_LOOPSHIFT)
+#define LLK_NK_LS_XSTR_(x)      #x
+#define LLK_NK_LS_XSTR(x)       LLK_NK_LS_XSTR_(x)
+#define LLK_NK_LOOPSHIFT_HOOK() asm volatile(".rept " LLK_NK_LS_XSTR(LLK_NK_LOOPSHIFT) "\n\tnop\n\t.endr")
+#else
+#define LLK_NK_LOOPSHIFT_HOOK() \
+    do                          \
+    {                           \
+    } while (0)
+#endif
