@@ -24,6 +24,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -179,12 +180,25 @@ ttnn::Tensor all_reduce_async(
             topology,
             num_preferred_links,
             worker_subdevice_id_opt);
+        // The inner call labelled the unsqueezed result from its input, whose label is the rank-1 input's (unsqueeze
+        // keeps it); reshape keeps the label, so nothing is relabelled here.
         return ttnn::reshape(output_tensor, logical_shape);
     }
 
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
+
+    // Label of the result whichever path runs below: every device holds the same bytes after a whole-mesh
+    // all_reduce. The composite path's intermediates (an all_gather of an unsqueezed tensor whose label still spells
+    // the original dims, then a local sum) do not label this tensor, so the returned tensor is relabelled explicitly.
+    // Computed before the scope below so a label the helper refuses for the input itself still fails loudly.
+    const std::optional<tt::tt_metal::TensorTopology> output_topology =
+        ttnn::operations::ccl::common::all_reduce_output_topology(input_tensor, std::nullopt);
+    // Everything below runs on intermediates whose labels nobody reads (the result is relabelled on every path), so
+    // the helper's refusals for them are silenced: a collapsed Shard{d} reduce-scattered on d is column-major and
+    // would otherwise be refused although the all_reduce result is labelled honestly.
+    [[maybe_unused]] const ttnn::operations::ccl::common::CallerRelabelsScope caller_relabels;
     uint32_t resolved_num_links = num_preferred_links.has_value()
                                       ? *num_preferred_links
                                       : ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt);
@@ -249,7 +263,11 @@ ttnn::Tensor all_reduce_async(
         gather_tensor.deallocate();
 
         // Reshape (1, B, C, H, W) -> (B, C, H, W)
-        return ttnn::reshape(sum_tensor, initial_shape);
+        auto output_tensor = ttnn::reshape(sum_tensor, initial_shape);
+        if (output_topology.has_value()) {
+            output_tensor.update_tensor_topology(*output_topology);
+        }
+        return output_tensor;
     }
 
     // Reduce scatter + all gather
@@ -296,6 +314,9 @@ ttnn::Tensor all_reduce_async(
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
+    if (output_topology.has_value()) {
+        gathered.update_tensor_topology(*output_topology);
+    }
     return gathered;
 }
 
@@ -326,6 +347,8 @@ ttnn::Tensor all_reduce_async(
             topology,
             num_preferred_links,
             worker_subdevice_id_opt);
+        // The inner call labelled the unsqueezed result from its input, whose label is the rank-1 input's (unsqueeze
+        // keeps it); reshape keeps the label, so nothing is relabelled here.
         return ttnn::reshape(output_tensor, logical_shape);
     }
 
@@ -333,6 +356,19 @@ ttnn::Tensor all_reduce_async(
     uint32_t resolved_num_links = num_preferred_links.has_value()
                                       ? *num_preferred_links
                                       : ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis);
+
+    // Label of the result whichever path runs below: Replicate on `cluster_axis`, the other mesh axes as the input
+    // had them (a collapsed 1-D label is expanded per axis). The composite path's intermediates (an all_gather of an
+    // unsqueezed tensor whose label still spells the original dims, then a local sum) do not label this tensor, so
+    // the returned tensor is relabelled explicitly; this is what lets callers stop re-labelling all_reduce results.
+    // Computed before the scope below so a label the helper refuses for the input itself still fails loudly.
+    const std::optional<tt::tt_metal::TensorTopology> output_topology =
+        ttnn::operations::ccl::common::all_reduce_output_topology(input_tensor, cluster_axis);
+    // Everything below runs on intermediates whose labels nobody reads (the result is relabelled on every path), so
+    // the helper's refusals for them are silenced. Without this a collapsed Shard{d} reduced along the outer axis
+    // when finding_scatter_dim picks d is refused twice -- the reduce_scatter intermediate is column-major and the
+    // all_gather of it interleaves -- although the all_reduce result is labelled honestly from `input_tensor`.
+    [[maybe_unused]] const ttnn::operations::ccl::common::CallerRelabelsScope caller_relabels;
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -372,6 +408,8 @@ ttnn::Tensor all_reduce_async(
 
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
+        // The unsqueezed tensor carries the input's label verbatim, so a collapsed Shard{0} input reads as sharded on
+        // the new gather dim; the gather is an intermediate (CallerRelabelsScope above), so its label is not refused.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -392,7 +430,11 @@ ttnn::Tensor all_reduce_async(
         gather_tensor.deallocate();
 
         // Reshape (1, B, C, H, W) -> (B, C, H, W)
-        return ttnn::reshape(sum_tensor, initial_shape);
+        auto output_tensor = ttnn::reshape(sum_tensor, initial_shape);
+        if (output_topology.has_value()) {
+            output_tensor.update_tensor_topology(*output_topology);
+        }
+        return output_tensor;
     }
 
     // Reduce scatter + all gather
@@ -463,6 +505,9 @@ ttnn::Tensor all_reduce_async(
 
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
+    }
+    if (output_topology.has_value()) {
+        gathered.update_tensor_topology(*output_topology);
     }
     return gathered;
 }
