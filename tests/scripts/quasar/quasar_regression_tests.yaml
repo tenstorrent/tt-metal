@@ -506,6 +506,17 @@ unit_tests_data_movement:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+# TensorAccessor transfers through the HW address generator. Needs the 2x3 ATT map (2 workers, DRAM selectors); emu
+# boot does not program the tables, so firmware does. Disabled: the suite (~440 tests) is too long for the emulator
+# regression budget.
+  # - filter: "*TensorAccessorAddrgen*"
+  #   config: 2x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  #     TT_METAL_NOC_ATT: quasar_aether_2x3
+  #     TT_METAL_ATT_PROGRAM_FOR_TEST: 1
+
 unit_tests_device:
   - filter: "*SimulatorFixture*QuasarIoWindowReadWrite*"
     config: 1x3

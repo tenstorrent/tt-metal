@@ -18,6 +18,12 @@
 #include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
+// The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
+// and ttsim doesn't model the address generators.
+#if defined(NOC_ATT_ENABLED) && !defined(TT_METAL_TTSIM)
+#define DM_RESET_ADDRGENS 1
+#include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
+#endif
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -502,6 +508,11 @@ extern "C" uint32_t _start1() {
         // Invalidate the i$ now the kernels have loaded and before running
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
+#if defined(DM_RESET_ADDRGENS)
+        // Clear the state to ensure previous state is not leaked
+        overlay::reset_addrgen<overlay::ADDRGEN_0>();
+        overlay::reset_addrgen<overlay::ADDRGEN_1>();
+#endif
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
             DeviceZoneScopedMainN("DM-FW");

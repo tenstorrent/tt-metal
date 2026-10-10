@@ -684,7 +684,7 @@ inline void DataflowBuffer::commit_implicit_write() {
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
 template <NocOptions opts, typename Src>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -698,18 +698,24 @@ Noc::async_read(
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
-    noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
-        get_src_ptr<AddressType::NOC>(src, src_args),
-        // Use cached addresses for NOC APIs
-        dst.get_noc_write_addr(),
-        dst.get_entry_size(),
-        noc_id_,
-        NOC_UNICAST_WRITE_VC);
+    // Use cached addresses for NOC APIs
+    const uint32_t dst_addr = dst.get_noc_write_addr();
+    auto issue = [&](uint64_t src_noc_addr) {
+        noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
+            src_noc_addr, dst_addr, dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
+    };
+    if constexpr (noc_addrgen_push_v<Src>) {
+        // The ordinary issue below always traces (noc_async_read<..., true>); so does the pushed one.
+        issue_read_maybe_pushed</*trace=*/true>(
+            src, src_args, dst_addr, dst.get_entry_size(), NOC_UNICAST_WRITE_VC, issue);
+    } else {
+        issue(get_src_ptr<AddressType::NOC>(src, src_args));
+    }
     dst.commit_implicit_read();
 }
 
 template <NocOptions opts, typename Dst>
-std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
+NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -721,23 +727,30 @@ Noc::async_write(
     uint32_t txn_id = src.prepare_implicit_write();
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
-    auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT("Issue the write\n");
-    ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
-        noc_id_,
-        write_cmd_buf,
-        src_addr,
-        dst_noc_addr,
-        src.get_entry_size(),
-        NOC_UNICAST_WRITE_VC,
-        false,   // mcast
-        false,   // linked
-        1,       // num_dests
-        true,    // multicast_path_reserve
-        false,   // posted == false (NocOptions::POSTED not set)
-        txn_id);
+    auto issue = [&](uint64_t dst_noc_addr) {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+        // DPRINT("Issue the write\n");
+        ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
+            noc_id_,
+            write_cmd_buf,
+            src_addr,
+            dst_noc_addr,
+            src.get_entry_size(),
+            NOC_UNICAST_WRITE_VC,
+            false,   // mcast
+            false,   // linked
+            1,       // num_dests
+            true,    // multicast_path_reserve
+            false,   // posted == false (NocOptions::POSTED not set)
+            txn_id);
+    };
+    if constexpr (noc_addrgen_push_v<Dst>) {
+        issue_write_maybe_pushed</*posted=*/false, /*use_trid=*/true, /*trace=*/true>(
+            dst, dst_args, src_addr, src.get_entry_size(), NOC_UNICAST_WRITE_VC, txn_id, issue);
+    } else {
+        issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
+    }
     src.commit_implicit_write();
 }
 

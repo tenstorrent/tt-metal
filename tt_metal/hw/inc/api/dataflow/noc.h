@@ -41,6 +41,24 @@ inline constexpr bool noc_zero_l1_endpoint_v = false;
 template <typename T>
 inline constexpr bool is_scratchpad_v = false;
 
+// NOC_TRANSFER_INLINE: on a Quasar DM with the address-generator path (the same condition as TT_TA_ADDRGEN_ACTIVE,
+// internal/tensor/generated_noc_addr.h), the transfer calls below are forced inline, so the sequencer's hit path ends
+// up in the kernel's transfer loop. Left to the compiler, the inline budget ran out somewhere along Noc call -> traits
+// -> sequencer, and the call that remained cost 20-45 cycles per transfer. Elsewhere the compiler decides, as before.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_METAL_TTSIM) && \
+    !defined(TT_TA_ADDRGEN_DISABLE)
+#define NOC_TRANSFER_INLINE FORCE_INLINE
+#else
+#define NOC_TRANSFER_INLINE
+#endif
+
+// True when T can push its generated address straight into the command buffer that will issue the noc transaction.
+template <typename T, typename = void>
+inline constexpr bool noc_addrgen_push_v = false;
+template <typename T>
+inline constexpr bool noc_addrgen_push_v<T, std::void_t<decltype(noc_traits_t<T>::may_push)>> =
+    noc_traits_t<T>::may_push;
+
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
  *
@@ -125,9 +143,8 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
-    // Every NoC transfer path takes its endpoint addresses from these three helpers, so this is
-    // where op-to-op R/W inference notes a bound tensor: a source is read, a destination written
-    // (api/dataflow/buf_rw_note.h). The notes are section data only: no instructions.
+    // Every NoC transfer path takes its endpoint addresses from the helpers below, so this is where R/W inference notes
+    // are emitted. A source is read, a destination written (api/dataflow/buf_rw_note.h).
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
@@ -139,6 +156,21 @@ private:
         }
     }
 
+    // Issue a read from a source that may push its address into a command buffer. Its traits get the remote address and
+    // either issue the read with it already in the command buffer, or call `issue` (the ordinary issue) with it.
+    // trace: the caller's enable_noc_tracing, passed on so a pushed transfer is traced exactly as the ordinary issue.
+    template <bool trace, typename Src, typename Issue>
+    FORCE_INLINE void issue_read_maybe_pushed(
+        const Src& src,
+        const src_args_t<Src>& src_args,
+        uint32_t dst_local_l1_addr,
+        uint32_t size_bytes,
+        uint32_t vc,
+        Issue&& issue) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
+        noc_traits_t<Src>::template issue_read<trace>(src, *this, src_args, dst_local_l1_addr, size_bytes, vc, issue);
+    }
+
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
@@ -148,6 +180,21 @@ private:
         } else {
             return addr_underlying_t<address_type>{addr};
         }
+    }
+
+    // Write variant of issue_read_maybe_pushed, the destination address may be pushed into a command buffer.
+    template <bool posted, bool use_trid, bool trace, typename Dst, typename Issue>
+    FORCE_INLINE void issue_write_maybe_pushed(
+        const Dst& dst,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t src_local_l1_addr,
+        uint32_t size_bytes,
+        uint32_t vc,
+        uint32_t trid,
+        Issue&& issue) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
+        noc_traits_t<Dst>::template issue_write<posted, use_trid, trace>(
+            dst, *this, dst_args, src_local_l1_addr, size_bytes, vc, trid, issue);
     }
 
     template <AddressType address_type, typename Dst>
@@ -193,7 +240,7 @@ public:
         bool enable_noc_tracing = true,
         typename Src,
         typename Dst>
-    void async_read(
+    NOC_TRANSFER_INLINE void async_read(
         const Src& src,
         const Dst& dst,
         uint32_t size_bytes,
@@ -210,12 +257,15 @@ public:
         const uint32_t req_vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-        noc_async_read<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-            size_bytes,
-            noc_id_,
-            req_vc);
+        const uint32_t dst_addr = get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args);
+        auto issue = [&](uint64_t src_noc_addr) {
+            noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_addr, size_bytes, noc_id_, req_vc);
+        };
+        if constexpr (noc_addrgen_push_v<Src>) {
+            issue_read_maybe_pushed<enable_noc_tracing>(src, src_args, dst_addr, size_bytes, req_vc, issue);
+        } else {
+            issue(get_src_ptr<AddressType::NOC>(src, src_args));
+        }
     }
 
     /**
@@ -349,7 +399,7 @@ public:
         bool enable_noc_tracing = true,
         typename Src,
         typename Dst>
-    void async_write(
+    NOC_TRANSFER_INLINE void async_write(
         const Src& src,
         const Dst& dst,
         uint32_t size_bytes,
@@ -364,41 +414,52 @@ public:
             // register does not overflow
             DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             WAYPOINT("NAWW");
-            auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
-            auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-            if constexpr (enable_noc_tracing) {
-                RECORD_NOC_EVENT_WITH_ADDR(
-                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+            const uint32_t vc =
+                has_flag(opts, NocOptions::CUSTOM_VC) ? static_cast<uint32_t>(noc_opts.vc) : NOC_UNICAST_WRITE_VC;
+            const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto issue = [&](uint64_t dst_noc_addr) {
+                if constexpr (enable_noc_tracing) {
+                    RECORD_NOC_EVENT_WITH_ADDR(
+                        NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+                }
+                DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
+                constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
+                ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
+                    noc_id_,
+                    write_cmd_buf,
+                    src_addr,
+                    dst_noc_addr,
+                    size_bytes,
+                    vc,
+                    false,  // mcast
+                    false,  // linked
+                    1,      // num_dests
+                    true,   // multicast_path_reserve
+                    posted,
+                    noc_opts.trid);
+            };
+            if constexpr (noc_addrgen_push_v<Dst>) {
+                issue_write_maybe_pushed<posted, /*use_trid=*/true, enable_noc_tracing>(
+                    dst, dst_args, src_addr, size_bytes, vc, noc_opts.trid, issue);
+            } else {
+                issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
             }
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
-            constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
-            const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
-                                    ? static_cast<uint32_t>(noc_opts.vc)
-                                    : NOC_UNICAST_WRITE_VC;
-            ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
-                noc_id_,
-                write_cmd_buf,
-                src_addr,
-                dst_noc_addr,
-                size_bytes,
-                vc,
-                false,  // mcast
-                false,  // linked
-                1,      // num_dests
-                true,   // multicast_path_reserve
-                posted,
-                noc_opts.trid);
             WAYPOINT("NWPD");
         } else {
             const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-            noc_async_write<max_page_size, enable_noc_tracing, posted>(
-                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-                get_dst_ptr<AddressType::NOC>(dst, dst_args),
-                size_bytes,
-                noc_id_,
-                vc);
+            const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto issue = [&](uint64_t dst_noc_addr) {
+                noc_async_write<max_page_size, enable_noc_tracing, posted>(
+                    src_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+            };
+            if constexpr (noc_addrgen_push_v<Dst>) {
+                issue_write_maybe_pushed<posted, /*use_trid=*/false, enable_noc_tracing>(
+                    dst, dst_args, src_addr, size_bytes, vc, 0, issue);
+            } else {
+                issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
+            }
         }
     }
 
@@ -554,12 +615,10 @@ public:
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_addr, src_addr, size_bytes);
 
             WAYPOINT("NWPW");
+            // The addresses above: each endpoint is asked once per transfer (a stateful transfer address, such as the
+            // Quasar address-generator sequence, advances when asked).
             ncrisc_noc_write_any_len_with_state<noc_mode, posted>(
-                noc_id_,
-                write_cmd_buf,
-                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-                (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
-                size_bytes);
+                noc_id_, write_cmd_buf, src_addr, (uint32_t)dst_addr, size_bytes);
             WAYPOINT("NWPD");
         }
     }
@@ -839,8 +898,7 @@ public:
      * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
      */
     template <NocOptions opts, typename Src>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_read(
+    NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
         DataflowBuffer& dst,
         const src_args_t<Src>& src_args,
@@ -855,12 +913,8 @@ public:
      * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
      */
     template <NocOptions opts, typename Dst>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_write(
-        DataflowBuffer& src,
-        const Dst& dst,
-        const DataflowBufferArgs& src_args,
-        const dst_args_t<Dst>& dst_args) const;
+    NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
+        DataflowBuffer& src, const Dst& dst, const DataflowBufferArgs& src_args, const dst_args_t<Dst>& dst_args) const;
 #endif
 
 private:

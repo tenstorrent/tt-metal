@@ -281,6 +281,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tensor/binding_id.h
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
+    inc/internal/tensor/generated_noc_addr.h
     inc/internal/tensor/helpers.h
     inc/internal/tensor/transfer_noc_addr.h
     inc/internal/tt-1xx/cache.h
@@ -377,10 +378,16 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/quasar/overlay/addrgen_api.hpp
+    inc/internal/tt-2xx/quasar/overlay/addrgen_state.h
+    inc/internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
+    inc/internal/tt-2xx/quasar/overlay/rocc_instructions.hpp
+    inc/internal/tt-2xx/quasar/overlay/xcustom_test.hpp
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h
+    inc/internal/tt-2xx/quasar/tensor/addrgen_sequencer.h
     inc/internal/tt-2xx/quasar/tensix.h
     inc/internal/tt-2xx/quasar/tensix_types.h
     inc/internal/tt-1xx/noc_address_backend.h
