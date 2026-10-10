@@ -61,7 +61,7 @@ def test_vae_ltx_fuse_unpatch_ab(mesh_device, device_params):
     )
 
     assert os.environ.get("LTX_FUSE_YUV_OUTPUT") == "1", "the unpatchify fusion only applies to the fused YUV path"
-    fuse = os.environ.get("LTX_VAE_FUSE_UNPATCH", "0")
+    fuse = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1")
     arm = f"r{fuse}"
     ckpt = os.environ.get("VAE_CKPT")
     cfg = _vae_header_config(ckpt) if ckpt else {}

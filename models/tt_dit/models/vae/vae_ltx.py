@@ -854,7 +854,7 @@ class LTXVideoDecoder(Module):
         self._yuv_output_tracer = None
         self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
         # rgb_to_yuv reads conv_out's patchified output directly instead of after a reshape + permute.
-        self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "0") == "1"
+        self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
         self.exact_shard = _exact_shard_enabled()
         self._decode_logical_hw = (0, 0)
