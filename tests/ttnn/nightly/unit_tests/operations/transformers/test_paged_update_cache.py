@@ -447,7 +447,16 @@ def test_tensor_index_update_cache_decode_program_cache(
 
 
 def run_test_paged_update_cache_decode(
-    cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    device,
+    page_table_sharded=False,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -507,7 +516,22 @@ def run_test_paged_update_cache_decode(
         cache_idxs[num_users // 2] = -1
     # logger.info(f"cache_idxs: {cache_idxs}")
     cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
-    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    if page_table_sharded:
+        # Sharded page tables are UINT16, one full copy per core.
+        page_table_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))])
+        page_table_tt = ttnn.as_tensor(
+            page_table.repeat(page_table_grid.num_cores(), 1),
+            device=device,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(page_table_grid, (num_users, max_num_blocks_per_seq), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+    else:
+        page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     cachett = ttnn.experimental.paged_update_cache(
         cachett, xt, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
@@ -574,6 +598,14 @@ def test_paged_update_cache_decode(
 ):
     run_test_paged_update_cache_decode(
         cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+
+
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("cache_idx", [0, 127, 1057])
+def test_paged_update_cache_decode_sharded_uint16_page_table(cache_idx, block_size, device):
+    run_test_paged_update_cache_decode(
+        cache_idx, block_size, 128, 2048, 32, 1, ttnn.bfloat16, ttnn.bfloat16, device, page_table_sharded=True
     )
 
 
