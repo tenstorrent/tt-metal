@@ -63,6 +63,14 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
+// Kickoff staggering (wall-clock cycles at the 1.35 GHz core clock). Every producer reading chunk 0..NP-1 and every
+// receiver reading its initial state in the same microsecond made chunk 0's reads queue for up to ~37 us on the
+// slowest heads (a 20 us item took 57). Producer j waits j * kProducerKickoffStaggerCycles: chunk j is needed only
+// j receiver steps (~3 us each) after chunk 0. Receivers issue their first credits, then hold the initial-state
+// read back by kReceiverKickoffWaitCycles: the state is first needed when chunk 0 arrives, a prep item later.
+constexpr uint32_t kProducerKickoffStaggerCycles = 4050;  // ~3 us
+constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
+
 // CB index plan — kept in sync with the prep/scan compute + dataflow kernels (post-renumber).
 // Uniquely named (fcb) so it does not ODR-clash with the phased factory's pcb:: under unity builds.
 namespace fcb {
@@ -434,7 +442,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
                  NC,
                  attrs.HV,
                  attrs.Hk,
-                 NP});
+                 NP,
+                 j * kProducerKickoffStaggerCycles});
             prep_compute.emplace_runtime_args(pc, {cnt});
             std::vector<std::variant<uint32_t, Buffer*>> w_args = {
                 NC,
@@ -462,6 +471,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
                 r_args.push_back(static_cast<uint32_t>(pv[j].x));
                 r_args.push_back(static_cast<uint32_t>(pv[j].y));
             }
+            r_args.push_back(kReceiverKickoffWaitCycles);
             receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
             scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});

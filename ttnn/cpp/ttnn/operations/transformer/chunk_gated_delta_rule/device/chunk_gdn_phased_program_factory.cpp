@@ -353,7 +353,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
         // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT);
-        // the final 1 is the work-item stride (contiguous here; the fused NP>1 split strides by NP).
+        // then the work-item stride (1: contiguous here; the fused NP>1 split strides by NP) and the kickoff
+        // wait (0: no staggering on the phased prep).
         reader.emplace_runtime_args(
             core,
             {wi_start,
@@ -370,7 +371,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
              NC,
              attrs.HV,
              attrs.Hk,
-             1u});
+             1u,
+             0u});
         writer.emplace_runtime_args(
             core, {wi_start, wi_count, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});
