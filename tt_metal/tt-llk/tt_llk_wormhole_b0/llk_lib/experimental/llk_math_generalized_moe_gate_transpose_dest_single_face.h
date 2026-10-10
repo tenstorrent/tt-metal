@@ -186,7 +186,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init
     generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
     // Transpose-dest is a data-movement op -> PRESERVE. Route through the tracker (not a raw write) so a
     // later matmul/eltwise-binary re-establishes DEFAULT instead of skipping and inheriting this keep flag.
-    math::_configure_preserve_zero_flag_state_();
+    math::_configure_preserve_zero_flag_state_<true>();
 }
 
 // Initialize for single face transpose
