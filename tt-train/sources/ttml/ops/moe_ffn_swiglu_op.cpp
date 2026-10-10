@@ -178,7 +178,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                                    gate_proj = std::move(gate_proj),
                                    up_proj = std::move(up_proj),
                                    num_experts,
-                                   per_expert_M_tiles]() mutable {
+                                   per_expert_M_tiles]() {
         const auto dY = out->get_grad();
         const auto& grouped_value = grouped->get_value();
         const auto& grouped_shape = grouped_value.logical_shape();
@@ -245,9 +245,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         activated.deallocate();
 
         // Bulk swiglu·multiply backward — operates over the full shared tensors. Pad rows are
-        // zero in/zero out. d_gate_proj aliases gate_proj (swiglu_bw writes in place).
-        auto [d_gate_proj, d_up_proj] = ttml::metal::swiglu_elemwise_bw(gate_proj, up_proj, d_activated, gate_proj);
-        up_proj.deallocate();
+        // zero in/zero out. Keep the saved projections immutable so retained graphs can rerun.
+        auto [d_gate_proj, d_up_proj] = ttml::metal::swiglu_elemwise_bw(gate_proj, up_proj, d_activated);
         d_activated.deallocate();
 
         for (uint32_t e = 0; e < num_experts; ++e) {
