@@ -49,6 +49,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LEAKY_RELU:
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
+        case UnaryOpType::GELU_TANH:
         case UnaryOpType::RSQRT:
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
