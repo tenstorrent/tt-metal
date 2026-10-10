@@ -102,6 +102,21 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
         in_cb_id, in_tile_index, src_tile_index, dst_tile_index);
 }
 
+namespace detail {
+// _calculate_fill_ over the first SFPU rows of dst_index, the rows the scalar reduce reads and writes.
+template <bool is_fp32_dest_acc_en>
+ALWI void fill_reduce_rows(uint32_t dst_index, float value) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        _calculate_fill_,
+        (APPROX, 2 /*ITERATIONS*/),
+        dst_index,
+        VectorMode::RC_custom,
+        value));
+}
+}  // namespace detail
+
 /**
  * Reduce a row of products whose tile count exceeds DST capacity.
  *
@@ -135,14 +150,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
     constexpr uint32_t last_batch_size = num_tiles - (num_batches - 1) * batch_size;
 
     // Only element 0 of the accumulator is defined: the fill completes its first four rows, the add covers one vector.
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
-        accumulator,
-        VectorMode::RC_custom,
-        0.0f));
+    detail::fill_reduce_rows<is_fp32_dest_acc_en>(accumulator, 0.0f /*value*/);
 
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
         const uint32_t input_start = batch * batch_size;
@@ -163,23 +171,9 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
         MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            scaler));
+        detail::fill_reduce_rows<is_fp32_dest_acc_en>(0 /*dst_index*/, scaler);
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            0.0f));
+        detail::fill_reduce_rows<is_fp32_dest_acc_en>(0 /*dst_index*/, 0.0f /*value*/);
 
         if (batch == 0) {
             PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));
@@ -197,7 +191,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             calculate_sfpu_binary,
             (APPROX, ckernel::BinaryOp::ADD, 1 /*ITERATIONS*/, is_fp32_dest_acc_en, DstRoundingMode::Default),
             accumulator,
-            0,
+            0 /*dst_index_in1*/,
             accumulator,
             VectorMode::RC_custom)));
     }

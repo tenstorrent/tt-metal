@@ -25,16 +25,16 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, tiles per row, row length compiled in: 0 for the runtime count, tile rows). The last three are the DeepSeek
-# RMSNorm's rows at LoFi: one and three 16x32 tiles (512 and 1536 wide) and seven 32x32 tiles (7168 wide).
+# (fidelity, tiles per row, the row length compiled in rather than a runtime count, tile rows). The last three are the
+# DeepSeek RMSNorm's rows at LoFi: one and three 16x32 tiles (512 and 1536 wide) and seven 32x32 tiles (7168 wide).
 VARIANTS = [
-    (fidelity, num_tiles, 0, 32)
+    (fidelity, num_tiles, False, 32)
     for num_tiles in (1, 2, 4, 8)
     for fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4)
 ] + [
-    (MathFidelity.LoFi, 1, 1, 16),
-    (MathFidelity.LoFi, 3, 3, 16),
-    (MathFidelity.LoFi, 7, 7, 32),
+    (MathFidelity.LoFi, 1, True, 16),
+    (MathFidelity.LoFi, 3, True, 16),
+    (MathFidelity.LoFi, 7, True, 32),
 ]
 
 
@@ -43,7 +43,9 @@ VARIANTS = [
 def test_perf_mul_reduce_scalar(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
-    fidelity, num_tiles, row_tiles, tile_rows = variant
+    fidelity, num_tiles, compiled, tile_rows = variant
+    # The unpack and the isolate mocks loop on TILE_COUNT, so a compiled row length must equal it.
+    row_tiles = num_tiles if compiled else 0
     tile_dimensions = [tile_rows, 32]
     tile_shape = construct_tile_shape(tile_dimensions)
     configuration = PerfConfig(

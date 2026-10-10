@@ -35,12 +35,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& TILE_CNT            = params.TILE_CNT;
+    const auto& num_faces_r_dim_A   = params.num_faces_r_dim_A;
+    const auto& num_faces_c_dim_A   = params.num_faces_c_dim_A;
+    const auto& buffer_A            = params.buffer_A;
+    const auto& buffer_B            = params.buffer_B;
+#endif
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
-        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     {
         START_PERF_MEASURE("INIT")
@@ -65,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < params.TILE_CNT * num_faces; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT * num_faces; ++i)
                 {
                     _perf_unpack_set_valid(ckernel::SrcA);
                     _perf_unpack_set_valid(ckernel::SrcB);
@@ -78,9 +85,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
+                    _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
                 }
                 _llk_unpack_mul_reduce_scalar_switch_to_reduce_();
             }
@@ -108,15 +115,16 @@ inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < row_tiles; ++i)
     {
-        _llk_math_mul_reduce_scalar_move_product_(i, row_tiles, tensor_shape);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+        _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(i, row_tiles, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
     }
 }
 
 inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
-    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
+    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+        tensor_shape, 0 /* acc_to_dest */);
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
@@ -132,12 +140,13 @@ inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::Tensor
             MATH_FIDELITY,
             EltwiseBinaryReuseDestType::NONE>(tensor_shape, i, true /* clear_fp32_dst_acc */);
     }
-    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false>();
-    _llk_math_mul_reduce_scalar_move_product_(DST_INDEX, tile_cnt, tensor_shape);
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false, 2>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
+    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
+    _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(DST_INDEX, tile_cnt, tensor_shape);
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
-    _llk_math_mul_reduce_scalar_clear_tile_<is_fp32_dest_acc_en>(DST_INDEX);
-    _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+    _llk_math_mul_reduce_scalar_clear_pool_face_<is_fp32_dest_acc_en>(DST_INDEX);
+    _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
     if constexpr (ROW_TILES > 0)
     {
         reduce_later_tiles<ROW_TILES>(tensor_shape);
@@ -146,8 +155,8 @@ inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::Tensor
     {
         for (std::uint32_t i = 1; i < tile_cnt; ++i)
         {
-            _llk_math_mul_reduce_scalar_move_product_(i, tile_cnt, tensor_shape);
-            _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+            _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(i, tile_cnt, tensor_shape);
+            _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
         }
     }
     _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
@@ -159,13 +168,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
-    const std::uint32_t tile_cnt            = params.TILE_CNT;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& TILE_CNT            = params.TILE_CNT;
+    const auto& num_faces_r_dim_A   = params.num_faces_r_dim_A;
+    const auto& num_faces_c_dim_A   = params.num_faces_c_dim_A;
+#endif
+    const std::uint32_t tile_cnt            = TILE_CNT;
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
-        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     {
         START_PERF_MEASURE("INIT")
@@ -224,12 +238,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t LOOP_FACTOR         = params.LOOP_FACTOR;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const auto& num_faces_r_dim_A   = params.num_faces_r_dim_A;
+    const auto& num_faces_c_dim_A   = params.num_faces_c_dim_A;
+    const auto& buffer_Res          = params.buffer_Res;
+#endif
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
-        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
@@ -237,7 +256,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
-        _llk_pack_init_<PackMode::Default, false, false, true>(formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, 1, false);
+        _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+            formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
         _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
         _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
@@ -251,7 +271,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[0]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(buffer_Res[0]));
             }
         }
         else
@@ -259,7 +279,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(params.buffer_Res[0]));
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX, L1_ADDRESS(buffer_Res[0]));
                 _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
             }
         }

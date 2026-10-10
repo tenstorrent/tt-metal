@@ -84,9 +84,9 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
-    // Move dest[0] (first multiply result) to srcA
+    // Move dest[0] (the first product, and on Blackhole the second when two share the slot) to srcA
 #if defined(ARCH_BLACKHOLE)
-    MATH((llk_math_mul_reduce_scalar_move_product(0, product_tiles, icb0)));
+    MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(0 /*i*/, product_tiles, icb0)));
 #else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 #endif
@@ -104,7 +104,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
 #if defined(ARCH_BLACKHOLE)
-    MATH((llk_math_mul_reduce_scalar_clear_tile<is_fp32_dest_acc_en>(0)));
+    MATH((llk_math_mul_reduce_scalar_clear_pool_face<is_fp32_dest_acc_en>(0 /*dst_index*/)));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -123,18 +123,18 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     // First iteration (i=0) - no move needed
 #if defined(ARCH_BLACKHOLE)
     // The scaler move drained the SFPU and the clear left the DEST address at tile 0.
-    MATH((llk_math_mul_reduce_column<reduce_f, false>(0, icb0)));
+    MATH((llk_math_mul_reduce_column<reduce_f, false /*tile_setup*/>(0 /*dst_index*/, icb0)));
 #else
     MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
 #endif
 
-    // Remaining iterations - always move
+    // Remaining iterations - move each product, or on Blackhole each pair that shares a slot
 #if defined(ARCH_BLACKHOLE)
-    // Unrolled for a compile-time count; the scaler move drained the SFPU and the clear set the DEST address.
+    // Unrolled when the caller passes a constant count; the scaler move drained the SFPU and the clear set the address.
 #pragma GCC unroll 8
     for (uint32_t i = 1; i < product_tiles; i++) {
-        MATH((llk_math_mul_reduce_scalar_move_product(i, product_tiles, icb0)));
-        MATH((llk_math_mul_reduce_column<reduce_f, false>(0, icb0)));
+        MATH((llk_math_mul_reduce_scalar_move_product<!accumulate_in_one_tile>(i, product_tiles, icb0)));
+        MATH((llk_math_mul_reduce_column<reduce_f, false /*tile_setup*/>(0 /*dst_index*/, icb0)));
     }
 #else
     for (uint32_t i = 1; i < product_tiles; i++) {

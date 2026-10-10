@@ -27,15 +27,23 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
         EltwiseBinaryReuseDestType::NONE>(tensor_shape, acc_to_dest);
 }
 
+/**
+ * @tparam share_slots: Two 16x32 products share a DEST slot, so dst_index is a 32-row product index: product i goes to
+ *         rows 32 * (i % 2) of slot i / 2. Other shapes keep one tile per slot.
+ * @note Move products written with share_slots through @ref llk_math_mul_reduce_scalar_move_product with share_slots
+ * too.
+ */
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool share_slots = false>
 inline void llk_math_eltwise_mul_reduce_scalar(
     std::uint32_t dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    if (share_slots && _llk_math_mul_reduce_scalar_shares_slot_(tensor_shape)) {
-        _llk_math_mul_reduce_scalar_mul_half_slot_<math_fidelity>(tensor_shape, dst_index);
-        return;
+    if constexpr (share_slots) {
+        if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape)) {
+            _llk_math_mul_reduce_scalar_mul_half_slot_<math_fidelity>(tensor_shape, dst_index);
+            return;
+        }
     }
 
     _llk_math_eltwise_binary_<
@@ -61,10 +69,14 @@ inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std:
     _llk_math_mul_reduce_column_<math_fidelity, tile_setup>(dst_index, tensor_shape);
 }
 
+/**
+ * @brief Zero face 0 of dest[dst_index], where the column passes pool; see @ref
+ * _llk_math_mul_reduce_scalar_clear_pool_face_.
+ */
 template <bool is_fp32_dest_acc_en>
-inline void llk_math_mul_reduce_scalar_clear_tile(const std::uint32_t dst_index) {
+inline void llk_math_mul_reduce_scalar_clear_pool_face(const std::uint32_t dst_index) {
     SAN_HOOK(unsupported());
-    _llk_math_mul_reduce_scalar_clear_tile_<is_fp32_dest_acc_en>(dst_index);
+    _llk_math_mul_reduce_scalar_clear_pool_face_<is_fp32_dest_acc_en>(dst_index);
 }
 
 template <MathFidelity math_fidelity>
@@ -73,7 +85,9 @@ inline void llk_math_mul_reduce_scalar() {
     _llk_math_mul_reduce_scalar_<math_fidelity>();
 }
 
-// Restores the multiply's address modifiers after a reduce phase; the reduce does not touch the multiply's MOP.
+/**
+ * @brief Restore the multiply's address modifiers after a reduce phase; the reduce does not touch the multiply's MOP.
+ */
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar_reinit() {
     SAN_HOOK(unsupported());
@@ -91,11 +105,16 @@ inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) 
     _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
 }
 
-// The move before product i's column pass, for products written with share_slots.
+/**
+ * @brief The move into SrcA before product i's column pass.
+ *
+ * @tparam share_slots: As given to @ref llk_math_eltwise_mul_reduce_scalar for the products.
+ */
+template <bool share_slots>
 inline void llk_math_mul_reduce_scalar_move_product(
     const std::uint32_t i, const std::uint32_t num_products, const std::uint32_t icb0) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_math_mul_reduce_scalar_move_product_(i, num_products, tensor_shape);
+    _llk_math_mul_reduce_scalar_move_product_<share_slots>(i, num_products, tensor_shape);
 }

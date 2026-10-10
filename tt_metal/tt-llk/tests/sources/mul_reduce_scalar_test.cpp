@@ -5,7 +5,7 @@
 // Fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 //
 // Mirrors the ttnn compute-kernel flow of ckernel::mul_reduce_scalar_tile:
-//   1. Multiply phase: C[i] = A[i] * B[i] element-wise (ELWMUL) into DEST tiles.
+//   1. Multiply phase: C[i] = A[i] * B[i] element-wise (ELWMUL) into DEST tiles (two 16x32 products per slot).
 //   2. Switch UNPACK -> reduce phase (DEST reused as SrcA/SrcB via MOVD2A/MOVD2B).
 //   3. Column-reduce every tile with GAPOOL, accumulating into DEST[0].
 //   4. Collapse DEST[0] to a single scalar (transpose + GAPOOL).
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i].
+    // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i], or for 16x32 tiles rows 32 * (i % 2) of DEST[i / 2].
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
@@ -144,20 +144,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
 
     // Step 4 - stage tile 0 into SrcA, fill SrcB with the scaler, clear DEST[0].
-    _llk_math_mul_reduce_scalar_move_product_(DST_INDEX, tile_cnt, tensor_shape);
+    _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(DST_INDEX, tile_cnt, tensor_shape);
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
-    _llk_math_mul_reduce_scalar_clear_tile_<is_fp32_dest_acc_en>(DST_INDEX);
+    _llk_math_mul_reduce_scalar_clear_pool_face_<is_fp32_dest_acc_en>(DST_INDEX);
 
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
-    _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
-    // The tile count is a runtime argument here; the API unrolls this loop for its compile-time count.
+    _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
+    // The tile count is a runtime argument here; the API unrolls this loop when its caller passes a constant count.
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
-        _llk_math_mul_reduce_scalar_move_product_(i, tile_cnt, tensor_shape);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+        _llk_math_mul_reduce_scalar_move_product_<true /* share_slots */>(i, tile_cnt, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, false /* tile_setup */>(DST_INDEX, tensor_shape);
     }
 
     // Step 7 - collapse DEST[0] to a single scalar.

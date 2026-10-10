@@ -16,7 +16,7 @@ other lanes are unspecified — so the test validates the reduced scalar alone.
 Kernel B is held at 1.0 (matching the on-silicon gtest and the
 ``fuser_config/fpu_reduce_scalar.yaml`` recipe), so the multiply reduces to
 ``sum(A)``. Coverage: bf16 (num_tiles up to 8, the DEST half-sync capacity)
-plus native fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32
+plus native fp32 DEST (up to 4 tiles), for LoFi/HiFi2/HiFi4, across the full 32x32
 tile (num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny
 tiles" — mirroring the on-silicon MulReduceScalarTinyTile gtest suite.
 """
@@ -73,7 +73,7 @@ def _num_tiles_for_format(formats):
 
 @parametrize(
     formats=FORMATS,
-    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
 )

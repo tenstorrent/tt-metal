@@ -83,6 +83,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 static constexpr float REDUCE_SCALER = 1.0f;
+// The batch's first product slot, where each batch's reduce runs.
+static constexpr std::uint32_t DST_INDEX = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -113,7 +115,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, accumulator, VectorMode::RC_custom, 0.0f);
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, accumulator, VectorMode::RC_custom, 0.0f /* value */);
 
     for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
     {
@@ -135,16 +138,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0, VectorMode::RC_custom, REDUCE_SCALER);
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, 0, VectorMode::RC_custom, 0.0f);
+        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
+        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, 0.0f /* clear DEST[0] */);
 
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
         for (std::uint32_t j = 1; j < count; ++j)
         {
             _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(j);
-            _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+            _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
         }
         _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
         _llk_math_mul_reduce_scalar_clear_dvalid_();
@@ -155,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             calculate_sfpu_binary,
             (false /* APPROX */, BinaryOp::ADD, 1 /* ITERATIONS */, is_fp32_dest_acc_en),
             accumulator,
-            0,
+            DST_INDEX,
             accumulator,
             VectorMode::RC_custom);
     }
