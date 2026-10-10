@@ -128,7 +128,6 @@ inline void _llk_init_packer_dest_offset_registers_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_init_()
 {
-    tensix_sync();
     reset_dest_offset_id();
     _llk_init_packer_dest_offset_registers_<Dst>();
     packer_addr_counter_init();
