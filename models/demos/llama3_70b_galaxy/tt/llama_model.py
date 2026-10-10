@@ -17,6 +17,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill
 from models.common.sampling.generator import SamplingGenerator
 
 
@@ -1052,6 +1053,14 @@ class TtTransformer(LightweightModule):
                 num_devices=num_devices,
             )
             rot_mats = (rot_cos_slice, rot_sin_slice)
+
+        # Qwen long prefill on Wormhole (batch 1, no prefix, S > 8192): context-parallel layout B
+        # (tt/qwen_cp_prefill.py; QWEN_CP_PREFILL=0 keeps the seq-parallel path below). Returns the same natural
+        # [1, 1, S, 1280] pre-norm output as that path.
+        if qwen_cp_prefill.cp_prefill_applies(
+            self.args, self.use_prefetcher, self.prefetcher_setup, mode, batch_size, start_pos, x.shape[-2]
+        ):
+            return qwen_cp_prefill.model_prefill(self, x, rot_mats, user_id, page_table, kv_cache)
 
         # Qwen long prefill on Wormhole (batch 1, no prefix): sequence-parallel residual stream over the mesh rows.
         # Each row keeps one S/8 chunk of the residual between layers, runs the norms and residual adds on it, gathers
