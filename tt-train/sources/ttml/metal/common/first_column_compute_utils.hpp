@@ -25,9 +25,9 @@ namespace ttml_first_column_detail {
 // LLK-style body, shaped like calculate_sdpa_fw_recip_first_column in
 // experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h: 4 half-face iterations at dst_reg stride 2.
 //
-// Calls the same _calculate_sqrt_body_ that _calculate_sqrt_internal_ uses, with the same
-// template arguments sqrt_tile passes. The lanes this touches therefore get results
-// identical to sqrt_tile.
+// Calls _calculate_sqrt_body_ with the template arguments sqrt_tile passes. sqrt_tile runs it
+// directly in approximate mode and through the two-vector form in accurate mode, which gives
+// the same results per lane, so the lanes this touches get results identical to sqrt_tile.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
