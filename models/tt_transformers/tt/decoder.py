@@ -376,9 +376,9 @@ class TransformerBlock(LightweightModule):
                 else activation_dtype or ttnn.bfloat16,
             )
             ttnn.deallocate(attn_out)
-            if mode == "prefill":
+            if mode == Mode.PREFILL:
                 x.deallocate(True)
-            if TG and mode == "decode":
+            if TG and mode == Mode.DECODE:
                 mlp_in = ttnn.to_memory_config(mlp_in, memory_config=self.args.get_mlp_act_mem_config(mode))
             mlp_out = self.feed_forward.forward(mlp_in, mode)
             out = ttnn.add(
@@ -396,7 +396,7 @@ class TransformerBlock(LightweightModule):
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
-            if mode == "prefill":
+            if mode == Mode.PREFILL:
                 x.deallocate(True)
         else:
             hidden_states = attn_out
