@@ -647,8 +647,23 @@ Tensor div_no_nan(
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-    return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
+    if (!tt::tt_metal::is_floating_point(input_a.dtype()) || !tt::tt_metal::is_floating_point(input_b.dtype())) {
+        // Integer inputs keep the composite: divide promotes them to a float32 true division.
+        Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
+        return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
+    }
+    // The divide kernel with its zero-divisor arm, in place of a divide, an eqz and a where.
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        binary::BinaryOpType::DIV_NO_NAN,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 Tensor prelu(const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& output_mem_config) {

@@ -153,6 +153,20 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 #ifndef ARCH_QUASAR
+/// div_binary_tile with a zero divisor yielding zero. Uses div_binary_tile_init().
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void div_no_nan_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary_div,
+        (APPROX, ckernel::BinaryOp::DIV_NO_NAN, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+
 /// @tparam dst_rounding_mode, is_fp32_dest_acc_en See add_binary_tile.
 template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
