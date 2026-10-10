@@ -60,7 +60,11 @@ void kernel_main() {
         const uint32_t first_site = group * sites_per_group;
         const uint32_t sites_in_group =
             (first_site + sites_per_group <= num_sites) ? sites_per_group : num_sites - first_site;
-        const uint32_t weights_per_set = sites_in_group * num_candidates;
+        // CB traffic is in whole groups even when the last group is short -- the reader
+        // pushes, and the writer pops, sites_per_group-sized units -- so every reservation
+        // divides its CB and no pointer is ever left where the next one would straddle the
+        // end. Only the first sites_in_group of each unit hold data.
+        const uint32_t weights_per_set = sites_per_group * num_candidates;
 
         // One weight set per token row, shared by the Wt positions in that row.
         // The reader turns the set over on the same test — `i % Wt == 0` over the
@@ -88,14 +92,14 @@ void kernel_main() {
             tile_regs_commit();
             cb_in0_obj.pop_front(num_candidates);
 
-            cb_out0_obj.reserve_back(sites_in_group);
+            cb_out0_obj.reserve_back(sites_per_group);
             pack_reconfig_data_format(cb_out0);
             tile_regs_wait();
             for (uint32_t s = 0; s < sites_in_group; ++s) {
                 pack_tile(s, cb_out0);
             }
             tile_regs_release();
-            cb_out0_obj.push_back(sites_in_group);
+            cb_out0_obj.push_back(sites_per_group);
 
             ++width_index;
             if (width_index == Wt) {

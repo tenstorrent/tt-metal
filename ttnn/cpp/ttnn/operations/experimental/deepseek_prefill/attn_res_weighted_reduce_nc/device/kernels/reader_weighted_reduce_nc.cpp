@@ -52,7 +52,8 @@ void kernel_main() {
 
         // This core owns a contiguous run of tile positions, so the weight
         // traffic is negligible: the Wt positions of one token row share a
-        // single set of sites_in_group * num_candidates tiles.
+        // single set: a sites_per_group * num_candidates CB unit, of which the first
+        // sites_in_group * num_candidates tiles are filled.
         for (uint32_t i = start_id; i < start_id + num_positions; ++i) {
             // Fetch a weight set on the first position and whenever the token
             // row turns over. `i % Wt == 0` is exactly the row boundary: the row
@@ -60,7 +61,11 @@ void kernel_main() {
             if (i == start_id || i % Wt == 0) {
                 const uint32_t row = i / Wt;
 
-                cb_in1_obj.reserve_back(sites_in_group * num_candidates);
+                // Always a full group's worth of pages, even for a short last group: the CB
+                // holds exactly one full set, and a smaller reservation would leave the write
+                // pointer mid-buffer so the next set ran past the CB's end into the next one
+                // in L1. The tail pages of a short set are reserved but never filled or read.
+                cb_in1_obj.reserve_back(sites_per_group * num_candidates);
                 uint32_t weight_write_offset = 0;
                 for (uint32_t s = 0; s < sites_in_group; ++s) {
                     uint32_t weight_tile_id = (first_site + s) * weight_reduce_tile_size + row;
@@ -76,7 +81,7 @@ void kernel_main() {
                     }
                 }
                 noc.async_read_barrier();
-                cb_in1_obj.push_back(sites_in_group * num_candidates);
+                cb_in1_obj.push_back(sites_per_group * num_candidates);
             }
 
             // A whole reduction as one CB unit, so a candidate's position in the

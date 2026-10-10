@@ -105,6 +105,83 @@ def test_attn_res_weighted_reduce_nc_weight_batch(num_sites, device):
         assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
 
 
+@pytest.mark.parametrize(
+    "fp32_dest_acc",
+    (True, False),
+    ids=("fp32_dest_groups_of_4", "bf16_dest_groups_of_8"),
+)
+@pytest.mark.parametrize("weight_dtype", (ttnn.float32, ttnn.bfloat16), ids=("fp32_weight", "bf16_weight"))
+@pytest.mark.parametrize("num_sites", range(1, 33))
+def test_attn_res_weighted_reduce_nc_short_last_group(num_sites, weight_dtype, fp32_dest_acc, device):
+    """Every site count up to a tile, at the AttnRes shape, where each core owns many positions.
+
+    The group width is DEST's capacity under the compute config -- 4 with the op's default
+    fp32 accumulation (how AttnRes calls it), 8 without -- so most counts leave a short last
+    group. Its CB traffic used to be sized to the short group, which left the write pointer
+    mid-buffer and sent the next reservation past the end of the CB: at the default, R = 7,
+    11, ..., 31 came back with garbage and inf in the short group and the one before it. A
+    small input hides that, because a core with one position never wraps a CB -- hence 640
+    rows of 1792, AttnRes's per-chip shard. The weight dtype changes the page size only."""
+    torch.manual_seed(2026)
+    torch_input = torch.randn([1, 2, 640, 1792], dtype=torch.bfloat16)
+    torch_weight = torch.rand([num_sites, 2, 640, 1], dtype=torch.float32)
+
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
+        _place(torch_input, device),
+        _place(torch_weight, device, weight_dtype),
+        dim=1,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc,
+        ),
+    )
+
+    got = ttnn.to_torch(output).float()
+    want = _reference(torch_input, torch_weight)
+    assert torch.isfinite(got).all(), f"R={num_sites}: non-finite output"
+    for site in range(num_sites):
+        assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
+
+
+@pytest.mark.parametrize(
+    "fp32_dest_acc",
+    (True, False),
+    ids=("fp32_dest_groups_of_4", "bf16_dest_groups_of_8"),
+)
+# 6 is a control: under groups of 4 its short group (2 sites) divides both CBs and was never
+# broken. 7, 11 and 31 leave a short group of 3 under groups of 4; 11 and 31 leave 3 and 7
+# under groups of 8.
+@pytest.mark.parametrize("num_sites", (6, 7, 11, 31))
+def test_attn_res_weighted_reduce_nc_short_last_group_many_rows(num_sites, fp32_dest_acc, device):
+    """One tile column and many token rows, so every core turns its weight set over several
+    times per group. The test above only does so on the few cores whose contiguous range
+    happens to straddle a row boundary; this one makes it the common case, which is where a
+    short weight set used to run past the end of the weight CB."""
+    torch.manual_seed(2026)
+    torch_input = torch.randn([1, 2, 32 * 600, 32], dtype=torch.bfloat16)
+    torch_weight = torch.rand([num_sites, 2, 32 * 600, 1], dtype=torch.float32)
+
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
+        _place(torch_input, device),
+        _place(torch_weight, device, ttnn.float32),
+        dim=1,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc,
+        ),
+    )
+
+    got = ttnn.to_torch(output).float()
+    want = _reference(torch_input, torch_weight)
+    assert torch.isfinite(got).all(), f"R={num_sites}: non-finite output"
+    for site in range(num_sites):
+        assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
+
+
 def test_attn_res_weighted_reduce_nc_weight_batch_matches_per_site(device):
     """A batch of R sets against R calls of one set each.
 
