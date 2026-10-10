@@ -226,6 +226,34 @@ def test_one_change_on_many_points_is_one_finding():
     assert "×4 points" in text
 
 
+def test_a_covering_acceptance_table_pings_the_approvers():
+    ctx = dict(
+        _CTX,
+        acceptance={"state": "waiting", "missing": []},
+        approvers={"nstojicTT": "U123", "other": ""},
+    )
+    text = build_text("regressed", [_ROW], ctx)
+    assert "<@U123>" in text and "`other`" in text and "/accept-regression" in text
+
+
+def test_an_incomplete_acceptance_table_does_not_ping():
+    ctx = dict(
+        _CTX,
+        acceptance={"state": "incomplete", "missing": ["a", "b"]},
+        approvers={"x": "U1"},
+    )
+    text = build_text("regressed", [_ROW], ctx)
+    assert "does not cover 2 point(s)" in text and "<@U1>" not in text
+
+
+def test_a_pass_with_accepted_points_says_who_accepted_them():
+    ctx = dict(
+        _CTX, acceptance={"state": "approved", "accepted": 8, "approver": "nstojicTT"}
+    )
+    text = build_text("clean", [], ctx)
+    assert "8 regressed point(s) accepted by `nstojicTT`" in text
+
+
 def test_the_merge_gate_names_itself_and_carries_the_note():
     ctx = {**_CTX, "gate_name": "LLK perf merge gate", "note": "Stale baseline."}
     for status, rows in (("clean", []), ("skipped", []), ("regressed", [_ROW])):
