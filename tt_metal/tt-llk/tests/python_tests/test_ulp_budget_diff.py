@@ -17,6 +17,7 @@ import pytest
 from helpers.ulp_budget_diff import (
     _MAX_ROWS,
     KEY_FIELDS,
+    DuplicateRow,
     _measured_cells,
     _nonfinite_cells,
     _resolve,
@@ -30,6 +31,7 @@ from helpers.ulp_budget_diff import (
     render_budget_diff,
     render_headroom,
 )
+from helpers.ulp_provenance import KeyLine, Kind, Provenance, RunIdentity
 
 #: The tool's short key spelling -> the registry's BudgetKey field. Both of its copies
 #: of the key list are held to this one by test_the_key_dimensions_are_the_registrys.
@@ -93,9 +95,9 @@ def _measured(*cells):
     )
 
 
-def _refuses(match):
+def _refuses(kind):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
-    return pytest.raises(ValueError, match=match)  # allow-pytest.raises: host-only test
+    return pytest.raises(kind)  # allow-pytest.raises: host-only test
 
 
 # ── What counts as a regression ───────────────────────────────────────────────
@@ -204,10 +206,12 @@ def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
             "{out: Float16_b, max_ulp: 9}  # max 8 ULP",
         )
     )
-    with _refuses("equally specific"):
+    with _refuses(ValueError) as caught:
         _resolve(table, "Abs", _BF16)
-    with _refuses("equally specific"):
+    assert "equally specific" in str(caught.value)
+    with _refuses(ValueError) as caught:
         compare(parse_table(_BASE), table)
+    assert "equally specific" in str(caught.value)
 
 
 # ── Tolerance cells: what the sweep holds them to ─────────────────────────────
@@ -428,7 +432,10 @@ def test_an_anchor_and_its_alias_are_both_real_rows():
     assert {cell[0] for cell in table} == {"GeluAppx", "SigmoidAppx"}
     assert all(row.max_ulp == 3 for row in table.values())
     # Each keeps its own comment, so a re-measurement on one is visible.
-    assert table[("SigmoidAppx", ())].provenance == "same cause, same number"
+    assert table[("SigmoidAppx", ())].provenance == Provenance.hand(
+        "same cause, same number"
+    )
+    assert table[("GeluAppx", ())].provenance == Provenance(Kind.EMITTED, measured=2)
 
 
 def test_a_merge_key_row_is_read_through():
@@ -447,18 +454,22 @@ def test_a_row_without_a_comment_inherits_its_op_header():
     no inline comment. Without the fallback their provenance is permanently empty, so a
     raise on one could never register as re-measured. A row's own comment still wins."""
 
-    def table(run, budget):
+    def run(sweep):
+        return RunIdentity(sweep=sweep, arch="wormhole", date="2026-01-01")
+
+    def table(sweep, budget):
         return parse_table(
-            f"Abs:  # measured by: {run}, wormhole\n"
+            f"Abs:  # {KeyLine(run=run(sweep)).render()}\n"
             f"  - {{out: Float32, max_ulp: {budget}}}\n"
             "  - {out: Float16_b, max_ulp: 1}  # max 0 ULP, its own row\n"
         )
 
     base = table("sweep A", 1)
-    assert base[("Abs", (("out", "Float32"),))].provenance.startswith(
-        "measured by: sweep A"
+    assert base[("Abs", (("out", "Float32"),))].provenance == KeyLine(
+        run=run("sweep A")
     )
-    assert base[("Abs", (("out", "Float16_b"),))].provenance == "max 0 ULP, its own row"
+    own = base[("Abs", (("out", "Float16_b"),))].provenance
+    assert own == Provenance.hand("max 0 ULP, its own row")
     # Raising the comment-less row shows as re-measured only through a new header.
     (raised,) = [c for c in compare(base, table("sweep B", 4)) if c.is_regression]
     assert raised.kind == "raised" and raised.remeasured
@@ -498,13 +509,14 @@ def test_a_duplicated_cell_is_refused_rather_than_judged():
     """`_load_table` rejects two rows of equal specificity, so the table cannot load.
     Keeping the last row silently produced a verdict -- a *tightening*, even -- for a
     table the registry would not accept at all."""
-    with _refuses("duplicate row"):
+    with _refuses(DuplicateRow) as caught:
         parse_table(
             _head(
                 "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP",
                 "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
             )
         )
+    assert caught.value.cell == ("Abs", _BF16)
 
 
 # ── The headroom half ─────────────────────────────────────────────────────────
@@ -614,24 +626,58 @@ def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently
 # ── The slim runner, and the tie-back to the real loader ──────────────────────
 
 
-def test_the_tool_imports_nothing_but_the_standard_library_and_yaml():
+#: The modules the slim runner loads, by path: the tool, and the one sibling it reads
+#: the table through.
+_SLIM_MODULES = ("ulp_budget_diff.py", "ulp_provenance.py")
+
+
+@pytest.mark.parametrize("module", _SLIM_MODULES)
+def test_the_tool_imports_nothing_but_the_standard_library_and_yaml(module):
     """The PR check runs on a slim runner: no torch, no ttexalens, no LLK venv. Read off
-    the module's own AST: the import list is the actual property, and a subprocess would
-    prove it for one environment only."""
-    tool = Path(__file__).parent / "helpers" / "ulp_budget_diff.py"
+    each module's own AST: the import list is the actual property, and a subprocess
+    would prove it for one environment only. The one sibling allowed is
+    ``ulp_provenance``, itself held to the same rule."""
+    tool = Path(__file__).parent / "helpers" / module
     roots = set()
     for node in ast.walk(ast.parse(tool.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             roots.update(a.name.split(".")[0] for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            # A relative import would reach back into `helpers`, the thing this module
-            # must not do.
-            assert node.level == 0, f"relative import of {node.module!r}"
+            # A relative import would reach back into `helpers`; only the sibling the
+            # runner also has on its path is allowed.
+            if node.level:
+                assert (node.level, node.module) == (1, "ulp_provenance"), node.module
+                continue
             if node.module:
                 roots.add(node.module.split(".")[0])
-    allowed = set(sys.stdlib_module_names) | {"yaml"}
+    allowed = set(sys.stdlib_module_names) | {"yaml", "ulp_provenance"}
     assert roots <= allowed, f"imports outside stdlib + yaml: {sorted(roots - allowed)}"
     assert "helpers" not in roots and "torch" not in roots
+
+
+def test_the_tool_runs_by_path_with_its_sibling(tmp_path):
+    """What the workflow does: ``python3 helpers/ulp_budget_diff.py``, so the package
+    is not importable and the sibling is found on the script's own directory."""
+    import subprocess
+
+    tool = Path(__file__).parent / "helpers" / "ulp_budget_diff.py"
+    (tmp_path / "base.yaml").write_text(_BASE, encoding="utf-8")
+    (tmp_path / "head.yaml").write_text(_edited(0, _BASE_ROWS[0]), encoding="utf-8")
+    done = subprocess.run(
+        [
+            sys.executable,
+            str(tool),
+            "diff",
+            "--base",
+            str(tmp_path / "base.yaml"),
+            "--head",
+            str(tmp_path / "head.yaml"),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():

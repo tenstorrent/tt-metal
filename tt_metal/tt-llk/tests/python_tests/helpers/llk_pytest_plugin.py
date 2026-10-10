@@ -1148,7 +1148,7 @@ def _finish_ulp_emit(session):
             get_chip_architecture(),
             session.testsfailed,
             exitstatus=session.exitstatus,
-        )
+        ).summary()
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
         # Escalate only a clean session: a refusal *because* the run was interrupted, hit
