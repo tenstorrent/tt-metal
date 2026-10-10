@@ -10,6 +10,11 @@ of environment variables.
 
 - `libttsim_{wh,bh}.so` downloaded from
   [ttsim releases](https://github.com/tenstorrent/ttsim/releases).
+- A host with **glibc 2.38 or newer**. The `ttsim` binary links against
+  `GLIBC_2.38`, so it fails on older bases with
+  `version 'GLIBC_2.38' not found`. Ubuntu 24.04 (glibc 2.39) works;
+  Ubuntu 22.04 (glibc 2.35) does not. The `.so` itself only needs
+  `GLIBC_2.14`, so this applies to the standalone binary.
 - A SoC descriptor YAML for the target arch, placed next to the `.so`
   and named `soc_descriptor.yaml` (ttsim derives its path from the `.so`
   path).
