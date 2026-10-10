@@ -69,7 +69,8 @@ MoeGroupResult moe_group(
     const ttnn::Tensor& dispatched,        // [D, B, S, H]  ROW_MAJOR bf16
     const ttnn::Tensor& metadata,          // [D, B, S, K]  ROW_MAJOR uint16
     const ttnn::Tensor& scores,            // [D, B, S, K]  ROW_MAJOR bf16
-    const ttnn::Tensor& local_expert_ids,  // [E_local]     ROW_MAJOR uint16
+    const ttnn::Tensor& local_expert_ids,  // [E_local]     ROW_MAJOR uint16; treated as an ordered set, so later
+                                           // duplicate IDs produce empty expert slots (first occurrence wins)
     uint32_t e_local,
     uint32_t k);
 
