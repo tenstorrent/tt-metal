@@ -63,6 +63,9 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
+            zero_initial_state_on_start (bool, optional): Ignore the external request carry
+                when device actual_start is zero. Requires SP1; leave disabled for computed
+                rank/group entry states. Defaults to False, preserving explicit-state semantics.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
             local_rows (int): Positive, 32-aligned token rows per SP device. Summary tensor
@@ -102,7 +105,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("zero_initial_state_on_start") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

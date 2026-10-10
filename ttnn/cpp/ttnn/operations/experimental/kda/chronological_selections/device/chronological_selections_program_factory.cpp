@@ -60,4 +60,53 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
         a.local_rows,
         kernel);
 }
+
+ttnn::device_operation::MeshWorkloadArtifacts SelectRequestHistoryFactory::create_mesh_workload_artifacts(
+    const SelectRequestHistoryParams&,
+    const SelectRequestHistoryInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    using namespace tt::tt_metal::experimental;
+    const KernelSpecName kernel{"select_request_history"};
+    const ScratchpadSpecName scratch{"scratch"};
+    const uint32_t row_bytes = in.layer_history.logical_shape()[2] * sizeof(uint16_t);
+    KernelSpec reader{
+        .unique_id = kernel,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/"
+            "select_request_history.cpp",
+        .scratchpad_bindings = {{scratch, "scratch"}},
+        .compile_time_args = {{"row_bytes", row_bytes}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    ProgramSpec spec{
+        .name = "kda_select_request_history",
+        .kernels = {std::move(reader)},
+        .scratchpads = {{.unique_id = scratch, .size_per_node = 64 + row_bytes}},
+        .work_units =
+            {{.name = "main",
+              .kernels = {kernel},
+              .target_nodes = tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {0, 0})})}},
+    };
+    ProgramRunArgs run;
+    auto bind = [&](const char* name, const Tensor& tensor) {
+        const TensorParamName param{name};
+        const auto& mesh_tensor = tensor.mesh_tensor();
+        spec.tensor_parameters.push_back({.unique_id = param, .spec = mesh_tensor.tensor_spec()});
+        spec.kernels[0].tensor_bindings.push_back({param, name});
+        run.tensor_args.emplace(param, mesh_tensor);
+    };
+    bind("projected_qkv", in.projected_qkv);
+    bind("layer_history", in.layer_history);
+    bind("predecessor_history", in.predecessor_history);
+    bind("selection_records", in.selection_records);
+    bind("actual_start", in.actual_start);
+    bind("output", outputs[0]);
+    ttnn::device_operation::MeshWorkloadArtifacts workload;
+    for (const auto& coordinate : tensor_coords.coords()) {
+        workload.programs.push_back({.range = ttnn::MeshCoordinateRange(coordinate), .spec = spec, .run_params = run});
+    }
+    return workload;
+}
+
 }  // namespace ttnn::experimental::prim

@@ -18,6 +18,20 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("FINAL_STATE") = final_state;
     layout.attr("LOCAL_FINAL_HISTORY") = local_final_history;
 
+    ttnn::bind_function<"select_request_history", "ttnn.experimental.kda.">(
+        mod,
+        "Select three outgoing convolution-history rows using a chronological selection table. "
+        "Request-owned state only: missing prefix rows are zeros at device absolute start zero; "
+        "positive starts consume the supplied BF16 row-major history. Predecessor history is preserved. "
+        "selection_records must be produced by chronological_selections for the same bounds and geometry; "
+        "record contents are device-side caller preconditions.",
+        &ttnn::experimental::kda::select_request_history,
+        nb::arg("projected_qkv").noconvert(),
+        nb::arg("layer_history").noconvert(),
+        nb::arg("predecessor_history").noconvert(),
+        nb::arg("selection_records").noconvert(),
+        nb::arg("actual_start").noconvert());
+
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
         R"doc(

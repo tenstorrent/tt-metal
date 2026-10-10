@@ -37,6 +37,7 @@ Tensor affine_exclusive_scan(
     const Tensor&,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::optional<Tensor>& actual_end);
+    const std::optional<Tensor>& actual_end,
+    bool zero_initial_state_on_start);
 
 }  // namespace ttnn::experimental::prim

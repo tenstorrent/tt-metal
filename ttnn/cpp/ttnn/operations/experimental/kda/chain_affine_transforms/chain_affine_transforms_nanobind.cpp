@@ -42,6 +42,8 @@ void bind_chain_affine_transforms(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute-kernel configuration.
                 Defaults to HiFi2 with FP32 destination accumulation, which is required.
+            zero_initial_state_on_start (bool, optional): Ignore the external request carry
+                when device actual_start is zero. Defaults to False, preserving explicit-state semantics.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence. Native mesh
                 coordinates supply each device's rank.
 
@@ -61,7 +63,8 @@ void bind_chain_affine_transforms(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("zero_initial_state_on_start") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::chain_affine_transforms::detail

@@ -26,7 +26,14 @@ FORCE_INLINE void issue_tensor_block_read(
 
 // One worker owns one head's state: it streams each chronological step's [A | B] rows to compute and writes the
 // entry state and final carry that compute publishes.
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t BH,
+    uint32_t zero_initial_state_on_start,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t head) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t state_tiles = Kt * Vt;
@@ -53,10 +60,13 @@ TT_KERNEL void dataflow(uint32_t head) {
         noc.async_write_barrier();
     };
 
-    // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
+    // Generic callers keep the overlapped seed read. Request-owned carries must first inspect actual_start.
     initial.reserve_back(state_tiles);
-    issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, state_tiles);
+    if constexpr (!zero_initial_state_on_start) {
+        issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, state_tiles);
+    }
     kda_chronology::Topology topology{};
+    bool fresh_request = false;
     {
         DataflowBuffer chronology(dfb::chronology_compute);
         chronology.reserve_back(1);
@@ -64,9 +74,20 @@ TT_KERNEL void dataflow(uint32_t head) {
         noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
+        fresh_request = words[0] == 0;
         topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
         kda_chronology::store(words, topology);
         chronology.push_back(1);
+    }
+    if constexpr (zero_initial_state_on_start) {
+        if (fresh_request) {
+            // Every rank chains the same external seed; later entries still include preceding transforms.
+            noc.async_write_zeros(initial, state_tiles * initial.get_entry_size());
+            noc.write_zeros_l1_barrier();
+        } else {
+            issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, state_tiles);
+            noc.async_read_barrier();
+        }
     }
     // This rank's chronological index: its entry state is the carry after step entry_step - 1.
     const uint32_t entry_step = (topology.rank + sp_size - topology.first_rank) % sp_size;

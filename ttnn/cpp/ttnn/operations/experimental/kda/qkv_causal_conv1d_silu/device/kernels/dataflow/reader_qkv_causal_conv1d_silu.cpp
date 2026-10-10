@@ -38,7 +38,13 @@ FORCE_INLINE void load_weight_block(
     weights.push_back(tap_count * block_ct);
 }
 
-template <uint32_t block_ct, uint32_t Mt, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t block_ct,
+    uint32_t Mt,
+    uint32_t zero_initial_state_on_start,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -58,12 +64,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     uint32_t local_split_row = 0;
     bool initial_from_predecessor = false;
+    bool fresh_request = false;
     {
         // The window is free until the first work item, so it doubles as landing space for actual_start.
         const auto actual_start = TensorAccessor(tensor::actual_start);
         noc.async_read(actual_start, CoreLocalMem<uint32_t>(window_base), sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(window_base);
+        fresh_request = words[0] == 0;
         const auto topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
         local_split_row = topology.local_split ? topology.head_rows : 0;
         initial_from_predecessor = topology.rank != topology.first_rank;
@@ -103,6 +111,13 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             row_floor = static_cast<int32_t>(local_split_row);
         }
 
+        const bool zero_request_history =
+            zero_initial_state_on_start && fresh_request && !initial_from_predecessor && mt == 0;
+        if (zero_request_history) {
+            // Only the request head has external history. Other ranks need this chunk's predecessor tokens.
+            noc.async_write_zeros(window, history_rows * block_row_bytes);
+            noc.write_zeros_l1_barrier();
+        }
         for (uint32_t row = 0; row < tile_height + history_rows; ++row) {
             const int32_t source_row =
                 static_cast<int32_t>(mt * tile_height + row) - static_cast<int32_t>(history_rows);
@@ -118,7 +133,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 };
                 if (initial_from_predecessor || row_floor != 0) {
                     read_history(predecessor_carry);
-                } else {
+                } else if (!zero_request_history) {
                     read_history(history);
                 }
             } else {

@@ -7,16 +7,133 @@ compacted slot space, and the adapter hooks must map the three configs back to m
 """
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3 import DeepSeekV3Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
 
 SPLITS = [(0, 24), (24, 24), (48, 24), (72, 21)]
+
+
+@pytest.mark.parametrize("num_layers", [1, 3, 5, 25])
+def test_migration_rejects_unfenced_kda_exports(num_layers, expect_error):
+    with expect_error(RuntimeError, "trailing KDA exports"):
+        KimiK3Adapter().validate_migration_completion(num_layers)
+
+
+@pytest.mark.parametrize("adapter,ack_layers,mtp_levels", [(KimiK3Adapter(), 1, 0), (DeepSeekV3Adapter(), 4, 1)])
+@pytest.mark.parametrize("completion_delta", [None, -6, -1, 0, 1])
+def test_migration_requires_exact_model_aware_completion(
+    monkeypatch, adapter, ack_layers, mtp_levels, completion_delta, expect_error
+):
+    from models.demos.common.prefill.runners import prefill_producer as producer
+    from models.demos.common.prefill.runners.migration_driver import _require_prefill_completion
+
+    monkeypatch.setattr(producer, "ADAPTER", adapter)
+    monkeypatch.setattr(producer, "NUM_LAYERS", 4)
+    monkeypatch.setattr(producer, "NUM_ACK_LAYERS", ack_layers)
+    monkeypatch.setattr(producer, "MTP_LEVELS", mtp_levels)
+    expected = (ack_layers + mtp_levels) * 6
+    completion = None if completion_delta is None else expected + completion_delta
+    # Exercise the real drain loop with an immediate deadline for missing/partial acks.
+    channel = None if completion is None else SimpleNamespace(try_consume_all=Mock(side_effect=[completion, 0]))
+    migrate = Mock()
+    if completion == expected:
+        _require_prefill_completion(producer, None, channel, 6, timeout_s=-1)
+        migrate()
+        migrate.assert_called_once()
+    else:
+        with expect_error(RuntimeError, "completion channel|complete layer acknowledgements"):
+            _require_prefill_completion(producer, None, channel, 6, timeout_s=-1)
+            migrate()
+        migrate.assert_not_called()
+
+
+def test_migration_does_not_drain_when_no_ack_can_cover_exports(expect_error):
+    from models.demos.common.prefill.runners.migration_driver import _require_prefill_completion
+
+    producer = SimpleNamespace(ADAPTER=KimiK3Adapter(), NUM_LAYERS=5, _drain_layer_acks=Mock())
+    with expect_error(RuntimeError, "trailing KDA exports"):
+        _require_prefill_completion(producer, object(), object(), 1)
+    producer._drain_layer_acks.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["prefix", "channel", "timeout", "excess_acks"])
+def test_prefill_failure_releases_validators_before_resident_broadcast(monkeypatch, failure, expect_error):
+    from models.demos.common.prefill.runners import migration_driver as migration
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    monkeypatch.setattr(migration.sys, "argv", ["migration_driver"])
+    monkeypatch.delenv("PREFILL_PRODUCER_MANIFEST", raising=False)
+    monkeypatch.setattr(producer, "_load_env_config", Mock())
+    monkeypatch.setattr(producer, "_mr_config", Mock(return_value=(0, 2)))
+    monkeypatch.setattr(producer, "_require_shared_table_path", Mock())
+    cfg = SimpleNamespace(num_users=1, chunks_min=1, chunks_max=1, max_requests=1, verify=False)
+    monkeypatch.setattr(producer, "_config_from_env", Mock(return_value=cfg))
+    monkeypatch.setattr(producer, "ADAPTER", KimiK3Adapter())
+    monkeypatch.setattr(producer, "NUM_LAYERS", 5 if failure == "prefix" else 4)
+    monkeypatch.setattr(producer, "NUM_ACK_LAYERS", 1)
+    monkeypatch.setattr(producer, "MTP_LEVELS", 0)
+    monkeypatch.setattr(producer, "_read_kv_chunk_table", Mock(return_value=None))
+    monkeypatch.setattr(
+        producer, "_connect_layer_ack_channel", Mock(return_value=None if failure == "channel" else object())
+    )
+    monkeypatch.setattr(producer, "_drain_layer_acks", Mock(return_value=7 if failure == "excess_acks" else 0))
+    monkeypatch.setattr(producer, "_resolve_slot_prompts", Mock(return_value=({}, {}, {})))
+    schedule = Mock(return_value=SimpleNamespace(total_pushes=6, wall_s=0.0, completed=1))
+    monkeypatch.setattr(producer, "run_schedule", schedule)
+    broadcast = Mock()
+    monkeypatch.setattr(producer, "_mr_bcast_resident", broadcast)
+    driver = Mock()
+    monkeypatch.setattr(migration, "MigrationDriver", Mock(return_value=driver))
+    service = Mock()
+    monkeypatch.setattr(migration.ttnn, "H2DStreamService", SimpleNamespace(connect=Mock(return_value=service)))
+    collective = Mock(return_value=[0, 0])
+    monkeypatch.setattr(migration.ttnn, "distributed_context_allgather_int", collective)
+
+    error = {
+        "prefix": "trailing KDA exports",
+        "channel": "completion channel",
+        "timeout": "received 0, expected 6",
+        "excess_acks": "received 7, expected 6",
+    }[failure]
+    with expect_error(RuntimeError, error):
+        migration.main()
+    collective.assert_called_once_with(0)
+    if failure in ("prefix", "channel"):
+        schedule.assert_not_called()
+        driver.attach.assert_not_called()
+    else:
+        schedule.assert_called_once()
+    driver.run.assert_not_called()
+    broadcast.assert_not_called()
+
+    # A validator receives that failure status and never joins the resident broadcast.
+    collective.reset_mock()
+    with expect_error(RuntimeError, "rank zero prefill failed"):
+        migration._run_validator(1, 2, SimpleNamespace())
+    collective.assert_called_once_with(0)
+    broadcast.assert_not_called()
+
+
+@pytest.mark.parametrize("world_size", [1, 2])
+def test_successful_prefill_releases_validators(monkeypatch, world_size):
+    from models.demos.common.prefill.runners import migration_driver as migration
+
+    collective = Mock(return_value=[1, 0])
+    monkeypatch.setattr(migration.ttnn, "distributed_context_allgather_int", collective)
+    with migration._coordinate_prefill_completion(world_size):
+        pass
+    if world_size > 1:
+        collective.assert_called_once_with(1)
+    else:
+        collective.assert_not_called()
 
 
 def _tensor(address, shape):

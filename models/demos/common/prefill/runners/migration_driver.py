@@ -7,6 +7,7 @@ import os
 import struct
 import sys
 import time
+from contextlib import contextmanager
 
 from loguru import logger
 
@@ -59,6 +60,41 @@ def apply_manifest_env(manifest: dict) -> None:
 def _parse_layers(spec: str):
     spec = (spec or "").strip()
     return [int(x) for x in spec.split(",") if x.strip()] if spec else None
+
+
+def _validate_prefill_completion_channel(producer, kv_table, ack_channel) -> int:
+    """Reject unsupported completion contracts before submitting prefill work."""
+    validate = getattr(producer.ADAPTER, "validate_migration_completion", None)
+    if validate is not None:
+        validate(producer.NUM_LAYERS)
+    layers = producer._ack_layers_per_chunk(kv_table)
+    if layers <= 0 or ack_channel is None:
+        raise RuntimeError("migration requires a layer-completion channel covering all state exports")
+    return layers
+
+
+def _require_prefill_completion(producer, kv_table, ack_channel, total_pushes: int, *, timeout_s: float = 600.0):
+    """Fence exports, including unacknowledged layers, before verification or migration reads them."""
+    if total_pushes == 0:
+        return
+    expected = _validate_prefill_completion_channel(producer, kv_table, ack_channel) * total_pushes
+    drained = producer._drain_layer_acks(ack_channel, expected, timeout_s=timeout_s)
+    if drained != expected:
+        raise RuntimeError(
+            f"migration requires complete layer acknowledgements: received {drained}, expected {expected}"
+        )
+
+
+@contextmanager
+def _coordinate_prefill_completion(world_size: int):
+    """Release validators on success or failure, preserving rank zero's original exception."""
+    completed = False
+    try:
+        yield
+        completed = True
+    finally:
+        if world_size > 1:
+            ttnn.distributed_context_allgather_int(int(completed))
 
 
 class MigrationDriver:
@@ -678,6 +714,10 @@ def _mr_bcast_triples(rank: int, triples: list) -> list:
 def _run_validator(rank: int, world_size: int, args) -> None:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
+    # Match rank zero's completion collective before entering any resident-state broadcast.
+    if not ttnn.distributed_context_allgather_int(0)[0]:
+        raise RuntimeError("rank zero prefill failed; migration cancelled on all validator ranks")
+
     cfg = producer._config_from_env()
     producer._require_shared_table_path(world_size)
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
@@ -816,57 +856,61 @@ def main() -> None:
         _run_validator(mr_rank, world_size, args)
         return
 
-    cfg = producer._config_from_env()
-    producer._require_shared_table_path(world_size)
-    if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
-        logger.warning(
-            "[migration_driver] the manifest sets migration.issue: false, which is ignored when this module "
-            "is the entry point — invoking it IS the opt-in. Run prefill_producer for a no-migration run."
+    with _coordinate_prefill_completion(world_size):
+        cfg = producer._config_from_env()
+        producer._require_shared_table_path(world_size)
+        if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
+            logger.warning(
+                "[migration_driver] the manifest sets migration.issue: false, which is ignored when this module "
+                "is the entry point — invoking it IS the opt-in. Run prefill_producer for a no-migration run."
+            )
+        driver = MigrationDriver(
+            chunk_size=producer.CHUNK_SIZE,
+            num_layers=producer.NUM_LAYERS,
+            default_dst_slot_offset=cfg.num_users,
         )
-    driver = MigrationDriver(
-        chunk_size=producer.CHUNK_SIZE,
-        num_layers=producer.NUM_LAYERS,
-        default_dst_slot_offset=cfg.num_users,
-    )
 
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
-    logger.info(
-        f"[migration_driver] service_id={service_id!r} users={cfg.num_users} "
-        f"chunks=[{cfg.chunks_min},{cfg.chunks_max}] max_requests={cfg.max_requests} verify={cfg.verify}"
-    )
-    service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
-    payload_bytes = service.payload_size_bytes()
-    logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
-
-    kv_table = producer._read_kv_chunk_table(timeout_s)
-    ack_channel = producer._connect_layer_ack_channel(timeout_s)
-
-    driver.attach()
-
-    slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
-    cfg.slot_lengths = slot_lengths
-
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
-        push_start = time.perf_counter()
-        producer._push(
-            service,
-            payload_bytes,
-            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl), actual_start),
-            producer._mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
-            producer._pack_metadata(slot_id, actual_start, actual_end),
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+        logger.info(
+            f"[migration_driver] service_id={service_id!r} users={cfg.num_users} "
+            f"chunks=[{cfg.chunks_min},{cfg.chunks_max}] max_requests={cfg.max_requests} verify={cfg.verify}"
         )
-        return (time.perf_counter() - push_start) * 1000.0
+        service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
+        payload_bytes = service.payload_size_bytes()
+        logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
-    stats = producer.run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
-    logger.info(
-        f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
-        f"requests={stats.completed}"
-    )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+        kv_table = producer._read_kv_chunk_table(timeout_s)
+        ack_channel = producer._connect_layer_ack_channel(timeout_s)
+        _validate_prefill_completion_channel(producer, kv_table, ack_channel)
+
+        driver.attach()
+
+        slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
+        cfg.slot_lengths = slot_lengths
+
+        def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
+            pool = pools_by_trace[slot_traces[slot_id]]
+            logger.info(
+                f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}"
+            )
+            push_start = time.perf_counter()
+            producer._push(
+                service,
+                payload_bytes,
+                producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl), actual_start),
+                producer._mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
+                producer._pack_metadata(slot_id, actual_start, actual_end),
+            )
+            return (time.perf_counter() - push_start) * 1000.0
+
+        stats = producer.run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        logger.info(
+            f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
+            f"requests={stats.completed}"
+        )
+        _require_prefill_completion(producer, kv_table, ack_channel, stats.total_pushes)
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)

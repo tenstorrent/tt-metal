@@ -160,7 +160,11 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{tail_entry_states_tensor_name, "tail_entry_states"},
             },
         .compile_time_args =
-            {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
+            {{"Kt", key_tiles},
+             {"Vt", value_tiles},
+             {"BH", attrs.batch_heads},
+             {"G", groups_per_head},
+             {"zero_initial_state_on_start", attrs.zero_initial_state_on_start}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
