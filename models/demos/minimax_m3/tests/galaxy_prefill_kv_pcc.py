@@ -669,12 +669,6 @@ def main():
             f"golden_root={golden_root} specs={'stream' if batch_specs is None else len(batch_specs)}",
             flush=True,
         )
-    if chunk < MSA_MIN_TOKENS and (runs_source is not None or chunked):
-        print(
-            f"[prefill-pcc] WARNING: chunked chunk={chunk} < MSA floor {MSA_MIN_TOKENS}; the first chunk "
-            f"(cache empty) has < 16 blocks and MSA topk will abort. Use PREFILL_CHUNK_SIZE >= {MSA_MIN_TOKENS}.",
-            flush=True,
-        )
 
     rows, cols = 8, 4  # SP=8 (rows), TP=4 (cols), EP=32
 
