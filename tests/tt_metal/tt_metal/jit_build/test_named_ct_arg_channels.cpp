@@ -4,21 +4,33 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 
+#include "common/executor.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/program/kernel_compile_utils.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include "jit_build/jit_build_cache.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "llrt/rtoptions.hpp"
 #include "mock_blackhole_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -234,6 +246,138 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
         .config = DataMovementConfigDescriptor{},
     };
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDuplicateBuilds) {
+    KernelDescriptor kernel = {
+        .kernel_source = "void kernel_main() {}",
+        .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+        .core_ranges = CoreRange(CoreCoord{0, 0}),
+        .blaze_named_args = {.named_compile_time_args = {{"typed.value", 7}}},
+        .config = DataMovementConfigDescriptor{},
+    };
+    ProgramDescriptor descriptor{.kernels = {kernel}};
+    kernel.core_ranges = CoreRange(CoreCoord{1, 0});
+    descriptor.kernels.push_back(kernel);
+    auto* device = devices_.at(0).get();
+
+    // Build once to put the binary on disk. Same source and args on different cores share one build.
+    Program warm(descriptor);
+    warm.impl().compile(device, false);
+    EXPECT_EQ(warm.impl().get_kernel(0)->get_full_kernel_name(), warm.impl().get_kernel(1)->get_full_kernel_name());
+
+    // The kernel uses no CBs, so its build options need nothing beyond the kernel's own.
+    Program program(descriptor);
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+    JitBuildOptions build_options(build_env.build_env);
+    program.impl().get_kernel(0)->set_build_options(build_options);
+    const size_t kernel_hash =
+        detail::KernelCompileHash(program.impl().get_kernel(0), build_options, build_env.build_key());
+
+    // Hold that hash in progress so both kernels of the fresh Program defer and join it after the sync.
+    auto& cache = JitBuildCache::inst();
+    cache.clear();
+    std::promise<void> started;
+    std::promise<void> release;
+    auto release_future = release.get_future();
+    std::thread owner([&] {
+        cache.build_once(kernel_hash, [&] {
+            started.set_value();
+            release_future.wait();
+        });
+    });
+    started.get_future().wait();
+    auto compiled = std::async(std::launch::async, [&] { program.impl().compile(device, false); });
+    EXPECT_EQ(compiled.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+    // The duplicates wait on the compiling thread, not in compile workers.
+    for (int i = 0; i < 1000 && detail::GetExecutor().num_topologies() != 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(detail::GetExecutor().num_topologies(), 0u);
+    release.set_value();
+    owner.join();
+    EXPECT_NO_THROW(compiled.get());
+    EXPECT_NO_THROW(program.impl().get_kernel(0)->binaries(build_env.build_key()));
+    EXPECT_NO_THROW(program.impl().get_kernel(1)->binaries(build_env.build_key()));
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryFailedBuild) {
+    // Each compile of this source blocks reading the FIFO until the test opens it for writing, then fails.
+    const auto fifo = std::filesystem::temp_directory_path() / ("jit_failed_build_" + std::to_string(::getpid()));
+    std::filesystem::remove(fifo);
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+    KernelDescriptor kernel = {
+        .kernel_source = "#include \"" + fifo.string() + "\"\n#error expected build failure\n",
+        .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+        .core_ranges = CoreRange(CoreCoord{0, 0}),
+        .config = DataMovementConfigDescriptor{},
+    };
+    ProgramDescriptor descriptor{.kernels = {kernel}};
+    kernel.core_ranges = CoreRange(CoreCoord{1, 0});
+    descriptor.kernels.push_back(kernel);
+    Program program(descriptor);
+    JitBuildCache::inst().clear();
+    auto compiled = std::async(std::launch::async, [&] { program.impl().compile(devices_.at(0).get(), false); });
+
+    // A nonblocking open succeeds only while a compiler has the FIFO open, so each success is one build.
+    const auto open_build = [&] { return ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK); };
+    int fd = -1;
+    while ((fd = open_build()) < 0) {
+        ASSERT_EQ(compiled.wait_for(std::chrono::milliseconds(1)), std::future_status::timeout);
+    }
+    // Once the duplicate defers, only the owner's task and its compile step remain.
+    for (int i = 0; i < 1000 && detail::GetExecutor().num_topologies() != 2; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(detail::GetExecutor().num_topologies(), 2u);
+    ::close(fd);
+    int retries = 0;
+    while (compiled.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
+        fd = open_build();
+        if (fd >= 0) {
+            ++retries;
+            ::close(fd);
+        }
+    }
+    try {
+        compiled.get();
+        ADD_FAILURE() << "compile succeeded";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("Failed to generate binaries"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(retries, 0);
+    std::filesystem::remove(fifo);
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, PlacementFailureDoesNotStartBuilds) {
+    auto* device = devices_.at(0).get();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    if (!context.rtoptions().get_fast_dispatch() ||
+        context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::WORKER) {
+        GTEST_SKIP() << "Requires a fast-dispatch mock with worker dispatch cores";
+    }
+    const auto& dispatch_cores = context.get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+    ASSERT_FALSE(dispatch_cores.empty());
+    const auto invalid_core = dispatch_cores.front();
+    const CoreCoord valid_core = invalid_core == CoreCoord{0, 0} ? CoreCoord{1, 0} : CoreCoord{0, 0};
+    for (const bool invalid_first : {false, true}) {
+        KernelDescriptor kernel{
+            .kernel_source = "void kernel_main() {}",
+            .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+            .core_ranges = CoreRange(invalid_first ? invalid_core : valid_core),
+            .blaze_named_args = {.named_compile_time_args = {{"typed.value", 8}}},
+            .config = DataMovementConfigDescriptor{},
+        };
+        ProgramDescriptor descriptor{.kernels = {kernel}};
+        kernel.core_ranges = CoreRange(invalid_first ? valid_core : invalid_core);
+        descriptor.kernels.push_back(kernel);
+        Program program(descriptor);
+        EXPECT_THROW(program.impl().compile(device, false), std::runtime_error);
+        EXPECT_TRUE(program.impl().get_kernel(0)->get_full_kernel_name().empty());
+        EXPECT_TRUE(program.impl().get_kernel(1)->get_full_kernel_name().empty());
+        EXPECT_NO_THROW(program.impl().compile(device, true));
+    }
 }
 
 }  // namespace tt::tt_metal

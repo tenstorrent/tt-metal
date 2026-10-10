@@ -34,6 +34,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
+    SfpuSrcsImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -434,6 +435,14 @@ class APPROX_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool APPROX_MODE = {self.approx_mode.cpp_enum_value};"
+
+
+@dataclass
+class SFPU_SRCS_IMPL(TemplateParameter):
+    sfpu_srcs_impl: SfpuSrcsImpl
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
 
 
 @dataclass
@@ -897,7 +906,7 @@ class WELFORD_RECIP_SIZE(TemplateParameter):
 
 
 @dataclass
-class WELFORD_RECIP_BASE(TemplateParameter):
+class WELFORD_RECIP_BASE(RuntimeParameter):
     """First index whose reciprocal sfpu_welford_recip_test.cpp computes: the run covers
     1 / (idx + 1) for idx in [base, base + 32 * TILE_CNT)."""
 
@@ -906,6 +915,25 @@ class WELFORD_RECIP_BASE(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t WELFORD_RECIP_BASE;", "I"
+
+
+@dataclass
+class WELFORD_ROWS(TemplateParameter):
+    """Rows [start_row, start_row + num_rows) of every tile that sfpu_welford_test.cpp folds
+    into the statistics; the whole tile takes the full-tile update, any other range the
+    partial-tile one."""
+
+    welford_start_row: int = 0
+    welford_num_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_START_ROW = {self.welford_start_row}u;\n"
+            f"constexpr std::uint32_t WELFORD_NUM_ROWS = {self.welford_num_rows}u;"
         )
 
 
