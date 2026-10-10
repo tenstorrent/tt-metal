@@ -96,6 +96,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
+    reconfig_data_format<SrcOrder::Reverse>(cb_sum_idx, cb_scaler_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
@@ -153,6 +154,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
+    reconfig_data_format<SrcOrder::Reverse>(cb_sum_idx, cb_scaler_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
@@ -325,6 +327,7 @@ inline void compute_rstd() {
 inline void compute_x_hat() {
     cb_wait_front(cb_mean_bcast_idx, onetile);
     cb_wait_front(cb_rstd_bcast_idx, onetile);
+    reconfig_data_format(cb_input_idx, cb_mean_bcast_idx);
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
@@ -395,6 +398,7 @@ inline void compute_output() {
 inline void compute_output() {
     cb_wait_front(cb_mean_bcast_idx, onetile);
     cb_wait_front(cb_rstd_bcast_idx, onetile);
+    reconfig_data_format(cb_input_idx, cb_mean_bcast_idx);
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, Wt - col);
@@ -504,8 +508,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_output_idx);
     copy_init(cb_input_idx);
-    reconfig_data_format(cb_scaler_idx, cb_sum_idx);
-    matmul_init(cb_sum_idx, cb_scaler_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
 #ifdef EVERYTHING_FITS_IN_L1
