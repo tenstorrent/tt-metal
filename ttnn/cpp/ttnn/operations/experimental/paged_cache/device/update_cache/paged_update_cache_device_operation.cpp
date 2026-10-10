@@ -311,6 +311,15 @@ PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOpe
     return tensor_args.cache_tensor;
 }
 
+PagedUpdateCacheDeviceOperation::topology_return_value_t PagedUpdateCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: the cache keeps its own distribution. The framework's default otherwise unions the cache's
+    // label with the update/index/page_table labels, so a replicated cache written from a mesh-sharded
+    // update came back labelled as sharded (same contract as update_padded_kv_cache /
+    // indexed_fused_update_cache).
+    return {tensor_args.cache_tensor.tensor_topology()};
+}
+
 ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
