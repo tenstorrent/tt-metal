@@ -42,6 +42,8 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention_csa import DeepSe
 from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm, Linear, LinearDecode
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache
 
+from .decode_prefetch import prefetch_rings
+
 DECODE_LAYOUTS = {
     # 8 cores keep q_a's B grid inside q_b's 8x8 rectangle, the dest of its fused-norm mcast.
     "q_a_proj": {"K": 5120, "N": 1280, "n_blocks": 8},
@@ -110,12 +112,32 @@ class DeepSeekV41Attention(DeepSeekV4Attention):
     """
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(prefetch_rings)
     q_head_norm = False
 
     def __init__(
-        self, config, layer_idx: int, weights: dict, device, cache=None, weight_dtype=ttnn.bfloat16, tp_size: int = 1
+        self,
+        config,
+        layer_idx: int,
+        weights: dict,
+        device,
+        cache=None,
+        weight_dtype=ttnn.bfloat16,
+        tp_size: int = 1,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
     ):
-        super().__init__(config, layer_idx, weights, device, cache=cache, weight_dtype=weight_dtype, tp_size=tp_size)
+        super().__init__(
+            config,
+            layer_idx,
+            weights,
+            device,
+            cache=cache,
+            weight_dtype=weight_dtype,
+            tp_size=tp_size,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+        )
         cache = _as_cache(cache)
         self.window = config.sliding_window
         self.index_topk = config.index_topk

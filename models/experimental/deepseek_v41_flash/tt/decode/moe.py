@@ -33,6 +33,8 @@ from models.experimental.deepseek_v4_flash.tt.decode.moe import (
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _memo
 
+from .decode_prefetch import prefetch_rings
+
 DECODE_LAYOUTS = {
     # One 32-expert tile per core; 12x1 sits inside the 12x8 fused-experts replica.
     "router_gate": {"K": 5120, "N": 384, "n_blocks": 12},
@@ -56,6 +58,7 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
     """
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(prefetch_rings)
 
     def __init__(self, config, weights: dict, device, cache=None, weight_dtype=None, **kwargs):
         gate = _memo(weights["gate.weight"])
@@ -72,6 +75,7 @@ class DeepSeekV41MLP(DeepSeekV4MLP):
     """V4's shared expert at V4.1's shapes, clamped like the routed experts."""
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(prefetch_rings)
     clamp_swiglu = True
 
 
@@ -146,7 +150,18 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
     router_cls = DeepSeekV41TopKRouter
     shared_expert_cls = DeepSeekV41MLP
 
-    def __init__(self, config, weights: dict, device, experts, cache=None, weight_dtype=ttnn.bfloat8_b, tp_size=1):
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device,
+        experts,
+        cache=None,
+        weight_dtype=ttnn.bfloat8_b,
+        tp_size=1,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
+    ):
         if experts.tp_size != tp_size:
             raise ValueError(f"the experts were built for TP{experts.tp_size}, not TP{tp_size}")
         super().__init__(
@@ -158,4 +173,6 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
             weight_dtype=weight_dtype,
             tp_size=tp_size,
             matmul_decode=True,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
         )
