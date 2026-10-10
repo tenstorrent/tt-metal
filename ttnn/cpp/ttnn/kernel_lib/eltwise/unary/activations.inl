@@ -64,8 +64,9 @@ struct GeluDerivative : UnaryOp<GeluDerivative<fast, Slot>, Slot> {
     }
 };
 
-/// Logsigmoid binary-in-DEST: logsigmoid_tile(In0, In1, Out) where caller
-/// has loaded x into D[In0] and exp(-x) into D[In1]; result placed in D[Out].
+/// Logsigmoid binary-in-DEST: logsigmoid_tile(In0, In1, Out) where caller has loaded x into
+/// D[In0]; result placed in D[Out]. The LLK computes the internal exponential itself, so D[In1]
+/// is accepted for binary-SFPU call-site arity but its contents are ignored.
 /// Modelled as BinaryOp (3-DEST, no CB sources).
 template <Dst In0, Dst In1, Dst Out>
 struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
