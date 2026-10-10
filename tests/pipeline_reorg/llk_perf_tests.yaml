@@ -10,61 +10,157 @@
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
 # (both use pytest-split sharding).
 
-- name: llk_perf_wormhole group 1/5
+- name: llk_perf_wormhole group 1/13
   split_group: 1
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 2/5
+- name: llk_perf_wormhole group 2/13
   split_group: 2
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 3/5
+- name: llk_perf_wormhole group 3/13
   split_group: 3
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 4/5
+- name: llk_perf_wormhole group 4/13
   split_group: 4
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 5/5
+- name: llk_perf_wormhole group 5/13
   split_group: 5
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 6/13
+  split_group: 6
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 7/13
+  split_group: 7
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 8/13
+  split_group: 8
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 9/13
+  split_group: 9
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 10/13
+  split_group: 10
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 11/13
+  split_group: 11
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 12/13
+  split_group: 12
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 13/13
+  split_group: 13
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 13
   skus:
     wh_n150_civ2:
       timeout: 150
