@@ -139,6 +139,8 @@ protected:
     // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
     // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
     bool is_compute_pack_{};
+    // True for every TENSIX compute (TRISC) state; the replay opt-out applies to all three.
+    bool is_compute_{};
     // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
     // processor does not support it. Appended to a kernel's recipe cflags only when that
     // kernel opted in, so default builds are unchanged.

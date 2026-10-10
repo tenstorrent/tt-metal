@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
+#include <tt-metalium/experimental/kernel_build_options.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstring>
@@ -265,6 +266,10 @@ void ComputeKernel::process_defines(
     }
     // pass default noc mode as compute does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+}
+
+bool ComputeKernel::get_sfpu_replay_optimization_disabled() const {
+    return this->defines_.contains(experimental::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE);
 }
 
 void EthernetKernel::process_defines(
