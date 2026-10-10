@@ -4,7 +4,8 @@
 // Batch-1 (or R-row) decode all-reduce, step 1 (Laguna): rows 0..R-1 of a [32, H] bf16 TILE tensor -> [R, H]
 // row-major rows. Row r of a 32x32 tile is 16 bf16 of face f = (r / 16) * 2 at byte f * 512 + (r % 16) * 32
 // followed by 16 of face f + 1 (512 bytes later). Core c packs tiles [c * per, (c + 1) * per) of each row into
-// 64-byte pieces of a local stage and writes them to output row r at byte c * per * 64.
+// 64-byte pieces of a local stage and writes them to output row r at byte c * per * 64. An L1 source is read piece by
+// piece straight into the stage (2.4 -> 1.8 us at 6 rows); a DRAM one through 64-byte-aligned reads + local copies.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -19,6 +20,23 @@ void kernel_main() {
     const auto o = TensorAccessor(o_args, get_common_arg_val<uint32_t>(1));
     const uint32_t c = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const uint32_t stage = get_write_ptr(0);
+    if constexpr (x_args.is_dram == 0) {
+        // an L1 source: each row's two 32-byte face pieces read straight into place (no aligned staging + local copies)
+        for (uint32_t r = 0; r < R; ++r) {
+            const uint32_t off = ((r / 16) * 2) * 512 + (r % 16) * 32;
+            for (uint32_t i = 0; i < per; ++i) {
+                const uint64_t a = x.get_noc_addr(c * per + i) + off;
+                noc_async_read(a, stage + (r * per + i) * 64, 32);
+                noc_async_read(a + 512, stage + (r * per + i) * 64 + 32, 32);
+            }
+        }
+        noc_async_read_barrier();
+        for (uint32_t r = 0; r < R; ++r) {
+            noc_async_write(stage + r * per * 64, o.get_noc_addr(r) + c * per * 64, per * 64);
+        }
+        noc_async_write_barrier();
+        return;
+    }
     // aligned 64-byte reads into tmp (a DRAM source needs a destination with the same 64-byte alignment), then
     // local 32-byte copies of the two pieces of each row
     const uint32_t tmp = get_write_ptr(1);

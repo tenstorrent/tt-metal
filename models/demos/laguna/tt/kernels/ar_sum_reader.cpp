@@ -35,6 +35,20 @@ void kernel_main() {
             noc_async_read(src + c * per * 64, base + p * slot + r * per * 64, per * 64);
         }
     }
+    if constexpr (r_args.is_dram == 0) {
+        // an L1 residual: each row's two 32-byte face pieces read straight into the residual's slot
+        for (uint32_t r = 0; r < R; ++r) {
+            const uint32_t off = ((r / 16) * 2) * 512 + (r % 16) * 32;
+            for (uint32_t i = 0; i < per; ++i) {
+                const uint64_t a = res.get_noc_addr(c * per + i) + off;
+                noc_async_read(a, base + D * slot + (r * per + i) * 64, 32);
+                noc_async_read(a + 512, base + D * slot + (r * per + i) * 64 + 32, 32);
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(0, D + 1);
+        return;
+    }
     // residual rows: aligned 64-byte reads into tmp (a DRAM residual needs a destination with the same 64-byte
     // alignment), then local 32-byte copies into the residual's slot
     const uint32_t tmp = get_write_ptr(1);
