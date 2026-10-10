@@ -45,6 +45,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
 
     ``tp_size > 1`` needs ``device`` to be a 1xTP mesh with fabric, and ``experts`` built at the
     same ``tp_size``. The inputs and outputs of :meth:`decode` are replicated over it.
+    ``use_prefetcher`` streams the attention and MoE projections through ``prefetch_buffers``,
+    the per-device decode rings V4 uses; the hyper-connections stay off them.
     """
 
     def __init__(
@@ -57,6 +59,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         cache=None,
         weight_dtype=ttnn.bfloat16,
         tp_size: int = 1,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
     ):
         cache = _as_cache(cache)
         self.config = config
@@ -77,9 +81,18 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             cache=cache.sub("attn"),
             weight_dtype=weight_dtype,
             tp_size=tp_size,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
         )
         self.mlp = DeepSeekV41SparseMoeBlock(
-            config, _strip_prefix(weights, "mlp"), device, experts, cache=cache.sub("ffn"), tp_size=tp_size
+            config,
+            _strip_prefix(weights, "mlp"),
+            device,
+            experts,
+            cache=cache.sub("ffn"),
+            tp_size=tp_size,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("attn_norm"), sharded=True

@@ -20,14 +20,10 @@ import torch
 from ..common import DeepSeekV4Module, _profile, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
-    ROUTER_GATE_GCB,
     check_decode_layout,
-    decode_prefetch_page_bytes,
-    ensure_named_gcb,
-    ensure_q_a_gcb,
+    decode_prefetch_rings,
     make_decode_prefetch_buffers,
-    q_a_page_bytes,
-    router_gate_page_bytes,
+    ring_prefetch,
     tp_gate_up_layout,
 )
 from ..layers import Linear, LinearDecode, _core_grid_contains
@@ -81,11 +77,13 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     wider input cannot use it. ``config`` is needed either way, to check the fixed weight layouts
     against the shapes this model wants.
 
-    Subclasses for other checkpoints override ``decode_layouts`` (the gate/up/down cuts) and
+    Subclasses for other checkpoints override ``decode_layouts`` (the gate/up/down cuts),
+    ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the GCB each streams through) and
     ``clamp_swiglu`` (whether the activation takes the routed experts' ``swiglu_limit`` clamp).
     """
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(decode_prefetch_rings)
     clamp_swiglu = False
 
     def __init__(
@@ -154,18 +152,11 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         if use_prefetcher:
             if prefetch_buffers is None:
                 prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
-            # Same 32-receiver FIFO as q_a (and CSA and the hyper-connections' fn). Queued
-            # after those in :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`.
-            gate_up_prefetch = {
-                "use_prefetcher": True,
-                "global_cb": ensure_q_a_gcb(prefetch_buffers, device, weight_dtype),
-                "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
-            }
-            down_prefetch = {
-                "use_prefetcher": True,
-                "global_cb": prefetch_buffers["shared_down_proj"],
-                "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype),
-            }
+            # On V4, gate/up share q_a's 32-receiver FIFO (and CSA and the hyper-connections'
+            # fn), queued after those in :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`.
+            rings = self.prefetch_rings(tp_size)
+            gate_up_prefetch = ring_prefetch(rings, "shared_gate_proj", prefetch_buffers, device, weight_dtype)
+            down_prefetch = ring_prefetch(rings, "shared_down_proj", prefetch_buffers, device, weight_dtype)
         decode_gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None
         decode_down_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
         if tp_size > 1:
@@ -290,6 +281,7 @@ def _make_router_gate(
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
     matmul_decode: Optional[bool] = None,
     layouts: dict = DECODE_LAYOUTS,
+    rings: Optional[dict] = None,
 ):
     """The learned ``[D, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
 
@@ -301,22 +293,21 @@ def _make_router_gate(
     A) where it sits instead of unreplicating it through DRAM and re-sharding it -- that round
     trip was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver
     ring or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_GCB`. ``layouts`` is
-    the table holding the ``router_gate`` cut.
+    the table holding the ``router_gate`` cut and ``rings`` (default
+    :func:`~.decode_prefetch.decode_prefetch_rings`) the GCB it streams through, if any.
     """
     if not (use_prefetcher if matmul_decode is None else matmul_decode):
         return Linear(weights["gate.weight"], device, cache.file("gate"))
     layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts, layouts=layouts))
     prefetch = {"use_prefetcher": False}
     if use_prefetcher:
-        if prefetch_buffers is None:
-            prefetch_buffers = {}
-        prefetch = {
-            "use_prefetcher": True,
-            "global_cb": ensure_named_gcb(
-                prefetch_buffers, ROUTER_GATE_GCB, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
-            ),
-            "global_cb_page_bytes": router_gate_page_bytes(weight_dtype),
-        }
+        prefetch = ring_prefetch(
+            decode_prefetch_rings() if rings is None else rings,
+            "router_gate",
+            {} if prefetch_buffers is None else prefetch_buffers,
+            device,
+            weight_dtype,
+        )
     gate = LinearDecode(
         weights["gate.weight"],
         device,
@@ -350,10 +341,12 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     The reference's renormalize-and-scale tail likewise runs inside ``fused_experts``, on the k
     values per token it already reads, rather than here across a dense E-wide row.
 
-    ``decode_layouts`` is the table holding the gate's ``router_gate`` cut.
+    ``decode_layouts`` is the table holding the gate's ``router_gate`` cut and
+    ``prefetch_rings`` the ring table naming the GCB it streams through.
     """
 
     decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(decode_prefetch_rings)
 
     def __init__(
         self,
@@ -389,6 +382,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             matmul_decode=matmul_decode,
             layouts=self.decode_layouts,
+            rings=self.prefetch_rings(),
         )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16

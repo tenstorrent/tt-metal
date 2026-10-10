@@ -47,6 +47,7 @@ Letters: ``K``/``N`` are a weight's in/out features -- a ``[K, N]`` weight, cut 
 ``E`` = ``num_local_experts``, ``T`` = token rows of an activation's shard.
 """
 
+from dataclasses import dataclass
 from typing import Optional
 
 import ttnn
@@ -299,6 +300,60 @@ def make_decode_prefetch_buffers(
         num_pages=num_prefetch_pages,
     )
     return {name: global_cb for name in DECODE_GCB_GROUP}
+
+
+@dataclass(frozen=True)
+class PrefetchRing:
+    """Which GCB a prefetched weight streams through.
+
+    ``key`` is its entry in the per-device ``prefetch_buffers`` mapping and ``specs`` the
+    ``decode_weight_layout`` dicts the ring is sized from (their slab gcd is its page). Every
+    weight naming the same ``key`` must give the same ``specs``. ``num_pages=None`` marks the
+    shared decode GCB, which :func:`make_decode_prefetch_buffers` builds up front under the
+    :data:`DECODE_GCB_GROUP` keys; a private ring is built on first use at ``num_pages``.
+    """
+
+    key: str
+    specs: tuple
+    num_pages: Optional[int] = None
+
+
+def decode_prefetch_rings(tp_size: int = 1) -> dict:
+    """V4's rings by weight name; a name that is absent is not prefetched.
+
+    The same at every ``tp_size``: the TP4 shared expert's gate/up are taken off the q_a ring by
+    :class:`~.moe.DeepSeekV4MLP` itself.
+    """
+    q_a = PrefetchRing(Q_A_GCB, tuple(q_a_ring_specs()), Q_A_GCB_PAGES)
+    shared = tuple(decode_gcb_group_specs())
+    return {
+        "q_a_proj": q_a,
+        "kv_proj": PrefetchRing(KV_GCB, (DECODE_LAYOUTS["kv_proj"],), TP_PRIVATE_GCB_PAGES),
+        "router_gate": PrefetchRing(ROUTER_GATE_GCB, (DECODE_LAYOUTS["router_gate"],), TP_PRIVATE_GCB_PAGES),
+        "shared_gate_proj": q_a,
+        "shared_up_proj": q_a,
+        **{name: PrefetchRing(name, shared) for name in DECODE_GCB_GROUP},
+    }
+
+
+def ring_prefetch(rings: dict, name: str, prefetch_buffers: dict, device, weight_dtype: ttnn.DataType) -> dict:
+    """The ``use_prefetcher`` / ``global_cb`` / ``global_cb_page_bytes`` kwargs for weight ``name``
+    under ``rings`` (see :func:`decode_prefetch_rings`), building its private ring on first use."""
+    ring = rings.get(name)
+    if ring is None:
+        return {"use_prefetcher": False}
+    specs = list(ring.specs)
+    if ring.num_pages is None:
+        if ring.key not in prefetch_buffers:
+            raise KeyError(f"{name} streams through the shared decode GCB, which this mapping does not hold")
+        global_cb = prefetch_buffers[ring.key]
+    else:
+        global_cb = ensure_named_gcb(prefetch_buffers, ring.key, device, specs, weight_dtype, ring.num_pages)
+    return {
+        "use_prefetcher": True,
+        "global_cb": global_cb,
+        "global_cb_page_bytes": decode_gcb_page_bytes(specs, weight_dtype),
+    }
 
 
 def check_decode_layout(name: str, K: int, N: int, batch: Optional[int] = None, layouts: dict = DECODE_LAYOUTS) -> dict:
