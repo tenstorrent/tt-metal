@@ -45,3 +45,12 @@ The cold test does not fit 600 s at the 900 MHz clamp: warmup alone passes 400 s
 cut warm work so one arm finishes in ~400 s: e.g. init only the 1344x768/5 s bucket buffer instead of
 all 26 buckets, and skip keyframe-layout warmups the fl2va 5 s run does not use (or run at full AICLK).
 Then requeue off then on (on needs its precomputed-AdaLN cache: a cache-only job first, then the timed run).
+
+## 2026-10-10 05:10 PDT (run 1370): still blocked on blx03
+- g14blx03.READY is stale (04:36 UTC, before the outage). blx03 broker at 12:05 UTC: "device HELD
+  (degraded): device is dirty and unverified: gate/post-job: 8/32 chip", health gates 884/886/888/892
+  failed, bridge-reset chips 8-15 failed. Wait probe: tt-project/t288/probe_blx03.sh (exits 0 once the
+  broker is active and not holding the device).
+- No device work, no copies to blx01 (coordinator 05:02 PDT). Branch unchanged at f7266236d90 on origin.
+- Before requeueing, the warm-only-the-used-bucket flags (coordinator decision 05:04 PDT) must land on
+  ttp/t288-adaln-ab; the cold test does not fit 600 s at the 900 MHz clamp otherwise.
