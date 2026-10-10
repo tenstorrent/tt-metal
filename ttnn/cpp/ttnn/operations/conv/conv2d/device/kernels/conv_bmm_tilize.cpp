@@ -247,6 +247,12 @@ void kernel_main() {
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
+#ifdef ARCH_BLACKHOLE
+    // Subblock and inner block shapes where the block run reads slower keep the per-tile pack.
+    constexpr bool tile_pack_subblocks =
+        (out_subblock_w == 1 && in0_block_w < 4) ||
+        (out_subblock_w == 2 && !packer_l1_acc && (out_subblock_h == 1 || in0_block_w < 6));
+#endif
 
     uint32_t bias_block_offset = 0;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
@@ -487,8 +493,7 @@ void kernel_main() {
 
                         uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                        // The block run does not pay off for one-column subblocks over a short inner block.
-                        if constexpr (out_subblock_w == 1 && in0_block_w < 4) {
+                        if constexpr (tile_pack_subblocks) {
                             PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
                                 start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles)));
                         } else {
@@ -565,7 +570,7 @@ void kernel_main() {
                         tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
                         // As for the subblock pack, but with packer L1 accumulate the block run still pays off here.
-                        if constexpr (out_subblock_w == 1 && in0_block_w < 4 && !packer_l1_acc) {
+                        if constexpr (tile_pack_subblocks && !packer_l1_acc) {
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, untilize_mode_out_cb_id);
                             }
