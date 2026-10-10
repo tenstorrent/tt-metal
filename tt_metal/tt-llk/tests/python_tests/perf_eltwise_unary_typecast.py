@@ -4,13 +4,11 @@
 """
 On-silicon perf benchmark for the SFPU typecast op (issue #46751).
 
-Measures cycles/tile for the typecast variants whose SFPLOADMACRO fast path was
-re-introduced for Blackhole. The macro fast path in the calculate_typecast_*
-primitives is gated `#ifndef DISABLE_SFPLOADMACRO`; compiling with
-TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback.
-Running this module twice -- once without the env (macro ON,
-optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
--- gives a clean A/B on the same tree.
+Measures cycles/tile for the typecast pairs. Most rows run SFPLOADMACRO bodies, whose
+fast path in the calculate_typecast_* primitives is gated `#ifndef DISABLE_SFPLOADMACRO`;
+compiling with TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback, so running
+this module with and without that env gives an A/B on the same tree. The last three rows
+are plain loops in both builds.
 
 Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
@@ -48,8 +46,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
-# The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
-# including the paths re-introduced by issue #46751.
+# The (IN, OUT, dest_acc) typecast cases: the SFPLOADMACRO bodies, then three plain-loop
+# bodies that have no DISABLE_SFPLOADMACRO variant.
 #
 # dest_acc is the production setting except in the two 16-bit Dest rows marked below
 # (ttnn.typecast forces dest_acc=Yes for 32-bit outputs); their 32-bit Dest rows follow.

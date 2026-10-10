@@ -335,9 +335,9 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     )
 
 
-# The pairs whose 32-bit Dest bodies run SFPLOADMACRO programs on Blackhole, with the 16-bit Dest
-# pair that shares the fp32 -> uint16 macro.
-_MACRO_PAIRS_32B = [
+# Edge-value pins: the 32-bit Dest SFPLOADMACRO programs of the uint16 inputs and of float32 to uint16, the 16-bit
+# Dest pair that shares the float to uint16 macro, and float32 to bfloat16, whose plain loop rounds on the low half.
+_EDGE_PAIRS = [
     (DataFormat.UInt16, DataFormat.Float32),
     (DataFormat.UInt16, DataFormat.UInt32),
     (DataFormat.UInt16, DataFormat.Int32),
@@ -347,26 +347,32 @@ _MACRO_PAIRS_32B = [
 ]
 
 
+def _spread_over_face(fixed: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    # An odd period of at most 31 puts every fixed class in each 4-row block on both column parities, so each class
+    # reaches every SFPU row of the face and every register of a rotation; the other slots keep their random values.
+    period = 31
+    assert len(fixed) < period
+    pos = torch.arange(values.numel()) % period
+    slot = pos < len(fixed)
+    values[slot] = fixed[pos[slot]].to(values.dtype)
+    return values
+
+
 def _edge_spec_uint16() -> StimuliSpec:
-    # Every uint16 value class, then random values. 0xFFFF stays on even positions so no 32-bit
-    # output word reads back as all ones (which the readback path treats as a timeout).
+    # Every uint16 value class, random values in between; the outputs are 32-bit words.
     def dist(size, dtype, generator):
-        values = torch.randint(0, 65535, (size,), generator=generator)
-        fixed = torch.tensor(
-            [0, 1, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, 0, 0xFFFF, 0, 2, 0xFFFF, 0]
-        )
-        values[: len(fixed)] = fixed
-        values[1::2] = torch.minimum(values[1::2], torch.tensor(0xFFFE))
-        return values.to(dtype)
+        values = torch.randint(0, 65536, (size,), generator=generator)
+        fixed = torch.tensor([0, 1, 2, 255, 256, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF])
+        return _spread_over_face(fixed, values).to(dtype)
 
     return StimuliSpec(distribution=dist, seed=16)
 
 
 def _edge_spec_float_to_uint16() -> StimuliSpec:
-    # Negatives, fractions with ties, the top of the range and past it, then random values; the
-    # saturating values stay off the odd positions.
+    # Negatives, fractions with ties, the top of the range and past it, random in-range values in between. A
+    # saturating input never shares its output word with another: an all-ones word reads back as a timeout.
     def dist(size, dtype, generator):
-        values = torch.rand(size, generator=generator) * 70100.0 - 100.0
+        values = torch.rand(size, generator=generator) * 65400.0 - 100.0
         fixed = torch.tensor(
             [
                 0.0,
@@ -380,7 +386,9 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
                 254.5,
                 255.5,
                 65534.0,
+                0.0,
                 65534.5,
+                0.0,
                 65535.0,
                 0.0,
                 70000.0,
@@ -388,12 +396,12 @@ def _edge_spec_float_to_uint16() -> StimuliSpec:
                 1.0e9,
                 0.0,
                 -1.0e9,
-                0.0,
             ]
         )
-        values[: len(fixed)] = fixed
-        values[1::2] = torch.clamp(values[1::2], max=65534.0)
-        return values.to(dtype)
+        values = _spread_over_face(fixed, values).to(dtype)
+        saturates = values.float() >= 65534.5
+        assert not (saturates[0::2] & saturates[1::2]).any()
+        return values
 
     return StimuliSpec(distribution=dist, seed=32)
 
@@ -423,25 +431,17 @@ def _edge_spec_float_to_bf16() -> StimuliSpec:
     return StimuliSpec(distribution=dist, seed=64)
 
 
-def _as_float_tensor(src) -> torch.Tensor:
-    return (
-        src.float()
-        if isinstance(src, torch.Tensor)
-        else torch.tensor(src, dtype=torch.float32)
-    )
-
-
 def _golden_float_to_uint16(src):
     # Clamp at zero, round to nearest with ties away from zero (SFPSTOCHRND float to integer),
     # saturate at 65535; floor(x + 0.5) in float64 is exact for every float32 x.
-    values = torch.clamp(_as_float_tensor(src).to(torch.float64), min=0.0)
+    values = torch.clamp(src.float().to(torch.float64), min=0.0)
     return torch.clamp(torch.floor(values + 0.5), 0, 65535).to(torch.int32).flatten()
 
 
 @parametrize(
     formats=[
         InputOutputFormat(i, o)
-        for i, o in _MACRO_PAIRS_32B
+        for i, o in _EDGE_PAIRS
         if InputOutputFormat(i, o) in TYPECAST_PAIRS
     ],
     dest_acc=_production_dest_acc,
@@ -481,7 +481,7 @@ _INT32_MIN = -(2**31)
 
 def _golden_float_to_int32(src):
     # Truncation toward zero, saturation by the sign (NaN by its sign bit), zero and denormals to 0.
-    values = _as_float_tensor(src)
+    values = src.float()
     negative = values.view(torch.int32) < 0
     magnitude = values.abs()
     out = torch.trunc(values).to(torch.float64)
