@@ -120,8 +120,14 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
+        # The affine prefix composes the per-chip summaries into the carried state, carry = A @ carry + B,
+        # once per SP chip per chunk. At HiFi2 its rounding accumulates in long-memory channels over long
+        # prompts; with the complement-form decay in the recurrence kernels, HiFi4 keeps every K3 KDA layer
+        # at >= 0.99 PCC against exact math over a 1M-token prompt.
         recurrence=KDARecurrenceProgramConfig(
-            local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
+            local_scan_strategy="grouped",
+            summary_group_chunks=group_chunks[active_seq_len_local],
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi4,
         ),
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
