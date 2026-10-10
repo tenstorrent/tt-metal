@@ -180,7 +180,11 @@ void bind_moe_compute(nb::module_& mod) {
           INTERLEAVED or HEIGHT_SHARDED with whole rows per shard, DRAM or L1; WIDTH_SHARDED,
           BLOCK_SHARDED and ND sharding are rejected (a row would span several pages). Nothing is
           staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
-          this path. That form does not support shared experts.
+          this path. That form does not support shared experts. Outputs 1 and 2 are a one-page
+          placeholder and the packed ``(token, k)`` lists
+          (``moe_compute_utils.decode_packed_token_lists``) instead of the activation rows and the
+          per-expert token pages, and a call is not capped at 32 tokens per combine core: the token
+          id must fit 24 bits and k 8 bits.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and
