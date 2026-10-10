@@ -724,6 +724,104 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         same_width_ranges = detail::get_core_page_ranges(input_buffer, output_buffer);
     }
 
+    // Staged path (differing page widths): 4 reader threads gather the output shard from the input
+    // shards into a staging DFB one unit (the gcd of the page sizes) per entry, and 2 writer threads
+    // copy the units into the output shard, all with implicit sync. Each NoC transfer is one full entry,
+    // and with no skip strides output unit k lands at offset k * unit_size. Every reader thread needs at
+    // least one unit, since the DFB's final-credit barrier waits for all of a kernel's threads.
+    if (diff_width) {
+        bool staged = true;
+        std::vector<std::pair<NodeCoord, std::vector<uint32_t>>> staged_varargs;
+        uint32_t staged_max_len = 0;
+        KernelRunArgs writer_run{.kernel = KernelSpecName{"writer"}};
+        for (const auto& core : cores) {
+            const auto& blocks = diff_width_ranges.at(core);
+            for (const auto& block : blocks) {
+                for (const auto& ps : block.base_pattern) {
+                    staged = staged && !ps.skip;
+                }
+            }
+            std::vector<uint32_t> args = detail::get_runtime_args_for_given_ranges_diff_width(
+                physical_core_coords, blocks, 0, /*input_addr=*/0, 0, blocks.size());
+            args.erase(args.begin() + coords_count);  // the kernel reads the input base from tensor::input
+            const uint32_t num_units = args[coords_count];
+            staged = staged && num_units >= kGenNumReaderThreads;
+            AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values,
+                core,
+                {{"num_entries", num_units}, {"block_width", 1}, {"shard_width", 1}, {"entry_bytes", unit_size}});
+            staged_max_len = std::max(staged_max_len, static_cast<uint32_t>(args.size()));
+            staged_varargs.emplace_back(NodeCoord{core.x, core.y}, std::move(args));
+        }
+        if (staged) {
+            const DFBSpecName STAGE_DFB{"reshard_stage"};
+            ProgramSpec spec;
+            spec.name = "reshard_generic_staged";
+            spec.dataflow_buffers = {DataflowBufferSpec{
+                .unique_id = STAGE_DFB,
+                .entry_size = unit_size,
+                .num_entries = 2 * kGenNumReaderThreads,
+                .data_format_metadata = data_format,
+            }};
+            spec.kernels = {
+                KernelSpec{
+                    .unique_id = KernelSpecName{"reader"},
+                    .source = std::filesystem::path(
+                        "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/dataflow/"
+                        "reshard_reader_diff_width_staged.cpp"),
+                    .num_threads = kGenNumReaderThreads,
+                    .dfb_bindings = {ProducerOf(STAGE_DFB, "stage")},
+                    .tensor_bindings = {TensorBinding{
+                        .tensor_parameter_name = TensorParamName{kGenInputTensorParam},
+                        .accessor_name = kGenInputTensorParam}},
+                    .compile_time_args =
+                        {{"num_x_cores", static_cast<uint32_t>(grid.x)},
+                         {"num_y_cores", static_cast<uint32_t>(grid.y)},
+                         {"unit_size", unit_size}},
+                    .hw_config = ttnn::create_reader_datamovement_config(),
+                    .advanced_options = {.num_runtime_varargs = staged_max_len},
+                },
+                KernelSpec{
+                    .unique_id = KernelSpecName{"writer"},
+                    .source = std::filesystem::path(
+                        "ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded/device/kernels/"
+                        "dataflow/writer_unary_staged_to_shard.cpp"),
+                    .num_threads = kGenNumWriterThreads,
+                    .dfb_bindings = {ConsumerOf(STAGE_DFB, "stage")},
+                    .tensor_bindings = {TensorBinding{
+                        .tensor_parameter_name = TensorParamName{kGenOutputTensorParam}, .accessor_name = "dst"}},
+                    .runtime_arg_schema =
+                        {.runtime_arg_names = {"num_entries", "block_width", "shard_width", "entry_bytes"}},
+                    .hw_config = ttnn::create_writer_datamovement_config(),
+                }};
+            spec.tensor_parameters = {
+                TensorParameter{.unique_id = TensorParamName{kGenInputTensorParam}, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = TensorParamName{kGenOutputTensorParam}, .spec = output.tensor_spec()},
+            };
+            spec.work_units = {WorkUnitSpec{
+                .name = "reshard_generic_staged_work_unit",
+                .kernels = {KernelSpecName{"reader"}, KernelSpecName{"writer"}},
+                .target_nodes = all_cores,
+            }};
+
+            KernelRunArgs reader_run{.kernel = KernelSpecName{"reader"}};
+            for (auto& [node, args] : staged_varargs) {
+                args.resize(staged_max_len, 0u);
+                reader_run.advanced_options.runtime_varargs.emplace(node, std::move(args));
+            }
+            ProgramRunArgs run_params;
+            run_params.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
+            run_params.tensor_args = {
+                {TensorParamName{kGenInputTensorParam}, TensorArgument{input.mesh_tensor()}},
+                {TensorParamName{kGenOutputTensorParam}, TensorArgument{output.mesh_tensor()}},
+            };
+            return ttnn::device_operation::ProgramArtifacts{
+                .spec = std::move(spec),
+                .run_params = std::move(run_params),
+            };
+        }
+    }
+
     std::vector<PerNodeVarargs> per_node;
     per_node.reserve(cores.size());
     uint32_t max_len = 0;
