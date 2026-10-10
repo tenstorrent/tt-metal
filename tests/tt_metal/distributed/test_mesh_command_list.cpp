@@ -594,5 +594,87 @@ TEST_F(CommandListMultiCQTest, EnforcesTheCommandQueueUsedAtBuildTime) {
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 }
 
+TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
+    // Traces and command lists may share a device, but never while the other is live.
+    auto list_workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "exclusion_list");
+    auto trace_workload = make_l1_write_workload(*mesh_device_, kAddressB, kValueB, "exclusion_trace");
+    auto& cq = mesh_device_->mesh_command_queue(0);
+
+    // A live builder, and then live lists on their own, block trace capture until the last list is
+    // released. The remaining list is released by its destructor rather than by deallocate().
+    {
+        CommandListBuilder builder(*mesh_device_);
+        EXPECT_THAT(
+            [&] { (void)mesh_device_->begin_mesh_trace(cq); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
+        builder.add(list_workload);
+        auto first_list = builder.build(cq);
+        auto second_list = builder.build(cq);
+        builder.deallocate();
+        first_list.deallocate();
+        EXPECT_THAT(
+            [&] { (void)mesh_device_->begin_mesh_trace(cq); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
+
+        write_l1(mesh_device_, kAddressA, 0);
+        EnqueueCommandList(cq, second_list, /*blocking=*/true);
+        EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
+    }
+
+    // With every command list released, a trace can be captured and replayed. The trace blocks
+    // builders both during capture and after capture ends, until it is released.
+    EnqueueMeshWorkload(cq, trace_workload, /*blocking=*/true);
+    const auto trace_id = mesh_device_->begin_mesh_trace(cq);
+    EXPECT_THAT(
+        [&] { CommandListBuilder builder(*mesh_device_); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("while a trace exists")));
+    EnqueueMeshWorkload(cq, trace_workload, /*blocking=*/false);
+    mesh_device_->end_mesh_trace(cq, trace_id);
+    EXPECT_THAT(
+        [&] { CommandListBuilder builder(*mesh_device_); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("while a trace exists")));
+
+    write_l1(mesh_device_, kAddressB, 0);
+    mesh_device_->replay_mesh_trace(cq, trace_id, /*blocking=*/true);
+    EXPECT_EQ(read_l1(mesh_device_, kAddressB), kValueB);
+    mesh_device_->release_mesh_trace(trace_id);
+
+    // Releasing the trace makes command lists available again.
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(list_workload);
+    auto command_list = builder.build(cq);
+    write_l1(mesh_device_, kAddressA, 0);
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
+    EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
+}
+
+TEST_F(CommandListTest, TracesOnInactiveSubDeviceManagersBlockBuilders) {
+    // A trace outlives the loading of a different sub-device manager, so it must keep blocking builders.
+    const auto worker_grid = mesh_device_->compute_with_storage_grid_size();
+    const SubDevice full_grid_sub_device(
+        std::array{CoreRangeSet(CoreRange({0, 0}, {worker_grid.x - 1, worker_grid.y - 1}))});
+    const auto trace_manager = mesh_device_->create_sub_device_manager({full_grid_sub_device}, 3200);
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "inactive_manager_trace");
+    auto& cq = mesh_device_->mesh_command_queue(0);
+
+    mesh_device_->load_sub_device_manager(trace_manager);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    const auto trace_id = mesh_device_->begin_mesh_trace(cq);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    mesh_device_->end_mesh_trace(cq, trace_id);
+
+    mesh_device_->clear_loaded_sub_device_manager();
+    EXPECT_THAT(
+        [&] { CommandListBuilder builder(*mesh_device_); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("while a trace exists")));
+
+    // Traces are released from the active manager, so the trace's manager must be reloaded first.
+    mesh_device_->load_sub_device_manager(trace_manager);
+    mesh_device_->release_mesh_trace(trace_id);
+    mesh_device_->clear_loaded_sub_device_manager();
+    mesh_device_->remove_sub_device_manager(trace_manager);
+    EXPECT_NO_THROW({ CommandListBuilder builder(*mesh_device_); });
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::test

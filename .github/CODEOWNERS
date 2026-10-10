@@ -132,8 +132,7 @@ tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @t
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu # this should go away
 tt_metal/detail/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra # this should go away
-tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
-tt_metal/distributed/experimental/command_list.* @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
+tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @anashTT
 tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
@@ -178,9 +177,7 @@ tt_metal/impl/data_format/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @nc
 tt_metal/impl/dataflow_buffer/ @abhullar-tt @arikTT
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @sidnadTT @tenstorrent/metalium-developers-triage
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu
-tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/dispatch/*telemetry* @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/dispatch/kernels/*telemetry* @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
+tt_metal/impl/dispatch/ @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @anashTT
 tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @anashTT @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
@@ -211,7 +208,7 @@ tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu 
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
 tt_metal/impl/threading/ @cfjchu @tt-asaigal @msudumbrekar-TT
-tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
+tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @anashTT
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
@@ -278,7 +275,7 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @
 
 # metal tests
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed
-tests/tt_metal/distributed/test_mesh_command_list.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
+tests/tt_metal/distributed/test_mesh_command_list.cpp @anashTT @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-metal-distributed
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu
