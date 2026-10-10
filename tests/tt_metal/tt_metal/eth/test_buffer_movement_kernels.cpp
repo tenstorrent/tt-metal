@@ -367,6 +367,9 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 namespace tt::tt_metal {
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -417,6 +420,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
 }
 
 TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -467,6 +473,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
@@ -639,6 +648,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
 }
 
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -713,6 +725,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
 }
 
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);

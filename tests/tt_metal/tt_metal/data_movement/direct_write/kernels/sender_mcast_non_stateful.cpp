@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "hw/inc/api/debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t test_id = get_arg(args::test_id);

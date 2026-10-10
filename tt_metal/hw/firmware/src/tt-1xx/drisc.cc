@@ -49,7 +49,7 @@ uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __a
 // firmwares this block is streaming-only: a DRISC kernel built under TT_METAL_STREAMING_PROFILER resolves
 // kernel_profiler::wIndex (and zoneValid, which kernel_profiler_streaming.hpp defines itself for FW builds) out of
 // this firmware ELF via --just-symbols. Without it the kernel fails to link.
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
 }  // namespace kernel_profiler
