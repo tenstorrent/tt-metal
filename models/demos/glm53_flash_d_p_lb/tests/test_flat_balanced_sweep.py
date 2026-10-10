@@ -20,7 +20,12 @@ import torch
 
 import ttnn
 
-E, NG, T, CAP = 36, 288, 5120, 8192
+# GLM_SWEEP_E / GLM_SWEEP_CAP / GLM_SWEEP_ACT: other deployments (local experts, capacity, activation name of
+# flat_expert.ACTS)
+E = int(os.environ.get("GLM_SWEEP_E", "36"))
+NG, T = max(288, E), 5120
+CAP = int(os.environ.get("GLM_SWEEP_CAP", "8192"))
+ACT = os.environ.get("GLM_SWEEP_ACT", "clamped_silu")
 # GLM_SWEEP_H / GLM_SWEEP_I: other expert shapes (hidden, intermediate), e.g. 7168 / 2048, 6144 / 2048, 3584 / 3072
 H = int(os.environ.get("GLM_SWEEP_H", "4096"))
 I = int(os.environ.get("GLM_SWEEP_I", "2048"))
@@ -68,7 +73,7 @@ def test_flat_balanced_sweep(device):
             gids=[list(range(E))],
             n_global=NG,
             wdtype="bf4",
-            act="clamped_silu",
+            act=ACT,
             pin=1,
             x_bf16=XBF16,
             h_bf16=HBF16,
@@ -85,18 +90,29 @@ def test_flat_balanced_sweep(device):
 
     hdl = ttnn.device.RegisterProgramRealtimeProfilerCallback(cb) if rt else None
     ms_list = [int(v) for v in os.environ["GLM_SWEEP_M"].split(",")] if os.environ.get("GLM_SWEEP_M") else MS
+    # GLM_SWEEP_COUNTS=file, GLM_SWEEP_COUNTS_KEY=model: uneven routing ({model: {pattern: [count per expert]}});
+    # M is then the pattern's mean count (the table's M_total its total)
+    cases = [(M, [M] * E) for M in ms_list]
+    if os.environ.get("GLM_SWEEP_COUNTS"):
+        import json
+
+        pats = json.load(open(os.environ["GLM_SWEEP_COUNTS"]))[os.environ["GLM_SWEEP_COUNTS_KEY"]]
+        cases = [(name, cl) for name, cl in pats.items()]
     rows_out = []
     try:
-        for M in ms_list:
+        for M, cl in cases:
+            pads = [(c + 31) // 32 * 32 for c in cl]
             counts = torch.zeros(1, NG, dtype=torch.int32)
             regions = torch.zeros(1, NG, dtype=torch.int32)
-            counts[0, :E] = M
-            regions[0, :E] = torch.arange(E, dtype=torch.int32) * M
+            counts[0, :E] = torch.tensor(cl, dtype=torch.int32)
+            regions[0, :E] = torch.tensor([sum(pads[:e]) for e in range(E)], dtype=torch.int32)
+            n_rows = max(sum(pads), 32)
             # (seeded per M: a run's inputs at M do not depend on its M list, so dumps of different runs compare)
-            tidx = torch.randint(0, T, (1, E * M), dtype=torch.int32, generator=torch.Generator().manual_seed(M))
+            seed = M if isinstance(M, int) else sum(cl)
+            tidx = torch.randint(0, T, (1, n_rows), dtype=torch.int32, generator=torch.Generator().manual_seed(seed))
             cd, rd, td = rm(counts, ttnn.uint32), rm(regions, ttnn.uint32), rm(tidx, ttnn.uint32)
             if UNIFIED:  # the dispatched buffer: the experts' rows back to back (>= one expert's capacity of rows)
-                xb = rm(torch.randn(max(E * M, CAP), H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
+                xb = rm(torch.randn(max(sum(cl), CAP), H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
                 call = lambda: ttnn.bringup.unified_routed_expert_moe(  # noqa: E731
                     xb,
                     rd,
@@ -133,7 +149,7 @@ def test_flat_balanced_sweep(device):
                 if hit:
                     dev, ghz = statistics.median(per) / 1e3, recs[hit[0]][1]
             ms = dev if dev is not None else wall
-            rows = E * M
+            rows = sum(cl)
             y_b = (2 if UNI_HP else 1088 / 1024) if UNIFIED else (2 if YRM else 1088 / 1024)  # y bytes per element
             dram = (W_BYTES + rows * H * (2 + y_b)) / (ms * 1e-3) / 1e9 / DRAM_GBS
             flops = rows * 6 * H * I
@@ -142,7 +158,7 @@ def test_flat_balanced_sweep(device):
             mg = flops / (ms * 1e-3) / (peak_core * N_GRID)
             rows_out.append((M, rows, ms, wall, ms / E * 1e3, dram, mc, mg, ghz))
             print(
-                f"[sweep] M {M:5d} rows {rows:6d}: dev {ms:8.3f} ms (wall {wall:8.3f}) {ms / E * 1e3:7.1f} us/expert "
+                f"[sweep] M {M!s:>5} rows {rows:6d}: dev {ms:8.3f} ms (wall {wall:8.3f}) {ms / E * 1e3:7.1f} us/expert "
                 f"DRAM {dram:5.1%} math90 {mc:5.1%} math110 {mg:5.1%} @ {ghz:.3f} GHz",
                 flush=True,
             )

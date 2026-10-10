@@ -300,6 +300,40 @@ def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None):
     return host.to(device, mc)
 
 
+# plan fields that decide where every weight tile is packed (flat_weight_regions, _bank_sharded)
+WEIGHT_LAYOUT_KEYS = (
+    "banks", "kblk", "rg", "np", "n_rd", "n_rd_sg", "nk_gu", "nd", "pcds", "col0s",
+    "rdown", "kd_r", "n_rdn", "pcd_r", "rem_cols", "nblk_r", "nsg",
+)  # fmt: skip
+
+
+def _adopt_legacy(cache_prefix, wdtype, files):
+    """Caches written before the layout-only key were keyed on the whole plan (capacity, h buffers, ...), so any
+    plan change re-packed every layer (~1 h for 42 layers on the CPU). When the layout-keyed files are missing, hard
+    link the newest whole-plan-keyed set of this layer (same weights, dtype and mesh directory): the packing depends
+    on the shape and the grid only, and no packing change was made while those keys were in use. Set
+    FLAT_CACHE_NO_ADOPT=1 to repack instead."""
+    import os
+
+    if os.environ.get("FLAT_CACHE_NO_ADOPT") or all(Path(f).is_file() for f in files.values()):
+        return
+    stem = Path(cache_prefix)
+    sets = {}
+    for f in stem.parent.glob(f"{stem.name}.flat.{wdtype}.*.tensorbin"):
+        key = f.name[len(stem.name) + len(f".flat.{wdtype}.") :].split(".")[0]
+        if not key.startswith("lay"):
+            sets.setdefault(key, []).append(f)
+    names = list(files)
+    full = [k for k, fs in sets.items() if all(any(x.name.endswith(f".{n}.tensorbin") for x in fs) for n in names)]
+    if not full:
+        return
+    best = max(full, key=lambda k: max(x.stat().st_mtime for x in sets[k]))
+    for n, dst in files.items():
+        src = stem.parent / f"{stem.name}.flat.{wdtype}.{best}.{n}.tensorbin"
+        if not Path(dst).is_file():
+            os.link(src, dst)
+
+
 def _load_cached(cache_file, device):
     """A _bank_sharded tensor from its dump (the memory config is part of the stored spec), or None."""
     if cache_file is None or not Path(cache_file).is_file():
@@ -1773,8 +1807,12 @@ class FlatRoutedExpert:
         names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
         files = dict.fromkeys(names)
         if cache_prefix is not None:
-            key = hashlib.sha1(repr((sorted(lay.items()), gids, n_dev)).encode()).hexdigest()[:12]
-            files = {n: f"{cache_prefix}.flat.{wdtype}.{key}.{n}.tensorbin" for n in names}
+            # keyed on what decides the packing (flat_weight_regions, _bank_sharded) only: the capacity, sub-block
+            # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
+            layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay}
+            key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
+            files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
+            _adopt_legacy(cache_prefix, wdtype, files)
         cached = {n: _load_cached(files[n], device) for n in names}
         if any(t is None for t in cached.values()):
             weights = weights() if callable(weights) else weights
