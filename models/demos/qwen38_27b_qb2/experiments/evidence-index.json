@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T07:22:21.463366+00:00",
+  "generated_at": "2026-10-10T07:42:06.603367+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -179,13 +179,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 154001,
-      "sha256": "7bbf3995d7af4910c588f996d6787504ac1d8b1cc6347e32a20935f952e168fe"
+      "bytes": 156461,
+      "sha256": "3df06d54b4d65f11df602a7d52f8b7e628c70a0cbdd4f550852cfbfc83ff4a7a"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 21450,
-      "sha256": "bc501f498dd7dcde7c7c7be14fed9dd48ebf880bcdba9a8e237f01f851fd281f"
+      "bytes": 22100,
+      "sha256": "23a14254add8827c28315b2994c493f5cee162c3e57db1101f68b30f8698e52c"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -10558,6 +10558,26 @@
       "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/summary.json",
       "bytes": 2071,
       "sha256": "d0f0bce8d2223e80cf4bc5c4d2b8e3a49c53eb039f5323369332e1f9cd8b4d95"
+    },
+    {
+      "path": "galaxy-evidence/shield-reference-38027117236/README.md",
+      "bytes": 9467,
+      "sha256": "a344288aa8480f845f1f152509a3b8b7076d268136554ae18b16a54e9446499a"
+    },
+    {
+      "path": "galaxy-evidence/shield-reference-38027117236/audit.json",
+      "bytes": 16430,
+      "sha256": "bf251a27e991df2ccf1e58b7d4fe95074ed443257f3f7008ad8846cdc73194b0"
+    },
+    {
+      "path": "galaxy-evidence/shield-reference-38027117236/benchmark-report.json",
+      "bytes": 20520,
+      "sha256": "47bb0c71034320ac2349077dbd7fb09f362cc0cc98c18a90af5ac2f7dffeaee8"
+    },
+    {
+      "path": "galaxy-evidence/shield-reference-38027117236/reference-config.json",
+      "bytes": 2794,
+      "sha256": "10dc3c2f5d1e566637d95c332021bb2b9055541e73eea85da6430d0c82168495"
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",

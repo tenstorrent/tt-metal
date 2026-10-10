@@ -1,0 +1,682 @@
+{
+  "metadata": {
+    "model_name": "Qwen3.8-27B",
+    "model_repo": "Qwen/Qwen3.8-27B",
+    "device": "P150X8",
+    "generated_at": "2026-10-10T05:37:34+00:00",
+    "report_id": "Qwen__Qwen3.8-27B_2026-10-10T053734+0000",
+    "workflow": "benchmarks",
+    "report_partial": true,
+    "report_blocks": 22,
+    "server_mode": "docker",
+    "run_command": "python run.py --model Qwen/Qwen3.8-27B --workflow benchmarks --device p150x8 --docker-server --dev-mode --ci-mode --override-docker-image ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.24.0-e6b4fe334de4b008ca2cd800f2b26130417b3aa0-c62035d-114130039423 --host-volume /mnt/MLPerf/tt-shield/persistent-volume",
+    "runtime_model_spec_json": "/home/ubuntu/actions-runner/_work/tt-shield/tt-shield/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-10-10_05-24-20_id_qwen36-blackhole_Qwen3.8-27B_p150x8_N1cgMOyl.json",
+    "model_id": "id_qwen36-blackhole_Qwen3.8-27B_p150x8",
+    "inference_engine": "vLLM",
+    "tt_metal_commit": "e6b4fe334de4b008ca2cd800f2b26130417b3aa0",
+    "vllm_commit": "c62035d",
+    "model_impl": "qwen36-blackhole"
+  },
+  "sections": [
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 8,
+        "input_sequence_length": 128,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 128.0835,
+        "p50_ttft": 125.5161,
+        "p99_ttft": 137.7724,
+        "mean_tpot_ms": 27.1689,
+        "mean_e2el_ms": 3578.5284,
+        "tps_input_throughput": 35.7654,
+        "tps_output_throughput": 35.7654,
+        "tps_total_throughput": 71.5309,
+        "request_throughput": 0.2794,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:38:24"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 256,
+        "input_sequence_length": 128,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 6919.6781,
+        "p50_ttft": 4182.1414,
+        "p99_ttft": 26002.8545,
+        "mean_tpot_ms": 54.0626,
+        "mean_e2el_ms": 13785.6283,
+        "tps_input_throughput": 297.0867,
+        "tps_output_throughput": 297.0867,
+        "tps_total_throughput": 594.1735,
+        "request_throughput": 2.321,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:40:27"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 4,
+        "input_sequence_length": 128,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 132.3128,
+        "p50_ttft": 133.6373,
+        "p99_ttft": 136.7739,
+        "mean_tpot_ms": 27.2484,
+        "mean_e2el_ms": 28007.441,
+        "tps_input_throughput": 4.5702,
+        "tps_output_throughput": 36.5612,
+        "tps_total_throughput": 41.1314,
+        "request_throughput": 0.0357,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:42:57"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 128,
+        "input_sequence_length": 128,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 4167.6677,
+        "p50_ttft": 4160.5505,
+        "p99_ttft": 4200.2581,
+        "mean_tpot_ms": 54.8238,
+        "mean_e2el_ms": 60252.3972,
+        "tps_input_throughput": 67.9778,
+        "tps_output_throughput": 543.8222,
+        "tps_total_throughput": 611.7999,
+        "request_throughput": 0.5311,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:47:35"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 4,
+        "input_sequence_length": 1024,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 177.2522,
+        "p50_ttft": 175.0373,
+        "p99_ttft": 185.3823,
+        "mean_tpot_ms": 27.3167,
+        "mean_e2el_ms": 3646.4713,
+        "tps_input_throughput": 280.7885,
+        "tps_output_throughput": 35.0986,
+        "tps_total_throughput": 315.887,
+        "request_throughput": 0.2742,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:48:02"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 128,
+        "input_sequence_length": 1024,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 5648.9503,
+        "p50_ttft": 5651.5327,
+        "p99_ttft": 5661.4877,
+        "mean_tpot_ms": 55.4334,
+        "mean_e2el_ms": 12688.9891,
+        "tps_input_throughput": 2581.9018,
+        "tps_output_throughput": 322.7377,
+        "tps_total_throughput": 2904.6396,
+        "request_throughput": 2.5214,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:49:06"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 4,
+        "input_sequence_length": 2048,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 271.2909,
+        "p50_ttft": 271.3083,
+        "p99_ttft": 277.0472,
+        "mean_tpot_ms": 27.3963,
+        "mean_e2el_ms": 3750.6175,
+        "tps_input_throughput": 545.9825,
+        "tps_output_throughput": 34.1239,
+        "tps_total_throughput": 580.1064,
+        "request_throughput": 0.2666,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:49:34"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 128,
+        "input_sequence_length": 2048,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 8470.5783,
+        "p50_ttft": 8426.2328,
+        "p99_ttft": 8630.6642,
+        "mean_tpot_ms": 56.6596,
+        "mean_e2el_ms": 15666.3493,
+        "tps_input_throughput": 4182.56,
+        "tps_output_throughput": 261.41,
+        "tps_total_throughput": 4443.97,
+        "request_throughput": 2.0423,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:50:51"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 4,
+        "input_sequence_length": 4096,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 450.9093,
+        "p50_ttft": 451.1257,
+        "p99_ttft": 457.4685,
+        "mean_tpot_ms": 27.6258,
+        "mean_e2el_ms": 3959.3803,
+        "tps_input_throughput": 1034.3837,
+        "tps_output_throughput": 32.3245,
+        "tps_total_throughput": 1066.7082,
+        "request_throughput": 0.2525,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:51:20"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 128,
+        "input_sequence_length": 4096,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 14078.5644,
+        "p50_ttft": 14036.6724,
+        "p99_ttft": 14174.5746,
+        "mean_tpot_ms": 59.0734,
+        "mean_e2el_ms": 21580.8883,
+        "tps_input_throughput": 6072.7296,
+        "tps_output_throughput": 189.7728,
+        "tps_total_throughput": 6262.5024,
+        "request_throughput": 1.4826,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:53:02"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 2,
+        "input_sequence_length": 8192,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 865.3672,
+        "p50_ttft": 865.3672,
+        "p99_ttft": 867.5721,
+        "mean_tpot_ms": 27.8044,
+        "mean_e2el_ms": 4396.5282,
+        "tps_input_throughput": 1863.0486,
+        "tps_output_throughput": 29.1101,
+        "tps_total_throughput": 1892.1588,
+        "request_throughput": 0.2274,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:53:24"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 64,
+        "input_sequence_length": 8192,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 27086.1368,
+        "p50_ttft": 27054.0166,
+        "p99_ttft": 27136.1995,
+        "mean_tpot_ms": 63.9439,
+        "mean_e2el_ms": 35207.0155,
+        "tps_input_throughput": 7444.6455,
+        "tps_output_throughput": 116.3226,
+        "tps_total_throughput": 7560.9681,
+        "request_throughput": 0.9088,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:54:51"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 2,
+        "input_sequence_length": 8192,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 864.5357,
+        "p50_ttft": 864.5357,
+        "p99_ttft": 865.9279,
+        "mean_tpot_ms": 27.8367,
+        "mean_e2el_ms": 29341.4862,
+        "tps_input_throughput": 279.1905,
+        "tps_output_throughput": 34.8988,
+        "tps_total_throughput": 314.0893,
+        "request_throughput": 0.0341,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 05:56:28"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 64,
+        "input_sequence_length": 8192,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 26909.7465,
+        "p50_ttft": 26834.6784,
+        "p99_ttft": 27008.5911,
+        "mean_tpot_ms": 65.0997,
+        "mean_e2el_ms": 93506.723,
+        "tps_input_throughput": 2803.311,
+        "tps_output_throughput": 350.4139,
+        "tps_total_throughput": 3153.7248,
+        "request_throughput": 0.3422,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:00:16"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 2,
+        "input_sequence_length": 10000,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 1165.5905,
+        "p50_ttft": 1165.5905,
+        "p99_ttft": 1179.4101,
+        "mean_tpot_ms": 27.838,
+        "mean_e2el_ms": 29643.8422,
+        "tps_input_throughput": 337.3326,
+        "tps_output_throughput": 34.5429,
+        "tps_total_throughput": 371.8755,
+        "request_throughput": 0.0337,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:01:54"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 32,
+        "num_requests": 64,
+        "input_sequence_length": 10000,
+        "output_sequence_length": 1024.0,
+        "mean_ttft_ms": 36361.0264,
+        "p50_ttft": 36358.4087,
+        "p99_ttft": 36383.5618,
+        "mean_tpot_ms": 67.4126,
+        "mean_e2el_ms": 105324.0898,
+        "tps_input_throughput": 3038.0552,
+        "tps_output_throughput": 311.0969,
+        "tps_total_throughput": 3349.1521,
+        "request_throughput": 0.3038,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:06:07"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 2,
+        "input_sequence_length": 16384,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 1889.9412,
+        "p50_ttft": 1889.9412,
+        "p99_ttft": 1895.3795,
+        "mean_tpot_ms": 28.1293,
+        "mean_e2el_ms": 5462.3654,
+        "tps_input_throughput": 2999.1126,
+        "tps_output_throughput": 23.4306,
+        "tps_total_throughput": 3022.5432,
+        "request_throughput": 0.1831,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:06:33"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 31,
+        "num_requests": 62,
+        "input_sequence_length": 16384,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 57060.2989,
+        "p50_ttft": 57052.3611,
+        "p99_ttft": 57096.9858,
+        "mean_tpot_ms": 73.2498,
+        "mean_e2el_ms": 66363.0184,
+        "tps_input_throughput": 7652.5929,
+        "tps_output_throughput": 59.7859,
+        "tps_total_throughput": 7712.3787,
+        "request_throughput": 0.4671,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:09:06"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 1,
+        "input_sequence_length": 32768,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 4707.4657,
+        "p50_ttft": 4707.4657,
+        "p99_ttft": 4707.4657,
+        "mean_tpot_ms": 28.7824,
+        "mean_e2el_ms": 8362.8258,
+        "tps_input_throughput": 3917.9058,
+        "tps_output_throughput": 15.3043,
+        "tps_total_throughput": 3933.2102,
+        "request_throughput": 0.1196,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:09:32"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 15,
+        "num_requests": 15,
+        "input_sequence_length": 32768,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 68876.8356,
+        "p50_ttft": 68889.5582,
+        "p99_ttft": 68895.8492,
+        "mean_tpot_ms": 59.3698,
+        "mean_e2el_ms": 76416.7975,
+        "tps_input_throughput": 6431.2609,
+        "tps_output_throughput": 25.1221,
+        "tps_total_throughput": 6456.3831,
+        "request_throughput": 0.1963,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:11:09"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 1,
+        "num_requests": 1,
+        "input_sequence_length": 65536,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 13302.0937,
+        "p50_ttft": 13302.0937,
+        "p99_ttft": 13302.0937,
+        "mean_tpot_ms": 30.1114,
+        "mean_e2el_ms": 17126.2372,
+        "tps_input_throughput": 3826.4177,
+        "tps_output_throughput": 7.4735,
+        "tps_total_throughput": 3833.8912,
+        "request_throughput": 0.0584,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:11:52"
+      }
+    },
+    {
+      "kind": "benchmarks",
+      "data": {
+        "concurrency": 8,
+        "num_requests": 8,
+        "input_sequence_length": 65536,
+        "output_sequence_length": 128.0,
+        "mean_ttft_ms": 104891.1269,
+        "p50_ttft": 104915.6154,
+        "p99_ttft": 104922.0493,
+        "mean_tpot_ms": 53.8542,
+        "mean_e2el_ms": 111730.6149,
+        "tps_input_throughput": 4692.0498,
+        "tps_output_throughput": 9.1642,
+        "tps_total_throughput": 4701.2139,
+        "request_throughput": 0.0716,
+        "goodput_pct": null,
+        "error_request_count": null,
+        "status": "na",
+        "target_check": 1
+      },
+      "title": "vLLM Benchmark",
+      "id": "Qwen__Qwen3.8-27B_P150X8",
+      "targets": {
+        "tool": "vllm",
+        "model": "Qwen/Qwen3.8-27B",
+        "device": "P150X8",
+        "timestamp": "2026-10-10 06:14:13"
+      }
+    }
+  ]
+}

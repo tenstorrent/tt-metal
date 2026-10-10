@@ -1,0 +1,76 @@
+{
+  "model_id": "id_qwen36-blackhole_Qwen3.8-27B_p150x8",
+  "impl": {
+    "impl_id": "qwen36_blackhole",
+    "impl_name": "qwen36-blackhole",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/demos/blackhole/qwen36"
+  },
+  "device_type": "P150X8",
+  "device_model_spec": {
+    "device": "P150X8",
+    "max_concurrency": 32,
+    "max_context": 262144,
+    "max_tokens_all_users_override": 525312,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [],
+    "vllm_args": {
+      "model": "Qwen/Qwen3.8-27B",
+      "block_size": "64",
+      "max_model_len": "262144",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "525312",
+      "max-log-len": "32",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1073741824, \"l1_small_size\": 24576, \"sample_on_device_mode\": \"decode_only\"}}",
+      "enable_auto_tool_choice": true,
+      "reasoning_parser": "qwen3",
+      "tool_call_parser": "qwen3_coder",
+      "port": "8000"
+    },
+    "override_tt_config": {
+      "fabric_config": "FABRIC_1D",
+      "trace_region_size": 1073741824,
+      "l1_small_size": 24576,
+      "sample_on_device_mode": "decode_only"
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P150x8",
+      "ARCH_NAME": "blackhole",
+      "TT_QWEN35_TEXT_VER": "qwen36_blackhole",
+      "HF_MODEL": "Qwen/Qwen3.8-27B",
+      "TT_MESH_GRAPH_DESC_PATH": "../../tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto",
+      "QWEN36_MAX_TOKENS_ALL_USERS": "525312",
+      "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES": "0"
+    },
+    "tensor_cache_timeout": 3600,
+    "system_requirements": null,
+    "known_issues": [],
+    "eval_max_retries": null,
+    "image_benchmark_num_batches": 3
+  },
+  "tt_metal_commit": "e6b4fe334de4b008ca2cd800f2b26130417b3aa0",
+  "vllm_commit": "c62035d",
+  "docker_image": "ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.24.0-e6b4fe334de4b008ca2cd800f2b26130417b3aa0-c62035d-114130039423",
+  "override_tt_config": {
+    "fabric_config": "FABRIC_1D",
+    "trace_region_size": 1073741824,
+    "l1_small_size": 24576,
+    "sample_on_device_mode": "decode_only"
+  },
+  "env_vars": {
+    "VLLM_CONFIGURE_LOGGING": "1",
+    "VLLM_RPC_TIMEOUT": "900000",
+    "VLLM_TARGET_DEVICE": "tt",
+    "TORCHDYNAMO_DISABLE": "1",
+    "MESH_DEVICE": "P150x8",
+    "ARCH_NAME": "blackhole",
+    "TT_QWEN35_TEXT_VER": "qwen36_blackhole",
+    "HF_MODEL": "Qwen/Qwen3.8-27B",
+    "TT_MESH_GRAPH_DESC_PATH": "../../tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto",
+    "QWEN36_MAX_TOKENS_ALL_USERS": "525312",
+    "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES": "0"
+  },
+  "status": "EXPERIMENTAL"
+}

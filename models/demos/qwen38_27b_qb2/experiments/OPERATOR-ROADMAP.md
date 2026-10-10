@@ -13,8 +13,8 @@ and labeled measured Galaxy throughput. This continues the Metal path.
   questions remain in the denominator, including five output-budget cutoffs.
 - New direct-preparation/epilogue candidate: three completed B16/32K measurements
   give 60.422 ms/token, 16.550 tokens/s/user and 264.80 aggregate decode
-  tokens/s. After-control drift/hash comparison and full GPQA
-  remain pending at this snapshot. This is not a promoted configuration.
+  tokens/s. The completed after-control drift is +0.003082% with identical
+  output hashes; full GPQA remains pending. This is not a promoted configuration.
   [Raw candidate snapshot](../galaxy-evidence/operator-scope-v1/candidate-sweep.json)
   retains source/config hashes and every measured sample.
 - Full timing profile covers 64 layers, four ranks, three replays and all
@@ -33,6 +33,15 @@ and labeled measured Galaxy throughput. This continues the Metal path.
 The [complete inventory and matmul table](../galaxy-evidence/operator-scope-v1/INVENTORY.md)
 are generated from the retained CSV and checked against every rank/replay's
 independent timing summary. [Raw capture](../galaxy-evidence/p0-priority-v1/README.md).
+
+The [Shield reference audit](../galaxy-evidence/shield-reference-38027117236/README.md)
+identifies additional prefill/serving transfers: long-prompt traces with device
+chunk offsets, fused all-gather/MLP/SwiGLU, burst admission sized separately from
+device activation chunks, and run-coalesced recurrent-slot moves. The reference
+is TP8 and mixed BFP4/BFP8; its 16.84 client TSU at C15/32K is not a matched
+comparison with our BFP8 TP4 B16 16.55 native TSU. Its partial benchmark run
+does not qualify accuracy. These follow-ups have not replaced the active
+compact-GDN/projection queue or changed the qualified serving launch.
 
 ## Matmuls are optimized, with uneven remaining room
 
