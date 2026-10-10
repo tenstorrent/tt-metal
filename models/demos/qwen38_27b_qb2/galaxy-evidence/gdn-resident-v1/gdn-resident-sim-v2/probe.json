@@ -1,0 +1,16 @@
+{
+  "state": "running",
+  "passed": false,
+  "cleanup_completed": false,
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "candidate_first": true,
+  "scope": "FP32 recurrence only; simulator arithmetic/rebinding check, not a hardware or long-horizon pass",
+  "compiler_fallback": "Explicit instructions replace SFPLOADMACRO; hardware instruction parity unqualified",
+  "checks": [],
+  "updated_at": "2026-10-10T19:45:52Z",
+  "active_allocation": 0,
+  "active_iteration": 0,
+  "active_resident": true
+}

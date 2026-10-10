@@ -12,8 +12,10 @@ and labeled measured Galaxy throughput. This continues the Metal path.
   +20.81% against the fresh 16.584-TSU before-control. At 16K it gives
   43.955 ms / 22.751 TSU (+23.60%). All three repeats per context match the
   baseline's output hashes and the candidate cleaned up successfully.
-  The after-control and compact GPQA remain pending; eight-replica throughput
-  is not measured. [Raw compact receipts](../galaxy-evidence/compact-first-decode-v1/README.md).
+  The after-control passed with 0.00202% drift at 32K and 0.000702% at 16K.
+  Eight-replica G0/API checks passed; compact GPQA remains in progress.
+  Whole-Galaxy client throughput is not measured.
+  [Completed controls and qualification snapshot](../galaxy-evidence/gdn-resident-v1/README.md).
 - Qualified shared-QK baseline: 67.245 ms/token, 14.871 tokens/s/user and
   237.94 aggregate decode tokens/s/TP4. Full GPQA: 178/198 (89.90%); all
   questions remain in the denominator, including five output-budget cutoffs.
@@ -57,20 +59,23 @@ records completed fusion GPQA and the prefill-budget A/B. Preallocating both
 sessions before trace capture fixed a changing-input harness failure. The
 real-weight compact block then measured 567.18 -> 350.97 us at B16. Extrapolating
 the 10.38-ms saving over 48 layers gave about 20 TSU. The completed full-model
-candidate now measures that gain, with after-control and GPQA still pending.
+candidate now measures that gain, with after-control passed and GPQA running.
 Its first full-model attempt failed at the prefill vocabulary head because
 static kernel buffers overlapped persistent L1 allocations. A
 [replica-shared compact scratch pool](../galaxy-evidence/compact-pool-recovery-v1/README.md)
 reduces four L1 operands per layer to four per batch shape per replica while
 keeping history/recurrent state private. CPU and physical block checks passed;
-fresh before/compact/after full-model controls are running. The candidate has
+fresh before/compact/after full-model controls passed. The candidate has
 passed the formerly failing full-model boundary at both 32K and 16K, then
 completed three measured repeats and clean teardown. No further L1 failure
 occurred in this arm; qualification and long-horizon validation remain separate.
 The existing source-frozen followers run conditional G0/full GPQA/profile,
 projection tuning, then batched prefill attention. The 4K changing-input test is
-a separate last follower; it adds no performance credit or independent dense
-reference claim.
+a separate follower; it adds no performance credit or independent dense
+reference claim. A register-resident recurrence experiment follows it, with
+independent dense-reference and before/candidate/after physical tests. Its two
+simulator attempts stopped at unsupported SETDVALID behavior before numerical
+comparison; no correctness or speedup is claimed for that candidate.
 
 ## Matmuls are optimized, with uneven remaining room
 
@@ -102,15 +107,16 @@ Savings below are engineering targets unless explicitly measured. They refer
 to a full B16/32K step, exclude prefill and are not independently additive.
 Ownership columns identify overlapping operations. A 1-ms saving from the
 67.245-ms baseline gives about 1.5% more decode throughput; use
-`speedup = old_step / (old_step - saved_ms)` for larger changes.
+`speedup = old_step / (old_step - saved_ms)` for larger changes. The current
+compact baseline is 49.913 ms, so 1 ms now corresponds to about 2% more TSU.
 
 | Order | Change and ownership | Expected benefit | Evidence, effort and risk |
 |---|---|---|---|
 | 0, completed | Direct preparation + fused GDN output epilogue | Measured 6.82-ms saving; +11.3% decode, reaching 16.55 TSU. | Matched controls and full GPQA 177/198 passed. Serving promotion and full Galaxy client performance remain separate. |
-| 1, qualifying | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control and GPQA pending. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4K check separately queued. This gain replaces the initial estimate and overlaps broader fusion savings. |
-| 2 | Retune output/down matmuls first, then GDN packed projection; include input/output conversions | Target 1.5-3.5 ms across matmuls, ~2-6% over the original baseline. This is a target range, not a demonstrated 90%-bandwidth result. | Vary reader count, bank/worker placement, K blocking and output sharding together. Measure the complete projection boundary. Avoid losing more to padding/resharding than the kernel saves. Existing gate/up is lower priority. Medium effort/risk. |
+| 1, qualifying | Compact GDN convolution/history, compact packed-projection consumption, and gate preparation | Measured B16/32K full-model 60.300 -> 49.913 ms, 16.584 -> 20.035 TSU (+20.81%); B16/16K +23.60%. After-control passed; GPQA running. | Opt-in policy. Exact 64-step four-rank checks passed at B16/B32. Shared-pool full-model candidate completed with unchanged tokens; 4K check separately queued. This gain replaces the initial estimate and overlaps broader fusion savings. |
+| 2 | Retune output/down matmuls first, then GDN packed projection; include input/output conversions | Target 1.5-3.5 ms across matmuls, ~3-8% over the current compact baseline. This is a target range, not a demonstrated 90%-bandwidth result. | Vary reader count, bank/worker placement, K blocking and output sharding together. Measure the complete projection boundary. Avoid losing more to padding/resharding than the kernel saves. Existing gate/up is lower priority. Medium effort/risk. |
 | 3 | Production SDPA reader/compute delivery: chunk size, worker distribution, tagged lookahead and bank-local delivery | Target 1-2.7 ms, ~2-4% of the baseline. | SDPA is 12.63 ms; modeled KV-only floor is 8.91 ms at peak or 9.90 ms at 90%. Required math/reduction adds cost. Existing remote-delivery prototype loses to production and must not be promoted. Medium/high effort; preserve accurate exponentiation, FP32 accumulation and page ownership. |
-| 4 | Recurrence/preparation scheduling with shared Q/K and FP32 state | Target 0.5-1.5 ms after the current fusion; remeasure the boundary before credit. | Baseline generic kernels total 5.29 ms, including preparation. Sweep state work partition/placement and buffering; retain the existing operation order first. Long-horizon 4096-step changing-input reference, rebinding and trace tests are required. Medium/high risk. |
+| 4 | Recurrence/preparation scheduling with shared Q/K and FP32 state | Target 0.5-1.5 ms after compact, ~1-3%; remeasure the boundary before credit. | Default-off register-resident compute variant compiled in simulator but execution was blocked by unsupported SETDVALID in both arms. Persistent physical correctness/timing test queued; full-DEST synchronization may offset saved L1 traffic. Baseline generic kernels total 5.29 ms including preparation; this is not the post-compact recurrence cost. Medium/high risk. |
 | 5 | Fuse residual add + RMSNorm and finish MLP SwiGLU in compatible L1 layouts | Target 0.5-1.5 ms beyond existing compact MLP/residual paths. | Norm kernels total 1.08 ms and binary/unary kernels 2.36 ms, shared across several candidates. Do not count the whole family. Current packed MLP already fuses SiLU into multiply. Further projection epilogues compete for pack/SFPU/register resources. Medium risk to rounding. |
 | 6 | All-reduce placement, buffer reuse and tiled projection/collective overlap | Target 0.3-0.8 ms plus any separately measured producer overlap. | All-reduce totals 2.61 ms. Existing two-link, persistent-buffer, direct-all-reduce path is already selected. Alternative fused collective paths exist in source but are not qualified substitutes. Changing reduction order requires accuracy checks. Medium/high integration risk. |
 | 7 | Q/K norm + RoPE + head-layout boundary; write final cache/attention layout directly | Target 0.3-0.7 ms. | Batched RoPE wrapper is ~1.01 ms across 16 layers, but rotation arithmetic itself only 0.137 ms in the full profile. Savings mostly belong to the layout budget. Preserve rotary dimensions, per-user positions and BFP8 cache packing. Medium effort/risk. |

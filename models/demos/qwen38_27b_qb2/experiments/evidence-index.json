@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-10T19:10:59.814892+00:00",
+  "generated_at": "2026-10-10T20:48:13.533625+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -78,6 +78,11 @@
       "sha256": "dc5140bf02008beba3fed073dc66da726818b8a7bebbc03db853bafbae47bdb4"
     },
     {
+      "path": "demo/probe_gdn_resident.py",
+      "bytes": 6289,
+      "sha256": "2528a6730c24b4cac5178fe16d6bdc4a82acbd4b29cbecff34d3e4ab608e6747"
+    },
+    {
       "path": "demo/probe_hf_head.py",
       "bytes": 7284,
       "sha256": "61403cd817689a506504f7f7752a8fb228aa6e8d8971a2f5c2d1742ad582abb8"
@@ -153,6 +158,11 @@
       "sha256": "f4a3cd5dad519c3909f785788077af7cec15e14594e2472a6d2aa95aa4ac4508"
     },
     {
+      "path": "demo/run_gdn_resident.py",
+      "bytes": 5504,
+      "sha256": "6681836ce02466bdb7c7afa75be0b442165ad5382102133114932ae7ee077d64"
+    },
+    {
       "path": "demo/run_gpqa_audit_followup.py",
       "bytes": 5201,
       "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"
@@ -194,13 +204,13 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 174387,
-      "sha256": "34566635fe122fc42be26b9f91ffe27afd30edc6fdefdd49558b7f559488ad0a"
+      "bytes": 178032,
+      "sha256": "89820aebbadca2624a4d5ebefa02c54ebd941be4fdfe2486ae41bf82dcbeedff"
     },
     {
       "path": "experiments/OPERATOR-ROADMAP.md",
-      "bytes": 24925,
-      "sha256": "840b0aba5628b1a9a9888c8cfaf7b00bf52691fb7ac722602654c34f6258854d"
+      "bytes": 25518,
+      "sha256": "5f431177c580d5ef16981d13cfb0128b577eefcc2b3366b91d4ff85cfa0cf2c1"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -6184,6 +6194,181 @@
       "sha256": "bb07010e2a4ea12a996c374f6d77d085cb35478418975789651f351ee5371d37"
     },
     {
+      "path": "galaxy-evidence/gdn-resident-v1/README.md",
+      "bytes": 4879,
+      "sha256": "abda24bcf02c1beafdfe14c62866ada7080bb244591143ed5bcbf305a46ff82e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/capture.json",
+      "bytes": 9698,
+      "sha256": "15b8212201bce402b653850c7ca8ff8988ac351f969caf733debf4cabf55eb0c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-control/evaluation/api.json",
+      "bytes": 38602,
+      "sha256": "17b5fe3b56bc922e74fc6c2e7337a8647568ac9a4047b5e005e4cfe00ea3c8a0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-control/evaluation/deployment.json",
+      "bytes": 24824,
+      "sha256": "c5a13dc45d51c76922de70449b43ddb16c273116047c1bf41f06cf8e54543a4c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-control/evaluation/evaluator.log.gz",
+      "bytes": 1099,
+      "sha256": "a219c65049a52877f273bd0fc8f71ecc5383fc3d9fc5bb6db45adbc662513f13"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-control/evaluation/gpqa/gpqa-progress.json",
+      "bytes": 176,
+      "sha256": "2d342071e1b881ef15cf8627ffc9ffeefa4429b242c9c21617903c5dd999ccec"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-control/evaluation/gpqa/protocol.json",
+      "bytes": 1472,
+      "sha256": "92ce8366444b2fb4685ed2c00d0cd16ea174435f418bd249b0adab5c0b4f275b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/native-g0/receipts/full-model.json",
+      "bytes": 267258,
+      "sha256": "2e46156b8f28c7332f777d3d5d34114750117135c2d2eb26efe2647922c6606e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/qualification/queue.json",
+      "bytes": 32577,
+      "sha256": "388f4a2150505303ace31c7f5bcbeddc1180a8986ccb9a57b28687aa9bd42567"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-followup-v3/queue.json",
+      "bytes": 4484,
+      "sha256": "7bbf736c8405555abe7de633cfa569a147a755ce950f8c4d4badcc1fa391fc41"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-gdn-v3/after/sweep.json",
+      "bytes": 24095,
+      "sha256": "96938baa61a6558ac942aaefa3d8adcf5f6c24f53bc50a7520e1808588a07e67"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-gdn-v3/before/sweep.json",
+      "bytes": 24046,
+      "sha256": "7617f2562903b334852965b04c102c82ea17d199f4d77f62703ca1dc6d7e1b33"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-gdn-v3/compact/sweep.json",
+      "bytes": 24058,
+      "sha256": "2dd249c394f63193b51b30f3b798b8f950098f70169f0687400dde844c3c9870"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-gdn-v3/comparison.json",
+      "bytes": 3911,
+      "sha256": "e722dcac9552e27f92c3aad0335e58a6d55b9fd226058da8c50ede0311f8f72d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/compact-gdn-v3/queue.json",
+      "bytes": 8567,
+      "sha256": "ebe2c1e61e0a77286c4d3f1b6d8581075da6f2f5cc27f54292b00e016cd0fac7"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/launch-unit.json",
+      "bytes": 132,
+      "sha256": "1db458d81d25f41d6d4c797e1735b773f6adb29e6edf2abc3b30d88860a612ee"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/launch.json",
+      "bytes": 2240,
+      "sha256": "df0a2be591cc21f3aa19f9f8d8609fa248e9cc166cfa06ab631a705fc1e631db"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/preflight.log.gz",
+      "bytes": 390,
+      "sha256": "e89dd06869d051dd4cccf59ea2fa505ee7eea8eb9a394160710641cfdf6cb684"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/run.log.gz",
+      "bytes": 20,
+      "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/source-manifest.json",
+      "bytes": 28214,
+      "sha256": "5966a8e77186270e631556229a8eae5473e01e6dcc74ab7c1a1170fbfaf3a3f0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-control-v1/unit.xml.gz",
+      "bytes": 10951,
+      "sha256": "b08cfd848dd17186bfd46721a97b6ff61b6dc40ff42c97a444e7cb0ecbc6f0a9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-hardware-v1/queue.json",
+      "bytes": 619,
+      "sha256": "ebc7cfe20959141778c714c1e0497c9b533e8b2e4b96fc8b34d9df529c9343c0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/launch.json",
+      "bytes": 2163,
+      "sha256": "a0ebe882f73f46c53d041c5921028d84c472e1f399d9aeaeb83ca37512a0eeff"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/preflight.log.gz",
+      "bytes": 646,
+      "sha256": "346bbb18faebbcee683413b22ee5e6bdb5b3c019f7ad365b04f1f823320ef550"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/probe.json",
+      "bytes": 531,
+      "sha256": "d31a4a87b58a78ae29cf53996ddf4bd876e1ae82303a1f7ec47c580ad4b3ac8f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/run.log.gz",
+      "bytes": 3120,
+      "sha256": "3fb8e5e99a95c8b398b8b51a02f5c6e7c1fe0da693ff8386f9b583d280d31483"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/source-manifest.json",
+      "bytes": 518,
+      "sha256": "a050e561b78a3fa0525ce7a4b1da8bbb619b2e68dd21d84af50f6c369632a33d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v1/unit.xml.gz",
+      "bytes": 953,
+      "sha256": "bb9e863e4f2765198f60518dc5257576907fd4e62260f3f97721d674457de85e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/launch.json",
+      "bytes": 2188,
+      "sha256": "5031a04f3168cf6fbc4f124520d433df3d8667d0d811d982b494d483a8c95a62"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/preflight.log.gz",
+      "bytes": 645,
+      "sha256": "42835f45ca9e04ee5b3b42cce28cc039b0239205b4188dbf068bf2befe53d7da"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/probe.json",
+      "bytes": 557,
+      "sha256": "b0a95b774e0190b41e6168e2ac52fc403da87cbef8f2b210797d82cb59bce750"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/run.log.gz",
+      "bytes": 3121,
+      "sha256": "604c579200382eaa71f0f80ffa75e3c2a7e571840eee09ae4b69758aef41d428"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/source-manifest.json",
+      "bytes": 518,
+      "sha256": "79b8004be8260fab0ec6718b726a1665f75d86446c67d6e7e90036cac0d8bd40"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/gdn-resident-sim-v2/unit.xml.gz",
+      "bytes": 958,
+      "sha256": "8eddf25d60b0f25063442296f68d0766362bdb020fe19193bafbd56e609fc2f3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-resident-v1/units.json",
+      "bytes": 1895,
+      "sha256": "df1a9fa8f98c9b90872c08ca2c70ed54620c03c91ad3f39058844137dcad720c"
+    },
+    {
       "path": "galaxy-evidence/gdn-step-buffering-v1/candidate.json.gz",
       "bytes": 13366,
       "sha256": "b55ff9d8f93f436188144bd82e52d53884aa2b7a356aee838bbbd277b60ebd9f",
@@ -11381,6 +11566,11 @@
       "sha256": "51159c05a49dfc2ea89e216442e6fa49b16daac8c4641f0e9fcb9ad3887f9493"
     },
     {
+      "path": "tests/gdn_resident.py",
+      "bytes": 4687,
+      "sha256": "1d2b84427adfdede8a9b9036de0837a927b95d5bf080a4e578b464377a88d282"
+    },
+    {
       "path": "tests/gpqa_documents.py",
       "bytes": 1407,
       "sha256": "bf49f832f4f204d847e8a1bbbfb56fc94ebdc7c41bec65e08b8cfa15d6f17828"
@@ -11471,6 +11661,11 @@
       "sha256": "bdeb9e9cc1a5a07783b56eb614c5bc35ac7479a5a925855e60f99a1a64d1f592"
     },
     {
+      "path": "tests/test_gdn_resident.py",
+      "bytes": 11051,
+      "sha256": "fefcc93bf59afb1d296536775186cb1acefe6c1e37021f8417afc29f490238bc"
+    },
+    {
       "path": "tests/test_hf_layer_reference.py",
       "bytes": 1132,
       "sha256": "605a70cf622bb055867933fdd86027680be43e66d006d32f9c8b7ceff1fe6718"
@@ -11556,6 +11751,16 @@
       "sha256": "c198d02ce6ce0b63a47d3c322a69a30a9cd1f39ed437ac727b7d15bb2310602a"
     },
     {
+      "path": "tests/unit/test_gdn_resident_report.py",
+      "bytes": 4900,
+      "sha256": "ea05bc9fc6680a2bc80819b7a3126853bc9b01a2df827cbb8e237966e5f7d3d7"
+    },
+    {
+      "path": "tests/unit/test_gdn_step_work.py",
+      "bytes": 5526,
+      "sha256": "b63af18b1db83f7d0e3d2a79ede42f07e8f16a4c234187138cf480eb0028be57"
+    },
+    {
       "path": "tests/unit/test_gpqa_audit_followup.py",
       "bytes": 2008,
       "sha256": "e10f13dcf6d3cea4c676c490393e42a153ac51f7a985959ccda92390e8ebf149"
@@ -11636,6 +11841,11 @@
       "sha256": "cc3f7c63a0d1a68b80460ab53e6ddd63450c8909c41331d08a44724772a6cf85"
     },
     {
+      "path": "tt/gdn_step/compute_resident.cpp",
+      "bytes": 3598,
+      "sha256": "d6b2b29ea780f4fbb8112ea2025be71ebc7c518b76f55e481917ab0cc7af5b7c"
+    },
+    {
       "path": "tt/gdn_step/flat_prepare.py",
       "bytes": 4934,
       "sha256": "0e8abc89cf6126a6efabc263a2214fb9a3389526041f3c8b55578b27f1276632"
@@ -11649,6 +11859,11 @@
       "path": "tt/gdn_step/model_adapter.py",
       "bytes": 6179,
       "sha256": "b872ca310ce15741a17a778710dac8251a786d0b1d864ed73dc2e5df0066b069"
+    },
+    {
+      "path": "tt/gdn_step/op.py",
+      "bytes": 7629,
+      "sha256": "f034dc8e9c9831a7746c41d3d553454ce2a115dcde6afc896ae32017d86f2b44"
     },
     {
       "path": "tt/gdn_step/workspace.py",

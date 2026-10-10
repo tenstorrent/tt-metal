@@ -1,0 +1,6 @@
+{
+  "models/demos/qwen38_27b_qb2/demo/probe_gdn_resident.py": "e95ee934aa99f255f8e9d0674d78f2912dac9bdbbaf2baa3f2654f7db13bec12",
+  "models/demos/qwen38_27b_qb2/tt/gdn_step/op.py": "f034dc8e9c9831a7746c41d3d553454ce2a115dcde6afc896ae32017d86f2b44",
+  "models/demos/qwen38_27b_qb2/tt/gdn_step/compute_resident.cpp": "d6b2b29ea780f4fbb8112ea2025be71ebc7c518b76f55e481917ab0cc7af5b7c",
+  "models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py": "b63af18b1db83f7d0e3d2a79ede42f07e8f16a4c234187138cf480eb0028be57"
+}

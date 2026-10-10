@@ -4,7 +4,34 @@
 
 import pytest
 
-from models.demos.qwen38_27b_qb2.tt.gdn_step.op import circular_buffer_pages, shared_head_count, work_items
+from models.demos.qwen38_27b_qb2.tt.gdn_step.op import (
+    circular_buffer_pages,
+    compute_variant,
+    shared_head_count,
+    work_items,
+)
+
+
+@pytest.mark.parametrize("splits", [1, 2, 4])
+@pytest.mark.parametrize("normalized", [False, True])
+def test_default_compute_selection_preserves_existing_geometry(splits, normalized):
+    assert compute_variant(resident_state=False, value_splits=splits, normalize_qk=normalized) == "compute.cpp"
+
+
+@pytest.mark.parametrize("splits,normalized", [(1, False), (2, False), (4, True)])
+def test_register_residency_rejects_unsupported_dest_geometry(splits, normalized, expect_error):
+    with expect_error(ValueError, "Register-resident GDN requires"):
+        compute_variant(resident_state=True, value_splits=splits, normalize_qk=normalized)
+
+
+@pytest.mark.parametrize("flag", [1, 0, "true", None])
+def test_register_residency_requires_explicit_boolean(flag, expect_error):
+    with expect_error(ValueError, "resident_state must be Boolean"):
+        compute_variant(resident_state=flag, value_splits=4, normalize_qk=False)
+
+
+def test_register_residency_selects_separate_compute_program():
+    assert compute_variant(resident_state=True, value_splits=4, normalize_qk=False) == "compute_resident.cpp"
 
 
 @pytest.mark.parametrize("heads", [1, 12, 96, 120, 121, 192, 768])

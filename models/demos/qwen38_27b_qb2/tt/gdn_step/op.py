@@ -53,7 +53,29 @@ def circular_buffer_pages(value_splits, input_buffer_items, *, normalize_qk=Fals
     )
 
 
-def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1, normalize_qk=False, qk_head_repeat=1):
+def compute_variant(*, resident_state, value_splits, normalize_qk):
+    """Register residency requires one value column and eight FP32 DEST tiles."""
+    if type(resident_state) is not bool:
+        raise ValueError("resident_state must be Boolean")
+    if resident_state and (value_splits != 4 or normalize_qk):
+        raise ValueError("Register-resident GDN requires value_splits=4 and pre-normalized Q/K")
+    return "compute_resident.cpp" if resident_state else "compute.cpp"
+
+
+def step(
+    q,
+    k,
+    v,
+    gates,
+    state,
+    output,
+    *,
+    value_splits=1,
+    input_buffer_items=1,
+    normalize_qk=False,
+    qk_head_repeat=1,
+    resident_state=False,
+):
     """Mutate state[heads,128,128]; write output[heads,128], all FP32 DRAM.
 
     The caller preallocates output and retains all tensors through trace
@@ -61,7 +83,12 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
     buffers get new runtime addresses. generic_op's descriptor adapter copies
     the complete runtime arguments on cache hits; its regression is exercised
     with two independently allocated tensor sets in the hardware test.
+    resident_state is an unqualified opt-in compute experiment; no model policy
+    selects it. It preserves reader/writer ownership but uses full DEST sync.
     """
+    compute_source = compute_variant(
+        resident_state=resident_state, value_splits=value_splits, normalize_qk=normalize_qk
+    )
     pages_per_cb = circular_buffer_pages(value_splits, input_buffer_items, normalize_qk=normalize_qk)
     import ttnn
 
@@ -97,7 +124,9 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
     def accessors(values):
         return [arg for tensor in values for arg in ttnn.TensorAccessorArgs(tensor).get_compile_time_args()]
 
-    config = ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True, math_approx_mode=False)
+    config = ttnn.ComputeConfigDescriptor(
+        fp32_dest_acc_en=True, math_approx_mode=False, dst_full_sync_en=resident_state
+    )
     modes = [ttnn.UnpackToDestMode.Default] * 64
     for cb in range(9):
         modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
@@ -114,7 +143,7 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
             ttnn.ReaderConfigDescriptor(),
         ),
         ("writer.cpp", write_args, [value_columns, *accessors([state, output])], ttnn.WriterConfigDescriptor()),
-        ("compute.cpp", compute_args, [value_columns, int(normalize_qk)], config),
+        (compute_source, compute_args, [value_columns, int(normalize_qk)], config),
     ]:
         kernels.append(
             ttnn.KernelDescriptor(

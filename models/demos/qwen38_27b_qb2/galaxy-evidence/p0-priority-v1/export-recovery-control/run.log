@@ -1,0 +1,7 @@
+2026-10-10 05:37:55.194 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+2026-10-10 05:37:56.133 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2107 - Getting device ops
+2026-10-10 05:37:56.161 | INFO     | tracy.process_ops_logs:append_device_data:1120 - Appending device data
+2026-10-10 05:38:11.824 | INFO     | tracy.process_ops_logs:generate_reports:1451 - OPs' perf analysis is finished! Generating reports ...
+2026-10-10 05:38:11.825 | INFO     | tracy.process_ops_logs:generate_reports:1471 - Copying runtime artifacts
+2026-10-10 05:38:11.990 | INFO     | tracy.process_ops_logs:generate_reports:1480 - Generating OPs CSV
+2026-10-10 05:39:27.118 | INFO     | tracy.process_ops_logs:generate_reports:1936 - OPs csv generated at: /dev/shm/qwen38-p0-export-recovery-v1-20261010/tracy/reports/2026_10_10_05_38_11/ops_perf_results_2026_10_10_05_38_11.csv
