@@ -1,0 +1,5 @@
+TT_METAL_HOME: /home/smarton/fasth3/t315
+PYTHON_ENV_DIR: /home/smarton/fasth3/tt-metal/python_env
+PYTHONPATH: /home/smarton/fasth3/t315:/home/smarton/fasth3/t315/ttnn:/home/smarton/fasth3/t315/tools
+TT_METAL_CACHE: /var/tmp/fasth3/t315/jit
+HF_HUB_OFFLINE: "1"
