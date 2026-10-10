@@ -67,6 +67,7 @@ SECTIONS
        and the kernel, so no code outside INIT moves them (empty in every other build) */
     *(.text.llk_init_callee)
     *(.llk_init_body)
+    PROVIDE (__llk_init_body_end = .); /* counters.h: math's TRISC_END_PC */
     *(.llk_init_tramp)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
