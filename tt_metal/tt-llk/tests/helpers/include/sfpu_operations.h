@@ -455,6 +455,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        ckernel::sfpu::asin_bf16_tile_init<OPERATION == SfpuType::asin && !is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::sinh)
     {
