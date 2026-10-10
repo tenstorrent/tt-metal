@@ -7,6 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "sfpu/dispatch.h"
+#include "tensor_shape.h"
 
 using namespace sfpi;
 
@@ -15,15 +17,24 @@ namespace sfpu {
 
 inline void abs_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_abs() {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        dst_reg[0] = sfpi::abs(v);
-        dst_reg++;
-    }
-}
+/// @ref UnaryDispatch op: tile = |tile|, on float data.
+struct Abs : llk::sfpu::SfpuUnary {
+    static constexpr llk::sfpu::PaddingAgnostic padding_agnostic() { return llk::sfpu::PaddingAgnostic::Yes; }
+
+    struct Init : llk::sfpu::UnaryInit<Abs> {
+        void run() const {}
+    };
+
+    template <const TensorShape& SHAPE, llk::sfpu::PaddingAgnostic PADDING>
+    struct Execute : llk::sfpu::UnaryExecute<Abs> {
+        void run() const {
+            llk::sfpu::unary<PADDING>(
+                llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->output),
+                llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->input),
+                [](const sfpi::vFloat value) { return sfpi::abs(value); });
+        }
+    };
+};
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {

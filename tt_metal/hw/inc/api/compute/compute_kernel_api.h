@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "ckernel.h"
+#include "tensor_shape.h"
 #ifndef ARCH_QUASAR
 #include "ckernel_globals.h"
 #include "ckernel_debug.h"
@@ -436,6 +437,9 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * The SHAPE template argument selects the region of the tile to process (a
+ * TensorShape with static storage); it defaults to the whole 32x32 tile.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
@@ -443,14 +447,15 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <const TensorShape& SHAPE = DEFAULT_TENSOR_SHAPE>
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(llk::sfpu::UnaryDispatch<sfpu::Abs>::execute<DST_SYNC_MODE, SHAPE>(idst, idst).run());
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
+ALWI void abs_tile_init() { MATH(llk::sfpu::UnaryDispatch<sfpu::Abs>::init().run()); }
 
 // clang-format off
 /**
