@@ -76,6 +76,7 @@ def run_test_linear_impl(
     residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -158,6 +159,11 @@ def run_test_linear_impl(
         tt_addcmul_a = None
         tt_addcmul_b = None
         addcmul_scalar = None
+
+    if fuse_addcmul and share_addcmul_inputs:
+        assert not broadcast_gate, "Aliased addcmul inputs require full-size ternary tensors"
+        tt_addcmul_b = tt_addcmul_a
+        torch_addcmul_b = torch_addcmul_a
 
     with torch.no_grad():
         torch_output = torch_input @ weight_input
@@ -408,6 +414,7 @@ def run_test_linear(
     residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -521,6 +528,7 @@ def run_test_linear(
         residual_memory_config=residual_memory_config,
         gate_memory_config=gate_memory_config,
         num_buffers_per_channel=num_buffers_per_channel,
+        share_addcmul_inputs=share_addcmul_inputs,
     )
 
 
