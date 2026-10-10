@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -113,11 +114,21 @@ struct ReduceScatterFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
+    void init_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& core_range_to_signal);
 
     void init_fused_op();
 
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
+
+uint32_t add_semaphore_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t initial_value = 0,
+    tt::CoreType core_type = tt::CoreType::WORKER);
 
 enum class MatmulFusedOpSignalerType {
     ALL_GATHER,
