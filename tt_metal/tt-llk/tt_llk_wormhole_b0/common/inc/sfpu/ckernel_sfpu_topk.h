@@ -420,6 +420,83 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// Build the TRANSPOSED index tiles for width positions w/32 (and w/32 + 1) directly in DEST, so a
+// sort op needs no DM-generated index tile, no circular buffer to carry it, and no unpack + transpose
+// of it. The tile the network reads (bitonic_topk_load16) holds, in every column of tile row r, the
+// index w + r. An SFPSTORE vector covers 4 consecutive Dst rows (lane j writes row rwc + j/8), and Dst
+// row R of a tile is face R/16, face row R%16, i.e. tile row (R%16) + 16*(R/32); LTILEID = 2*j, so
+// LTILEID>>4 is the lane's row inside its 4-row group. The walk over the 16 row groups is the one
+// _topk_stamp_tile_rank_range_ uses: +4 per group, rewind 12 where the group crosses into the paired
+// face. After the last group the register holds w + 32 plus the lane row, which is the first group of
+// the next width position, so a second tile continues without a reload.
+// The stores use the network's own index store mode (LO16 in 16-bit DEST, INT32 words [0|idx] in
+// 32-bit DEST, where w may exceed 16 bits) and constant addresses like the network's own index stores
+// (a tile is 64 SFPSTORE address units in either DEST mode; 4 per row group, +2 selects the odd
+// columns), so the whole fill is immediate instructions: three per group.
+// Wormhole's SFPSTORE address-mode field is two bits and the SFPU wrapper sets addr_mod_base, so
+// ADDR_MOD_3 is the incr-0 mode here (physical ADDR_MOD_7), as in the rest of this header.
+// Runs on MATH inside the SFPU wrapper (which has already waited for the value tiles' transposes to
+// drain), while DEST is acquired. Clobbers LREG1..2 and the lane enables (left fully enabled).
+#define TOPK_FILL_INDEX_GROUP(store_mode, addr, delta)                                  \
+    TTI_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, (addr));     /* even columns */ \
+    TTI_SFPSTORE(p_sfpu::LREG2, store_mode, ADDR_MOD_3, (addr) + 2); /* odd columns */  \
+    TTI_SFPIADD((delta) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE)
+
+template <std::uint32_t store_mode, std::uint32_t tile_index>
+inline void topk_fill_index_tile_groups()
+{
+    constexpr std::uint32_t base = tile_index * 64;
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 0, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 4, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 8, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 12, -12);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 16, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 20, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 24, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 28, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 32, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 36, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 40, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 44, -12);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 48, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 52, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 56, 4);
+    TOPK_FILL_INDEX_GROUP(store_mode, base + 60, 4);
+}
+
+#undef TOPK_FILL_INDEX_GROUP
+
+template <bool is_fp32_dest_acc_en, std::uint32_t first_tile, std::uint32_t num_tiles>
+inline void _topk_fill_index_tiles_(std::uint32_t w)
+{
+    static_assert(num_tiles == 1 || num_tiles == 2, "fill one tile or a pair of adjacent width positions");
+    // The mode the network itself stores indices with (bitonic_topk_store16).
+    constexpr std::uint32_t store_mode = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16);
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // LREG2 = w | (lane row inside the 4-row group). w is a multiple of 32 and the iota is below 4,
+    // so the bits are disjoint.
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, w & 0xFFFF);
+        TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, w >> 16);
+    }
+    else
+    {
+        TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, w);
+    }
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+
+    topk_fill_index_tile_groups<store_mode, first_tile>();
+    if constexpr (num_tiles == 2)
+    {
+        topk_fill_index_tile_groups<store_mode, first_tile + 1>();
+    }
+}
+
 // Stamp the 2-tile slab's value words with their sign-conditioned sequence
 // position (rank 0..63 per 64-datum column), clearing any stale low bits, and
 // fold -0.0 into the +0.0 tie class on the way (torch treats +-0 as ONE tie

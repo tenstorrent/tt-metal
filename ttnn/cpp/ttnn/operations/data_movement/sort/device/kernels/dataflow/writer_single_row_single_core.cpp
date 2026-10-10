@@ -66,6 +66,7 @@ void kernel_main() {
                            get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Generate index tiles into the index DFB (consumed by compute)
+#if !INDEX_TILES_ON_COMPUTE
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
@@ -73,6 +74,7 @@ void kernel_main() {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
+#endif
 
 #ifdef IS_UINT16_FP32_MODE
         for (uint32_t w = 0; w < Wt; w++) {
@@ -151,6 +153,7 @@ void kernel_main() {
         // Generate Wt index tiles (TILE / integer format) into the index DFB.
         // The topk LLK reads indices via LO16 (uint16) or INT32 (uint32) mode, so
         // the index DFB must contain raw unsigned integers, not floating-point values.
+#if !INDEX_TILES_ON_COMPUTE
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
@@ -158,6 +161,7 @@ void kernel_main() {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
+#endif
 
         // Drain 32 sorted RM value rows from rm_value_output_dfb → DRAM
         const uint32_t row_base = h * TILE_H;

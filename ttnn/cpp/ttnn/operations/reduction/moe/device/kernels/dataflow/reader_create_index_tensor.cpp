@@ -55,10 +55,14 @@ void kernel_main() {
             dfb_in0.reserve_back(2);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
+#if !INDEX_TILES_ON_COMPUTE
             dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+#endif
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
             tile_id++;
+#if !INDEX_TILES_ON_COMPUTE
             dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j + 1);
+#endif
             noc.async_read_barrier();
             dfb_in0.push_back(2);
         }

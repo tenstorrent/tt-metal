@@ -218,11 +218,17 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     uint32_t p_chunk_size = num_cores * bf16_bytes;
     uint32_t temp_chunk_size = num_cores * bf16_bytes;
 
+    // Index tiles: on Wormhole and Blackhole the compute kernel builds each one in DEST from the lane
+    // id (topk_fill_index_tiles), so no index DFB exists and the reader generates nothing. Other
+    // architectures keep the reader's DM generator. Always defined for the kernels, as 0 or 1.
+    const bool index_tiles_on_compute = device.arch() == tt::ARCH::WORMHOLE_B0 || device.arch() == tt::ARCH::BLACKHOLE;
+    KernelSpec::CompilerOptions::Defines index_defines;
+    index_defines.insert({"INDEX_TILES_ON_COMPUTE", index_tiles_on_compute ? "1" : "0"});
+
     Group<DataflowBufferSpec> dataflow_buffers{
         // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid
         // stalls, so allocate four tiles of space
         make_dfb(SAMPLING_INPUT_VALUES, input_values_tile_size, dfb_in_units, input_values_dfb_data_format),
-        make_dfb(SAMPLING_INDEX, index_tile_size, dfb_in_units, index_dfb_data_format),
         make_dfb(SAMPLING_SCALER_MAX, scalar_tile_size, scale_tiles, scalar_df),
         make_dfb(SAMPLING_SCALER_SUM, scalar_tile_size, scale_tiles, scalar_df),
         make_dfb(SAMPLING_TOPK_MASK, input_values_tile_size, dfb_in_units, input_values_dfb_data_format),
@@ -248,28 +254,29 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         make_dfb(SAMPLING_P, p_chunk_size, 1, p_dfb_data_format),
         make_dfb(SAMPLING_TEMP, temp_chunk_size, 1, temp_dfb_data_format),
     };
+    if (!index_tiles_on_compute) {
+        dataflow_buffers.push_back(make_dfb(SAMPLING_INDEX, index_tile_size, dfb_in_units, index_dfb_data_format));
+    }
 
     // The reader is created once over every running core: it streams in the value and index tiles the
     // top-k consumes, plus the row-major index sticks the writer looks up.
     KernelSpec reader{
         .unique_id = SAMPLING_READER,
         .source = SAMPLING_READER_SOURCE,
+        .compiler_options = {.defines = index_defines},
         .dfb_bindings =
-            {DFBBinding{
-                 .dfb_spec_name = SAMPLING_INPUT_VALUES,
-                 .accessor_name = "input_values",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = SAMPLING_FINAL_INDICES_RM,
-                 .accessor_name = "input_indices",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = SAMPLING_INDEX,
-                 .accessor_name = "index",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             }},
+            {
+                DFBBinding{
+                    .dfb_spec_name = SAMPLING_INPUT_VALUES,
+                    .accessor_name = "input_values",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SAMPLING_FINAL_INDICES_RM,
+                    .accessor_name = "input_indices",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
         .tensor_bindings =
             {TensorBinding{
                  .tensor_parameter_name = SAMPLING_INPUT_VALUES_TENSOR,
@@ -305,16 +312,11 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .source = SAMPLING_COMPUTE_SOURCE,
         // O3 is the optimization level a compute kernel is built at; the CompilerOptions default (O2)
         // is the data-movement level, so compute kernels state it explicitly.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = index_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = SAMPLING_INPUT_VALUES,
                  .accessor_name = "input_values",
-                 .endpoint_type = DFBEndpointType::CONSUMER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = SAMPLING_INDEX,
-                 .accessor_name = "index",
                  .endpoint_type = DFBEndpointType::CONSUMER,
              },
              DFBBinding{
@@ -524,6 +526,19 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     Group<KernelSpec> kernels;
     kernels.reserve(2 + cores.size());
+    if (!index_tiles_on_compute) {
+        // The reader generates the index tiles and the compute kernel consumes them.
+        reader.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SAMPLING_INDEX,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SAMPLING_INDEX,
+            .accessor_name = "index",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(compute));
 

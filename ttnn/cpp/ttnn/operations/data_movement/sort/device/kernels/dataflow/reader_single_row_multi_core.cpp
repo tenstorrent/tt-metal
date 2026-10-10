@@ -271,25 +271,29 @@ void kernel_main() {
                             input_tensor_dfb.push_back(one_tile);
 #endif
 
-                            index_tensor_dfb.reserve_back(one_tile);
-                            noc.async_read(
-                                index_tensor_addr_gen,
-                                index_tensor_dfb,
-                                index_tensor_tile_size,
-                                {.page_id = h * Wt + left_tile_id, .offset_bytes = 0},
-                                {.offset_bytes = 0});
-                            noc.async_read_barrier();
-                            index_tensor_dfb.push_back(one_tile);
+                            // Stage 1 has no index tensor in DRAM yet when the compute kernel builds the index
+                            // tiles in DEST; it writes them at the end of the stage and later stages read them.
+                            if (!(INDEX_TILES_ON_COMPUTE && stage == 1 && sub == 1)) {
+                                index_tensor_dfb.reserve_back(one_tile);
+                                noc.async_read(
+                                    index_tensor_addr_gen,
+                                    index_tensor_dfb,
+                                    index_tensor_tile_size,
+                                    {.page_id = h * Wt + left_tile_id, .offset_bytes = 0},
+                                    {.offset_bytes = 0});
+                                noc.async_read_barrier();
+                                index_tensor_dfb.push_back(one_tile);
 
-                            index_tensor_dfb.reserve_back(one_tile);
-                            noc.async_read(
-                                index_tensor_addr_gen,
-                                index_tensor_dfb,
-                                index_tensor_tile_size,
-                                {.page_id = h * Wt + right_tile_id, .offset_bytes = 0},
-                                {.offset_bytes = 0});
-                            noc.async_read_barrier();
-                            index_tensor_dfb.push_back(one_tile);
+                                index_tensor_dfb.reserve_back(one_tile);
+                                noc.async_read(
+                                    index_tensor_addr_gen,
+                                    index_tensor_dfb,
+                                    index_tensor_tile_size,
+                                    {.page_id = h * Wt + right_tile_id, .offset_bytes = 0},
+                                    {.offset_bytes = 0});
+                                noc.async_read_barrier();
+                                index_tensor_dfb.push_back(one_tile);
+                            }
 #endif
 
                             processing_pair_id += number_of_available_cores;
