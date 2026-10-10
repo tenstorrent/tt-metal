@@ -17,7 +17,9 @@
 //
 // SrcA is never unpacked into, so the row staged in step 2 is whatever SrcA happens to hold.
 // That is deliberate: the test asserts only that dest survives the borrow, which is the
-// contract the helper breaks when the two halves share a register.
+// contract the helper breaks when the two halves share a register, or when the save converts the
+// row instead of moving its bits (the kernel pins the FPU and SFPU views of dest to the test's DEST width,
+// and the host plants Int32 values that a converting save would change).
 //
 // Step 2 is bracketed by dbg_thread_halt / dbg_thread_unhalt, as every in-tree caller does
 // (dbg_halt / dbg_unhalt, the DPRINT dest dump). The debug array read leaves the packer needing
@@ -58,6 +60,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const DataFormat l1_fmt          = static_cast<DataFormat>(formats.unpack_A_src);
     constexpr std::uint32_t TILE_IDX = 0;
+
+    // Pin dest to the test's DEST width for both the FPU (which sets the width MOVDBGA2D writes) and the SFPU
+    // (which the save/restore goes through), the pairing _llk_math_hw_configure_ uses, so both modes are checked.
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    tensix_sync();
 
     dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
 
