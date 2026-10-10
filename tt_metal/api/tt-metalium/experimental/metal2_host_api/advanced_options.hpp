@@ -15,6 +15,14 @@
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
 
+// The PrefetcherPipe host handle (tt-metalium/experimental/prefetcher_pipe.hpp). Only referenced
+// here, so the pipe implementation is not a dependency of the core Metal 2.0 spec headers.
+// NOTE: PrefetcherPipe stays experimental when the Metal 2.0 host API graduates. This declaration
+//       and its fully qualified use in AdvancedProgramRunArgs must keep the experimental namespace.
+namespace tt::tt_metal::experimental {
+class PrefetcherPipe;
+}  // namespace tt::tt_metal::experimental
+
 namespace tt::tt_metal::experimental {
 
 // ============================================================================
@@ -44,47 +52,41 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
 
-// The PrefetcherPipe host handle (tt-metalium/experimental/prefetcher_pipe.hpp). Only referenced
-// here, so the pipe implementation is not a dependency of the core Metal 2.0 spec headers.
-class PrefetcherPipe;
-
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
-    // In Metal 2.0, kernel arguments are NAMED parameters declared in the KernelSpec.
-    // However, until typed kernel argument support is available, certain advanced use
-    // cases require a VARIABLE number of arguments. e.g.:
-    //   - N runtime arguments, representing the size of an N-dimensional tensor
-    //   - a kernel that accepts a variadic number of tensor arguments
+    // In Metal 2.0, kernel arguments are named parameters declared in the KernelSpec.
+    // Varargs are the exception: unnamed arguments that the kernel accesses POSITIONALLY,
+    // by index. They are intended for arguments that the kernel reads only as elements of an
+    // indexed collection, e.g. N runtime arguments holding the shape of an N-dimensional tensor.
     //
-    // Varargs must be accessed POSITIONALLY in the kernel code.
-    //
-    // The vararg schema below is a temporary mechanism to support these use cases.
-    // It will later be deprecated and replaced by std::array typed arguments.
+    // (For a variable number of tensor bindings, use a TensorBindingSequence instead; see below.)
 
     //--------------------------------
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
-    // Set the vararg values (per node) via ProgramRunArgs.
+    // Set the vararg values (per node) via ProgramRunArgs (KernelRunArgs::advanced_options.runtime_varargs).
     //
     // To retrieve these values in kernel code, use:
     //   get_vararg(uint32_t idx); // index in [0, num_runtime_varargs - 1]
+    // (There is no kernel-side count accessor; if the kernel needs the count, pass it as a named argument.)
     //
-    // CAUTION: This feature exists to address niche uses cases only.
-    //          Prefer regular, named runtime arguments unless varargs are strictly necessary.
+    // CAUTION: This feature exists to address niche use cases only.
+    //          Prefer named runtime arguments unless varargs are strictly necessary.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
-    // Set the vararg values via ProgramRunArgs.
+    // Set the vararg values via ProgramRunArgs (KernelRunArgs::advanced_options.common_runtime_varargs).
     // (The same argument values are broadcast to every node the kernel runs on.)
     //
     // To retrieve these values in kernel code, use:
-    //    get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    //   get_common_vararg(uint32_t idx); // index in [0, num_common_runtime_varargs - 1]
+    // (There is no kernel-side count accessor; if the kernel needs the count, pass it as a named argument.)
     //
-    // CAUTION: This feature exists to address niche uses cases only.
+    // CAUTION: This feature exists to address niche use cases only.
     //          Prefer named common runtime arguments unless varargs are strictly necessary.
     uint32_t num_common_runtime_varargs = 0;
 
@@ -92,8 +94,9 @@ struct KernelAdvancedOptions {
     // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
     // different nodes. Each entry pairs a node set with its vararg count; nodes
     // not listed default to num_runtime_varargs.
-    // TODO: This feature is truly bizarre. It will be removed from the API once
-    //       existing uses are refactored to avoid it.
+    //
+    // CAUTION: This feature is deprecated and will be removed from the API once all existing
+    //          uses are refactored to avoid it. Do not add new uses of this feature.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
@@ -102,17 +105,15 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Compile-time vararg VALUES for the kernel.
     // (Unlike the runtime varargs fields above, these values are baked into the Program
-    // at kernel compile time.)
+    // at kernel compile time: each distinct set of values compiles a distinct kernel binary.)
     //
     // To retrieve these values in kernel code, use:
     //   - get_compile_time_vararg(idx)   // for a computed index
     //   - get_compile_time_vararg<idx>() // for a compile-time constant index
     //   - get_num_compile_time_varargs() // for the count
     //
-    // CAUTION: This is a temporary API that will removed in favor of compile-time array arguments.
-    //          It exists to solve a niche, isolated use case.
-    //          Always prefer regular, named compile-time arguments.
-    [[deprecated("Compile-time varargs is a temporary feature that will be removed in the future.")]]
+    // CAUTION: This feature exists to address niche use cases only.
+    //          Always prefer named compile-time arguments.
     std::vector<uint32_t> compile_time_varargs;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -225,7 +226,7 @@ struct DFBAdvancedOptions {
     // different types of producer kernels on different nodes.)
     //
     // "Multi-binding" refers to a DFB instance that has more than one producer
-    // and/or more than one consumer kernel instance. Gen1 hardware (Wormhole and
+    // and/or more than one consumer kernel instance. 1st-gen (1xx) hardware (Wormhole,
     // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
     // to a plain circular buffer there, so the FIFO pointers are shared L1 state
     // that any number of producer/consumer RISCs can drive.
@@ -239,7 +240,7 @@ struct DFBAdvancedOptions {
     //
     // NOTE:
     // This feature is included for backwards compatibility with legacy APIs.
-    // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
+    // It is NOT supported on 2nd-gen (2xx) architectures: setting this flag on a 2nd-gen
     // target is a hard error, whether or not any instance is actually multi-bound.
     bool allow_instance_multi_binding = false;
 
@@ -295,7 +296,8 @@ struct AdvancedKernelRunArgs {
 
     // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
-    // Specified per-node; length can vary per-node (as declared in schema).
+    // Specified per-node; each node's list must have num_runtime_varargs entries
+    // (unless overridden by the deprecated num_runtime_varargs_per_node).
     Table<NodeCoord, Varargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
@@ -311,7 +313,7 @@ struct AdvancedProgramRunArgs {
 
     // The actual PrefetcherPipe argument.
     // (Non-owning reference. Non-const: binding a Program records program-side state on the pipe.)
-    using PrefetcherPipeArgument = std::reference_wrapper<PrefetcherPipe>;
+    using PrefetcherPipeArgument = std::reference_wrapper<tt::tt_metal::experimental::PrefetcherPipe>;
 
     // A PrefetcherPipeArgument must be specified:
     //  For EVERY PrefetcherPipeParameter in the ProgramSpec that is not yet bound, when calling
@@ -344,21 +346,28 @@ struct SemaphoreAdvancedOptions {
     // Non-zero initial value
     ////////////////////////////////////////////////////////////////////////////////
 
-    // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
-    // NOTE: Runtime wants to deprecate this feature for ALL architectures.
-    //       When cross-node DFB becomes available, non-zero initial values will be removed.
+    // NOTE: Setting a non-zero initial value is not supported on 2nd-gen (2xx) architectures.
+    //       Once existing uses are refactored to avoid it, this feature will be removed
+    //       for 1st-gen (1xx) architectures as well. Do not add new uses of this feature.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Capacity (compute semaphores only)
+    // Compute semaphores (experimental; Blackhole only)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // For a semaphore bound by a Blackhole compute kernel: the capacity in credits, i.e. the depth of
-    // the L1 ring the semaphore guards. The producer's Semaphore::wait_not_full() blocks while the
-    // value is at this capacity, so the producer can never run more than max_value slots ahead of the
-    // consumer. Range 1..15 (the Tensix hardware semaphore is 4 bits). 0 = default capacity 15.
-    // Rejected unless the semaphore is bound only by compute kernels.
+    // A semaphore bound only by compute kernels is a "compute semaphore". It synchronizes the Pack and
+    // Unpack stages of a single compute kernel instance (e.g. to hand tiles from Pack back to Unpack
+    // through an L1 ring, without a DFB). Data-movement kernels and other nodes cannot reach it.
+    //
+    // Rules: Blackhole only. At most one compute semaphore per Program. It cannot also be bound by a
+    // data-movement kernel, and its initial value is always 0. For kernel-side usage, see api/semaphore.h.
+    //
+    // max_value is the compute semaphore's capacity, in credits: typically the number of slots in the ring
+    // it guards. Semaphore::wait_not_full() blocks while the semaphore is at capacity.
+    // Range 1..15; 0 (the default) means 15. Must be 0 for a semaphore not bound by compute kernels.
+    //
+    // CAUTION: Compute semaphores are experimental, and may change or be removed.
     uint32_t max_value = 0;
 };
 
