@@ -11,6 +11,7 @@
 #include "hostdevcommon/config.hpp"
 #include "moe_compute_device_operation_types.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "moe_expert_rows.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -23,7 +24,7 @@ struct MoEComputeDeviceOperation {
     using tensor_args_t = MoEComputeInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
-    using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory>;
+    using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory, MoEComputePlaceFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,6 +32,7 @@ struct MoEComputeDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -58,7 +60,10 @@ std::vector<Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
     bool compute_only = false,
     const std::optional<uint32_t>& bh_ring_size = std::nullopt,
-    const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt);
+    const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt,
+    const std::optional<float>& activation_limit = std::nullopt,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+    bool fp32_dest_acc_en = false);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;

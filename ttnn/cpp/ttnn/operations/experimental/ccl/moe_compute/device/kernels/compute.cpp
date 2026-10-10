@@ -15,16 +15,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Need these headers for running SFPU on PACK thread
-#ifdef TRISC_PACK
-#include "ckernel_sfpu_exp.h"
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
-#include "ckernel_sfpu_silu.h"
-#include "ckernel_sfpu_binary.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "ckernel_sfpu_gelu.h"
-#endif
+#include "moe_activation.h"
 
 namespace detail {
 
@@ -36,130 +27,6 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     } while ((*sem_addr) < val);
     WAYPOINT("NSMD");
 }
-
-// Note GELU gets init'd at each iteration in its PackActivation specialization
-template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
-inline void pack_init_activation() {};
-
-template <>
-inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
-    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
-};
-
-template <>
-inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
-};
-
-// Activation on the packer's SFPU over DEST: dst 0 = act(W0 x) * (W1 x) for the first (W0, W1) pair, dst 2 for the
-// second (dst 1 and 3 hold W1 x). kPairs = 1: only the first pair holds data -- the half block-column of a ring core
-// with an odd gate/up column count.
-template <ttnn::experimental::prim::detail::MoEActivationFunction activation, uint32_t kPairs>
-struct PackActivation {
-    static inline void compute() {}
-};
-
-template <uint32_t kPairs>
-struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU, kPairs> {
-    static inline void compute() {
-        PACK(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_silu,
-            (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-            0 /*DST_IDX*/,
-            ::ckernel::VectorMode::RC));
-        if constexpr (kPairs == 2) {
-            PACK(SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_silu,
-                (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-                2 /*DST_IDX*/,
-                ::ckernel::VectorMode::RC));
-        }
-
-        PACK((SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sfpu_binary,
-            (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
-            0 /*DST_IN0*/,
-            1 /*DST_IN1*/,
-            0 /*DST_OUT*/,
-            ::ckernel::VectorMode::RC)));
-        if constexpr (kPairs == 2) {
-            PACK((SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_sfpu_binary,
-                (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
-                2 /*DST_IN0*/,
-                3 /*DST_IN1*/,
-                2 /*DST_OUT*/,
-                ::ckernel::VectorMode::RC)));
-        }
-    }
-};
-
-template <uint32_t kPairs>
-struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU, kPairs> {
-    static inline void compute() {
-        PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
-        if constexpr (kPairs == 2) {
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
-        }
-    }
-};
-
-template <uint32_t kPairs>
-struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU, kPairs> {
-    static inline void compute() {
-        // GELU programs an SFPU LUT (gelu_init). The trailing binary MUL below clobbers that LUT,
-        // so when the activation loop runs >1 iteration per chunk (tiles_per_step > 2, which happens
-        // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
-        // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
-        // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
-        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
-        PACK(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_gelu,
-            (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-            0 /*DST_IDX*/,
-            ::ckernel::VectorMode::RC));
-        if constexpr (kPairs == 2) {
-            PACK(SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_gelu,
-                (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-                2 /*DST_IDX*/,
-                ::ckernel::VectorMode::RC));
-        }
-
-        PACK((SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_sfpu_binary,
-            (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
-            0 /*DST_IN0*/,
-            1 /*DST_IN1*/,
-            0 /*DST_OUT*/,
-            ::ckernel::VectorMode::RC)));
-        if constexpr (kPairs == 2) {
-            PACK((SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_sfpu_binary,
-                (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
-                2 /*DST_IN0*/,
-                3 /*DST_IN1*/,
-                2 /*DST_OUT*/,
-                ::ckernel::VectorMode::RC)));
-        }
-    }
-};
 
 // in @ {W0, W1} for one gate/up block-column, then the activation, packed to the in2 tiles
 // [out_tile, out_tile + kPairs). kPairs = 2: a full block-column, 4 tiles wide (W0 c, W1 c, W0 c+1, W1 c+1);
@@ -239,7 +106,7 @@ FORCE_INLINE void compute_w0_w1_block_column(
     // Make SFPU access the appropriate half of the destination registers
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
-    PackActivation<activation, kPairs>::compute();
+    ::moe_activation::PackActivation<activation, kPairs>::compute();
 
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -421,7 +288,7 @@ void kernel_main() {
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
-                ::detail::pack_init_activation<activation_type>();
+                ::moe_activation::pack_init_activation<activation_type>();
             }
 
             // Initialize matmul for W0
