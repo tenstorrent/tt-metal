@@ -1317,6 +1317,7 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
     // Reopen with a different command-queue count: the changed context parameters force a full
     // re-initialization, which resets the cores and boots the firmware again.
     std::vector<ChipId> ids;
+    ids.reserve(id_to_device_.size());
     for (const auto& [id, device] : id_to_device_) {
         ids.push_back(id);
     }
