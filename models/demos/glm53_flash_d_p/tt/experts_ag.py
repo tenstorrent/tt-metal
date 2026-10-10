@@ -5,7 +5,7 @@
 
 Port of models/demos/mimo_v2_d_p/tt/moe_ag.py (MoeAgBlock, branch mstaletovic/mimo-v2-dp) onto the ttnn.bringup ops
 (INDEX.md: moe_ag, flat_routed_expert_ttnn, fabric_all_gather_ttnn, fabric_reduce_scatter_ttnn), for a mesh with two
-rows (the dispatch axis 0, SP = 2) and any number of columns (TP):
+rows (the dispatch axis 0, SP = 2) and any number of columns (TP); more rows (a Galaxy 4x4) skip the fused send-back:
 
     x, top-k (idx, w) of mesh row r's S/2 tokens (the same on every chip of the row)
       -> fabric_all_gather over axis 0 -> every chip holds the chunk's T = S tokens (row r's at r S/2)
@@ -16,6 +16,7 @@ rows (the dispatch axis 0, SP = 2) and any number of columns (TP):
          10)) * clamp(u, +-10), as GLM): y [rows, H] bf16 row major
       -> moe_ag_local_reduce, fused send-back: phase 1 the other row's tokens' partial, fabric_all_gather axis 0, phase
          2 this row's tokens' partial + the peer's -> [S/2, H] bf16 tiles: the column's sum for row r's tokens
+         (R > 2 rows: moe_ag_local_reduce phase 0 over all T tokens as tiles, fabric_reduce_scatter axis 0 -> the same)
       -> reduce over the columns: split (the model's default residual layout) fabric_reduce_scatter axis 1 -> the
          chip's [S/(2 C), H] rows r S/2 + c S/(2 C) ..; replicated: reduce_scatter + all_gather on axis 1, then
          all_gather axis 0 -> [S, H] on every chip.
@@ -42,6 +43,10 @@ import ttnn
 from models.demos.glm53_flash_d_p.tt.experts import CACHE_ROOT, LazyExpertWeights
 
 NONE = 0xFFFFFFFF
+# more than two mesh rows, split output: one full-mesh reduce-scatter of the [T, H] partials (a snake line over every
+# chip, chip d gets rows d T/n) instead of axis 0 then axis 1. 4x4 Galaxy, chunk 5120: 852 vs 906 us device, but 15
+# bf16 roundings of the running sum instead of 3 + 3 (max abs err 0.37 vs 0.19 on unit partials); off by default
+RS_FULL_MESH = os.environ.get("GLM_MOE_RS_FULL_MESH", "0") == "1"
 
 
 def _up(v, a):
@@ -146,8 +151,10 @@ class _Block:
 
     def __init__(self, mesh, *, s, hidden, k, n_global, gids, links):
         rows, cols = tuple(mesh.shape)
-        assert rows == 2, f"the fused send-back needs two mesh rows, got {tuple(mesh.shape)}"
+        assert rows >= 2, f"the all-gather MoE needs at least two mesh rows, got {tuple(mesh.shape)}"
         self.mesh, self.S, self.H, self.K, self.links = mesh, s, hidden, k, links
+        # two rows: the fused send-back into the persistent ``own``; more: a reduce-scatter over axis 0 (fresh output)
+        self.fused = rows == 2
         self.T = T = rows * s
         self.epc = len(gids[0])
         self.rows = flat_rows(T, k, self.epc)
@@ -168,9 +175,10 @@ class _Block:
         )
         self.y_slot = _dram(mesh, [1, T * k], ttnn.uint32)
         self.info = chip_info(mesh, s)
-        self.other = _dram(mesh, [1, 1, s, hidden])
-        self.own = _dram(mesh, [1, 1, s, hidden], ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        self.g_sp = _dram(mesh, [1, 1, 2 * s, hidden])
+        if self.fused:
+            self.other = _dram(mesh, [1, 1, s, hidden])
+            self.own = _dram(mesh, [1, 1, s, hidden], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            self.g_sp = _dram(mesh, [1, 1, 2 * s, hidden])
 
     def gather(self, x, idx, w, replicated):
         """x [1, 1, s, H] bf16 TILE (s = S/2, mesh row r's tokens; replicated: all S tokens), idx / w [1, 1, s, K] TILE
@@ -216,8 +224,13 @@ class _Block:
         )
 
     def reduce(self, y, gw):
-        """y [rows, H] bf16 row major -> [1, 1, S/2, H] bf16 TILE (persistent ``own``): this mesh column's sum over
-        its two chips' experts for this mesh row's tokens."""
+        """y [rows, H] bf16 row major -> [1, 1, S/R, H] bf16 TILE: this mesh column's sum over its R chips' experts for
+        this mesh row's tokens (two rows: the persistent ``own``; more: a fresh tensor, see ``fused``)."""
+        if not self.fused:
+            (part,) = ttnn.bringup.moe_ag_local_reduce(y, self.y_slot, gw, self.info, self.S, phase=0, tiled=True)
+            col = reduce_scatter_rows(part, 0, self.links)
+            ttnn.deallocate(part)
+            return col
         ttnn.bringup.moe_ag_local_reduce(y, self.y_slot, gw, self.info, self.S, phase=1, outputs=[self.other])
         all_gather_rows(self.other, self.g_sp, 0, self.links)
         ttnn.bringup.moe_ag_local_reduce(
@@ -258,7 +271,8 @@ class TtExpertsAg:
 
         rows, cols = tuple(mesh.shape)
         n = rows * cols
-        assert rows == 2 and num_experts % n == 0, tuple(mesh.shape)
+        assert rows >= 2 and num_experts % n == 0, tuple(mesh.shape)
+        self.mesh_rows = rows
         assert float(limit) == 10.0, f"clamped_silu is fixed at limit 10, got {limit}"
         self.mesh, self.layer, self.links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = num_experts, top_k, emb_dim, hidden_dim
@@ -317,7 +331,9 @@ class TtExpertsAg:
         key = (id(self.mesh), s, self.H, self.K, self.E, self.epc, self.links)
         hit = _BLOCKS.get(key)
         if hit is None or hit.mesh is not self.mesh:
-            assert 2 * s <= self.max_seq_len, f"chunk {2 * s} > max_seq_len {self.max_seq_len}"
+            assert (
+                self.mesh_rows * s <= self.max_seq_len
+            ), f"chunk {self.mesh_rows * s} > max_seq_len {self.max_seq_len}"
             hit = _BLOCKS[key] = _Block(
                 self.mesh, s=s, hidden=self.H, k=self.K, n_global=self.E, gids=self.gids, links=self.links
             )
@@ -332,8 +348,8 @@ class TtExpertsAg:
 
     def __call__(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
         """x [1,1,S,H] replicated; routing as dense [1,1,S,E] or (idx, wts) [1,1,S,K] -> experts_out [1,1,S,H] bf16
-        replicated. split: x and the routing are mesh row r's half [r S/2, (r+1) S/2) (on every chip of the row); the
-        output is this chip's rows [r S/2 + c S/(2 C), + S/(2 C)) (the split residual layout). full_mesh (with split):
+        replicated. split: x and the routing are mesh row r's share [r S/R, (r+1) S/R) (on every chip of the row); the
+        output is this chip's rows [r S/R + c S/(R C), + S/(R C)) (the split residual layout). full_mesh (with split):
         x and the routing are this chip's own rows only (S/n); one full-mesh gather replaces the row's axis-1 gather and
         the axis-0 gather (GLM_MOE_FULL_MESH)."""
         tmp = []
@@ -357,7 +373,7 @@ class TtExpertsAg:
             wts = ttnn.to_layout(wts, ttnn.TILE_LAYOUT)
             tmp.append(wts)
         S = x.shape[-2]
-        s = S if split else S // 2
+        s = S if split else S // self.mesh_rows
         if full_mesh:
             assert split, "full_mesh needs the split layout"
             s = S * tuple(self.mesh.shape)[1]  # the mesh row's tokens, as the axis-1 gather would have made them
@@ -398,14 +414,26 @@ class TtExpertsAg:
         if own_gx:
             ttnn.deallocate(gx)
         ttnn.deallocate(gi)
+        if split and not blk.fused and RS_FULL_MESH:  # the [T, H] partials straight to the chip's own rows
+            (part,) = ttnn.bringup.moe_ag_local_reduce(y, blk.y_slot, gw, blk.info, blk.S, phase=0, tiled=True)
+            ttnn.deallocate(y)
+            ttnn.deallocate(gw)
+            out = reduce_scatter_rows(part, None, self.links)
+            ttnn.deallocate(part)
+            return out
         col = blk.reduce(y, gw)
         ttnn.deallocate(y)
         ttnn.deallocate(gw)
         if split:
-            return reduce_scatter_rows(col, 1, self.links)
+            out = reduce_scatter_rows(col, 1, self.links)
+            if not blk.fused:
+                ttnn.deallocate(col)
+            return out
         rs = ttnn.reduce_scatter(
             col, dim=2, cluster_axis=1, num_links=self.links, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        if not blk.fused:
+            ttnn.deallocate(col)
         half = ttnn.all_gather(rs, dim=2, cluster_axis=1, num_links=self.links, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(rs)
         out = ttnn.all_gather(half, dim=2, cluster_axis=0, num_links=self.links, memory_config=ttnn.DRAM_MEMORY_CONFIG)
