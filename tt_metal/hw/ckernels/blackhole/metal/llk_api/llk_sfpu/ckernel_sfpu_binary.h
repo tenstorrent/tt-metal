@@ -95,6 +95,12 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
+// The bit patterns the nextafter arm reads from vConstIntPrgm0 to 2, which sfpu_binary_init programs.
+constexpr std::int32_t nextafter_abs_mask = 0x7FFFFFFF;
+constexpr std::int32_t nextafter_inf_bits = 0x7F800000;
+template <BinaryOp BINOP>
+constexpr std::int32_t nextafter_ulp_step = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+
 template <
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
@@ -148,7 +154,7 @@ inline void calculate_sfpu_binary(
             // there: that gives one ULP at in0's own magnitude, which a fixed epsilon cannot.
             // bfloat16 keeps its mantissa in the top 16 bits of the fp32 dest register, so one of
             // its ULPs is 0x10000 there.
-            constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+            constexpr int kUlpStep = nextafter_ulp_step<BINOP>;
             // Kept flat, with every value declared up front: the sfpi predication pass does not
             // survive a v_if nested inside a v_else here.
             sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
@@ -191,7 +197,7 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            // vConstIntPrgm0 = 0x7FFFFFFF and vConstIntPrgm1 = 0x7F800000, programmed by sfpu_binary_init.
+            // vConstIntPrgm0 and vConstIntPrgm1 hold nextafter_abs_mask and nextafter_inf_bits.
             v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
             v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
@@ -208,7 +214,7 @@ inline void calculate_sfpu_binary(
         sfpi::dst_reg++;
     };
 
-    if constexpr (BINOP == BinaryOp::POW || (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en)) {
+    if constexpr (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) {
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }
@@ -258,7 +264,8 @@ inline void calculate_sfpu_binary_div_fp32_rows(
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x80 | (1 << 3) | 3) << 8);
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0x010, 8, 1);
-    load_replay_buf<Exec>(0, 32, [in0, in1] {
+    constexpr std::uint32_t row_len = 32;  // the instructions recorded below
+    load_replay_buf<Exec>(0, row_len, [in0, in1] {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
         TTI_SFPSETEXP(127, p_sfpu::LREG0, p_sfpu::LREG1, 1);                           // mb
@@ -296,7 +303,7 @@ inline void calculate_sfpu_binary_div_fp32_rows(
     TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 32);
+        lltt::replay(0, row_len);
         TT_SFPLOADMACRO(
             (0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
         TTI_INCRWC(0, 2, 0, 0);
@@ -318,7 +325,8 @@ inline void calculate_sfpu_binary_div_bf16_rows(
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0x110, 8, 1);
-    load_replay_buf<Exec>(0, 21, [in0, in1, out] {
+    constexpr std::uint32_t row_len = 21;  // the instructions recorded below
+    load_replay_buf<Exec>(0, row_len, [in0, in1, out] {
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
         TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                           // r
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);  // t = in1 * r - 2
@@ -344,21 +352,92 @@ inline void calculate_sfpu_binary_div_bf16_rows(
     });
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 21);
+        lltt::replay(0, row_len);
     }
 }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    const std::uint32_t in0 = (dst_index_in0 * 64) & 0x3ff;
-    const std::uint32_t in1 = (dst_index_in1 * 64) & 0x3ff;
-    const std::uint32_t out = (dst_index_out * 64) & 0x3ff;
+#ifdef DISABLE_SFPLOADMACRO
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+        sfpi::vFloat result;
+        if constexpr (is_fp32_dest_acc_en) {
+            // Refine signed mantissas with magnitudes in [1, 2), so neither the
+            // reciprocal nor the residual underflows, then restore the exponent.
+            sfpi::vFloat ma = sfpi::setexp(in0, 127);
+            sfpi::vFloat mb = sfpi::setexp(in1, 127);
+            // The hardware seed needs one Newton step before quotient refinement.
+            sfpi::vFloat r = sfpu_reciprocal_iter<1, true>(mb);
+            sfpi::vFloat q = ma * r;
+            sfpi::vFloat residual = ma - q * mb;
+            q = q + residual * r;
+
+            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
+            // Split exponent restoration between two factors. Their product
+            // supplies hardware overflow/underflow handling, while power-of-two
+            // scaling is exact for normal results.
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
+            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+
+            // For exceptional inputs only the reciprocal's sign and zero/Inf
+            // classification matter. Inverting its exponent gives Inf for zero,
+            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
+            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
+            // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
+                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
+                sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
+                    sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
+                // Inverting in1 also inverts the scale's sign, so negate the product.
+                result = nan_divisor - in0 * scale;
+            }
+            v_endif;
+        } else {
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
+            }
+            v_endif;
+        }
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            // software RNE approach:
+            result = float32_to_bf16_rne(result);
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+#else
+    // Each call programs load macro 0 and records its row into the replay buffer from slot 0, so an op that reads
+    // either after a division runs its own init first.
+    constexpr std::uint32_t dst_tile_rows = 64, dst_row_mask = 0x3ff;  // SFPLOAD and SFPSTORE take a 10-bit row
+    const std::uint32_t in0 = (dst_index_in0 * dst_tile_rows) & dst_row_mask;
+    const std::uint32_t in1 = (dst_index_in1 * dst_tile_rows) & dst_row_mask;
+    const std::uint32_t out = (dst_index_out * dst_tile_rows) & dst_row_mask;
     if constexpr (is_fp32_dest_acc_en) {
         calculate_sfpu_binary_div_fp32_rows<ITERATIONS>(in0, in1, out);
     } else {
         calculate_sfpu_binary_div_bf16_rows<ITERATIONS>(in0, in1, out);
     }
+#endif
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
@@ -373,9 +452,9 @@ inline void sfpu_binary_init() {
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
-        sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
-        sfpi::vConstIntPrgm1 = 0x7F800000;
-        sfpi::vConstIntPrgm2 = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+        sfpi::vConstIntPrgm0 = nextafter_abs_mask;
+        sfpi::vConstIntPrgm1 = nextafter_inf_bits;
+        sfpi::vConstIntPrgm2 = nextafter_ulp_step<BINOP>;
     }
 }
 
