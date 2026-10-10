@@ -1,0 +1,8 @@
+ID=t330-fl2va-5s
+TASK=t330
+WORKDIR=/var/tmp/fasth3/t330
+ENV=/home/smarton/fasth3/runner/env.yaml
+CONFIG=h3turbo-5s-fl2va-matched
+TIMEOUT=450
+CMD=env T286_WARM_DEADLINE_S=400 T286_RUNGS=38912,41984,45312 T286_WARM_LATE_S=330 T286_SKIP_VAE_WARM=1 bash /var/tmp/fasth3/t330/run330.sh fl2va 5 fl2va /var/tmp/fasth3/t330/kf_t2va_f0.png
+NEEDS=/var/tmp/fasth3/models/MiniMax-H3/READ_OK,/var/tmp/fasth3/models/lightx2v-h3-turbo/minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors,/home/smarton/fasth3/t286/ttnn/ttnn/_ttnn.so,/var/tmp/fasth3/t330/kf_t2va_f0.png
