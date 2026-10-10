@@ -92,6 +92,49 @@ def features(d, g, parts):
     return f
 
 
+def problem_features(d, f):
+    """for the offset stage: the row's mechanism features plus problem attributes the within-problem stage never needs"""
+    codes = dict(
+        mem={"dram": 0, "l1": 1, "l1_height": 2, "l1_width": 3, "l1_block": 4},
+        dt={"bf16": 0, "bfp8": 1, "bfp4": 2, "fp32": 3},
+        fid=FID,
+    )  # fixed codes, so training and pick time agree; sharded layouts and anything unlisted share the next code
+    kind = dict(a_mem="mem", b_mem="mem", out_mem="mem", a_dtype="dt", b_dtype="dt", out_dtype="dt", fidelity="fid")
+    cat = lambda c: (
+        d[c].map(codes[kind[c]]).fillna(len(codes[kind[c]]) + 1).to_numpy(float) if c in d else np.zeros(len(d))
+    )
+    num = lambda c: pd.to_numeric(d[c], errors="coerce").fillna(0).to_numpy() if c in d else np.zeros(len(d))
+    return f.assign(
+        a_mem=cat("a_mem"),
+        b_mem=cat("b_mem"),
+        out_mem=cat("out_mem"),
+        a_dt=cat("a_dtype"),
+        b_dt=cat("b_dtype"),
+        o_dt=cat("out_dtype")
+        if "out_dtype" not in d
+        else d.out_dtype.fillna(d.a_dtype).map(codes["dt"]).fillna(5).to_numpy(float),
+        fid=cat("fidelity"),
+        fp32=num("fp32_acc"),
+        l1acc=num("packer_l1_acc"),
+        bias=num("bias"),
+        tb=num("transpose_b"),
+    )
+
+
+def problem_offset(d, f, base, corr, rows_tr, rows_te, w):
+    """second stage: the problem-level log error left after the within-problem correction (constant per problem, so
+    it never changes a pick). Trained on each training problem's median, predicted per row and averaged per problem."""
+    e = np.log(d.device_ns.to_numpy()[rows_tr] / base[rows_tr]) - corr[rows_tr]
+    pid = d.problem_id.to_numpy()
+    y = pd.Series(e).groupby(pid[rows_tr]).transform("median").to_numpy()
+    pf = problem_features(d, f)
+    m = lgb.LGBMRegressor(**{**PARAMS, "num_leaves": int(os.environ.get("OFF_LEAVES", "63"))}).fit(
+        pf.iloc[rows_tr], y, sample_weight=w
+    )
+    o = m.predict(pf.iloc[rows_te])
+    return pd.Series(o).groupby(pid[rows_te]).transform("median").to_numpy(), m
+
+
 def base_parts(x, p):
     g = M.geometry(x)
     t, pr = M.predict(g, p, parts=True)
@@ -137,7 +180,20 @@ if __name__ == "__main__":
             w = 1.0 / np.sqrt(xtr.problem_id.map(xtr.problem_id.value_counts()).to_numpy())
             m = lgb.LGBMRegressor(**PARAMS).fit(ftr[cand & sub], y[cand & sub], sample_weight=w[cand & sub])
             c = SHRINK * m.predict(fte)
-            base_oof[te], corr_oof[te], final_oof[te] = bte, c, bte * np.exp(c)
+            for seed in range(1, int(os.environ.get("ENSEMBLE", "1"))):  # seed average: lower variance near ties
+                ms = lgb.LGBMRegressor(**{**PARAMS, "random_state": seed}).fit(
+                    ftr[cand & sub], y[cand & sub], sample_weight=w[cand & sub]
+                )
+                c = c + (SHRINK * ms.predict(fte) - c) / (seed + 1)
+            off = np.zeros(len(te))
+            if os.environ.get("OFFSET") == "1":
+                xx = pd.concat([xtr, xte], ignore_index=True)
+                ff = pd.concat([ftr, fte], ignore_index=True)
+                bb = np.concatenate([btr, bte])
+                cc = np.concatenate([SHRINK * m.predict(ftr), c])
+                itr, ite = np.flatnonzero(cand), len(xtr) + np.arange(len(xte))
+                off, _ = problem_offset(xx, ff, bb, cc, itr, ite, w[cand])
+            base_oof[te], corr_oof[te], final_oof[te] = bte, c, bte * np.exp(c + off)
             print(f"{a} fold {k}: |corr| median {np.median(np.abs(c)):.3f}", flush=True)
     np.save(f"{out}_base.npy", base_oof)
     np.save(f"{out}_final.npy", final_oof)

@@ -58,6 +58,9 @@ SETS = {  # name -> (path, arch); read-only inputs
     "bh_wbench": (f"{WORK}/frozen/bh_wbench.csv", "bh"),  # BH: write-rate sweep, 75 shapes
     "bh_cov1": (f"{WORK}/frozen/bh_cov1.csv", "bh"),  # BH coverage round 1: 200 least-covered pool problems, contenders
     "wh_draws": ([f"{WORK}/frozen/wh_draw{k}_timed.csv" for k in (2, 3, 4, 5)], "wh"),
+    # finalist round 1 (v18r10): new problems, v18r9's top 8 within 15% of its best, legacy and rules
+    "wh_fin1": (f"{WORK}/frozen/wh_fin1.csv", "wh"),
+    "bh_fin1": (f"{WORK}/frozen/bh_fin1.csv", "bh"),
 }
 # MultiCore probes: the MultiCore config timed on a set's own problems (origin "multicore"), joined unless MC_PROBES=0 (v18r4 on)
 MC_PROBES = {"wh_designed": f"{WORK}/device/multicore_wh.csv", "bh_designed": f"{WORK}/bh/bh_designed_mc.csv"}

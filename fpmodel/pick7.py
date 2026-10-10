@@ -94,6 +94,9 @@ if os.environ.get("RESID"):  # v18r: learned within-problem correction on top of
     base, g, pr = R.base_parts(e, p)
     corr = lgb.Booster(model_file=os.environ["RESID"]).predict(R.features(e, g, pr))
     e["pred"] = base * np.exp(float(os.environ.get("SHRINK", "1.0")) * corr)
+    if os.environ.get("OFFSET_LGB"):  # problem-level calibration: the same factor for every candidate, picks unchanged
+        o = lgb.Booster(model_file=os.environ["OFFSET_LGB"]).predict(R.problem_features(e, R.features(e, g, pr)))
+        e["pred"] *= np.exp(pd.Series(o).groupby(e.case.to_numpy()).transform("median").to_numpy())
 else:
     e["pred"] = M.predict(M.geometry(e), p)
 r = e.loc[e.groupby("case").pred.idxmin(), ["case", "config", "family", "origin", "pred"]]

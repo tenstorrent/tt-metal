@@ -1,5 +1,6 @@
 """Freeze base + residual: base constants (a fitted JSON on all training data) and the residual tree trained on all
-training rows of that arch with those constants. usage: resid_freeze.py ARCH CONST_JSON OUT_MODEL  (env as resid_cv.py)"""
+training rows of that arch with those constants. usage: resid_freeze.py ARCH CONST_JSON OUT_MODEL  (env as resid_cv.py)
+With OFFSET=1 also the problem-offset stage, saved next to OUT_MODEL as <name>.off.lgb (pick7.py: env OFFSET_LGB)."""
 import os, sys, json
 
 sys.path.insert(0, ".")
@@ -26,3 +27,8 @@ print(
     int(cand.sum()),
     "in-sample |corr| median %.3f p90 %.3f" % (np.median(np.abs(c)), np.quantile(np.abs(c), 0.9)),
 )
+if os.environ.get("OFFSET") == "1":
+    i = np.flatnonzero(cand)
+    _, mo = R.problem_offset(x, f, b, c, i, i, w[cand])
+    mo.booster_.save_model(out.replace(".lgb", ".off.lgb"))
+    print(arch, "offset stage saved:", out.replace(".lgb", ".off.lgb"))

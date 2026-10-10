@@ -1,7 +1,7 @@
 """Finalist timing: per problem, the model's top K candidates predicted within MARGIN of its best. Writes the cases with
 more than one finalist and a pre-filled sweep output marking every other enumerated config done, so
 sweep_enumerated.py --resume times only the finalists (plus legacy and the rules' pick, which it always times).
-usage: finalists.py CASES_CSV ENUM_CSV OUT_DIR CONST_JSON RESID_LGB [K=3] [MARGIN=1.2]"""
+usage: finalists.py CASES_CSV ENUM_CSV OUT_DIR CONST_JSON RESID_LGB [K=3] [MARGIN=1.2]   env: ARCH (default wh)"""
 import sys, os, json
 
 sys.path.insert(0, ".")
@@ -13,8 +13,15 @@ cases_csv, enum_csv, out_dir, cpath, lpath = sys.argv[1:6]
 K = int(sys.argv[6]) if len(sys.argv) > 6 else 3
 MARGIN = float(sys.argv[7]) if len(sys.argv) > 7 else 1.2
 p = json.load(open(cpath))
+for name, (_, _, term) in M.CONSTANTS.items():  # as pick7: terms the frozen constants lack are off
+    if term and name not in p:
+        M.OFF.add(term)
 raw = pd.read_csv(enum_csv, low_memory=False)
-e = raw[(raw.origin == "enumerated") & (raw.status == "ok")].reset_index(drop=True).assign(arch_="wh")
+e = (
+    raw[(raw.origin == "enumerated") & (raw.status == "ok")]
+    .reset_index(drop=True)
+    .assign(arch_=os.environ.get("ARCH", "wh"))
+)
 e = M.annotate(e)
 b, g, pr = R.base_parts(e, p)
 e["pred"] = b * np.exp(lgb.Booster(model_file=lpath).predict(R.features(e, g, pr)))
