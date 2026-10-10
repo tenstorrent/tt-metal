@@ -67,14 +67,15 @@ class V41Checkpoint:
 
     def layer(self, layer: int, *, experts: bool = False) -> dict:
         """Every tensor of ``layers.<layer>.`` (model.py names minus the prefix), Linear weights dequantised; the routed
-        experts only with ``experts=True`` (``ffn.experts.E.w{1,2,3}`` -> fp32 ``[N, K]``)."""
+        experts only with ``experts=True`` (``ffn.experts.E.w{1,2,3}`` -> fp32 ``[N, K]``). Never the Engram tables
+        (``engram.embed``, 384M x 256 per layer: ~393 GB in fp32 -- the host's EngramHost serves their rows)."""
         pre = f"layers.{layer}."
         out = {}
         for name in self.weight_map:
             if not name.startswith(pre) or name.endswith(".scale"):
                 continue
             short = name[len(pre) :]
-            if ".experts." in short and not experts:
+            if (".experts." in short and not experts) or short.startswith("engram.embed."):
                 continue
             if short.endswith(".weight") and self.has(name[: -len(".weight")] + ".scale"):
                 out[short] = self.linear(name[: -len(".weight")])

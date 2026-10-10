@@ -16,6 +16,7 @@ experts of a layer in fp32 would be 54 GB of host RAM). With ``weight_cache_path
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
@@ -61,13 +62,20 @@ def build_v41_moe(
     num_links=2,
     topology=ttnn.Topology.Linear,
     dispatch_buffer_capacity_factor: int = 2,
-    routed_expert_weights_dtype=ttnn.bfloat4_b,
+    routed_expert_weights_dtype=None,
     weight_cache_path: Optional[Path] = None,
     load_routed_from_cache: bool = False,
 ) -> TtMoe:
     """``w``: the layer's ``V41Checkpoint.layer(L)`` dict (gate / shared expert); the routed experts are read through
     ``ck`` (``LazyExperts``) unless ``load_routed_from_cache`` (a complete .tensorbin cache under ``weight_cache_path``).
-    Routed weights default to BFP4 -- the checkpoint is FP4, and the decode ring runs them at BFP4 (DS41F-0019)."""
+    Routed weights default to BFP8 (``V41_PREFILL_EXPERT_DTYPE=bfp4`` for BFP4): a BFP block shares one exponent over 16
+    OUTPUT channels of ``W.T`` whose e8m0 scales differ, so BFP4's 3 mantissa bits cannot hold the FP4 values (tt-blaze
+    DS41F-0019: the decode ring's BFP4 experts cost 0.009-0.016 MoE PCC); at 384 x 2304 BFP8 is ~9 GB per chip for the 20
+    encoder layers on 8 x 4."""
+    if routed_expert_weights_dtype is None:
+        routed_expert_weights_dtype = (
+            ttnn.bfloat4_b if os.environ.get("V41_PREFILL_EXPERT_DTYPE", "bfp8") == "bfp4" else ttnn.bfloat8_b
+        )
     mesh_config = extract_mesh_config(mesh_device)
     n_experts = int(cfg.n_routed_experts)
     (
