@@ -1,5 +1,5 @@
 ### Summary
-Turns on, by default, the LTX-2.3 distilled (8+3) speed gains that are bit-identical or quality-neutral. In `test_pipeline_distilled` 8+3 on BH Galaxy 4x8 the Total drops by about 0.2 s (about 3%): Stage 2 denoise -0.15..-0.17 s, Stage 1 denoise -0.03..-0.10 s. VAE decode, latent upsample and audio decode do not change.
+Turns on, by default, the LTX-2.3 distilled (8+3) speed gains that are bit-identical or quality-neutral. In `test_pipeline_distilled` 8+3 on BH Galaxy 4x8 the denoise stages drop by about 0.2 s (about 3% of the Total): Stage 2 denoise -0.14..-0.15 s, Stage 1 denoise -0.03..-0.06 s (tables below). The Total row moves -0.17 s against main job 210 but +0.05 s against job 214, because the Encoder row varies by up to 0.28 s between runs; without it, main 5.96 / 6.00 s vs this PR 5.77 s. VAE decode, latent upsample and audio decode do not change.
 
 The two mp4 export gains (AAC encode overlapped with the video encode, x264 ultrafast) run after the test fills its timing table, so the table below does not include them. Host bench for x264 ultrafast on 1080p, 145 frames: 0.15 s vs 0.65 s.
 
