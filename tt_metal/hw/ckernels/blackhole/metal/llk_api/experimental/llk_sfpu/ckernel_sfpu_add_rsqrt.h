@@ -10,6 +10,8 @@
 
 namespace ckernel::sfpu {
 
+constexpr uint32_t FP32_ONE_BITS = 0x3f800000u;
+
 // Calculate: result = rsqrt(x * INPUT_SCALE + param0)
 // param0 and INPUT_SCALE are the bit representations of floats
 // This is useful for operations like RMSNorm: rsqrt(variance + epsilon)
@@ -22,14 +24,14 @@ template <
     bool fp32_dest_acc_en,
     bool FAST_APPROX,
     bool typed_bf16_store = false,
-    uint32_t INPUT_SCALE = 0x3f800000u>
+    uint32_t INPUT_SCALE = FP32_ONE_BITS>
 inline void calculate_add_rsqrt(uint32_t param0) {
     if constexpr (APPROXIMATION_MODE || (ITERATIONS % 2) != 0) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
             sfpi::vFloat x_plus_addend;
-            if constexpr (INPUT_SCALE == 0x3f800000u) {
+            if constexpr (INPUT_SCALE == FP32_ONE_BITS) {
                 x_plus_addend = x + Converter::as_float(param0);
             } else {
                 x_plus_addend = x * Converter::as_float(INPUT_SCALE) + Converter::as_float(param0);
@@ -52,10 +54,10 @@ inline void calculate_add_rsqrt(uint32_t param0) {
         // Two vectors per step so that the refinement chains overlap; per lane the arithmetic is the one-vector loop's.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d += 2) {
-            // Formed at every read of x: the body reads DEST again for its second step.
+            // The body takes loaders; its reciprocal form calls each once, so the operand is formed once per vector.
             const float addend = Converter::as_float(param0);
             auto operand = [addend](const sfpi::vFloat x) {
-                if constexpr (INPUT_SCALE == 0x3f800000u) {
+                if constexpr (INPUT_SCALE == FP32_ONE_BITS) {
                     return x + addend;
                 } else {
                     return x * Converter::as_float(INPUT_SCALE) + addend;
@@ -63,7 +65,7 @@ inline void calculate_add_rsqrt(uint32_t param0) {
             };
             sfpi::vFloat y0;
             sfpi::vFloat y1;
-            _calculate_sqrt_body_accurate_x2_<true, FAST_APPROX>(
+            _calculate_sqrt_body_accurate_x2_<true /* RECIPROCAL */, FAST_APPROX>(
                 [&] { return operand(sfpi::dst_reg[0]); }, [&] { return operand(sfpi::dst_reg[1]); }, y0, y1);
 
             if constexpr (!fp32_dest_acc_en && typed_bf16_store) {

@@ -24,6 +24,7 @@ namespace sfpu {
 sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(x) << 1; }
 
 // Computes the square root or reciprocal square root of a positive floating point value x.
+// The accurate edge handling is repeated in the two-vector helpers below; keep them in step.
 template <bool APPROXIMATE = false, bool RECIPROCAL = false, bool FAST_APPROX = false>
 sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
     sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1);
@@ -143,39 +144,30 @@ sfpi_inline void _sqrt_accurate_reciprocal_edge_(
     v_endif;
 }
 
-// The second refinement step and edge handling of the accurate body for one vector, as in _calculate_sqrt_body_; the
-// integer statements sit between the dependent float steps so that no result is read by the next instruction.
-template <bool RECIPROCAL, bool FAST_APPROX>
+// The second refinement step and edge handling of the accurate square root body for one vector, as in
+// _calculate_sqrt_body_<false, false, FAST_APPROX>.
+template <bool FAST_APPROX>
 sfpi_inline sfpi::vFloat _sqrt_accurate_second_step_(const sfpi::vFloat x, sfpi::vFloat y) {
     sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
     sfpi::vInt infinity_bits = sfpi::as<sfpi::vInt>(infinity);
     sfpi::vFloat xy = x * y;
+    sfpi::vFloat negative_y = -y;
+    sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
+    // `<`, not `!=`: skips x = inf (y is already inf) and positive NaN, which the step would sign-flip; a negative
+    // NaN runs the step and the clamp below rewrites it.
+    v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) {
+        sfpi::vFloat half_xy = 0.5f * xy;
+        y = one_minus_xyy * half_xy + xy;
+    }
+    v_endif;
 
-    if constexpr (RECIPROCAL) {
-        sfpi::vInt x_bits = sfpi::as<sfpi::vInt>(x);
-        sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
-        sfpi::vFloat negative_y = -y;
-        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
-        _sqrt_accurate_reciprocal_edge_<FAST_APPROX>(x, y, one_minus_xyy, infinity_minus_x_bits);
-    } else {
-        sfpi::vFloat negative_y = -y;
-        sfpi::vFloat one_minus_xyy = 1.0f + (negative_y * xy);
-        // `<`, not `!=`: skips x = inf (y is already inf) and positive NaN, which the step would sign-flip; a negative
-        // NaN runs the step and the clamp below rewrites it.
-        v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) {
-            sfpi::vFloat half_xy = 0.5f * xy;
-            y = one_minus_xyy * half_xy + xy;
+    if constexpr (!FAST_APPROX) {
+        // sqrt(+/-0) = +/-0: return x, because the refinement cannot produce a signed zero.
+        v_if(_bits_without_sign_(x) == 0) { y = x; }
+        v_elseif(x < 0.0f) {
+            y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
         v_endif;
-
-        if constexpr (!FAST_APPROX) {
-            // sqrt(+/-0) = +/-0: return x, because the refinement cannot produce a signed zero.
-            v_if(_bits_without_sign_(x) == 0) { y = x; }
-            v_elseif(x < 0.0f) {
-                y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
-            }
-            v_endif;
-        }
     }
 
     return y;
@@ -204,8 +196,10 @@ sfpi_inline void _sqrt_accurate_first_step_x2_(
     y1 = y1 * t1;
 }
 
-// The accurate body for two vectors at once, interleaved so that no instruction reads the result of the one before it;
-// per lane the operations and their order are those of _calculate_sqrt_body_<false, RECIPROCAL, FAST_APPROX>.
+// The accurate body for two vectors at once; per lane the operations and their order are those of
+// _calculate_sqrt_body_<false, RECIPROCAL, FAST_APPROX>. Both forms interleave the two seeds and first steps. The
+// reciprocal form also interleaves the second steps and calls each loader once; the square root form, short of
+// registers to keep both x live, runs the two second steps one after the other and calls each loader again for them.
 template <bool RECIPROCAL, bool FAST_APPROX, class LoadX0, class LoadX1>
 sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x1, sfpi::vFloat& y0, sfpi::vFloat& y1) {
     if constexpr (RECIPROCAL) {
@@ -237,10 +231,10 @@ sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x
             _sqrt_accurate_first_step_x2_(x0, x1, y0, y1);
         }
         // The sqrt form re-reads x from DEST for the second step; the barriers keep the first read from being held.
-        asm volatile("" ::: "memory");
-        y0 = _sqrt_accurate_second_step_<false, FAST_APPROX>(load_x0(), y0);
-        asm volatile("" ::: "memory");
-        y1 = _sqrt_accurate_second_step_<false, FAST_APPROX>(load_x1(), y1);
+        ckernel::fence_compiler();
+        y0 = _sqrt_accurate_second_step_<FAST_APPROX>(load_x0(), y0);
+        ckernel::fence_compiler();
+        y1 = _sqrt_accurate_second_step_<FAST_APPROX>(load_x1(), y1);
     }
 }
 
