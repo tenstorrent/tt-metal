@@ -726,6 +726,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
             _init_topk();
         }
     }
+    else if constexpr (OPERATION == SfpuType::abs)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        ckernel::sfpu::abs_bf16_tile_init<!is_fp32_dest_acc_en>();
+    }
     else
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
@@ -808,7 +813,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 
     if constexpr (OPERATION == SfpuType::abs)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::abs_int32)
     {
