@@ -113,24 +113,11 @@ namespace {
 // A tri-state env var (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES) overrides the auto-detect:
 //   =1 → force enable, =0 → force disable, unset → auto-detect (below).
 //
-// Auto-detect resolves firmware support (architecture + firmware-bundle floor, via
-// check_firmware_capabilities). A cluster with a harvested DRAM channel keeps the core type off even
-// when the env var asks for it: its DRAM views come from harvested_dram_views, whose free subchannel
-// can be the core CMFW runs on, and DRISC firmware must never be loaded there.
+// Auto-detect resolves firmware support only (architecture + firmware-bundle floor, via
+// check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
+// GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
-    for (const auto chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
-            if (override.value_or(false)) {
-                log_warning(
-                    tt::LogMetal,
-                    "Ignoring TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1: chip {} has a harvested DRAM "
-                    "channel, so DRAM programmable cores stay disabled",
-                    chip);
-            }
-            return false;
-        }
-    }
     if (override.has_value()) {
         log_info(
             tt::LogMetal,

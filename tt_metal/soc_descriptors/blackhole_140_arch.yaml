@@ -80,20 +80,25 @@ dram_views:
 # translation keeps the column with no harvested channel at the lower translated x and moves the harvested
 # channel's rows to the bottom of the other column, so view k reaches the same translated cores whichever
 # channel is harvested. Subchannel s of a channel sits s translated rows below its subchannel 0.
-# Every view uses subchannel 2 on NOC0 and 1 on NOC1. Subchannel 0 would put two views of one column on
-# the same nearest worker row (rows 0 and 2 both map to worker row 2), and CMFW reads DRAM telemetry from
-# subchannel 0 or 2, never 1, so NOC1 traffic never shares an endpoint with it (SYS-1419).
-# Reset the board after any run that booted DRISC firmware with dram_views: that firmware leaves its
-# non-endpoint NIUs forwarding to DRISC L1 instead of GDDR until reset, and some are endpoints here.
+# Subchannel 1 is never an endpoint: the syseng firmware runs on noc2axi port 0 or 2 (port 2 only for
+# GDDR0), and port 1 is subchannel 1 in both columns, so every view keeps a free subchannel for DRISC
+# firmware whichever channel it lands on. The syseng firmware's tile is therefore one of the view's two
+# endpoints, NOC0 or NOC1 depending on the channel, and Metal runs DRISC firmware on neither.
+# Endpoints alternate by row within each column (views 0-3 are the first column, 4-6 the second). If
+# one NOC used subchannel 0 in every view, a column's GDDR rows 0 and 1 (NOC0 y 0 and 2) would share the
+# nearest worker row (both clamp to worker row 2); alternating keeps every view's nearest worker distinct
+# on both NOCs for every harvested channel.
+# Reset the board when a run that booted DRISC firmware used the other table: DRISC firmware leaves its
+# non-endpoint NIUs forwarding to DRISC L1 instead of GDDR until reset, and the tables' endpoints differ.
 harvested_dram_views:
   [
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
-    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
   ]
 
 dram_view_size:

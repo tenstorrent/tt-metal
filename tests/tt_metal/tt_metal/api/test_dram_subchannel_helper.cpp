@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <set>
 #include <cstdint>
 
@@ -114,9 +115,15 @@ TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
         EXPECT_EQ(free_logical.x, bank);
         EXPECT_GE(free_logical.y, 2u) << "the free subchannel collides with a worker endpoint role";
 
-        // The two sender roles the prefetcher provisions are exactly [free, NOC1 endpoint].
+        // The sender roles the prefetcher provisions are exactly [free, NOC1 endpoint], or just [free]
+        // where the NOC1 endpoint runs no DRISC firmware (it is not one of get_metal_dram_cores).
+        const auto metal_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::LOGICAL);
+        std::vector<CoreCoord> expected_senders{free_logical};
+        if (std::find(metal_cores.begin(), metal_cores.end(), CoreCoord(bank, 1)) != metal_cores.end()) {
+            expected_senders.emplace_back(bank, 1);
+        }
         const std::vector<CoreCoord> senders = mesh_device->impl().dram_sender_logical_cores(device, bank);
-        EXPECT_EQ(senders, (std::vector<CoreCoord>{free_logical, CoreCoord(bank, 1)}));
+        EXPECT_EQ(senders, expected_senders);
     }
 }
 

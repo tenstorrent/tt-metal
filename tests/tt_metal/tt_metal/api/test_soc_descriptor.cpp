@@ -22,11 +22,13 @@
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/soc_arch_descriptor.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/core_assignment.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/rtoptions.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <tuple>
 #include <vector>
 
@@ -157,6 +159,60 @@ TEST(DramViewMapping, BlackholeHarvestedViewsNameTheSameCoresWhicheverChannelIsH
                 unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested)),
             reference)
             << "harvested channel " << harvested;
+    }
+}
+
+// The syseng firmware never runs on subchannel 1, and harvested_dram_views makes the other two
+// subchannels the endpoints, so on a DRAM-harvested chip Metal's DRAM cores are exactly each view's
+// subchannel 1 -- the one core per bank DRISC firmware may use whichever channel is harvested.
+TEST(DramViewMapping, BlackholeHarvestedViewsLeaveOnlySubchannelOneToMetal) {
+    const uint32_t num_channels = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0).get_num_dram_views();
+    for (uint32_t harvested = 0; harvested < num_channels; ++harvested) {
+        const metal_SocDescriptor soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested);
+        std::set<CoreCoord> expected;
+        for (int view = 0; view < static_cast<int>(soc.get_num_dram_views()); ++view) {
+            const auto free_core =
+                soc.get_dram_core_for_channel(soc.get_channel_for_dram_view(view), 1, CoordSystem::TRANSLATED);
+            expected.insert({free_core.x, free_core.y});
+        }
+        const std::vector<CoreCoord> metal_cores = soc.get_metal_dram_cores(CoordSystem::TRANSLATED);
+        EXPECT_EQ(metal_cores.size(), soc.get_num_dram_views()) << "harvested channel " << harvested;
+        EXPECT_EQ(std::set<CoreCoord>(metal_cores.begin(), metal_cores.end()), expected)
+            << "harvested channel " << harvested;
+    }
+}
+
+// The nearest worker of each view's endpoint stays distinct on both NOCs whichever channel is
+// harvested. Using subchannel 0 on one NOC for every view would put a column's GDDR rows 0 and 1 on
+// one worker; harvested_dram_views alternates its endpoints by row to avoid that.
+TEST(DramViewMapping, BlackholeHarvestedViewsKeepNearestWorkersDistinct) {
+    const uint32_t num_channels = unit_tests::basic::soc_desc::make_blackhole_soc_desc(0).get_num_dram_views();
+    for (uint32_t harvested = 0; harvested < num_channels; ++harvested) {
+        const metal_SocDescriptor soc = unit_tests::basic::soc_desc::make_blackhole_soc_desc(1u << harvested);
+        std::set<uint32_t> worker_x;
+        std::set<uint32_t> worker_y;
+        for (const auto& core : soc.get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
+            worker_x.insert(core.x);
+            worker_y.insert(core.y);
+        }
+        for (uint8_t noc = 0; noc < 2; ++noc) {
+            std::vector<CoreCoord> dram_noc0_coords;
+            for (int view = 0; view < static_cast<int>(soc.get_num_dram_views()); ++view) {
+                const CoreCoord endpoint = soc.get_preferred_worker_core_for_dram_view(view, noc);
+                const auto noc0 = soc.translate_coord_to(
+                    tt_xy_pair(endpoint.x, endpoint.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                dram_noc0_coords.push_back({noc0.x, noc0.y});
+            }
+            const std::vector<CoreCoord> workers = get_optimal_dram_to_physical_worker_assignment(
+                ARCH::BLACKHOLE,
+                dram_noc0_coords,
+                soc.grid_size.x,
+                soc.grid_size.y,
+                std::vector<uint32_t>(worker_x.begin(), worker_x.end()),
+                std::vector<uint32_t>(worker_y.begin(), worker_y.end()));
+            EXPECT_EQ(std::set<CoreCoord>(workers.begin(), workers.end()).size(), workers.size())
+                << "harvested channel " << harvested << ", NOC " << static_cast<int>(noc);
+        }
     }
 }
 

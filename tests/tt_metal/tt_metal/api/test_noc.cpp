@@ -20,6 +20,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include "drisc_test_utils.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -693,8 +694,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
     }
 
     auto mesh_device = this->devices_[0];
-    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-    run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 1}, HalProgrammableCoreType::DRAM);
+    run_local_noc_stream_reg_inc(this, mesh_device, first_drisc_core(*mesh_device), HalProgrammableCoreType::DRAM);
 }
 
 // Tensix to DRISC stream register round trip DRISC test:
@@ -713,8 +713,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
     auto mesh_device = this->devices_[0];
     auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
 
-    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-    CoreCoord logical_core_drisc{0, 1};
+    CoreCoord logical_core_drisc = first_drisc_core(*mesh_device);
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord drisc_virtual = mesh_device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
     uint32_t tensix_l1_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
@@ -758,8 +757,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
     auto mesh_device = this->devices_[0];
     auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
 
-    // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-    CoreCoord logical_core_drisc{0, 1};
+    CoreCoord logical_core_drisc = first_drisc_core(*mesh_device);
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord tensix_virtual = mesh_device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
     CoreCoord drisc_virtual = mesh_device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);

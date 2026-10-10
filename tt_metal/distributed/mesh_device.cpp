@@ -1852,11 +1852,18 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* 
     // Sender 0: the free non-endpoint subchannel.
     const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
 
-    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
-    // matching the endpoint's physical (TRANSLATED) coord against this bank's
-    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
+    // Sender 1: the NOC1 worker-endpoint subchannel, if Metal runs DRISC firmware there. Under
+    // harvested_dram_views the syseng firmware can occupy it, so get_metal_dram_cores leaves it out
+    // and the bank has only the free sender.
     const CoreCoord noc1_endpoint_phys =
         soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
+    const std::vector<CoreCoord> metal_dram_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED);
+    if (std::find(metal_dram_cores.begin(), metal_dram_cores.end(), noc1_endpoint_phys) == metal_dram_cores.end()) {
+        return {free_core};
+    }
+
+    // Resolve the NOC1 endpoint's subchannel index by matching its physical (TRANSLATED) coord
+    // against this bank's subchannels (mirrors the loop in pick_unused_dram_logical_core).
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
     const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
     for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
