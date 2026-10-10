@@ -203,7 +203,63 @@ void kernel_main() {
         //  aka   ∑(x)
         //      --------
         //         n
+#if defined(TILIZE_IN)
+        // ROW_MAJOR input: dfb_in has no producer other than this kernel's tilize step, so pass 0 must
+        // tilize dfb_in_rm block by block (like the variance pass) instead of calling row_wise_mean,
+        // which waits on dfb_in directly and deadlocks. With a residual, mean(x + b) = mean(x) + mean(b),
+        // so both inputs are reduced into the same running sum; the reader interleaves them per block.
+        {
+            const bool mean_last_partial = W % tile_width > 0;
+            dfb_scaler.wait_front(mean_last_partial ? 2 : 1);
+            for (auto block : generic::blocks(Wt, block_size)) {
+                tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
+                tile_regs_acquire();
+                if (!block.is_first()) {
+                    dfb_accumulate.wait_front(onetile);
+                    reconfig_data_format_srca(dfb_accumulate_id);
+                    copy_init(dfb_accumulate_id);
+                    copy_tile(dfb_accumulate_id, 0, dst0);
+                    dfb_accumulate.pop_front(onetile);
+                }
+                dfb_in.wait_front(block.full_block_size());
+                reconfig_data_format(dfb_scaler_id, dfb_in_id);
+                reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_in_id, dfb_scaler_id, dfb_accumulate_id);
+                for (auto i : block.local()) {
+                    const auto sidx = block.to_global(i) == Wt - 1 && mean_last_partial ? 1 : 0;
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                        dfb_in_id, dfb_scaler_id, i, static_cast<uint32_t>(sidx), dst0);
+                }
+                dfb_in.pop_front(block.full_block_size());
 #ifdef FUSE_PRE_ADD
+                dfb_inb.wait_front(block.full_block_size());
+                reconfig_data_format(dfb_scaler_id, dfb_inb_id);
+                reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_inb_id, dfb_scaler_id, dfb_accumulate_id);
+                for (auto i : block.local()) {
+                    const auto sidx = block.to_global(i) == Wt - 1 && mean_last_partial ? 1 : 0;
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                        dfb_inb_id, dfb_scaler_id, i, static_cast<uint32_t>(sidx), dst0);
+                }
+                dfb_inb.pop_front(block.full_block_size());
+#endif
+                const auto final_iter = block.last() == Wt;
+                const auto pack_id = final_iter ? dfb_ex_id : dfb_accumulate_id;
+                DataflowBuffer pack_obj(pack_id);
+                if (final_iter) {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
+                }
+                reduce_uninit();
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_obj.reserve_back(onetile);
+                pack_reconfig_data_format(pack_id);
+                pack_tile(dst0, pack_id);
+                tile_regs_release();
+                pack_obj.push_back(onetile);
+            }
+            dfb_ex.wait_front(1);
+        }
+#elif defined(FUSE_PRE_ADD)
         numeric::row_wise_mean_with_pre_add<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
