@@ -333,13 +333,15 @@ private:
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::DeviceAddr>& receiver_tensor_addrs,
         const Tensor& backing,
-        const D2DStreamConfig& cfg);
+        const D2DStreamConfig& cfg,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& agreed_lanes);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const Tensor& backing,
-        const D2DStreamConfig& cfg);
+        const D2DStreamConfig& cfg,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& agreed_lanes);
 };
 
 }  // namespace ttnn

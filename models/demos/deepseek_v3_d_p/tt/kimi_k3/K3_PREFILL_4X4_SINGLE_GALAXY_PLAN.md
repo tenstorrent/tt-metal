@@ -523,7 +523,7 @@ throughput is measured from the last rank's chunk-start cadence over the 11 meas
 ### Verdict against the goals
 
 - **G1 Correct: met.** Split gate (Level 5) and runner KV PCC (Level 7) pass in every configuration.
-- **G2 Stable: met** for `2d`, `2d_torus_y` and `2d_torus_x`. `2d_torus_x` hangs intermittently with two D2D lanes; with one lane (the runner default for that mode now) 12 of 12 valid runs were clean.
+- **G2 Stable: met** for `2d`, `2d_torus_y` and `2d_torus_x`. The two-lane `2d_torus_x` hangs come from a pair between the halves training with one of two channels after a reset (see the investigation below). The D2D lane-count bug that this exposed is fixed; one hang mechanism remains open. With one lane (the runner default for that mode) 12 of 12 valid runs were clean.
 - **G3 Worth it: not met.** Against the production 8x4 TorusXY stage (19,413 tok/s), two 4x4 stages
   reach 17,058-17,100 tok/s with `2d_torus_y` (-12%), 17,874-17,940 with `2d_torus_x` (-8%, but it
   hangs with two D2D lanes) and about 17,230 with `2d_torus_x` on one D2D lane (-11%). Per-chunk time
@@ -556,6 +556,46 @@ Triage per rank on every hang (`generated/tt-triage/`):
   `2d_torus_y`.
 - Recommendation: run two stages per galaxy with `2d_torus_y`; report the two-lane D2D stall under
   TORUS_X to the fabric owners with the reproducer and triage.
+
+#### Root cause: links between the halves that train with one of two channels
+
+Further runs separated the setup from the fabric. Without a reset between runs, `2d_torus_x` two-lane
+passed 10 of 10 (also `2d_torus_y` 10/10, and `2d_torus_x` with no Z links in the MGD 10/10); with a
+`tt-smi -r` before each run it hung 5 of 18. After each reset, the link state was compared with the
+bring-up cluster descriptor:
+
+| Link state after reset (pairs between the two halves) | Runs | Hangs |
+|---|---|---|
+| All links fully trained | 20 | 0 |
+| A pair fully dead (0 of 2 channels) | 2 | 0 |
+| A pair half-trained (1 of 2 channels) | 3 | 3 |
+
+The hangs are not `TORUS_X` misbehaving on healthy links. They follow a pair between the halves that
+comes up with one channel, which the fabric still uses.
+
+**Bug 1 (fixed): D2D lane counts can disagree.** The D2D sender and receiver each computed
+`num_lanes = min(max_sender_lanes, forwarding links)` from their own route (sender->receiver and
+receiver->sender) and assumed both are equal. With a half-trained pair they are not: in `ln_ctrl_12`,
+9 of 16 coordinates had the sender on 2 lanes and the receiver expecting 1 (or the reverse). The
+receiver waits for one data-landed increment per sender lane, so the first transfer hangs. Fix in
+`ttnn/core/tensor/d2d_stream_service.cpp`: after the MeshSocket is built, both sides exchange their
+per-coordinate counts (new tag `0x44324c4e`; `create_pair` computes both locally), and both build with
+the per-coordinate minimum. After the fix, the state that hung before (`X:T1L5-T2L5=1/2`) passed 3 of 3,
+controls 3 of 3, and `unit_tests_ttnn_tensor --gtest_filter=D2DStreamServiceTest.*` 27 of 27.
+
+**Second mechanism (open).** One hang (`fix_half_2`) remains with lane counts in agreement, in the
+state `X:T1L5-T2L5=1/2` plus `X:T3L5-T4L5=0/2` (same as `ln_ctrl_13`). Triage: lane 1 of the senders at
+mesh 0 (2,3) and (3,3) waits in `wait_for_empty_write_slot`. Their receivers got 1 of 2 increments, and
+the D2D link-lease kernels and the TP ring reduce-scatter on rows 2-3 wait behind them. All routers
+are still in their main loop. The host route for those senders goes east over the `TORUS_X` wrap to
+(2,0), then crosses to mesh 1. The route under the failing link state has not been captured: the state
+recurred 2 times in about 60 resets. A debug patch that logs every D2D lane's end-to-end route
+(`TT_DEBUG_FWD_ROUTES`, in `fabric_host_utils.cpp`) is kept out of tree for the next occurrence.
+
+Practical guidance: check the link state after every reset (all pairs between the halves fully
+trained, or fully dead) before running two stages per galaxy. The runner keeps one D2D lane by default
+under `2d_torus_x` until the second mechanism is understood (`PREFILL_D2D_MAX_LANES=2` for full
+bandwidth on clean links).
 
 ### G4: per-op profile
 
