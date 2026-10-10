@@ -178,6 +178,7 @@ void physical_system_descriptor_to_proto(
         proto_asic_desc->set_unique_id(*asic_desc.unique_id);
         proto_asic_desc->set_umd_unique_id(asic_desc.umd_unique_id);
         proto_asic_desc->set_host_name(asic_desc.host_name);
+        proto_asic_desc->set_mpi_rank(asic_desc.mpi_rank);
     }
 
     // Convert host to mobo name map
@@ -268,10 +269,9 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     system_graph.host_connectivity_graph = proto_to_host_topology(proto_desc.system_graph());
 
     // Convert ASIC descriptors
-    auto& asic_descriptors = descriptor->get_asic_descriptors();
     for (const auto& proto_asic_map : proto_desc.asic_descriptors()) {
         AsicID asic_id{proto_asic_map.asic_id()};
-        ASICDescriptor asic_desc;
+        ASICDescriptor asic_desc{};
 
         const auto& proto_asic_desc = proto_asic_map.asic_descriptor();
         asic_desc.tray_id = TrayID{proto_asic_desc.tray_id()};
@@ -284,8 +284,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.umd_unique_id =
             proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
+        asic_desc.mpi_rank = proto_asic_desc.mpi_rank();
+        asic_desc.physical_node_id =
+            experimental::make_physical_node_id(asic_desc.host_name, asic_desc.tray_id, asic_desc.asic_location);
 
-        asic_descriptors[asic_id] = asic_desc;
+        descriptor->add_asic_descriptor(asic_id, std::move(asic_desc));
     }
 
     // Convert host to mobo name map

@@ -36,13 +36,12 @@ LocalEthernetMetrics query_local_ethernet_metrics(
     const PhysicalSystemDescriptor& psd, tt::umd::Cluster& cluster, const Hal* hal);
 
 namespace discovery_impl {
-// Internal discovery function - runs local discovery only.
-// all_hostnames_unique must be from resolve_hostname_uniqueness() called before this.
+// Internal discovery function - runs local discovery only. The hostname stored on each chip is the
+// machine name. MPI rank, recorded on the chip, separates ranks that share it.
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    tt::TargetDevice target_device_type,
-    bool all_hostnames_unique);
+    tt::TargetDevice target_device_type);
 
 }  // namespace discovery_impl
 

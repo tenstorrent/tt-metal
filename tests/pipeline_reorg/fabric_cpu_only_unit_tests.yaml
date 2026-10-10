@@ -67,7 +67,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
   skus:
     cpu_medium:
-      timeout: 36
+      timeout: 12
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -86,12 +86,23 @@
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
+- id: fabric-cpu-bh-fsd-reliability
+  name: fabric cpu unit tests (bh-fsd-reliability)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-fsd-reliability
+  skus:
+    cpu_medium:
+      timeout: 20
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
 - id: fabric-cpu-bh-subtorus-sc20
   name: fabric cpu unit tests (bh-subtorus-sc20)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 32
+      timeout: 30
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -102,7 +113,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      timeout: 37
+      timeout: 24
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -113,7 +124,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "TT_PIPELINE_TEST_STAGES=20"
   skus:
     cpu_medium:
-      timeout: 7
+      timeout: 6
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -124,7 +135,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "subtorus_sc16_4x32_3bigmesh"
   skus:
     cpu_medium:
-      timeout: 8
+      timeout: 6
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -135,7 +146,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      timeout: 95
+      timeout: 66
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
