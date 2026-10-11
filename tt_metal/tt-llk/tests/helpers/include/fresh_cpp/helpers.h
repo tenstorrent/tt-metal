@@ -91,16 +91,20 @@ sfpi_inline sfpi::vFloat fresh_fmod_core(const sfpi::vFloat v_mag, const sfpi::v
 
 // Shared: exp(x) by the exp_21f exponent/mantissa recombination, clamped form
 // (the production _sfpu_exp_21f_bf16_<true> contract: fp32 result, no bf16
-// store rounding — callers own the store).  Same golden-math constants as
-// calculate_exp_fresh_cpp; kept separate so the measured exp row's fresh body
-// stays byte-stable.
-template <bool NONPOSITIVE_FINITE_DOMAIN = false>
+// store rounding — callers own the store).  The default mode uses the same
+// golden-math constants as calculate_exp_fresh_cpp; kept separate so the
+// measured exp row's fresh body stays byte-stable.
+template <bool NONPOSITIVE_FINITE_DOMAIN = false, bool UNIT_ORIGIN = false>
 sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
 {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
-    constexpr float C0      = 1.0017248f;
-    constexpr float C1      = 7.839635491371155e-08f;
-    constexpr float C2      = 4.791750143340323e-15f;
+    // Dividing every mantissa-polynomial coefficient by its original C0
+    // normalizes the approximation to exp(0) = 1 without extra arithmetic.
+    // The algebra does not imply floating-point rounding identity; the caller
+    // must validate its delivered output over the required input classes.
+    constexpr float C0 = UNIT_ORIGIN ? 1.0f : 1.0017248f;
+    constexpr float C1 = UNIT_ORIGIN ? 7.826136538824358e-08f : 7.839635491371155e-08f;
+    constexpr float C2 = UNIT_ORIGIN ? 4.783499137973098e-15f : 4.791750143340323e-15f;
 
     sfpi::vFloat xlog2 = val * ONE_LN2 + 127.0f;
     if constexpr (NONPOSITIVE_FINITE_DOMAIN)

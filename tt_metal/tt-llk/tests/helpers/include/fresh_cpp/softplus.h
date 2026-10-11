@@ -52,15 +52,14 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
             v_endif;
 #else
             // Degree-3 endpoint-constrained fit of log1p(u)/u on [0, 1].
-            // fresh_exp_21f(0) = C0 = 1.0017248f. Fold u = e/C0 into
-            // coefficient k by dividing it by C0^(k+1), avoiding an extra
-            // multiply while retaining the correct log(2) value at t = 0.
+            // This call divides the exp mantissa polynomial by its original
+            // C0, giving e(0)=1; the residual can therefore use q directly.
             // Reproduce with corpus/tools/fit_softplus_residual.py.
-            const sfpi::vFloat e        = fresh_exp_21f<true>(-a);
-            sfpi::vFloat p              = -0.07473333925008774f;
-            p                           = p * e + 0.25558772683143616f;
-            p                           = p * e + -0.48683419823646545f;
-            p                           = p * e + 0.9982781410217285f;
+            const sfpi::vFloat e        = fresh_exp_21f<true, true>(-a);
+            sfpi::vFloat p              = -0.0752502828836441f;
+            p                           = p * e + 0.25691255927085876f;
+            p                           = p * e + -0.48851507902145386f;
+            p                           = p * e + 1.0f;
             const sfpi::vFloat residual = e * p;
 #endif
             const sfpi::vFloat sp = sfpi::max(t, 0.0f) + residual;
