@@ -107,6 +107,9 @@ def _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path):
         # the runner's warm-up chunk: builds every width (warm-all) and captures the trace islands; the requests below
         # then run on the islands (each request's first chunk resets the slot)
         rt.prefill_chunk(ids[:CHUNK], exp, slot_id=0, actual_start=0, actual_end=CHUNK, warmup=True)
+        # the runner's setup step: capture + one warm replay on slot 0 before any request (runtime.on_services_ready); the
+        # requests below must still match model.py (the dummy chunk's state is reset by each request's first chunk)
+        rt.on_services_ready(exp)
     requests = [(0, S)] + ([(1, S), (1, PREFIX)] if USERS > 1 else [])
     for slot, n in requests:
         for start in range(0, n, CHUNK):

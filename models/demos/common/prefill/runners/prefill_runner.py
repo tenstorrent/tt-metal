@@ -1166,6 +1166,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # No-op if already captured. See TtPrefillRuntime.capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
+    # A runtime with its own one-time capture that must follow every persistent service buffer above (DSv4.1's prefill
+    # trace islands), without the use_trace metadata path's other semantics. Optional: other models are unaffected.
+    if getattr(runtime, "on_services_ready", None):
+        runtime.on_services_ready(kv_caches)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 

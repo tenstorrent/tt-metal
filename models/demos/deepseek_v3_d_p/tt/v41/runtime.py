@@ -176,6 +176,25 @@ class V41PrefillRuntime:
         )
         return None
 
+    def on_services_ready(self, kv_caches) -> None:
+        """Called by the runner once every persistent service buffer (H2D / D2H / the KV table) exists, right before its
+        request loop: capture the trace islands HERE, so the first request no longer pays the ~6 s capture (DS41F-0037
+        10-11). The first-request capture in prefill_chunk stays as the fallback for callers without this hook (tests).
+        """
+        if os.environ.get("V41_PREFILL_ISLANDS", "0") == "1" and not self.pf.islands:
+            self.pf.enable_islands()
+            # The first replay after the capture is 1.3-3 s slower than the rest (MEASURED: a request's first 8192 chunk
+            # 3.07-4.71 s vs 1.4-2.1 s, 64K runs 10-11): absorb it with one dummy chunk on slot 0. Safe: the first real
+            # request starts at 0, which resets the slot's states and zeroes its export rows, and the Engram n-gram cache is
+            # position-indexed (a chunk at 0 overwrites every position it hashes over).
+            t0 = time.time()
+            self.pf.use_slot(0)
+            self.pf.reset()
+            self.pf._chunk([0] * self.chunk_size, 0, self.engram, None)
+            ttnn.synchronize_device(self.mesh_device)
+            self.pf.reset()
+            logger.info(f"[v41 runtime] islands warm replay at setup: {time.time() - t0:.2f} s")
+
     def _warm_all(self, ids, kv_caches, slot: int, start: int) -> None:
         """V41_PREFILL_WARM_ALL=1 (DS41F-0037 C-P1): after the warm-up chunk, run the same ids as dummy chunks at every later
         chunk position up to the capacity, export included, so every live-width program (the CSA live extent steps every
